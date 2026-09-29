@@ -2011,7 +2011,38 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "thinking_always_on": true,
-        "supports_forced_tool_use": false
+        "supports_forced_tool_use": false,
+        "bedrock_mantle": {
+            "anthropic.claude-opus-5-5": {
+                "bedrock_converse_supports_strict_tools": false,
+                "supports_adaptive_thinking": true,
+                "supports_mid_conversation_system": true,
+                "supports_tool_search": true,
+                "max_input_tokens": 1000000,
+                "max_output_tokens": 128000,
+                "max_tokens": 128000,
+                "mode": "chat",
+                "supports_assistant_prefill": false,
+                "supports_computer_use": true,
+                "supports_function_calling": true,
+                "supports_pdf_input": true,
+                "supports_prompt_caching": true,
+                "supports_reasoning": true,
+                "supports_response_schema": true,
+                "supports_sampling_params": false,
+                "supports_tool_choice": true,
+                "supports_vision": true,
+                "supports_xhigh_reasoning_effort": true,
+                "supports_native_structured_output": false,
+                "supports_max_reasoning_effort": true,
+                "supports_output_config": true,
+                "supports_parallel_tool_use_config": true,
+                "prompt_cache_min_tokens": 512,
+                "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html",
+                "thinking_always_on": true,
+                "supports_forced_tool_use": false
+            }
+        }
     },
     "eu.anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -47249,7 +47280,38 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "thinking_always_on": true,
-        "supports_forced_tool_use": false
+        "supports_forced_tool_use": false,
+        "bedrock_mantle": {
+            "us-gov-west-1/anthropic.claude-opus-5-5": {
+                "bedrock_converse_supports_strict_tools": false,
+                "supports_tool_search": true,
+                "max_input_tokens": 1000000,
+                "max_output_tokens": 128000,
+                "max_tokens": 128000,
+                "mode": "chat",
+                "prompt_cache_min_tokens": 512,
+                "supports_adaptive_thinking": true,
+                "supports_assistant_prefill": false,
+                "supports_computer_use": true,
+                "supports_function_calling": true,
+                "supports_max_reasoning_effort": true,
+                "supports_mid_conversation_system": true,
+                "supports_native_structured_output": false,
+                "supports_output_config": true,
+                "supports_parallel_tool_use_config": true,
+                "supports_pdf_input": true,
+                "supports_prompt_caching": true,
+                "supports_reasoning": true,
+                "supports_response_schema": true,
+                "supports_sampling_params": false,
+                "supports_tool_choice": true,
+                "supports_vision": true,
+                "supports_xhigh_reasoning_effort": true,
+                "thinking_always_on": true,
+                "supports_forced_tool_use": false,
+                "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html"
+            }
+        }
     },
     "us-gov.anthropic.claude-fable-5-1": {
         "cache_creation_input_token_cost": 1.5e-05,
@@ -78287,7 +78349,39 @@
         "supports_sampling_params": false,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_xhigh_reasoning_effort": true
+        "supports_xhigh_reasoning_effort": true,
+        "bedrock_mantle": {
+            "us-gov-west-1/anthropic.claude-sonnet-5-5": {
+                "bedrock_converse_supports_strict_tools": false,
+                "bedrock_output_config_effort_ceiling": "xhigh",
+                "supports_tool_search": true,
+                "max_input_tokens": 1000000,
+                "max_output_tokens": 128000,
+                "max_tokens": 128000,
+                "mode": "chat",
+                "supports_forced_tool_use": false,
+                "thinking_always_on": true,
+                "prompt_cache_min_tokens": 512,
+                "supports_adaptive_thinking": true,
+                "supports_assistant_prefill": false,
+                "supports_computer_use": true,
+                "supports_function_calling": true,
+                "supports_max_reasoning_effort": true,
+                "supports_mid_conversation_system": true,
+                "supports_native_structured_output": false,
+                "supports_output_config": true,
+                "supports_parallel_tool_use_config": true,
+                "supports_pdf_input": true,
+                "supports_prompt_caching": true,
+                "supports_reasoning": true,
+                "supports_response_schema": true,
+                "supports_sampling_params": false,
+                "supports_tool_choice": true,
+                "supports_vision": true,
+                "supports_xhigh_reasoning_effort": true,
+                "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html"
+            }
+        }
     },
     "us.anthropic.claude-sonnet-5-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -78328,7 +78422,39 @@
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "bedrock_mantle": {
+            "anthropic.claude-sonnet-5-5": {
+                "bedrock_converse_supports_strict_tools": false,
+                "supports_tool_search": true,
+                "max_input_tokens": 1000000,
+                "max_output_tokens": 128000,
+                "max_tokens": 128000,
+                "mode": "chat",
+                "supports_adaptive_thinking": true,
+                "supports_mid_conversation_system": true,
+                "supports_assistant_prefill": false,
+                "supports_computer_use": true,
+                "supports_function_calling": true,
+                "supports_pdf_input": true,
+                "supports_prompt_caching": true,
+                "supports_reasoning": true,
+                "supports_response_schema": true,
+                "supports_sampling_params": false,
+                "supports_tool_choice": true,
+                "supports_vision": true,
+                "supports_xhigh_reasoning_effort": true,
+                "supports_native_structured_output": false,
+                "supports_max_reasoning_effort": true,
+                "supports_output_config": true,
+                "bedrock_output_config_effort_ceiling": "xhigh",
+                "supports_parallel_tool_use_config": true,
+                "supports_forced_tool_use": false,
+                "thinking_always_on": true,
+                "prompt_cache_min_tokens": 512,
+                "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html"
+            }
+        }
     },
     "vertex_ai/claude-sonnet-5-5": {
         "regional_endpoint_uplift_multiplier": 1.1,
