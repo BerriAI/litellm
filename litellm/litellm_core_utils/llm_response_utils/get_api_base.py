@@ -52,7 +52,7 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
         elif "model" in optional_params:
             _optional_params = LiteLLM_Params.model_validate(optional_params)
         else:
-            _optional_params = LiteLLM_Params.model_validate({"model": model, **optional_params})
+            _optional_params = LiteLLM_Params(model=model, **optional_params)
     except Exception:
         return None
     # get llm provider
