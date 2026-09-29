@@ -1,3 +1,5 @@
+import base64
+import binascii
 from collections.abc import Mapping
 from typing import Final
 
@@ -11,6 +13,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helpe
 # Holds the name of the request header that carries the caller's LiteLLM key, which
 # user_api_key_auth reads straight from general_settings, so it stays plaintext.
 _CALLER_KEY_HEADER_NAME: Final = "litellm_user_api_key"
+_GCM_CIPHERTEXT_PREFIX: Final = "v2:gcm:"
+# Smallest encrypt_value_helper output for a one-byte value: nonce + tag (AES-GCM), nonce + MAC (nacl).
+_MIN_GCM_CIPHERTEXT_BYTES: Final = 29
+_MIN_NACL_CIPHERTEXT_BYTES: Final = 41
 
 
 def get_litellm_virtual_key(request: Request) -> str:
@@ -31,7 +37,7 @@ def get_litellm_virtual_key(request: Request) -> str:
 def _encrypt_header_value(name: str, value: JsonValue, new_encryption_key: str | None) -> JsonValue:
     if not isinstance(value, str) or not value or name == _CALLER_KEY_HEADER_NAME:
         return value
-    if value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+    if _is_marked(value):
         return value
     try:
         return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
@@ -43,23 +49,33 @@ def _encrypt_header_value(name: str, value: JsonValue, new_encryption_key: str |
 
 
 def _decrypted(name: str, value: str) -> str | None:
-    """Plaintext of a marked value; None when it does not decrypt or decrypts to an empty string."""
-    return (
-        decrypt_value_helper(
-            value=value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX),
-            key=name,
-            exception_type="debug",
-            return_original_value=False,
-        )
-        or None
+    return decrypt_value_helper(
+        value=value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX),
+        key=name,
+        exception_type="debug",
+        return_original_value=False,
     )
 
 
+def _has_ciphertext_shape(payload: str) -> bool:
+    gcm: Final = payload.startswith(_GCM_CIPHERTEXT_PREFIX)
+    encoded: Final = payload.removeprefix(_GCM_CIPHERTEXT_PREFIX)
+    try:
+        raw = base64.urlsafe_b64decode(encoded)
+    except (binascii.Error, ValueError):
+        try:
+            raw = base64.b64decode(encoded)
+        except (binascii.Error, ValueError):
+            return False
+    return len(raw) >= (_MIN_GCM_CIPHERTEXT_BYTES if gcm else _MIN_NACL_CIPHERTEXT_BYTES)
+
+
 def _is_marked(value: object) -> bool:
+    """True for a `litellm_enc::` value whose payload has the shape encrypt_value_helper produces."""
     return (
         isinstance(value, str)
         and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
-        and value != CALLBACK_VAR_ENCRYPTED_PREFIX
+        and _has_ciphertext_shape(value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX))
     )
 
 

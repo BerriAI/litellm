@@ -223,7 +223,12 @@ def test_undecryptable_pass_through_header_names(salt_key):
     assert undecryptable_pass_through_header_names(None) == frozenset()
     assert undecryptable_pass_through_header_names(rotated["pass_through_endpoints"][0]["headers"]) == {"x-a"}
     assert undecryptable_pass_through_header_names(
-        {"x-ok": stored["headers"]["x-a"], "x-bad": _ENC + "garbage", "x-plain": "p"}
+        {
+            "x-ok": stored["headers"]["x-a"],
+            "x-bad": rotated["pass_through_endpoints"][0]["headers"]["x-a"],
+            "x-garbage": _ENC + "garbage",
+            "x-plain": "p",
+        }
     ) == {"x-bad"}
 
 
@@ -232,7 +237,22 @@ def test_decrypt_pass_through_headers_keeps_a_bare_marker_literal(salt_key):
     assert undecryptable_pass_through_header_names({"x-tag": _ENC}) == frozenset()
 
 
-@pytest.mark.parametrize("value", [_ENC + "***", _ENC + "!!"])
-def test_decrypt_pass_through_headers_keeps_a_marked_value_that_decrypts_to_nothing(salt_key, value):
+@pytest.mark.parametrize("value", [_ENC + "***", _ENC + "!!", _ENC + "not-a-ciphertext", _ENC + "v2:gcm:abc"])
+def test_marker_prefixed_literal_is_encrypted_and_forwarded_unchanged(salt_key, value):
+    [stored] = encrypt_pass_through_endpoints([{"path": "/a", "headers": {"x-tag": value}}])
+
+    assert stored["headers"]["x-tag"] != value
+    assert decrypt_pass_through_headers(stored["headers"]) == {"x-tag": value}
     assert decrypt_pass_through_headers({"x-tag": value}) == {"x-tag": value}
-    assert undecryptable_pass_through_header_names({"x-tag": value}) == {"x-tag"}
+    assert undecryptable_pass_through_header_names({"x-tag": value}) == frozenset()
+
+
+def test_aes_gcm_ciphertext_from_another_key_is_undecryptable(salt_key, monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"encryption_algorithm": "aes-256-gcm"})
+    [stored] = encrypt_pass_through_endpoints([{"path": "/a", "headers": {"x-a": "v"}}])
+    assert stored["headers"]["x-a"].startswith(_ENC + "v2:gcm:")
+    assert decrypt_pass_through_headers(stored["headers"]) == {"x-a": "v"}
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-some-other-salt")
+
+    assert undecryptable_pass_through_header_names(stored["headers"]) == {"x-a"}
