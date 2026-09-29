@@ -95,6 +95,18 @@ class BaseSearchConfig:
         """
         return "Unknown Search Provider"
 
+    def supports_rich_search_input(self) -> bool:
+        """
+        Whether this provider's search API accepts a natural-language
+        objective plus multiple keyword queries in one request.
+
+        Integrations that collect the richer shape (e.g. websearch
+        interception) forward ``query`` as a list plus an ``objective``
+        optional param to providers that return True; every other provider
+        keeps receiving the single query string.
+        """
+        return False
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Get HTTP method for search requests.

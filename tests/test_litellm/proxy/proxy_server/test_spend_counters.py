@@ -72,6 +72,7 @@ def _make_spend_counter_cache(
 def _make_user_api_key_cache(get_value=None, get_side_effect=None):
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=get_value, side_effect=get_side_effect)
+    cache.async_batch_get_cache = AsyncMock(side_effect=lambda keys, **_: [get_value for _ in keys])
     cache.async_set_cache_pipeline = AsyncMock()
     return cache
 
@@ -633,7 +634,7 @@ async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch)
 
     reserved = {"spend:key:hashed-tok", "spend:org:org1"}
     monkeypatch.setattr(br, "get_reserved_counter_keys", MagicMock(return_value=set(reserved)))
-    monkeypatch.setattr(br, "reconcile_budget_reservation", AsyncMock())
+    monkeypatch.setattr(br, "reconcile_budget_reservation", AsyncMock(return_value=()))
 
     recorded: dict[str, float] = {}
 
@@ -888,7 +889,8 @@ async def test_increment_spend_counters_pipeline_failure_invalidates_all_counter
 @pytest.mark.asyncio
 async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set_when_none():
     result = await ps._reconcile_budget_reservation_for_counter_update(budget_reservation=None, response_cost=1.0)
-    assert result == set()
+    assert result.reserved_counter_keys == frozenset()
+    assert result.pending == ()
 
 
 @pytest.mark.asyncio
@@ -917,8 +919,34 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
         budget_reservation={"foo": "bar"}, response_cost=1.0
     )
 
-    assert result == set()
+    assert result.reserved_counter_keys == frozenset()
+    assert result.pending == ()
     assert fake_invalidate.called is True
+
+
+@pytest.mark.asyncio
+async def test_reconcile_budget_reservation_for_counter_update_finalized_reservation_falls_back_to_direct_increment(
+    monkeypatch,
+):
+    """A reservation already finalized before the counter update (the pre-persist
+    reconcile failed and dropped its counters) must not shield its keys from the
+    direct increment, or the settled cost is never added back after the drop."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    fake_reconcile = AsyncMock()
+    monkeypatch.setattr(br, "reconcile_budget_reservation", fake_reconcile)
+
+    result = await ps._reconcile_budget_reservation_for_counter_update(
+        budget_reservation={
+            "finalized": True,
+            "entries": [{"counter_key": "spend:key:abc"}],
+        },
+        response_cost=1.0,
+    )
+
+    assert result.reserved_counter_keys == frozenset()
+    assert result.pending == ()
+    fake_reconcile.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1507,16 +1535,15 @@ async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypa
         tags=["x"],
     )
 
-    observed = {
-        "lookups": fake_user_cache.async_get_cache.call_count,
-        "got_user": True,
-        "got_team": True,
-    }
-    assert normalize(observed) == {
-        "lookups": 4,
-        "got_user": True,
-        "got_team": True,
-    }
+    assert fake_user_cache.async_get_cache.await_count == 0
+    fake_user_cache.async_batch_get_cache.assert_awaited_once()
+    assert fake_user_cache.async_batch_get_cache.await_args.kwargs["keys"] == [
+        "u1",
+        f"{ps.litellm_proxy_admin_name}:spend",
+        "end_user_id:eu1",
+        "team_id:t1",
+        "tag:x",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1524,7 +1551,7 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     """An inner _update_user_cache raising must not propagate — update_cache
     catches and logs, the public coroutine still completes normally."""
     fake_user_cache = MagicMock()
-    fake_user_cache.async_get_cache = AsyncMock(side_effect=RuntimeError("cache down"))
+    fake_user_cache.async_batch_get_cache = AsyncMock(side_effect=RuntimeError("cache down"))
     fake_user_cache.async_set_cache_pipeline = AsyncMock()
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
 

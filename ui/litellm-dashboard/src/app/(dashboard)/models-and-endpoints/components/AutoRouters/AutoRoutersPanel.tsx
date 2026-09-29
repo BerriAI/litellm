@@ -38,7 +38,7 @@ export function AutoRoutersPanel({
   const canCreate = createScope !== "forbidden";
   const { data: deployments, isLoading } = useAutoRouters();
   const invalidateAutoRouters = useInvalidateAutoRouters();
-  // Clicking a router opens the same ?model= drill-in the All Models table uses, so an auto
+  // Clicking a router opens the same ?model= drill-in the Deployed Models table uses, so an auto
   // router gets the full ModelInfoView: Model Settings, Edit Settings, Edit Auto Router and
   // Delete. A separate detail view here would be a worse copy of it.
   const { openModel } = useModelDetailRouting();
@@ -104,8 +104,8 @@ export function AutoRoutersPanel({
           <DialogHeader>
             <DialogTitle>Add Auto Router</DialogTitle>
             <DialogDescription>
-              Routes each request to a model by classifying its complexity. Called like any other model, so clients keep
-              using a single model name.
+              Choose a classifier to route each request to a model. Called like any other model, so clients keep using a
+              single model name.
             </DialogDescription>
           </DialogHeader>
           <AddAutoRouterTab
@@ -114,6 +114,7 @@ export function AutoRoutersPanel({
             userRole={userRole}
             userId={userID}
             createScope={createScope}
+            teams={teams}
           />
         </DialogContent>
       </Dialog>

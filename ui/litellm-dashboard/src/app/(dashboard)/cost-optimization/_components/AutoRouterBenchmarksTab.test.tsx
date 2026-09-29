@@ -68,6 +68,8 @@ const totals = (overrides: Partial<Totals> = {}): Totals => ({
   avg_session_seconds: 7560,
   avg_tokens_per_session: 5_300_000,
   spend: 359.86,
+  savings_estimated_turns: overrides.turns ?? 3073,
+  savings_estimated_actual_spend: overrides.spend ?? 359.86,
   classifier_cost: 6.146,
   saved_spend: 2174.59,
   baseline_spend: 2534.45,
@@ -100,6 +102,8 @@ const zeroTotals: Totals = {
   avg_session_seconds: 0,
   avg_tokens_per_session: 0,
   spend: 0,
+  savings_estimated_turns: 0,
+  savings_estimated_actual_spend: 0,
   classifier_cost: 0,
   saved_spend: 0,
   baseline_spend: 0,
@@ -153,6 +157,53 @@ describe("AutoRouterBenchmarksTab", () => {
     mockAutoRouters();
   });
 
+  it.each([
+    { estimatedTurns: 0, actual: 0, saved: null, pct: null },
+    { estimatedTurns: 0, actual: 0, saved: 30, pct: null },
+    { estimatedTurns: 10, actual: 2, saved: -0.5, pct: -33.3 },
+    { estimatedTurns: 10, actual: 2, saved: 0, pct: 0 },
+    { estimatedTurns: 40, actual: 10, saved: 30, pct: 75 },
+  ])("compares matching old and new requests with savings $saved", ({ estimatedTurns, actual, saved, pct }) => {
+    const comparison = {
+      spend: actual + 99,
+      savings_estimated_turns: estimatedTurns,
+      savings_estimated_actual_spend: actual,
+      savings_estimated_classifier_cost: 0.1,
+      saved_spend: saved,
+      baseline_spend: estimatedTurns ? actual + (saved ?? 0) : null,
+      saved_pct: pct,
+      saved_per_session: null,
+    };
+    mockHook({
+      data: response([], totals(comparison)),
+    });
+    renderTab();
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getAllByRole("definition").map((row) => row.textContent)).toEqual(
+      estimatedTurns
+        ? [
+            `$${actual.toFixed(2)}`,
+            `$${(actual - 0.1).toFixed(2)}`,
+            "$0.1000",
+            `$${(actual + (saved ?? 0)).toFixed(2)}`,
+          ]
+        : ["Unavailable", "Unavailable", "Unavailable", "Unavailable"],
+    );
+    expect(screen.queryByText("Actual spend on covered turns")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
+    if (estimatedTurns) {
+      expect(screen.getByText(`Savings based on ${estimatedTurns} of 3,073 requests`)).toBeInTheDocument();
+      const sign = pct && pct > 0 ? "-" : "+";
+      const badge = pct === 0 ? "0%" : `${sign}${Math.abs(pct ?? 0).toFixed(0)}%`;
+      expect(screen.getByText(badge)).toBeInTheDocument();
+    } else if (saved != null) {
+      expect(screen.getByText("$30.00")).toBeInTheDocument();
+      expect(
+        screen.getByText("Historical savings are included. Matching cost details are unavailable."),
+      ).toBeInTheDocument();
+    }
+  });
+
   it("leads with total estimated savings, before the four session-shape metrics", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
@@ -179,7 +230,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("-86%")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
     expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Estimated spend at highest-tier model")).toBeInTheDocument();
+    expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
     expect(screen.getByText("$2,534.45")).toBeInTheDocument();
     expect(screen.getByText("32.7")).toBeInTheDocument();
     expect(screen.getByText("2.1h")).toBeInTheDocument();
@@ -205,17 +256,20 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getAllByText("$10,126.28").length).toBeGreaterThan(0);
   });
 
-  it.each([null, undefined])("keeps totals when the classification breakdown is %s", (classifier_cost) => {
-    const stats = totals({ classifier_cost });
-    mockHook({ data: response([group(stats)], stats) });
-    renderTab();
+  it.each([null, undefined])(
+    "keeps eligible totals when the classification breakdown is %s",
+    (savings_estimated_classifier_cost) => {
+      const stats = totals({ savings_estimated_turns: 30, savings_estimated_classifier_cost });
+      mockHook({ data: response([group(stats)], stats) });
+      renderTab();
 
-    expect(screen.getAllByText("Unavailable")).toHaveLength(2);
-    expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
-    expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("$2,174.59")).toBeInTheDocument();
-    expect(screen.getByText(/some usage predates classification-cost tracking/)).toBeInTheDocument();
-  });
+      expect(screen.getAllByText("Unavailable")).toHaveLength(2);
+      expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
+      expect(screen.getByText("$359.86")).toBeInTheDocument();
+      expect(screen.getByText("$2,174.59")).toBeInTheDocument();
+      expect(screen.getByText(/some usage predates classification-cost tracking/)).toBeInTheDocument();
+    },
+  );
 
   it("pairs the savings with the session count it was earned over, in its own tile", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
@@ -238,7 +292,7 @@ describe("AutoRouterBenchmarksTab", () => {
       "Actual auto-router spend",
       "LLM spend",
       "Classification cost($2.00 / 1K turns)",
-      "Estimated spend at highest-tier model",
+      "Estimated baseline spend",
     ]);
     expect(values).toEqual(["$359.86", "$353.71", "$6.15", "$2,534.45"]);
   });
@@ -397,7 +451,7 @@ describe("AutoRouterBenchmarksTab", () => {
     mockHook({ data: response([group()]) });
     const { dateValue, onDateChange } = renderTab();
 
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, undefined);
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, undefined, undefined);
     expect(screen.getByText("Jul 6 – Aug 5 (UTC)")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("date-picker"));
@@ -423,7 +477,7 @@ describe("AutoRouterBenchmarksTab", () => {
       </QueryClientProvider>,
     );
 
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, "key-hash-1");
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, "key-hash-1", undefined);
     expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Shadow Evals" })).not.toBeInTheDocument();
   });

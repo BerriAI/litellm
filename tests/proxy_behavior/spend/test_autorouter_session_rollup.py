@@ -6,15 +6,28 @@ tests/test_litellm/proxy/db/test_autorouter_session_rollup.py.
 """
 
 import asyncio
+import json
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from types import SimpleNamespace
+from typing import Final, TypedDict, cast
 
 import pytest
+from prisma import Prisma
+from prisma.errors import RawQueryError
+from typing_extensions import ReadOnly
 
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
     UPSERT_AUTOROUTER_SESSION_SQL,
+    AutoRouterTurnTransaction,
+    flush_autorouter_turn_transactions,
+)
+from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.autorouter_savings_comparison import (
+    HISTORICAL_SESSION_COMPARISONS_SQL,
+    SessionSavingsComparison,
 )
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -43,6 +56,8 @@ async def _turn(
     classifier_cost: float = 0.0,
     tier: "str | None" = None,
     baseline: "str | None" = None,
+    estimated: bool = True,
+    user_id: str = "",
 ) -> None:
     touched: Final = 1 if (hit or ttl is not None or not covered) else 0
     await db.execute_raw(
@@ -63,6 +78,10 @@ async def _turn(
         touched,
         tier,
         baseline,
+        int(estimated),
+        spend if estimated else 0.0,
+        saved if estimated else 0.0,
+        user_id,
     )
 
 
@@ -75,6 +94,66 @@ async def _row(db, key: str, session_id: str = "s1", router: str = "auto-1") -> 
     )
     assert len(rows) == 1
     return rows[0]
+
+
+@pytest.mark.parametrize("historical_saved, damaged, user_id, split_sessions, current_classifier", [
+    (29.5, None, None, False, 0.2), (29.5, None, "owner", False, 0.2), (0.0, None, None, False, 0.2),
+    (-3.0, None, None, False, 0.2), (29.5, "missing", None, False, 0.2), (29.5, "cost", None, False, 0.2),
+    (0.0, "missing", None, False, 0.2), (29.5, None, None, True, 0.2), (29.5, None, None, False, 0.0),
+])
+async def test_historical_and_new_savings_compare_matching_costs_and_exclude_unknown_requests(
+    db: Prisma, historical_saved: float, damaged: str | None, user_id: str | None, split_sessions: bool,
+    current_classifier: float,
+) -> None:
+    async with db.tx() as tx:
+        for table in ("LiteLLM_AutoRouterSession", "LiteLLM_AutoRouterUserSession", "LiteLLM_SpendLogs"):
+            await tx.execute_raw(f'CREATE TEMP TABLE "{table}" (LIKE public."{table}" INCLUDING ALL) ON COMMIT DROP')
+        for name, spend, saved, classifier, estimated in (
+            ("historical", 9.0, historical_saved, 0.1, False),
+            ("current", 1.0, 0.5, current_classifier, True),
+            ("unknown", 99.0, 0.0, 3.0, False),
+        ):
+            session_id: Final = "s2" if split_sessions and name == "current" else "s1"
+            await _turn(tx, "key", "model", T0, spend=spend, saved=saved, classifier_cost=classifier,
+                        estimated=estimated, session_id=session_id)
+            metadata: Final = {
+                "routing_decision": {"router_model_name": "auto-1", **({"classifier_cost": classifier} if classifier else {})},
+                "autorouter_savings": saved if name != "unknown" else None,
+                **({"autorouter_savings_estimate": {
+                    "version": 3, "status": "estimated" if estimated else "unknown",
+                }} if name != "historical" else {}),
+            }
+            await tx.execute_raw('''INSERT INTO "LiteLLM_SpendLogs"
+                (request_id,api_key,session_id,model,"user","startTime","endTime",call_type,
+                 spend,prompt_tokens,completion_tokens,status,metadata)
+                VALUES ($1,'key',$5,'model','owner',$2::timestamp,$2::timestamp,'acompletion',
+                        $3::float8,100,0,'success',$4::jsonb)
+            ''', name, T0.isoformat(), spend - classifier, json.dumps(metadata), session_id)
+        await tx.execute_raw('''INSERT INTO "LiteLLM_AutoRouterUserSession"
+            (user_id,api_key,session_id,router_name,router_type,first_turn_at,last_turn_at,last_model,
+             turns,total_tokens,spend,saved_spend,savings_estimated_turns,savings_estimated_actual_spend,
+             savings_estimated_saved_spend)
+            SELECT 'owner',api_key,session_id,router_name,router_type,first_turn_at,last_turn_at,last_model,
+                turns,total_tokens,spend,saved_spend,savings_estimated_turns,savings_estimated_actual_spend,
+                savings_estimated_saved_spend FROM "LiteLLM_AutoRouterSession"
+        ''')
+        if damaged == "missing":
+            await tx.execute_raw('DELETE FROM "LiteLLM_SpendLogs" WHERE request_id = \'historical\'')
+        elif damaged == "cost":
+            await tx.execute_raw('UPDATE "LiteLLM_SpendLogs" SET spend = 1 WHERE request_id = \'historical\'')
+        rows: Final = await tx.query_raw(
+            HISTORICAL_SESSION_COMPARISONS_SQL, "2026-08-01", "2026-08-02", "key", user_id, None,
+        )
+        comparison: Final = SessionSavingsComparison.model_validate(rows[0])
+        assert comparison.saved_spend == historical_saved + 0.5
+        assert comparison.complete is (damaged is None)
+        assert comparison.classifier_cost == (pytest.approx(0.1 + current_classifier) if damaged is None else None)
+        assert comparison.coverage_fields(historical_saved + 0.5, 4) == {}
+        assert comparison.coverage_fields(historical_saved + 0.5, 3) == ({
+            "savings_estimated_turns": 2,
+            "savings_estimated_actual_spend": 10.0,
+            "savings_estimated_saved_spend": historical_saved + 0.5,
+        } if damaged is None else {})
 
 
 async def test_every_turn_lands_in_exactly_one_bucket(db):
@@ -208,8 +287,11 @@ async def test_subtotal_coverage_survives_legacy_and_rolling_writers(db, writers
     assert row["saved_spend"] == pytest.approx(0.02 * len(writers))
     assert row["classifier_cost"] == pytest.approx(0.004 * sum(writers))
     assert row["classifier_cost_recorded_turns"] == sum(writers)
+    assert row["savings_estimated_turns"] == sum(writers)
+    assert row["savings_estimated_actual_spend"] == pytest.approx(0.01 * sum(writers))
+    assert row["savings_estimated_saved_spend"] == pytest.approx(0.02 * sum(writers))
     groups: Final = await db.query_raw(
-        AUTOROUTER_BENCHMARKS_SQL, T0.isoformat(), (T0 + timedelta(days=1)).isoformat(), key
+        AUTOROUTER_BENCHMARKS_SQL, T0.isoformat(), (T0 + timedelta(days=1)).isoformat(), key, None
     )
     assert len(groups) == 1
     assert groups[0]["classifier_cost"] == row["classifier_cost"]
@@ -217,6 +299,32 @@ async def test_subtotal_coverage_survives_legacy_and_rolling_writers(db, writers
     assert groups[0]["turns"] == len(writers)
     assert groups[0]["spend"] == row["spend"]
     assert groups[0]["saved_spend"] == row["saved_spend"]
+    assert groups[0]["savings_estimated_turns"] == sum(writers)
+    assert groups[0]["savings_estimated_actual_spend"] == row["savings_estimated_actual_spend"]
+    assert groups[0]["savings_estimated_saved_spend"] == row["savings_estimated_saved_spend"]
+
+
+async def test_unknown_and_legacy_turns_preserve_actual_spend_without_entering_the_estimated_cohort(db: Prisma) -> None:
+    key: Final = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, spend=0.25, saved=-0.05, baseline="opus")
+    await _turn(
+        db, key, "B", T0 + timedelta(seconds=1), spend=0.7, saved=0, baseline="sonnet", estimated=False
+    )
+    await _legacy_turn(db, key, T0 + timedelta(seconds=2))
+
+    row: Final = await _row(db, key)
+    assert row["saved_spend"] == pytest.approx(-0.03)
+    assert row["savings_estimated_baseline_models"] == {"opus": 1}
+    groups: Final = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL, T0.isoformat(), (T0 + timedelta(days=1)).isoformat(), key, None
+    )
+    assert len(groups) == 1
+    for actual in (row, groups[0]):
+        assert actual["turns"] == 3
+        assert actual["spend"] == pytest.approx(0.96)
+        assert actual["savings_estimated_turns"] == 1
+        assert actual["savings_estimated_actual_spend"] == pytest.approx(0.25)
+        assert actual["savings_estimated_saved_spend"] == pytest.approx(-0.05)
 
 
 async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
@@ -242,6 +350,7 @@ async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
         None,
     )
     matching = [row for row in rows if row["router_name"] == router]
@@ -270,6 +379,7 @@ async def test_the_benchmarks_aggregate_can_filter_to_one_key(db):
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
         first_key,
+        None,
     )
     matching = [row for row in rows if row["router_name"] == router]
     assert len(matching) == 1
@@ -283,8 +393,158 @@ async def test_the_benchmarks_aggregate_can_filter_to_one_key(db):
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
         f"k-{uuid.uuid4()}",
+        None,
     )
     assert [row for row in unknown_key_rows if row["router_name"] == router] == []
+
+
+class _BenchmarkRow(TypedDict):
+    sessions: ReadOnly[int]
+    turns: ReadOnly[int]
+    same_model_turns: ReadOnly[int]
+    first_visit_turns: ReadOnly[int]
+    spend: ReadOnly[float]
+    saved_spend: ReadOnly[float]
+    tier_turns: ReadOnly[dict[str, int]]
+    cache_hits: ReadOnly[int]
+    savings_estimated_turns: ReadOnly[int]
+    savings_estimated_actual_spend: ReadOnly[float]
+    savings_estimated_saved_spend: ReadOnly[float]
+
+
+async def _scoped_benchmarks(
+    db: Prisma, router: str, user_id: str | None = None, key: str | None = None
+) -> tuple[_BenchmarkRow, ...]:
+    rows: Final = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+        key,
+        user_id,
+    )
+    return tuple(cast(_BenchmarkRow, row) for row in rows if row["router_name"] == router)
+
+
+async def test_users_keep_written_identity_across_shared_keys_and_keyless_sessions(db: Prisma) -> None:
+    router: Final = f"r-{uuid.uuid4()}"
+    alice: Final = f"u-{uuid.uuid4()}"
+    bob: Final = f"u-{uuid.uuid4()}"
+    first_key: Final = f"k-{uuid.uuid4()}"
+    second_key: Final = f"k-{uuid.uuid4()}"
+    await _legacy_turn(db, first_key, T0, router=router)
+    await _turn(db, first_key, "A", T0 + timedelta(seconds=10), router=router, user_id=alice, tier="simple")
+    await _turn(
+        db, first_key, "B", T0 + timedelta(seconds=20), router=router, user_id=bob, spend=0.03, saved=0.06, tier="complex"
+    )
+    await _turn(db, second_key, "C", T0, router=router, user_id=alice, spend=0.02, saved=0.04)
+    await _turn(db, "", "A", T0, router=router, user_id=alice, ttl=300)
+    await _turn(db, "", "A", T0 + timedelta(seconds=1), router=router, user_id=alice, hit=1)
+    await _turn(db, "", "B", T0, router=router, user_id=bob, spend=0.04, saved=0.08)
+    await _turn(db, second_key, "C", T0 - timedelta(days=40), router=router, user_id=alice, session_id="expired")
+
+    alice_rows: Final = await _scoped_benchmarks(db, router, user_id=alice)
+    bob_rows: Final = await _scoped_benchmarks(db, router, user_id=bob)
+    global_rows: Final = await _scoped_benchmarks(db, router)
+    key_rows: Final = await _scoped_benchmarks(db, router, key=first_key)
+    intersection: Final = await _scoped_benchmarks(db, router, user_id=alice, key=first_key)
+    assert len(alice_rows) == len(bob_rows) == len(global_rows) == len(key_rows) == len(intersection) == 1
+    assert (alice_rows[0]["sessions"], alice_rows[0]["turns"], alice_rows[0]["same_model_turns"]) == (3, 4, 1)
+    assert (bob_rows[0]["sessions"], bob_rows[0]["turns"], bob_rows[0]["first_visit_turns"]) == (2, 2, 2)
+    assert alice_rows[0]["spend"] == pytest.approx(0.05)
+    assert bob_rows[0]["spend"] == pytest.approx(0.07)
+    assert alice_rows[0]["tier_turns"] == {"simple": 1}
+    assert bob_rows[0]["tier_turns"] == {"complex": 1}
+    assert (alice_rows[0]["cache_hits"], bob_rows[0]["cache_hits"]) == (1, 0)
+    assert (global_rows[0]["sessions"], global_rows[0]["turns"]) == (4, 7)
+    assert (alice_rows[0]["savings_estimated_turns"], bob_rows[0]["savings_estimated_turns"]) == (4, 2)
+    assert global_rows[0]["savings_estimated_turns"] == 6
+    for scoped in (alice_rows[0], bob_rows[0]):
+        assert scoped["savings_estimated_actual_spend"] == pytest.approx(scoped["spend"])
+        assert scoped["savings_estimated_saved_spend"] == pytest.approx(scoped["saved_spend"])
+    assert global_rows[0]["spend"] == pytest.approx(alice_rows[0]["spend"] + bob_rows[0]["spend"] + 0.01)
+    assert global_rows[0]["saved_spend"] == pytest.approx(alice_rows[0]["saved_spend"] + bob_rows[0]["saved_spend"] + 0.02)
+    assert global_rows[0]["tier_turns"] == {"simple": 1, "complex": 1}
+    assert (key_rows[0]["sessions"], key_rows[0]["turns"]) == (1, 3)
+    assert key_rows[0]["spend"] == pytest.approx(0.05)
+    assert (intersection[0]["sessions"], intersection[0]["turns"]) == (1, 1)
+    assert intersection[0]["spend"] == pytest.approx(0.01)
+    assert await _scoped_benchmarks(db, router, user_id=bob, key=second_key) == ()
+    assert await _scoped_benchmarks(db, router, user_id=f"u-{uuid.uuid4()}") == ()
+    assert await _scoped_benchmarks(db, router, user_id="") == ()
+
+
+async def test_a_failed_user_projection_rolls_back_the_keys_increment(db: Prisma) -> None:
+    key: Final = f"k-{uuid.uuid4()}"
+    user_id: Final = "".join(str(uuid.uuid4()) for _ in range(200))
+    await _turn(db, key, "A", T0)
+    before: Final = await _row(db, key)
+
+    with pytest.raises(RawQueryError, match=r"index row (requires|size)"):
+        await _turn(db, key, "B", T0 + timedelta(seconds=1), user_id=user_id)
+
+    assert await _row(db, key) == before
+    assert await db.query_raw('SELECT user_id FROM "LiteLLM_AutoRouterUserSession" WHERE user_id = $1', user_id) == []
+
+    first_user: Final = f"u-{uuid.uuid4()}"
+    second_user: Final = f"u-{uuid.uuid4()}"
+    turns: Final = tuple(
+        AutoRouterTurnTransaction(
+            api_key=key,
+            user_id=user,
+            session_id="s1",
+            router_name="auto-1",
+            router_type="complexity",
+            model=model,
+            turn_at=T0 + timedelta(seconds=second),
+            total_tokens=100,
+            spend=0.01,
+            saved_spend=0.02,
+            classifier_cost=0.0,
+            covered=True,
+            cache_hit=False,
+            cache_ttl_seconds=None,
+            cache_touched=False,
+        )
+        for user, model, second in (
+            (first_user, "A", 1),
+            (user_id, "B", 2),
+            (first_user, "B", 3),
+            (second_user, "C", 4),
+            (first_user, "B", 5),
+            (second_user, "C", 6),
+            (user_id, "A", 7),
+        )
+    )
+    await flush_autorouter_turn_transactions(SimpleNamespace(db=db), tuple(reversed(turns)), n_retry_times=0)
+
+    key_row: Final = await _row(db, key)
+    assert (key_row["turns"], key_row["last_model"], key_row["unordered_turns"]) == (2, "A", 0)
+    assert key_row["spend"] == pytest.approx(0.02)
+    user_rows: Final = await db.query_raw('SELECT * FROM "LiteLLM_AutoRouterUserSession" WHERE api_key = $1', key)
+    by_user: Final = {row["user_id"]: row for row in user_rows}
+    assert set(by_user) == {first_user, second_user}
+    for user, count, model in ((first_user, 3, "B"), (second_user, 2, "C")):
+        row: Final = by_user[user]
+        assert (row["turns"], row["same_model_turns"], row["unordered_turns"], row["last_model"]) == (count, 1, 0, model)
+        assert row["spend"] == pytest.approx(count * 0.01)
+        assert row["saved_spend"] == pytest.approx(count * 0.02)
+
+
+async def test_user_session_cleanup_keeps_another_users_recent_keyless_session(db: Prisma) -> None:
+    router: Final = f"r-{uuid.uuid4()}"
+    expired_user: Final = f"u-{uuid.uuid4()}"
+    recent_user: Final = f"u-{uuid.uuid4()}"
+    await _turn(db, "", "A", T0 - timedelta(days=1), router=router, user_id=expired_user)
+    await _turn(db, "", "A", T0 + timedelta(days=1), router=router, user_id=recent_user)
+    cleaner: Final = SpendLogCleanup(general_settings={})
+
+    await cleaner._delete_old_autorouter_user_session_rows(
+        SimpleNamespace(db=db), T0.replace(tzinfo=timezone.utc), time.monotonic() + 60
+    )
+
+    assert await db.query_raw(
+        'SELECT user_id, turns FROM "LiteLLM_AutoRouterUserSession" WHERE router_name = $1', router
+    ) == [{"user_id": recent_user, "turns": 1}]
 
 
 async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db):
@@ -299,6 +559,7 @@ async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
         None,
     )
     matching = sorted(
@@ -384,6 +645,7 @@ async def test_the_benchmarks_aggregate_sums_tier_turns_across_sessions(db):
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
         None,
+        None,
     )
     grouped = next(row for row in rows if row["router_name"] == router)
     assert grouped["tier_turns"] == {"simple": 2, "complex": 1}
@@ -412,6 +674,7 @@ async def test_tier_maps_stay_separate_per_router_type_on_a_reconfigured_alias(d
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
         None,
+        None,
     )
     by_type = {row["router_type"]: row["tier_turns"] for row in rows if row["router_name"] == router}
     assert by_type == {"complexity": {"medium": 1}, "quality": {"2": 1}}
@@ -426,6 +689,7 @@ async def test_a_window_with_no_tiered_turns_aggregates_to_an_empty_map(db):
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
         None,
     )
     grouped = next(row for row in rows if row["router_name"] == router)

@@ -1,5 +1,6 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 """Tests for guardrail-block recording in
-``litellm.proxy._experimental.mcp_server.server.call_mcp_tool``.
+``litellm.proxy._experimental.mcp_server.operations.call_mcp_tool``.
 
 A pre-call MCP guardrail block *raises* into ``call_mcp_tool``'s
 ``except Exception``. The failure spend-log row that the Guardrails Monitor's
@@ -70,7 +71,7 @@ async def _call_block(logging_obj, order: list, *, user_api_key_auth=mock.sentin
 
     with mock.patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}):
         with contextlib.suppress(HTTPException):
-            await server.call_mcp_tool.__wrapped__(
+            await mcp_operations.call_mcp_tool.__wrapped__(
                 name="t",
                 arguments=None,
                 user_api_key_auth=user_api_key_auth,
