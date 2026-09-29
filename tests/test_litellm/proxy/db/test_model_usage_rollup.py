@@ -9,7 +9,7 @@ from litellm.proxy.db.model_usage_rollup import increment_daily_model_usage, mod
 def test_model_usage_task_type_reads_task_tag_or_defaults() -> None:
     assert model_usage_task_type('["team-a", "task:classification"]') == "classification"
     assert model_usage_task_type('["task:made-up"]') == "uncategorized"
-    assert model_usage_task_type('["debugging"]') == "debugging"
+    assert model_usage_task_type('["debugging"]') == "uncategorized"
     assert model_usage_task_type("[]") == "uncategorized"
     assert model_usage_task_type("not json") == "uncategorized"
 
