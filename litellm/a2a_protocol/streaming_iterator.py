@@ -12,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 if TYPE_CHECKING:
@@ -129,6 +130,8 @@ class A2AStreamingIterator(Generic[_StreamChunk]):
 
             # Build result for logging
             result: Final = self._build_logging_result(usage)
+
+            bind_budget_reservation_to_callbacks(self.logging_obj.litellm_params)
 
             # Call success handlers - they will build standard_logging_object
             asyncio.create_task(
