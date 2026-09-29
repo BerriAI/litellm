@@ -87,6 +87,13 @@ SLOTS: Final = MappingProxyType(
         "C2": Slot("C2", "Key-level callback langfuse_secret_key in key metadata.logging"),
         "C3": Slot("C3", "Team callback dd_api_key for the Datadog sink"),
         "D5": Slot("D5", "Request-supplied langfuse_secret_key in the request body"),
+        "F1": Slot("F1", "MCP server static auth_value registered through /v1/mcp/server"),
+        "F2": Slot("F2", "Per-user MCP OAuth access token from the authorization-code flow"),
+        "F2E": Slot("F2E", "Per-user MCP env var value stored through /v1/mcp/server/{server_id}/user-env-vars"),
+        "F3": Slot("F3", "Client x-mcp-<server>-authorization request header"),
+        "H1": Slot("H1", "Pass-through endpoint credential header resolved from os.environ"),
+        "H2": Slot("H2", "Vector store api_key declared in the proxy config.yaml vector_store_registry"),
+        "H2S": Slot("H2S", "Search tool api_key declared in the proxy config.yaml search_tools"),
     }
 )
 
