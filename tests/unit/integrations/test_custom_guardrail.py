@@ -546,9 +546,13 @@ class TestApplyGuardrailCheck:
         class ParentGuardrail(CustomGuardrail):
             """Parent that inherits apply_guardrail from CustomGuardrail"""
 
+            pass
+
         # Child class that only inherits apply_guardrail (doesn't override)
         class ChildGuardrailWithoutOverride(ParentGuardrail):
             """Child that only inherits apply_guardrail"""
+
+            pass
 
         # Child class that overrides apply_guardrail
         class ChildGuardrailWithOverride(ParentGuardrail):
@@ -2536,7 +2540,7 @@ class TestLoggingOnlyApplyGuardrail:
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
             ContentFilterGuardrail,
         )
-        from litellm.types.guardrails import BlockedWord, ContentFilterAction
+        from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="content-review",
@@ -2628,7 +2632,7 @@ class TestLoggingOnlyApplyGuardrail:
 
     @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):
-        guardrail: Final = _ApplyOnlyObserver(block=True)
+        guardrail = _ApplyOnlyObserver(block=True)
         kwargs, response = _logged_call([{"role": "user", "content": "flagged content"}])
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
@@ -2637,7 +2641,7 @@ class TestLoggingOnlyApplyGuardrail:
             ("request", ["flagged content"]),
             ("response", ["general kenobi"]),
         ]
-        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [entry["guardrail_status"] for entry in entries] == ["guardrail_intervened", "guardrail_intervened"]
 
     @pytest.mark.asyncio
@@ -2964,7 +2968,9 @@ async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response(
     from litellm.types.utils import Choices, Message, ModelResponse
 
     guardrail = _NativeLifecycleLoggingGuardrail()
-    assembled = ModelResponse(choices=[Choices(message=Message(role="assistant", content="assembled stream text"))])
+    assembled = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content="assembled stream text"))]
+    )
     sentinel_result = object()
     kwargs = {
         "model": "gpt-5.4-mini",

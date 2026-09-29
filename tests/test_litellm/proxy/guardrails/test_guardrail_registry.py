@@ -7,11 +7,11 @@ from pydantic import ValidationError
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
+    get_guardrail_initializer_from_hooks,
     GuardrailRegistry,
     InMemoryGuardrailHandler,
-    get_guardrail_initializer_from_hooks,
 )
-from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams, LoggingOnlyScope, Mode
+from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams, LoggingOnlyScope, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 

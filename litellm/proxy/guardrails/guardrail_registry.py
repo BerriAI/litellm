@@ -440,8 +440,8 @@ def _as_callback_tuple(
 def _configure_callback_scoping(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
 ) -> None:
-    custom_guardrail_callback.logging_only_scope = litellm_params.logging_only_scope
     logging_only_scope: Final = litellm_params.logging_only_scope
+    custom_guardrail_callback.logging_only_scope = logging_only_scope
     if logging_only_scope is not None and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(
         litellm_params.mode
     ):
