@@ -38,6 +38,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
+    InstallationPreference,
     ListPluginsResponse,
     PluginListItem,
     PluginResponse,
@@ -71,12 +72,18 @@ class _MarketplaceEntry(TypedDict, total=False):
     homepage: object
     keywords: object
     category: object
-    installationPreference: ReadOnly[str]
+    installationPreference: ReadOnly[InstallationPreference]
 
 
-def _get_manifest_string(manifest: Mapping[str, object], key: str) -> str | None:
-    value: Final = manifest.get(key)
-    return value if isinstance(value, str) else None
+def _get_installation_preference(manifest: Mapping[str, object]) -> InstallationPreference | None:
+    value: Final = manifest.get("installation_preference")
+    if not isinstance(value, str):
+        return None
+    match value:
+        case "available" | "auto_install" | "required":
+            return value
+        case _:
+            return None
 
 
 async def _get_prisma_client() -> object:
@@ -143,10 +150,16 @@ async def get_marketplace(request: Request, key: str | None = None):
                 verbose_proxy_logger.warning("Plugin %s has no source field, skipping", plugin.name)
                 continue
 
-            entry: _MarketplaceEntry = {
-                "name": plugin.name,
-                "source": manifest["source"],
-            }
+            installation_preference = _get_installation_preference(manifest)
+            entry: _MarketplaceEntry = (
+                {"name": plugin.name, "source": manifest["source"]}
+                if installation_preference is None
+                else {
+                    "name": plugin.name,
+                    "source": manifest["source"],
+                    "installationPreference": installation_preference,
+                }
+            )
 
             if plugin.version:
                 entry["version"] = plugin.version
@@ -160,10 +173,6 @@ async def get_marketplace(request: Request, key: str | None = None):
                 entry["keywords"] = manifest["keywords"]
             if "category" in manifest:
                 entry["category"] = manifest["category"]
-            if (installation_preference := _get_manifest_string(manifest, "installation_preference")) is not None:
-                entry["installationPreference"] = (  # pyright: ignore[reportTypedDictNotRequiredAccess]  # assembled incrementally
-                    installation_preference
-                )
 
             plugin_list.append(entry)
 
@@ -317,7 +326,7 @@ async def register_plugin(
         - homepage: Plugin homepage URL (optional)
         - keywords: Search keywords (optional)
         - category: Plugin category (optional)
-        - installation_preference: Marketplace installationPreference, e.g. 'auto_install' (optional)
+        - installation_preference: 'available', 'auto_install', or 'required' (optional)
 
     Returns:
         Registration status (action is always "created") and plugin information.
@@ -447,7 +456,7 @@ async def list_plugins(
                     category=manifest.get("category"),
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
-                    installation_preference=_get_manifest_string(manifest, "installation_preference"),
+                    installation_preference=_get_installation_preference(manifest),
                     enabled=p.enabled,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,
@@ -521,7 +530,7 @@ async def get_plugin(
             "homepage": manifest.get("homepage"),
             "keywords": manifest.get("keywords"),
             "category": manifest.get("category"),
-            "installation_preference": manifest.get("installation_preference"),
+            "installation_preference": _get_installation_preference(manifest),
             "enabled": plugin.enabled,
             "created_at": plugin.created_at.isoformat() if plugin.created_at else None,
             "updated_at": plugin.updated_at.isoformat() if plugin.updated_at else None,
@@ -572,7 +581,7 @@ async def update_plugin(
         - homepage: Plugin homepage URL (optional)
         - keywords: Search keywords (optional)
         - category: Plugin category (optional)
-        - installation_preference: Marketplace installationPreference, e.g. 'auto_install' (optional)
+        - installation_preference: 'available', 'auto_install', or 'required' (optional)
 
     Returns:
         Update status (action is always "updated") and plugin information.

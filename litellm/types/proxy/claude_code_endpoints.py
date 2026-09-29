@@ -2,7 +2,11 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
+from typing import Literal, TypeAlias
+
 from pydantic import BaseModel, Field
+
+InstallationPreference: TypeAlias = Literal["available", "auto_install", "required"]
 
 
 class PluginAuthor(BaseModel):
@@ -41,9 +45,13 @@ class PluginSpec(BaseModel):
     category: str | None = Field(None, description="Plugin category")
     domain: str | None = Field(None, description="Skill domain (e.g., 'Productivity')")
     namespace: str | None = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
-    installation_preference: str | None = Field(
+    installation_preference: InstallationPreference | None = Field(
         None,
-        description="Claude Code marketplace installationPreference for this plugin (e.g. 'auto_install')",
+        description=(
+            "Emitted as installationPreference on this plugin's marketplace.json entry. Claude Desktop auto-installs "
+            "an 'auto_install' plugin when the marketplace is served from its inference gateway origin and the "
+            "plugin is an archive source with a sha256"
+        ),
     )
 
 
@@ -108,7 +116,7 @@ class PluginListItem(BaseModel):
     category: str | None = None
     domain: str | None = None
     namespace: str | None = None
-    installation_preference: str | None = None
+    installation_preference: InstallationPreference | None = None
     enabled: bool
     created_at: str | None
     updated_at: str | None
@@ -132,7 +140,6 @@ class MarketplacePluginEntry(BaseModel):
     homepage: str | None = None
     keywords: list[str] | None = None
     category: str | None = None
-    installation_preference: str | None = None
 
 
 class MarketplaceResponse(BaseModel):
