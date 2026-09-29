@@ -4650,11 +4650,6 @@ class MCPServerManager:
         if server.spec_path or caller is None:
             return None
         auth: Final = caller.user_api_key_auth
-        signed_caller: Final = (
-            f"{auth.user_id}:{auth.api_key}"
-            if auth is not None and self._signs_caller_identity_upstream(server)
-            else None
-        )
         forwarded: Final = dict(self._forwarded_header_values(server, caller.raw_headers)) or None
         header_env: Final = self._build_stdio_env(server, caller.raw_headers)
         stdio_env: Final = None if header_env == self._build_stdio_env(server) else header_env
@@ -4663,10 +4658,16 @@ class MCPServerManager:
             if server.is_client_forwarded_token or server.auth_type == MCPAuth.oauth2_token_exchange
             else None
         )
-        _, digest = self._discovery_key(server, auth, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer)
-        if signed_caller is None:
-            return digest
-        return hashlib.sha256(f"{digest}:{signed_caller}".encode()).hexdigest()
+        _, digest = self._discovery_key(
+            server,
+            auth,
+            caller.mcp_auth_header,
+            forwarded,
+            stdio_env,
+            caller_bearer,
+            per_caller=self._signs_caller_identity_upstream(server),
+        )
+        return digest
 
     @staticmethod
     def _signs_caller_identity_upstream(server: MCPServer) -> bool:
@@ -4714,9 +4715,11 @@ class MCPServerManager:
         stdio_env: dict[str, str] | None,
         subject_token: str | None,
         credential_fingerprint: str | None = None,
+        per_caller: bool = False,
     ) -> _DiscoveryKey:
         per_user: Final = (
-            server.requires_per_user_auth
+            per_caller
+            or server.requires_per_user_auth
             or self._references_per_user_env_var(server)
             or server.delegate_auth_to_upstream
             or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
