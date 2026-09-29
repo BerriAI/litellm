@@ -131,11 +131,13 @@ def _latest_user_message(messages: Sequence[Mapping[str, object]]) -> tuple[Mapp
 
 
 def _message_blocks(message: Mapping[str, object], nested_tool_blocks: _NestedToolBlocks) -> tuple[_Block, ...]:
-    if message.get("type") in _TOOL_OUTPUT_ITEM_TYPES:
+    message_type: Final = message.get("type")
+    if isinstance(message_type, str) and message_type in _TOOL_OUTPUT_ITEM_TYPES:
         output: Final = message.get("output")
         blocks: Final = (output,) if _is_mapping(output) else _mappings(output)
         return tuple(_Block(block, from_tool=True) for block in blocks)
-    from_tool_message: Final = message.get("role") in _TOOL_ROLES
+    role: Final = message.get("role")
+    from_tool_message: Final = isinstance(role, str) and role in _TOOL_ROLES
     return tuple(
         entry
         for block in _mappings(message.get("content"))
@@ -203,7 +205,7 @@ def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
         mime: Final = f"image/{image_format}" if isinstance(image_format, str) else None
         return _classify_base64(mime, encoded, "image")
     for key in _CONVERSE_UNSCANNABLE_KEYS:
-        if key in block:
+        if block.get(key) is not None:
             return _Unscannable(key)
     return None
 

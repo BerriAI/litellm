@@ -1279,7 +1279,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         headers_dict: Final = dict(prepared_request.headers)  # mutable-ok: the masking helper requires a dict
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
-            {**bedrock_request_data, "content": _without_image_bytes(content)},
+            {**bedrock_request_data, "content": _without_image_bytes(content)}
+            if any("image" in item for item in content)
+            else bedrock_request_data,
             prepared_request.url,
             _get_masked_values(headers_dict),
         )
@@ -2564,8 +2566,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Documents, files, audio, video, and images sent by URL, by file id or in another format block the
         request unless ``skip_unscannable_attachments`` is set. ``checks`` mode calls the text-only
         InvokeGuardrailChecks API, so there every image counts as unscannable too. A failed ApplyGuardrail
-        call raises the same error the text scan of the same hook raises.
+        call raises the same error the text scan of the same hook raises. A subclass that overrides
+        ``apply_guardrail`` skips this scan.
         """
+        if type(self).apply_guardrail is not BedrockGuardrail.apply_guardrail:
+            return
         attachments: Final = find_request_attachments(
             data,
             call_type,

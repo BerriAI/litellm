@@ -4,6 +4,7 @@ Unit tests for Bedrock Guardrails
 
 import json
 import asyncio
+import logging
 from datetime import datetime, timezone
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,6 +15,7 @@ from fastapi import HTTPException
 
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
 from litellm.proxy._types import UserAPIKeyAuth
@@ -6374,3 +6376,59 @@ async def test_attachment_scan_debug_log_omits_image_bytes():
     logged = " ".join(str(call.args) for call in mock_debug.call_args_list)
     assert _ATTACHMENT_PNG_B64 not in logged
     assert f"<{len(_ATTACHMENT_PNG_B64)} base64 chars>" in logged
+
+
+@pytest.mark.asyncio
+async def test_text_only_debug_log_prints_the_signed_request_body():
+    guardrail = _attachment_guardrail()
+    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(
+        guardrail, _passing_bedrock_httpx_response("ok")
+    )
+    captured_records: list[logging.LogRecord] = []
+
+    class _RecordingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured_records.append(record)
+
+    handler = _RecordingHandler(level=logging.DEBUG)
+    previous_level = verbose_proxy_logger.level
+    verbose_proxy_logger.addHandler(handler)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    try:
+        with post_patch, credentials_patch, prepare_patch:
+            await guardrail.make_bedrock_api_request(
+                source="INPUT", messages=[{"role": "user", "content": "hello"}], request_data={}
+            )
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(previous_level)
+
+    body_lines = [
+        record.getMessage() for record in captured_records if record.getMessage().startswith("Bedrock AI request body")
+    ]
+    assert len(body_lines) == 1
+    assert "'content': ({'text': {'text': 'hello'}},)" in body_lines[0]
+
+
+class _CustomApplyGuardrail(BedrockGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_attachment_scan_skipped_when_subclass_overrides_apply_guardrail():
+    guardrail = _CustomApplyGuardrail(
+        guardrail_name="bedrock-attachments", guardrailIdentifier="gid", guardrailVersion="DRAFT"
+    )
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+        pdf_result = await guardrail.async_scan_request_attachments(
+            data=_pdf_chat_request(), call_type=CallTypes.acompletion.value
+        )
+        image_result = await guardrail.async_scan_request_attachments(
+            data=_image_only_chat_request(), call_type=CallTypes.acompletion.value
+        )
+
+    assert pdf_result is None
+    assert image_result is None
+    assert mock_post.await_count == 0

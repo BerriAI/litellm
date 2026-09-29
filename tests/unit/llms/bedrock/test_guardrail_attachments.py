@@ -373,3 +373,27 @@ def test_latest_user_message_only():
 
     assert list(found.images) == [_png_item()]
     assert found.unscannable == ()
+
+
+def test_non_string_role_and_type_do_not_raise():
+    data = {
+        "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": f"data:image/png;base64,{PNG_B64}"}]},
+            {"role": ["tool"], "type": {"x": 1}, "content": [{"type": "file", "file": {"file_id": "f"}}]},
+            {"role": {"r": "tool"}, "type": ["function_call_output"], "content": [{"type": "file", "file": {}}]},
+        ]
+    }
+
+    found = find_request_attachments(data, CallTypes.acompletion.value, True, False)
+
+    assert list(found.images) == [_png_item()]
+    assert found.unscannable == ("file", "file")
+
+
+def test_converse_null_document_is_not_an_attachment():
+    data = _converse(_png_item(), {"document": None}, {"video": None, "audio": None}, {"audio": {"format": "mp3"}})
+
+    found = find_request_attachments(data, CallTypes.allm_passthrough_route.value, False, False)
+
+    assert list(found.images) == [_png_item()]
+    assert found.unscannable == ("audio",)
