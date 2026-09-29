@@ -8330,6 +8330,14 @@ def normalize_route_for_root_path(route: str) -> str | None:
     return route
 
 
+def strip_server_root_path(route: str) -> str:
+    """Return a route with the SERVER_ROOT_PATH prefix removed when present."""
+    root_path: Final = get_server_root_path().rstrip("/")
+    if root_path and route.startswith(root_path + "/"):
+        return route[len(root_path) :]
+    return route
+
+
 def get_prisma_client_or_throw(message: str):
     from litellm.proxy.proxy_server import prisma_client
 

@@ -134,7 +134,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
-    normalize_route_for_root_path,
+    strip_server_root_path,
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
@@ -860,12 +860,11 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
     api_key: str,
 ) -> UserAPIKeyAuth | str:
     is_mapped_pass_through_route: bool = False
-    normalized_route: Final = normalize_route_for_root_path(route)
-    if normalized_route is not None:
-        for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if normalized_route.startswith(mapped_route):
-                is_mapped_pass_through_route = True
-                break
+    normalized_route: Final = strip_server_root_path(route)
+    for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+        if normalized_route == mapped_route or normalized_route.startswith(mapped_route + "/"):
+            is_mapped_pass_through_route = True
+            break
     if is_mapped_pass_through_route:
         if request.headers.get("litellm_user_api_key") is not None:
             api_key = request.headers.get("litellm_user_api_key") or ""

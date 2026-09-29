@@ -3601,8 +3601,30 @@ def test_mapped_pass_through_routes_with_server_root_path():
         )
         assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/litellm/bedrock/model/invoke") is True
 
-        # bare route without prefix should not match when root is set
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/vertex_ai/v1/projects/foo") is False
+        # get_request_route() supplies bare paths after stripping root_path.
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/vertex_ai/v1/projects/foo") is True
+
+
+@pytest.mark.parametrize("server_root_path", ["", "/", "/api/v1", "/api/v1/"])
+def test_typesafe_mapped_pass_through_route_with_server_root_path(server_root_path):
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch(
+        "litellm.proxy.utils.get_server_root_path", return_value=server_root_path
+    ):
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/typesafe/decisions") is True
+        if server_root_path not in ("", "/"):
+            assert (
+                InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                    f"{server_root_path.rstrip('/')}/typesafe/decisions"
+                )
+                is True
+            )
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/anthropic/v1/messages") is True
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/typesafeevil/decisions") is False
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/not-a-passthrough/decisions") is False
 
 
 @pytest.mark.asyncio
