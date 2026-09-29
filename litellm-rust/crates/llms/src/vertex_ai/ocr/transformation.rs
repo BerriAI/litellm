@@ -12,9 +12,10 @@ use crate::{
             BaseOcrConfig, OcrConnection, OcrEnvironment, OcrRequestContext, PreparedOcrRequest,
         },
     },
-    mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
+    mistral::ocr::transformation::MistralOcrConfig,
 };
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::providers::mistral::ocr::MistralOcrRequest;
 
 const DEFAULT_LOCATION: &str = "us-central1";
 

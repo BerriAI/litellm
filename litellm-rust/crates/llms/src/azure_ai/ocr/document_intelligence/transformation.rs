@@ -4,11 +4,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
-use litellm_python_compat::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
-use serde_with::serde_as;
+use serde::Serialize;
+use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::base_llm::ocr::{
@@ -25,6 +23,10 @@ use crate::base_llm::ocr::{
 use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
+use litellm_llms_types::providers::azure::{
+    AzureDocumentIntelligenceOperation, AzureDocumentIntelligencePage, DocumentIntelligenceRequest,
+    OperationStatus,
+};
 
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
 const AZURE_DI_DEFAULT_WIDTH: f64 = 8.5;
@@ -39,89 +41,6 @@ pub struct DocumentIntelligenceParams {
     pub pages: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub features: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum DocumentIntelligenceRequest {
-    UrlSource {
-        #[serde(rename = "urlSource")]
-        url_source: String,
-    },
-    Base64Source {
-        #[serde(rename = "base64Source")]
-        base64_source: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum OperationStatus {
-    Succeeded,
-    Running,
-    NotStarted,
-    Failed,
-    Unknown(String),
-}
-
-impl<'de> Deserialize<'de> for OperationStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match String::deserialize(deserializer)?.as_str() {
-            "succeeded" => Self::Succeeded,
-            "running" => Self::Running,
-            "notStarted" => Self::NotStarted,
-            "failed" => Self::Failed,
-            value => Self::Unknown(value.to_string()),
-        })
-    }
-}
-
-impl std::fmt::Display for OperationStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Succeeded => "succeeded",
-            Self::Running => "running",
-            Self::NotStarted => "notStarted",
-            Self::Failed => "failed",
-            Self::Unknown(value) => value,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct AzureDocumentIntelligenceOperation {
-    status: Option<OperationStatus>,
-    #[serde(rename = "analyzeResult")]
-    analyze_result: Option<AzureDocumentIntelligenceAnalyzeResult>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-struct AzureDocumentIntelligenceAnalyzeResult {
-    pub content: Option<String>,
-    #[serde(default)]
-    pub pages: Vec<AzureDocumentIntelligencePage>,
-    pub tables: Option<Vec<Map<String, Value>>>,
-    #[serde(rename = "keyValuePairs")]
-    pub key_value_pairs: Option<Vec<Map<String, Value>>>,
-}
-
-#[serde_as]
-#[derive(Clone, Debug, Deserialize)]
-struct AzureDocumentIntelligencePage {
-    #[serde(rename = "pageNumber")]
-    #[serde_as(deserialize_as = "Option<LaxI64>")]
-    pub page_number: Option<i64>,
-    #[serde_as(deserialize_as = "Option<FiniteF64>")]
-    pub width: Option<f64>,
-    #[serde_as(deserialize_as = "Option<FiniteF64>")]
-    pub height: Option<f64>,
-    pub unit: Option<String>,
-    #[serde(default)]
-    pub lines: Vec<AzureDocumentIntelligenceLine>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct AzureDocumentIntelligenceLine {
-    pub content: Option<String>,
 }
 
 #[derive(Clone, Debug)]

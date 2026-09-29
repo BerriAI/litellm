@@ -1,6 +1,4 @@
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::base_llm::ocr::{
     error::Error,
@@ -9,37 +7,12 @@ use crate::base_llm::ocr::{
         BaseOcrConfig, OcrConnection, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
-use litellm_llms_types::formats::ocr::{
-    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
-};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::providers::mistral::ocr::{MistralOcrRequest, MistralOcrResponse};
 
 const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
 
 const MISTRAL_OCR_API_KEY_ENV_VAR: &str = "MISTRAL_API_KEY";
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MistralOcrRequest {
-    pub model: String,
-    pub document: OcrDocument,
-    #[serde(flatten)]
-    pub params: OpaqueParams,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct MistralOcrResponse {
-    #[serde(default)]
-    pub pages: Vec<OcrPage>,
-    #[serde(
-        default,
-        deserialize_with = "serde_with::rust::double_option::deserialize"
-    )]
-    pub model: Option<Option<String>>,
-    pub document_annotation: Option<Value>,
-    pub usage_info: Option<OcrUsageInfo>,
-
-    #[serde(flatten)]
-    pub extra_fields: serde_json::Map<String, Value>,
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct MistralOcrConfig;
@@ -118,7 +91,7 @@ impl BaseOcrConfig for MistralOcrConfig {
         Ok(MistralOcrRequest {
             model: model.to_string(),
             document,
-            params: optional_params.clone(),
+            params: optional_params.clone().into(),
         })
     }
 
