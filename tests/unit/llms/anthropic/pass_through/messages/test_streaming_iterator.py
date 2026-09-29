@@ -19,6 +19,7 @@ from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     _is_provider_error_chunk,
     anthropic_messages_response_as_sse_events,
     is_anthropic_content_delta_chunk,
+    is_anthropic_ping_chunk,
     parse_anthropic_error_event,
 )
 
@@ -169,6 +170,25 @@ def test_is_message_stop_chunk():
     assert _is_message_stop_chunk(b'event: message_stop\ndata: {}\n\n') is True
     assert _is_message_stop_chunk(b"raw-bytes") is False
     assert _is_message_stop_chunk("message_stop") is False
+
+
+@pytest.mark.parametrize(
+    ("chunk", "expected"),
+    [
+        (b'event: ping\ndata: {"type": "ping"}\n\n', True),
+        (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n', True),
+        (b'event: ping\ndata: {"type": "ping"}\n\nevent: ping\ndata: {"type": "ping"}\n\n', True),
+        ({"type": "ping"}, True),
+        (b'event: ping\ndata: {"ty', False),
+        (b'pe": "ping"}\n\n', False),
+        (b'pe": "message_start"}}\n\nevent: ping\ndata: {"type": "ping"}\n\n', False),
+        (b'event: ping\ndata: {"type": "ping"}\n\nevent: content_block_delta\ndata: {}\n\n', False),
+        ({"type": "message_start"}, False),
+        ("event: ping", False),
+    ],
+)
+def test_is_anthropic_ping_chunk_only_matches_whole_ping_frames(chunk: object, expected: bool):
+    assert is_anthropic_ping_chunk(chunk) is expected, chunk
 
 
 def test_is_message_stop_chunk_ignores_substring_in_payload():
