@@ -175,7 +175,7 @@ fn run_public(
                 )),
                 None => route,
             };
-            Ok(route.machine(request, cache_options))
+            Ok(route.machine(request, cache_options.policy))
         },
         host::ChatCompletionsPythonHost(host),
         hooks,

@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    marker::PhantomData,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -7,7 +8,8 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
-    CacheOptions, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope, cache_key,
+    CacheOptions, CachePolicy, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
+    ScopedCache, cache_key,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -77,7 +79,7 @@ impl CacheSession {
         options: Option<CacheOptions>,
         request: &CacheRequest,
     ) -> Option<Self> {
-        let options = options.filter(CacheOptions::enabled)?;
+        let options = options.filter(|options| options.policy.enabled())?;
         let service = service?;
         let input = request.input.clone();
         let request = options.request(&service.config().namespace, P::SURFACE, input);
@@ -198,81 +200,137 @@ where
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
     let session = CacheSession::prepare::<P>(cache, options, &request);
-    let hit = match &session {
-        Some(session) => session.lookup::<P>().await.and_then(|entry| {
-            let output = match entry {
-                CachedOutput::Response(response) => Some(CallOutput::Complete(response)),
-                CachedOutput::Stream(data) => P::replay(Bytes::from(data)),
-            };
-            output.map(|output| (output, cache_key(&session.request.key)))
-        }),
-        None => None,
+    let cache = CallCache::<P> {
+        session,
+        protocol: PhantomData,
     };
+    let hit = cache.lookup().await;
     let (output, source) = match hit {
-        Some((output, key)) => (output, ResultSource::Cache { key }),
+        Some(hit) => hit,
         None => (provider().await?, ResultSource::Provider),
     };
-    let from_provider = source == ResultSource::Provider;
     publish(
         ExecutionFacts {
             provider: identity,
-            source,
+            source: source.clone(),
         },
         interceptors,
         observers,
     )
     .await?;
-    let Some(session) =
-        session.filter(|session| from_provider && session.request.controls.writes())
-    else {
-        return Ok(output);
-    };
-    match output {
-        CallOutput::Complete(response) => {
-            session.store_response::<P>(&response).await;
-            Ok(CallOutput::Complete(response))
-        }
-        CallOutput::Stream { head, chunks } => {
-            let captured = stream::try_unfold(
-                (chunks, Some(Vec::<u8>::new()), session),
-                |(mut chunks, captured, session)| async move {
-                    match chunks.try_next().await? {
-                        Some(chunk) => {
-                            let captured = captured.and_then(|mut data| {
-                                let bytes = P::bytes(&chunk);
-                                if data.len().saturating_add(bytes.len())
-                                    > session.service.config().max_entry_bytes
-                                {
-                                    return None;
-                                }
-                                data.extend_from_slice(bytes);
-                                Some(data)
-                            });
-                            Ok(Some((chunk, (chunks, captured, session))))
-                        }
-                        None => {
-                            if let Some(data) = captured
-                                && let Ok(text) = String::from_utf8(data)
-                                && successful_stream(&text, P::TERMINAL_EVENT)
-                                && let Ok(entry) = serde_json::to_value(ResponseEnvelope::new(
-                                    P::SURFACE,
-                                    CachedOutput::<Value>::Stream(text),
-                                ))
-                            {
-                                session.store(entry).await;
-                            }
-                            Ok::<_, RouteError>(None)
-                        }
-                    }
-                },
-            )
-            .boxed();
-            Ok(CallOutput::Stream {
-                head,
-                chunks: captured,
+    Ok(cache.finish(output, &source).await)
+}
+
+pub(crate) struct CallCache<P> {
+    session: Option<CacheSession>,
+    protocol: PhantomData<P>,
+}
+
+impl<P: StreamCachable> CallCache<P> {
+    pub(crate) fn from_wire(
+        cache: Option<&ScopedCache>,
+        policy: CachePolicy,
+        identity: &ProviderIdentity,
+        wire: &WireRequest,
+    ) -> Self {
+        let session = cache.and_then(|cache| {
+            if !policy.enabled() {
+                return None;
+            }
+            let options = cache.options(Some(policy));
+            let request = CacheRequest::from_wire(identity.clone(), Some(wire));
+            Some(CacheSession {
+                request: options.request(
+                    &cache.service.config().namespace,
+                    P::SURFACE,
+                    request.input,
+                ),
+                service: cache.service.clone(),
             })
+        });
+        Self {
+            session,
+            protocol: PhantomData,
         }
     }
+
+    pub(crate) async fn lookup(&self) -> Option<(OutputOf<P>, ResultSource)>
+    where
+        P::Response: DeserializeOwned,
+    {
+        let session = self.session.as_ref()?;
+        let output = match session.lookup::<P>().await? {
+            CachedOutput::Response(response) => CallOutput::Complete(response),
+            CachedOutput::Stream(data) => P::replay(Bytes::from(data))?,
+        };
+        Some((
+            output,
+            ResultSource::Cache {
+                key: cache_key(&session.request.key),
+            },
+        ))
+    }
+
+    pub(crate) async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P>
+    where
+        P::Response: Serialize,
+    {
+        let Some(session) = self.session.filter(|session| {
+            *source == ResultSource::Provider && session.request.controls.writes()
+        }) else {
+            return output;
+        };
+        match output {
+            CallOutput::Complete(response) => {
+                session.store_response::<P>(&response).await;
+                CallOutput::Complete(response)
+            }
+            CallOutput::Stream { head, chunks } => CallOutput::Stream {
+                head,
+                chunks: capture_stream::<P>(chunks, session),
+            },
+        }
+    }
+}
+
+fn capture_stream<P: StreamCachable>(
+    chunks: futures_util::stream::BoxStream<'static, Result<P::Chunk, RouteError>>,
+    session: CacheSession,
+) -> futures_util::stream::BoxStream<'static, Result<P::Chunk, RouteError>> {
+    stream::try_unfold(
+        (chunks, Some(Vec::<u8>::new()), session),
+        |(mut chunks, captured, session)| async move {
+            match chunks.try_next().await? {
+                Some(chunk) => {
+                    let captured = captured.and_then(|mut data| {
+                        let bytes = P::bytes(&chunk);
+                        if data.len().saturating_add(bytes.len())
+                            > session.service.config().max_entry_bytes
+                        {
+                            return None;
+                        }
+                        data.extend_from_slice(bytes);
+                        Some(data)
+                    });
+                    Ok(Some((chunk, (chunks, captured, session))))
+                }
+                None => {
+                    if let Some(data) = captured
+                        && let Ok(text) = String::from_utf8(data)
+                        && successful_stream(&text, P::TERMINAL_EVENT)
+                        && let Ok(entry) = serde_json::to_value(ResponseEnvelope::new(
+                            P::SURFACE,
+                            CachedOutput::<Value>::Stream(text),
+                        ))
+                    {
+                        session.store(entry).await;
+                    }
+                    Ok::<_, RouteError>(None)
+                }
+            }
+        },
+    )
+    .boxed()
 }
 
 fn now() -> Duration {
