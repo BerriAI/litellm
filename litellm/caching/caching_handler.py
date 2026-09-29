@@ -1033,7 +1033,7 @@ class LLMCachingHandler:
         self,
         result: object,
         original_function: Callable,
-        kwargs: Mapping[str, object],
+        kwargs: dict[str, Any],
         args: tuple[object, ...] | None = None,
     ):
         """
@@ -1058,7 +1058,7 @@ class LLMCachingHandler:
             return
         cache: Final = litellm.cache
 
-        new_kwargs: Final = dict(kwargs)
+        new_kwargs: Final = kwargs.copy()
         new_kwargs.update(
             convert_args_to_kwargs(
                 original_function,
