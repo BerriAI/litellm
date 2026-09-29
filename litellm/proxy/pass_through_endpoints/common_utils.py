@@ -43,11 +43,15 @@ def _encrypt_header_value(name: str, value: JsonValue, new_encryption_key: str |
 
 
 def _decrypted(name: str, value: str) -> str | None:
-    return decrypt_value_helper(
-        value=value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX),
-        key=name,
-        exception_type="debug",
-        return_original_value=False,
+    """Plaintext of a marked value; None when it does not decrypt or decrypts to an empty string."""
+    return (
+        decrypt_value_helper(
+            value=value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX),
+            key=name,
+            exception_type="debug",
+            return_original_value=False,
+        )
+        or None
     )
 
 

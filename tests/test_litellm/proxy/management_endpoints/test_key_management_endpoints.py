@@ -21203,6 +21203,47 @@ async def test_rotate_master_key_leaves_pass_through_headers_under_salt_key(monk
 
 
 @pytest.mark.asyncio
+async def test_rotate_master_key_continues_when_pass_through_header_reencryption_fails(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(
+        return_value=[MagicMock(param_name="general_settings", param_value={})]
+    )
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        key_management_endpoints,
+        "_reencrypt_pass_through_endpoint_headers",
+        AsyncMock(side_effect=RuntimeError("general_settings write fault")),
+    )
+    later_steps = {
+        name: AsyncMock()
+        for name in (
+            "rotate_mcp_server_credentials_master_key",
+            "rotate_mcp_user_credentials_master_key",
+            "rotate_mcp_user_env_vars_master_key",
+            "rotate_sso_identity_assertions_master_key",
+        )
+    }
+    for name, step in later_steps.items():
+        monkeypatch.setattr(key_management_endpoints, name, step)
+
+    await key_management_endpoints._rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    assert all(step.await_count == 1 for step in later_steps.values())
+    mock_prisma_client.db.litellm_credentialstable.find_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_rotate_master_key_reencrypts_pass_through_headers_on_the_writer(monkeypatch):
     from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
     from litellm.proxy.management_endpoints import key_management_endpoints

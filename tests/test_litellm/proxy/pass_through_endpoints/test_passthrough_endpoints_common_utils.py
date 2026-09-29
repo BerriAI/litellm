@@ -230,3 +230,9 @@ def test_undecryptable_pass_through_header_names(salt_key):
 def test_decrypt_pass_through_headers_keeps_a_bare_marker_literal(salt_key):
     assert decrypt_pass_through_headers({"x-tag": _ENC}) == {"x-tag": _ENC}
     assert undecryptable_pass_through_header_names({"x-tag": _ENC}) == frozenset()
+
+
+@pytest.mark.parametrize("value", [_ENC + "***", _ENC + "!!"])
+def test_decrypt_pass_through_headers_keeps_a_marked_value_that_decrypts_to_nothing(salt_key, value):
+    assert decrypt_pass_through_headers({"x-tag": value}) == {"x-tag": value}
+    assert undecryptable_pass_through_header_names({"x-tag": value}) == {"x-tag"}

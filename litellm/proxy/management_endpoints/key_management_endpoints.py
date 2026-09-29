@@ -5353,7 +5353,10 @@ async def _rotate_master_key(
                 )
 
         if os.getenv(SALT_KEY_ENV_VAR) is None:
-            await _reencrypt_pass_through_endpoint_headers(prisma_client, new_master_key)
+            try:
+                await _reencrypt_pass_through_endpoint_headers(prisma_client, new_master_key)
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to rotate pass-through endpoint headers: %s", str(e))
 
     # 4. process MCP server table
     try:
