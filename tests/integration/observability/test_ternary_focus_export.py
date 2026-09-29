@@ -226,6 +226,21 @@ def _marker_upload_groups(
     )
 
 
+def _marker_upload_summaries(
+    records: tuple[MultipartRecord, ...], alias: str, marker: str
+) -> tuple[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...]], ...]:
+    groups: Final = _marker_upload_groups(records, alias, marker)
+    return tuple(
+        (
+            upload_id,
+            tuple(int(record.headers["x-ternary-chunk-index"]) for record in chunks),
+            tuple(int(record.headers["x-ternary-chunk-total"]) for record in chunks),
+            tuple(record.status for record in chunks),
+        )
+        for upload_id, chunks in groups
+    )
+
+
 def _rows_for_marker(records: tuple[MultipartRecord, ...], alias: str, marker: str) -> tuple[CsvRow, ...]:
     return tuple(
         chain.from_iterable(
@@ -563,51 +578,43 @@ def test_ternary_stops_after_chunk_two_fails_then_retries_with_a_fresh_id(ternar
     marker: Final = f"{identity}-{'x' * 50_000}"
     alias: Final = f"{identity}-alias"
     seeded_count: Final = 350
-    ternary_rig.sink.set_fail_chunk_once(1)
+    ternary_rig.sink.set_fail_chunk_once(1, api_key_alias=alias)
     with ternary_rig.owned.gateway.scenario() as scenario:
         key: Final = _request_key(scenario, alias, _models(scenario, ternary_rig.provider))
         try:
             _seed_chunk_rows(key, marker, seeded_count)
-            partial_groups: Final = eventually(
-                lambda: _marker_upload_groups(ternary_rig.sink.records, alias, marker),
-                lambda groups: any(
-                    any(record.status == 500 and record.headers["x-ternary-chunk-index"] == "1" for record in chunks)
-                    for _, chunks in groups
+            partial_uploads: Final = eventually(
+                lambda: _marker_upload_summaries(ternary_rig.sink.records, alias, marker),
+                lambda uploads: any(
+                    any(index == 1 and status == 500 for index, status in zip(indices, statuses))
+                    for _, indices, _, statuses in uploads
                 ),
                 seconds=80,
             )
-            failed_id, failed_chunks = next(
-                (upload_id, chunks)
-                for upload_id, chunks in partial_groups
-                if any(record.status == 500 and record.headers["x-ternary-chunk-index"] == "1" for record in chunks)
+            failed_id, failed_indices, failed_statuses = next(
+                (upload_id, indices, statuses)
+                for upload_id, indices, _, statuses in partial_uploads
+                if any(index == 1 and status == 500 for index, status in zip(indices, statuses))
             )
-            failed_indices: Final = tuple(int(record.headers["x-ternary-chunk-index"]) for record in failed_chunks)
             assert failed_indices == (0, 1)
-            assert tuple(record.status for record in failed_chunks) == (200, 500)
-            assert all(int(record.headers["x-ternary-chunk-index"]) < 2 for record in failed_chunks)
+            assert failed_statuses == (200, 500)
+            assert all(index < 2 for index in failed_indices)
             retried: Final = eventually(
-                lambda: _marker_upload_groups(ternary_rig.sink.records, alias, marker),
-                lambda groups: any(
-                    upload_id != failed_id
-                    and len(chunks) >= 2
-                    and frozenset(int(record.headers["x-ternary-chunk-index"]) for record in chunks)
-                    == frozenset(range(int(chunks[0].headers["x-ternary-chunk-total"])))
-                    for upload_id, chunks in groups
+                lambda: _marker_upload_summaries(ternary_rig.sink.records, alias, marker),
+                lambda uploads: any(
+                    upload_id != failed_id and len(indices) >= 2 and frozenset(indices) == frozenset(range(totals[0]))
+                    for upload_id, indices, totals, _ in uploads
                 ),
                 seconds=80,
             )
-            retry_id, retry_chunks = next(
-                (
-                    (upload_id, chunks)
-                    for upload_id, chunks in retried
-                    if upload_id != failed_id
-                    and len(chunks) >= 2
-                    and frozenset(int(record.headers["x-ternary-chunk-index"]) for record in chunks)
-                    == frozenset(range(int(chunks[0].headers["x-ternary-chunk-total"])))
-                )
+            retry_id: Final = next(
+                upload_id
+                for upload_id, indices, totals, _ in retried
+                if upload_id != failed_id and len(indices) >= 2 and frozenset(indices) == frozenset(range(totals[0]))
             )
             final_groups: Final = _marker_upload_groups(ternary_rig.sink.records, alias, marker)
             final_failed_chunks: Final = next(chunks for upload_id, chunks in final_groups if upload_id == failed_id)
+            retry_chunks: Final = next(chunks for upload_id, chunks in final_groups if upload_id == retry_id)
             assert tuple(int(record.headers["x-ternary-chunk-index"]) for record in final_failed_chunks) == (0, 1)
             failed_total: Final = int(final_failed_chunks[0].headers["x-ternary-chunk-total"])
             assert failed_total >= 3

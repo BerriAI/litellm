@@ -97,6 +97,7 @@ class MultipartSink:
         self._status_override: int | None = None
         self._redirect_location: str | None = None
         self._fail_chunk_index: int | None = None
+        self._fail_chunk_api_key_alias: str | None = None
         self._failed_chunk_once = False
         self._delay_seconds = delay_seconds
 
@@ -148,9 +149,10 @@ class MultipartSink:
         with self._lock:
             self._redirect_location = location
 
-    def set_fail_chunk_once(self, chunk_index: int | None) -> None:
+    def set_fail_chunk_once(self, chunk_index: int | None, *, api_key_alias: str | None = None) -> None:
         with self._lock:
             self._fail_chunk_index = chunk_index
+            self._fail_chunk_api_key_alias = api_key_alias
             self._failed_chunk_once = False
 
     def set_delay(self, seconds: float) -> None:
@@ -169,7 +171,12 @@ class MultipartSink:
             record: Final = parse_multipart(request)
             chunk_index: Final = int(record.headers.get("x-ternary-chunk-index", "0"))
             with self._lock:
-                failed_chunk: Final = self._fail_chunk_index == chunk_index and not self._failed_chunk_once
+                failure_alias_matches: Final = self._fail_chunk_api_key_alias is None or any(
+                    row.tags.get("api_key_alias") == self._fail_chunk_api_key_alias for row in record.rows
+                )
+                failed_chunk: Final = (
+                    self._fail_chunk_index == chunk_index and not self._failed_chunk_once and failure_alias_matches
+                )
                 redirect_location: Final = None if failed_chunk else self._redirect_location
                 status: Final = (
                     500 if failed_chunk else self._status_override or (307 if redirect_location is not None else 200)
