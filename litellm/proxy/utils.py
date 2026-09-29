@@ -41,7 +41,6 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    Union,
     cast,
     overload,
 )
@@ -8327,14 +8326,6 @@ def normalize_route_for_root_path(route: str) -> str | None:
         if route.startswith(root_path + "/"):
             return route[len(root_path) :]
         return None
-    return route
-
-
-def strip_server_root_path(route: str) -> str:
-    """Return a route with the SERVER_ROOT_PATH prefix removed when present."""
-    root_path: Final = get_server_root_path().rstrip("/")
-    if root_path and route.startswith(root_path + "/"):
-        return route[len(root_path) :]
     return route
 
 

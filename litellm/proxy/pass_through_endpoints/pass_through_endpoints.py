@@ -102,7 +102,6 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import strip_server_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
@@ -3143,12 +3142,14 @@ class InitPassThroughEndpointHelpers:
     @staticmethod
     def _route_for_registry_lookup(route: str) -> str:
         """
-        Normalize an incoming route to the bare path stored in the registry.
+        Return the root-relative route used as a registry key.
 
-        Registry keys store root-stripped paths. Callers may pass routes from
-        ``get_request_route()`` or prefixed ``request.url.path`` values.
+        Registry keys and all callers of this helper use routes from
+        ``get_request_route()``. They are already root-stripped, so stripping
+        again would make a deployment root that overlaps a route name ambiguous
+        (for example root ``/typesafe`` and route ``/typesafe/decisions``).
         """
-        return strip_server_root_path(route)
+        return route
 
     @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
@@ -3165,7 +3166,7 @@ class InitPassThroughEndpointHelpers:
             bool: True if route is a registered pass-through endpoint, False otherwise
         """
         ## CHECK IF MAPPED PASS THROUGH ENDPOINT
-        normalized_route: Final = strip_server_root_path(route)
+        normalized_route: Final = route
         for mapped_route in LiteLLMRoutes.mapped_pass_through_routes.value:
             if normalized_route == mapped_route or normalized_route.startswith(mapped_route + "/"):
                 return True
