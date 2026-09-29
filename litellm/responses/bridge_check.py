@@ -44,6 +44,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
+    deployment_mode: str | None = None,
 ) -> tuple[dict, str]:
     model_info: dict[str, object] = {}
 
@@ -72,7 +73,7 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-    if web_search_options is not None and custom_llm_provider == "xai":
+    if deployment_mode == "responses" or (web_search_options is not None and custom_llm_provider == "xai"):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
 
