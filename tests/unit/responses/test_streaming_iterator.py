@@ -279,6 +279,7 @@ async def test_completed_event_is_unwrapped_only_for_non_streaming_callers(strea
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
 async def test_completed_response_builds_real_spend_log_payload(stream: bool):
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
     from litellm.types.llms.openai import ResponseAPIUsage
 
@@ -327,7 +328,7 @@ async def test_completed_response_builds_real_spend_log_payload(stream: bool):
     iterator: Final = ResponsesAPIStreamingIterator(
         response=httpx.Response(200),
         model=model,
-        responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=logging_obj,
     )
     iterator.completed_response = ResponseCompletedEvent(
