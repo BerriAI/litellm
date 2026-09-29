@@ -8620,6 +8620,30 @@ def test_model_has_no_cost_mapping_unpriced_model_is_true():
     assert model_has_no_cost_mapping(model="unpriced-group", llm_router=router) is True
 
 
+def test_model_has_no_cost_mapping_resolves_model_group_alias():
+    """This helper and the zero-cost budget predicate share one explicit-cost check, so the
+    alias resolution it depends on has to keep working for both."""
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "priced-group",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+            },
+            {
+                "model_name": "unpriced-group",
+                "litellm_params": {"model": UNPRICED_UNDERLYING_MODEL, "api_key": "sk-test"},
+            },
+        ],
+        model_group_alias={"priced-alias": "priced-group", "unpriced-alias": "unpriced-group"},
+    )
+
+    assert model_has_no_cost_mapping(model="priced-alias", llm_router=router) is False
+    assert model_has_no_cost_mapping(model="unpriced-alias", llm_router=router) is True
+
+
 def test_model_has_no_cost_mapping_no_model_or_router_is_false():
     from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
 
