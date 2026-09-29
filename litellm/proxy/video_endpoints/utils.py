@@ -104,7 +104,7 @@ def encode_video_id_in_response(response: object, fallback_model: str | None) ->
     encoded: Final = encode_video_id_with_provider(
         video_id=decoded.get("video_id", ""),
         provider=_hidden_param(response, "custom_llm_provider") or decoded.get("custom_llm_provider") or "openai",
-        model_id=_hidden_param(response, "model_id") or fallback_model,
+        model_id=_hidden_param(response, "model_id") or fallback_model or decoded.get("model_id"),
     )
     if isinstance(response, dict):
         response["id"] = encoded  # rebind-ok: in-place id rewrite, matching encode_character_id_in_response

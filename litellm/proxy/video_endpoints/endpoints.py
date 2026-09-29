@@ -300,6 +300,7 @@ async def video_status(
             user_api_base=user_api_base,
             version=version,
         )
+        encoded_status: Final = encode_video_id_in_response(status, deployment_id_for_encoding(status, data))
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -308,7 +309,7 @@ async def video_status(
             version=version,
         )
     else:
-        return status
+        return encoded_status
 
 
 @router.get(

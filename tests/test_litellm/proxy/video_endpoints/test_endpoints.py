@@ -929,3 +929,31 @@ async def test_status__fal_id_keeps_the_model_path_fal_reads(harness):
 
     assert data["model"] == "deployment-fal"
     assert url == "https://queue.fal.run/fal-ai/kling-video/requests/req-123/status"
+
+
+@pytest.mark.asyncio
+async def test_status__response_id_keeps_the_deployment_for_content(harness):
+    # The provider drops the model from status ids, and the OpenAI SDK create_and_poll() downloads with the status id
+    harness.base_process.return_value = VideoObject(
+        id=encode_video_id_with_provider("video_orig", "openai", None), object="video", status="completed"
+    )
+
+    with patch.object(proxy_server, "llm_router", _video_router()):
+        status = await call_status(harness, _video_id("deployment-b"))
+        harness.base_process.reset_mock()
+        harness.base_process.return_value = b"video-bytes"
+        await call_content(harness, status.id)
+
+    assert decode_video_id_with_provider(status.id)["model_id"] == "deployment-b"
+    assert harness.processor_data().get("model") == "deployment-b"
+
+
+@pytest.mark.asyncio
+async def test_status__without_router_keeps_the_provider_model_in_the_id(harness):
+    fal_status_id = encode_video_id_with_provider("req-123", "fal_ai", "fal-ai/kling-video")
+    harness.base_process.return_value = VideoObject(id=fal_status_id, object="video", status="completed")
+
+    with patch.object(proxy_server, "llm_router", None):
+        status = await call_status(harness, fal_status_id)
+
+    assert status.id == fal_status_id
