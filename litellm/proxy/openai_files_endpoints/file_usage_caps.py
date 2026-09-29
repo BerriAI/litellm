@@ -177,8 +177,7 @@ def describe_limit_source(source: LimitSource) -> str:
             return "in this team's metadata"
         case "general_settings":
             return "in general_settings"
-        case _:
-            return assert_never(source)
+    return assert_never(source)
 
 
 def _describe_scope(scoped: ScopedFileUsageLimit) -> str:
@@ -189,8 +188,7 @@ def _describe_scope(scoped: ScopedFileUsageLimit) -> str:
             return f"user {scoped.scope_id}"
         case "team":
             return f"team {scoped.scope_id}"
-        case _:
-            return assert_never(scoped.scope)
+    return assert_never(scoped.scope)
 
 
 def _raise_limit_exceeded(exceeded: FileUsageLimitExceeded, what_ran_out: str, when_it_resets: str) -> NoReturn:
