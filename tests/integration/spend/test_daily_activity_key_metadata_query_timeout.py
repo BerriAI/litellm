@@ -4,6 +4,7 @@ import itertools
 import json
 import threading
 import uuid
+from bisect import bisect_left
 from collections.abc import Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -27,12 +28,15 @@ from integration._support.database_relay import database_relay
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from jwt.algorithms import RSAAlgorithm
+from litellm.constants import SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 MODEL: Final = "key-metadata-recovery-audit"
 LOOKUP_MARKER: Final = "first_alias"
 FAILED_LOOKUP_FLOOR: Final = timedelta(seconds=4)
 MISS_TTL_BOUND: Final = 60
+MISS_WINDOW: Final = timedelta(seconds=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL)
+WORKERS: Final = 2
 USAGE: Final = MappingProxyType({"prompt_tokens": 10, "completion_tokens": 30, "total_tokens": 40})
 REPLY_TEXT: Final = "You spent a little this week."
 WAITING_LOOKUPS: Final = (
@@ -274,7 +278,7 @@ def _proxy(
         },
         config=config,
         remove_environment=("DATABASE_URL_READ_REPLICA",),
-        workers=2,
+        workers=WORKERS,
     ) as owned:
         yield owned.gateway
 
@@ -389,6 +393,11 @@ def _recording(database_url: str) -> Generator[SimpleQueue[tuple[int, str]]]:
 
 def _lookups(seen: SimpleQueue[tuple[int, str]]) -> frozenset[tuple[int, str]]:
     return frozenset(seen.get_nowait() for _ in range(seen.qsize()))
+
+
+def _busiest_miss_window(lookups: frozenset[tuple[int, str]]) -> int:
+    starts: Final = sorted(datetime.fromisoformat(started) for _, started in lookups)
+    return max((bisect_left(starts, start + MISS_WINDOW) - index for index, start in enumerate(starts)), default=0)
 
 
 def _waiting_lookup_count(database_url: str) -> int:
@@ -913,7 +922,9 @@ def test_every_usage_route_names_spend_log_only_keys_again_once_an_outage_ends(
             assert frozenset(burst) == {outage.keys["user aggregated"]}, burst
             assert dict(blank.keys) == dict(outage.keys)
             assert blank.users == outage.users
-            assert 1 <= len(_lookups(during_outage)) <= 2, "A worker looked up again inside its 30s miss window"
+            outage_lookups: Final = _lookups(during_outage)
+            assert outage_lookups, "No alias lookup reached the locked spend logs"
+            assert _busiest_miss_window(outage_lookups) <= WORKERS, sorted(outage_lookups)
             eventually(
                 lambda: _walked(_get(pinned, AGGREGATED, {}), digests),
                 lambda rows: rows == healthy.keys["user aggregated"],
