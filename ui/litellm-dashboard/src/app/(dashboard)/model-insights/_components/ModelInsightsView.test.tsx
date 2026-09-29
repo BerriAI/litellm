@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -54,6 +55,31 @@ describe("ModelInsightsView", () => {
     expect(screen.getAllByText("100.0%")).toHaveLength(2);
     expect(screen.getByRole("tab", { name: "tokens" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "log" })).toBeInTheDocument();
-    expect(apiClient.get).toHaveBeenCalledWith("/model-insights", { accessToken: "token" });
+    expect(apiClient.get).toHaveBeenCalledWith("/model-insights", {
+      accessToken: "token",
+      query: { metric: "tokens" },
+    });
+  });
+
+  it("refetches with the selected metric so top models are ranked by it", async () => {
+    render(<ModelInsightsView accessToken="token" />);
+    await screen.findByText("fast-chat");
+
+    await userEvent.click(screen.getByRole("tab", { name: "requests" }));
+
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenLastCalledWith("/model-insights", {
+        accessToken: "token",
+        query: { metric: "requests" },
+      }),
+    );
+  });
+
+  it("shows the API error instead of loading forever", async () => {
+    vi.mocked(apiClient.get).mockRejectedValue(new Error("Only proxy admins can view deployment-wide model insights"));
+    render(<ModelInsightsView accessToken="token" />);
+
+    expect(await screen.findByText("Could not load model insights")).toBeInTheDocument();
+    expect(screen.getByText("Only proxy admins can view deployment-wide model insights")).toBeInTheDocument();
   });
 });
