@@ -192,6 +192,11 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
 
 _REDACTED_ERROR_FIELDS: Final = ("error_message", "traceback")
 
+_MESSAGE_REDACTION_ENABLE_HEADERS: Final = (
+    "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
+    "x-litellm-enable-message-redaction",  # new header
+)
+
 
 def _is_non_empty_str(value: object) -> bool:
     return isinstance(value, str) and bool(value)
@@ -218,16 +223,10 @@ def redact_error_information(
     )
 
 
-def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
-    """
-    Message-redaction decision for proxy ``async_post_call_failure_hook`` callbacks, which
-    only receive ``request_data`` (the Logging object is popped before hooks run).
-    ``litellm_metadata`` is included only when present so
-    ``get_metadata_variable_name_from_kwargs`` resolves ``metadata`` for chat routes.
-    ``turn_off_message_logging`` resolves like ``initialize_standard_callback_dynamic_params``:
-    the top-level value when present, else the first client-metadata slot carrying it.
-    """
-    dynamic_param: Final = (
+def _request_turn_off_message_logging(request_data: Mapping[str, object]) -> object:
+    """``turn_off_message_logging`` resolves like ``initialize_standard_callback_dynamic_params``:
+    the top-level value when present, else the first client-metadata slot carrying it."""
+    return (
         request_data["turn_off_message_logging"]
         if "turn_off_message_logging" in request_data
         else next(
@@ -239,6 +238,26 @@ def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
             None,
         )
     )
+
+
+def request_opts_into_message_redaction(headers: Mapping[str, str], request_data: Mapping[str, object]) -> bool:
+    """Opt-in signals only: usable at auth time before the key's
+    ``allow_client_message_redaction_opt_out`` permission is known, so the disable
+    header and the global flag are deliberately not consulted."""
+    return (
+        any(bool(headers.get(header)) for header in _MESSAGE_REDACTION_ENABLE_HEADERS)
+        or _request_turn_off_message_logging(request_data) is True
+    )
+
+
+def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
+    """
+    Message-redaction decision for proxy ``async_post_call_failure_hook`` callbacks, which
+    only receive ``request_data`` (the Logging object is popped before hooks run).
+    ``litellm_metadata`` is included only when present so
+    ``get_metadata_variable_name_from_kwargs`` resolves ``metadata`` for chat routes.
+    """
+    dynamic_param: Final = _request_turn_off_message_logging(request_data)
     litellm_params: Final = MappingProxyType(
         {
             key: request_data.get(key)
@@ -446,13 +465,8 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
         # User explicitly disabled redaction via header
         return False
 
-    possible_enable_headers: Final = [
-        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
-        "x-litellm-enable-message-redaction",  # new header
-    ]
-
     is_redaction_enabled_via_header = False
-    for header in possible_enable_headers:
+    for header in _MESSAGE_REDACTION_ENABLE_HEADERS:
         if bool(request_headers.get(header, False)):
             is_redaction_enabled_via_header = True
             break

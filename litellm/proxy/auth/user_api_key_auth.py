@@ -38,6 +38,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
+from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
 from litellm.proxy._types import *
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_from_headers
 from litellm.proxy.auth.auth_checks import (
@@ -3329,7 +3330,13 @@ async def user_api_key_auth(
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it
     # triggers (key/user/team object reads) nest under it instead of flattening
     # onto the server span. No-op when OTel V2 isn't active.
-    with phase_span(f"auth {route}"), spend_counter_batch_scope(_spend_counter_redis_cache()):
+    with (
+        phase_span(
+            f"auth {route}",
+            redact_content=request_opts_into_message_redaction(request.headers, request_data),
+        ),
+        spend_counter_batch_scope(_spend_counter_redis_cache()),
+    ):
         try:
             user_api_key_auth_obj: Final = await _user_api_key_auth_builder(
                 request=request,

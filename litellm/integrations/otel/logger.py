@@ -759,9 +759,9 @@ class OpenTelemetryV2(CustomLogger):
             pass
 
     @contextmanager
-    def start_phase_span(self, name: str) -> "Iterator[Span]":
+    def start_phase_span(self, name: str, *, redact_content: bool = False) -> "Iterator[Span]":
         span: Final = self._emitter.start_span(SpanRole.SERVICE, name)
-        redact: Final = should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
+        redact: Final = redact_content or should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
         with use_span(
             span,
             end_on_exit=True,
@@ -1016,12 +1016,12 @@ def fan_out_provider() -> ApiTracerProvider:
 
 
 @contextmanager
-def phase_span(name: str) -> "Iterator[Span | None]":
+def phase_span(name: str, *, redact_content: bool = False) -> "Iterator[Span | None]":
     logger: Final = _registered_v2_logger()
     if logger is None:
         yield None
         return
-    with logger.start_phase_span(name) as span:
+    with logger.start_phase_span(name, redact_content=redact_content) as span:
         yield span
 
 

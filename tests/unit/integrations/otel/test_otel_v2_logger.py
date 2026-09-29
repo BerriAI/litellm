@@ -3381,3 +3381,47 @@ def test_start_phase_span_does_not_record_raw_exception_when_gated():
         assert (exception_events[0].attributes or {}).get("exception.message") == "redacted-by-litellm"
     finally:
         litellm.turn_off_message_logging = False
+
+
+def test_start_phase_span_redact_content_kwarg_redacts_exception():
+    """A caller-provided opt-in (e.g. an enable header seen at auth time, where
+    the key's opt-out permission is not known yet) must redact the phase-span
+    exception even when the global flag is off."""
+    import litellm
+
+    litellm.turn_off_message_logging = False
+    try:
+        logger, exporter = _logger()
+        secret = "secret-prompt-marker"
+        with pytest.raises(RuntimeError):
+            with logger.start_phase_span("auth", redact_content=True):
+                raise RuntimeError(f"auth exploded: {secret}")
+        (span,) = exporter.get_finished_spans()
+        assert secret not in str(dict(span.attributes or {}))
+        assert secret not in str([dict(e.attributes or {}) for e in span.events])
+        assert secret not in str(span.status.description or "")
+        exception_events = [e for e in span.events if e.name == "exception"]
+        assert len(exception_events) == 1
+        assert (exception_events[0].attributes or {}).get("exception.message") == "redacted-by-litellm"
+    finally:
+        litellm.turn_off_message_logging = False
+
+
+def test_start_phase_span_without_opt_in_keeps_raw_exception():
+    """The default ``redact_content=False`` must leave use_span's own raw
+    exception recording untouched when the global flag is off."""
+    import litellm
+
+    litellm.turn_off_message_logging = False
+    try:
+        logger, exporter = _logger()
+        secret = "secret-prompt-marker"
+        with pytest.raises(RuntimeError):
+            with logger.start_phase_span("auth"):
+                raise RuntimeError(f"auth exploded: {secret}")
+        (span,) = exporter.get_finished_spans()
+        exception_events = [e for e in span.events if e.name == "exception"]
+        assert len(exception_events) == 1
+        assert secret in str(dict(exception_events[0].attributes or {}))
+    finally:
+        litellm.turn_off_message_logging = False

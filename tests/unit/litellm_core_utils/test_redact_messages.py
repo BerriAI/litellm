@@ -1197,3 +1197,36 @@ class TestShouldRedactFailedRequest:
             turn_off_message_logging=False,
         )
         assert should_redact_failed_request(request_data) is False
+
+
+class TestRequestOptsIntoMessageRedaction:
+    @pytest.mark.parametrize("header", ["litellm-enable-message-redaction", "x-litellm-enable-message-redaction"])
+    def test_enable_header(self, header: str) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({header: "true"}, {}) is True
+
+    def test_top_level_dynamic_param(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {"turn_off_message_logging": True}) is True
+
+    def test_metadata_slot_dynamic_param(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {"metadata": {"turn_off_message_logging": True}}) is True
+
+    def test_empty_inputs(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {}) is False
+
+    def test_disable_header_alone_is_not_an_opt_in(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({"litellm-disable-message-redaction": "true"}, {}) is False
+
+    def test_dynamic_param_false(self) -> None:
+        from litellm.litellm_core_utils.redact_messages import request_opts_into_message_redaction
+
+        assert request_opts_into_message_redaction({}, {"turn_off_message_logging": False}) is False
