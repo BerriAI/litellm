@@ -1,6 +1,7 @@
+import json
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from fastapi import FastAPI
@@ -18,6 +19,12 @@ from litellm.types.roi_calculator import ROISettings
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
 
 
+def _assert_json_round_trip(value: object) -> None:
+    serialized: Final = json.dumps(value)
+    decoded: Final[object] = cast(object, json.loads(serialized))
+    assert decoded == value
+
+
 class _Parameter:
     def __init__(self, param_value: object) -> None:
         self.param_value: Final = param_value
@@ -32,6 +39,7 @@ class _ConfigRepository:
         return _Parameter(value) if value is not None else None
 
     async def set_param(self, param_name: str, param_value: object) -> object:
+        _assert_json_round_trip(param_value)
         self.values = MappingProxyType({**self.values, param_name: param_value})
         return self.values[param_name]
 

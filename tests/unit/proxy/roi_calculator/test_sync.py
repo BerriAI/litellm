@@ -1,8 +1,9 @@
 import asyncio
+import json
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timezone
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import httpx
 import pytest
@@ -55,6 +56,14 @@ _COMMITS_JSON: Final = """[
     }
   }
 ]"""
+
+
+def _assert_json_round_trip(value: object) -> None:
+    serialized: Final = json.dumps(value)
+    decoded: Final[object] = cast(object, json.loads(serialized))
+    assert decoded == value
+
+
 class _Parameter:
     def __init__(self, param_value: object) -> None:
         self.param_value: Final = param_value
@@ -69,6 +78,7 @@ class _ReportRepository:
         return _Parameter(value) if value is not None else None
 
     async def set_param(self, param_name: str, param_value: object) -> object:
+        _assert_json_round_trip(param_value)
         self.values = MappingProxyType({**self.values, param_name: param_value})
         return self.values[param_name]
 
@@ -82,34 +92,27 @@ class _DailySpendTable:
         where: Mapping[str, object],
         order: Mapping[str, object],
     ) -> Sequence[Mapping[str, object]]:
-        assert by == ("user_id", "date")
-        assert sum == MappingProxyType({"spend": True, "api_requests": True})
-        assert where == MappingProxyType(
-            {"date": MappingProxyType({"gte": "2026-09-01", "lte": "2026-09-30"})}
-        )
-        assert order == MappingProxyType({"date": "asc"})
+        _assert_json_round_trip({"by": by, "sum": sum, "where": where, "order": order})
+        assert by == ["user_id", "date"]
+        assert sum == {"spend": True, "api_requests": True}
+        assert where == {"date": {"gte": "2026-09-01", "lte": "2026-09-30"}}
+        assert order == {"date": "asc"}
         return (
-            MappingProxyType(
-                {
-                    "user_id": "u1",
-                    "date": datetime(2026, 9, 12, tzinfo=timezone.utc),
-                    "_sum": MappingProxyType({"spend": 12.5, "api_requests": 2}),
-                }
-            ),
-            MappingProxyType(
-                {
-                    "user_id": "team@example.com",
-                    "date": datetime(2026, 9, 13, tzinfo=timezone.utc),
-                    "_sum": MappingProxyType({"spend": 3.0, "api_requests": 1}),
-                }
-            ),
-            MappingProxyType(
-                {
-                    "user_id": "missing",
-                    "date": datetime(2026, 9, 14, tzinfo=timezone.utc),
-                    "_sum": MappingProxyType({"spend": 1.0, "api_requests": 1}),
-                }
-            ),
+            {
+                "user_id": "u1",
+                "date": "2026-09-12",
+                "_sum": {"spend": 12.5, "api_requests": 2},
+            },
+            {
+                "user_id": "team@example.com",
+                "date": "2026-09-13",
+                "_sum": {"spend": 3.0, "api_requests": 1},
+            },
+            {
+                "user_id": "missing",
+                "date": "2026-09-14",
+                "_sum": {"spend": 1.0, "api_requests": 1},
+            },
         )
 
 
@@ -118,12 +121,9 @@ class _UserTable:
         self,
         *,
         where: Mapping[str, object],
-        select: Mapping[str, bool],
     ) -> Sequence[Mapping[str, str | None]]:
-        assert where == MappingProxyType(
-            {"user_id": MappingProxyType({"in": ("missing", "team@example.com", "u1")})}
-        )
-        assert select == MappingProxyType({"user_id": True, "user_email": True})
+        _assert_json_round_trip({"where": where})
+        assert where == {"user_id": {"in": ["missing", "team@example.com", "u1"]}}
         return (MappingProxyType({"user_id": "u1", "user_email": " Alice@Example.com "}),)
 
 

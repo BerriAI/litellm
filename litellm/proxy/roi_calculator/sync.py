@@ -25,6 +25,7 @@ from litellm.types.roi_calculator import (
 PR_CONCURRENCY: Final = 3
 _ESTIMATE_ADAPTER: Final = TypeAdapter(ROIEstimate)
 _REPORT_ADAPTER: Final = TypeAdapter(ROIReport)
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 class _ConfigParam(Protocol):
@@ -42,10 +43,10 @@ class _DailySpendTable(Protocol):
     async def group_by(
         self,
         *,
-        by: Sequence[Literal["user_id", "date"]],
-        sum: Mapping[str, object],
-        where: Mapping[str, object],
-        order: Mapping[str, object],
+        by: list[Literal["user_id", "date"]],
+        sum: dict[str, object],
+        where: dict[str, object],
+        order: dict[str, object],
     ) -> Sequence[Mapping[str, object]]: ...
 
 
@@ -53,8 +54,7 @@ class _UserTable(Protocol):
     async def find_many(
         self,
         *,
-        where: Mapping[str, object],
-        select: Mapping[str, bool],
+        where: dict[str, object],
     ) -> Sequence[Mapping[str, object]]: ...
 
 
@@ -87,7 +87,7 @@ class _DailySpendGroup(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     user_id: str | None
-    date: datetime
+    date: str
     sums: _DailySpendSums = Field(alias="_sum")
 
 
@@ -111,45 +111,51 @@ async def read_spend(
 
     database: Final = prisma_client.db
     daily_table: Final = database.litellm_dailyuserspend
+    group_by: Final[list[Literal["user_id", "date"]]] = [
+        "user_id",
+        "date",
+    ]  # mutable-ok: prisma client serializer only accepts builtin dict/list
+    sums: Final[dict[str, object]] = {
+        "spend": True,
+        "api_requests": True,
+    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
+    date_filter: Final[dict[str, object]] = {
+        "date": {
+            "gte": start.isoformat(),
+            "lte": end.isoformat(),
+        }
+    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
+    order: Final[dict[str, object]] = {
+        "date": "asc"
+    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
     groups: Final = _DAILY_SPEND_GROUPS.validate_python(
         await daily_table.group_by(
-            by=("user_id", "date"),
-            sum=MappingProxyType({"spend": True, "api_requests": True}),
-            where=MappingProxyType(
-                {
-                    "date": MappingProxyType(
-                        {"gte": start.isoformat(), "lte": end.isoformat()}
-                    )
-                }
-            ),
-            order=MappingProxyType({"date": "asc"}),
+            by=group_by,
+            sum=sums,
+            where=date_filter,
+            order=order,
         )
     )
-    user_ids: Final = tuple(
-        sorted(frozenset(group.user_id for group in groups if group.user_id))
-    )
+    user_ids: Final = tuple(sorted(frozenset(group.user_id for group in groups if group.user_id)))
     user_table: Final = database.litellm_usertable
+    user_filter: Final[dict[str, object]] = {
+        "user_id": {"in": list(user_ids)}
+    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
     users: Final = _USER_EMAILS.validate_python(
         await user_table.find_many(
-            where=MappingProxyType({"user_id": MappingProxyType({"in": user_ids})}),
-            select=MappingProxyType({"user_id": True, "user_email": True}),
+            where=user_filter,
         )
         if user_ids
         else ()
     )
     emails: Final[Mapping[str, str]] = MappingProxyType(
-        {
-            user.user_id: normalize_email(user.user_email)
-            for user in users
-            if normalize_email(user.user_email)
-        }
+        {user.user_id: normalize_email(user.user_email) for user in users if normalize_email(user.user_email)}
     )
     return tuple(
         ROISpendRecord(
-            date=group.date.date().isoformat(),
+            date=group.date,
             user_id=group.user_id or "",
-            email=emails.get(group.user_id or "", "")
-            or normalize_email(group.user_id),
+            email=emails.get(group.user_id or "", "") or normalize_email(group.user_id),
             spend=group.sums.spend,
             requests=group.sums.api_requests,
         )
@@ -179,9 +185,7 @@ class SyncClock(Protocol):
 
 class _StatusUpdate(TypedDict, total=False):
     running: ReadOnly[bool]
-    phase: ReadOnly[
-        Literal["idle", "spend", "repositories", "estimates", "complete", "cancelled", "error"]
-    ]
+    phase: ReadOnly[Literal["idle", "spend", "repositories", "estimates", "complete", "cancelled", "error"]]
     stage: ReadOnly[str]
     done: ReadOnly[int]
     total: ReadOnly[int]
@@ -256,9 +260,7 @@ class SyncManager:
             needs_attention=0,
             error=None,
         )
-        self._task = asyncio.create_task(
-            self._run(settings, repository, spend_reader, complete, github_transport)
-        )
+        self._task = asyncio.create_task(self._run(settings, repository, spend_reader, complete, github_transport))
         return True
 
     async def cancel(self) -> bool:
@@ -287,13 +289,10 @@ class SyncManager:
             start: Final = end - timedelta(days=settings.backfill_days - 1)
             spend: Final = await spend_reader(start, end)
             self._update_status(phase="repositories", stage="Reading configured repositories")
-            pull_groups: Final = await asyncio.gather(
-                *(github.pulls(repo, start, end) for repo in settings.repos)
-            )
+            pull_groups: Final = await asyncio.gather(*(github.pulls(repo, start, end) for repo in settings.repos))
             queue: Final = tuple(
                 chain.from_iterable(
-                    ((repo, pull) for pull in pulls)
-                    for repo, pulls in zip(settings.repos, pull_groups, strict=True)
+                    ((repo, pull) for pull in pulls) for repo, pulls in zip(settings.repos, pull_groups, strict=True)
                 )
             )
             context: Final = cache_context(settings)
@@ -319,11 +318,7 @@ class SyncManager:
             cached_by_index: Final[Mapping[int, ROIPullRecord]] = MappingProxyType(
                 {index: self._cached_record(pull) for index, pull in cached}
             )
-            pending: Final = tuple(
-                item
-                for item in indexed_queue
-                if item[0] not in cached_by_index
-            )
+            pending: Final = tuple(item for item in indexed_queue if item[0] not in cached_by_index)
             reused_count: Final = len(cached)
             self._update_status(
                 phase="estimates",
@@ -376,7 +371,10 @@ class SyncManager:
                 warnings=(),
             )
             await github.close()
-            await repository.set_param("roi_calculator_report", report)
+            report_json: Final[dict[str, object]] = _JSON_OBJECT_ADAPTER.validate_python(
+                _REPORT_ADAPTER.dump_python(report, mode="json")
+            )
+            await repository.set_param("roi_calculator_report", report_json)
             self._update_status(phase="complete", stage="Up to date")
         except asyncio.CancelledError:
             self._update_status(phase="cancelled", stage="Sync cancelled")
@@ -400,9 +398,7 @@ class SyncManager:
                 self._update_status(running=False)
 
     def _update_status(self, **update: Unpack[_StatusUpdate]) -> None:
-        status: Final = ROISyncStatus.model_validate(
-            MappingProxyType({**self._status.model_dump(), **update})
-        )
+        status: Final = ROISyncStatus.model_validate(MappingProxyType({**self._status.model_dump(), **update}))
         self._status = status
 
     async def _previous_report(self, repository: _ReportRepository) -> ROIReport | None:
@@ -415,9 +411,7 @@ class SyncManager:
             return None
 
     def _cached_record(self, pull: ROIPullRecord) -> ROIPullRecord:
-        estimate: Final = _ESTIMATE_ADAPTER.validate_python(
-            MappingProxyType({**pull["estimate"], "cached": True})
-        )
+        estimate: Final = _ESTIMATE_ADAPTER.validate_python(MappingProxyType({**pull["estimate"], "cached": True}))
         return ROIPullRecord(
             repo=pull["repo"],
             number=pull["number"],
