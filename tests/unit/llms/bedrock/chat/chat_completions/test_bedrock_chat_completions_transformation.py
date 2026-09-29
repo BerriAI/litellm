@@ -222,6 +222,18 @@ def test_completion_posts_runtime_chat_completions(local_cost_map, fake_aws_env)
     assert "inferenceConfig" not in body
 
 
+def test_completion_keeps_the_aws_request_id_as_a_provider_header(local_cost_map, fake_aws_env):
+    _, client = _recording_client(
+        json=_chat_completion_json("ok", "us.xai.grok-4.6"), headers={"x-amzn-requestid": "req-native-1"}
+    )
+    response = litellm.completion(
+        model="bedrock/chat_completions/us.xai.grok-4.6",
+        messages=[{"role": "user", "content": "hello"}],
+        client=client,
+    )
+
+    assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-native-1"
+
 def test_region_path_sends_the_bare_model_id_to_the_path_region(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
     litellm.completion(

@@ -22,6 +22,7 @@ import httpx
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
@@ -383,6 +384,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        set_provider_response_headers_in_hidden_params(response, raw_response.headers)
         for choice in response.choices:
             if not isinstance(choice, Choices) or not isinstance(choice.message.content, str):
                 continue
