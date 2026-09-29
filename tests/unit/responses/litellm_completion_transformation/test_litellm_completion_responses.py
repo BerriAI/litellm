@@ -2770,19 +2770,20 @@ class TestToolTransformation:
         assert result["reasoning_summary"] == "auto"
 
     @pytest.mark.parametrize("deployment_mode, expected_summary", [("responses", "auto"), ("chat", None)])
-    def test_summary_follows_the_routed_deployments_own_mode(self, deployment_mode, expected_summary):
+    def test_summary_follows_the_routed_deployments_own_mode(self, monkeypatch, deployment_mode, expected_summary):
         """
         https://github.com/BerriAI/litellm/issues/38543 - a deployment's ``mode`` no longer lands
         on the model's shared cost-map entry, so the probe has to read it off the routed
         deployment the same way ``litellm.completion`` does, or it drops the summary of a
         request that completion then bridges onto the Responses API
         """
+        monkeypatch.setitem(litellm.model_cost, "routed-deployment", {"mode": deployment_mode})
         result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model="gpt-4.1",
             input="hi",
             responses_api_request={"reasoning": {"effort": "medium", "summary": "auto"}},
             custom_llm_provider="openai",
-            litellm_metadata={"model_info": {"id": "routed-deployment", "mode": deployment_mode}},
+            litellm_metadata={"model_info": {"id": "routed-deployment"}},
         )
 
         assert result["reasoning_effort"] == "medium"

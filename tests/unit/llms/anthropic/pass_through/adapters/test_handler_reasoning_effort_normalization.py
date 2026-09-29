@@ -10,6 +10,7 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
@@ -122,11 +123,12 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         [("responses", {"effort": "high", "summary": "auto"}), ("chat", "high")],
     )
     def test_the_routed_deployments_own_mode_decides_the_shape(
-        self, local_model_cost_map: None, deployment_mode: str, expected: object
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, deployment_mode: str, expected: object
     ) -> None:
-        """https://github.com/BerriAI/litellm/issues/38543 - a deployment's mode rides with the
-        request instead of the model's shared cost-map entry, and this probe has to agree with
+        """https://github.com/BerriAI/litellm/issues/38543 - the routed deployment's own mode, not the
+        model's shared cost-map entry, decides the API, and this probe has to agree with
         ``litellm.completion`` about which API that request lands on"""
+        monkeypatch.setitem(litellm.model_cost, "routed-deployment", {"mode": deployment_mode})
         completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
             max_tokens=1024,
             messages=MESSAGES,
@@ -144,7 +146,7 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
             output_format=None,
             extra_kwargs={
                 "custom_llm_provider": "databricks",
-                "litellm_metadata": {"model_info": {"id": "routed-deployment", "mode": deployment_mode}},
+                "litellm_metadata": {"model_info": {"id": "routed-deployment"}},
             },
         )
 

@@ -1284,12 +1284,15 @@ def _get_router_deployment_id(kwargs: Mapping[str, object]) -> str | None:
 
 
 def router_deployment_mode(kwargs: Mapping[str, object]) -> str | None:
-    """The ``model_info.mode`` of the deployment the router picked for this request, if any."""
-    for deployment_model_info in _router_deployment_model_infos(kwargs):
-        mode = deployment_model_info.get("mode")
-        if isinstance(mode, str):
-            return mode
-    return None
+    """The ``mode`` the router registered for the deployment it picked for this request, if any.
+
+    Only the deployment id is taken from request metadata; the mode itself is read from the
+    router's own registration, so a caller can't hand-write one into their metadata.
+    """
+    deployment_id: Final = _get_router_deployment_id(kwargs)
+    registered: Final = litellm.model_cost.get(deployment_id) if deployment_id is not None else None
+    mode: Final = registered.get("mode") if isinstance(registered, dict) else None
+    return mode if isinstance(mode, str) else None
 
 
 def _register_custom_pricing_for_request(

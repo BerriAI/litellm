@@ -854,6 +854,36 @@ def test_a_priced_responses_deployment_does_not_move_its_siblings_after_serving_
     _invalidate_model_cost_lowercase_map()
 
 
+@pytest.mark.parametrize(
+    "caller_model_info",
+    ({"mode": "responses"}, {"id": "not-a-deployment", "mode": "responses"}),
+)
+def test_a_caller_cannot_move_a_chat_deployment_onto_the_responses_api_through_its_metadata(
+    respx_mock, monkeypatch: pytest.MonkeyPatch, caller_model_info: Mapping[str, str]
+) -> None:
+    """
+    The Responses bridge reads the mode the router registered for the routed deployment, never a
+    mode written into the request's own metadata
+    """
+    _use_catalog_with_a_chat_model(monkeypatch)
+    chat_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_REPLY)
+    )
+    responses_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/responses").mock(
+        return_value=httpx.Response(200, json=_RESPONSES_REPLY)
+    )
+    router: Final = Router(model_list=[_mode_test_deployment("my-chat-model", None)])
+
+    router.completion(
+        model="my-chat-model",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_metadata={"model_info": dict(caller_model_info)},
+    )
+
+    assert (chat_route.call_count, responses_route.call_count) == (1, 0)
+    _invalidate_model_cost_lowercase_map()
+
+
 def test_deployment_mode_still_fills_a_shared_key_with_no_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     For a provider model the catalog doesn't know, proxy model_info is how its mode gets
