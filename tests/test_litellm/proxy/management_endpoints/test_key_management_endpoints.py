@@ -21239,3 +21239,22 @@ async def test_route_write_rechecks_binding_and_preserves_supported_updates(boun
         response = await write
         assert response["data"]["allowed_routes"] == routes
     tx.litellm_budgettable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transactional", [False, True])
+async def test_rotation_grace_period_is_written_to_the_selected_database(transactional):
+    from litellm.proxy.management_endpoints.key_management_endpoints import _insert_deprecated_key
+
+    client = _make_regenerate_mock_prisma()
+    transaction = AsyncMock()
+    before = datetime.now(timezone.utc)
+    await _insert_deprecated_key(client, "old-token", "new-token", "1h", tx=transaction if transactional else None)
+    selected = transaction if transactional else client.db
+    unused = client.db if transactional else transaction
+    saved = selected.litellm_deprecatedverificationtoken.upsert.call_args.kwargs
+    assert saved["where"] == {"token": "old-token"}
+    assert saved["data"]["create"]["active_token_id"] == "new-token"
+    assert saved["data"]["update"]["active_token_id"] == "new-token"
+    assert before + timedelta(hours=1) <= saved["data"]["create"]["revoke_at"] <= datetime.now(timezone.utc) + timedelta(hours=1)
+    unused.litellm_deprecatedverificationtoken.upsert.assert_not_awaited()
