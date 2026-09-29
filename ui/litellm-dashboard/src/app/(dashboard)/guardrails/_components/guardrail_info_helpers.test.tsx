@@ -15,6 +15,11 @@ import {
   skipToolMessageToChoice,
   choiceToSkipToolForCreate,
   formatGuardrailMode,
+  loggingOnlyScopeToChoice,
+  choiceToLoggingOnlyScope,
+  getLoggingOnlyScopeUpdate,
+  formatLoggingOnlyScope,
+  modeIncludesLoggingOnly,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -236,6 +241,52 @@ describe("guardrail_info_helpers", () => {
       expect(formatGuardrailMode(null)).toBe("");
       expect(formatGuardrailMode({})).toBe("");
       expect(formatGuardrailMode({ tags: {}, default: null })).toBe("");
+    });
+  });
+
+  describe("logging-only scope helpers", () => {
+    it("maps API scope values to choices and back", () => {
+      expect(loggingOnlyScopeToChoice("input")).toBe("input");
+      expect(loggingOnlyScopeToChoice("output")).toBe("output");
+      expect(loggingOnlyScopeToChoice("both")).toBe("both");
+      expect(loggingOnlyScopeToChoice(undefined)).toBe("default");
+      expect(loggingOnlyScopeToChoice(null)).toBe("default");
+      expect(loggingOnlyScopeToChoice("invalid")).toBe("default");
+
+      expect(choiceToLoggingOnlyScope("default")).toBeNull();
+      expect(choiceToLoggingOnlyScope(undefined)).toBeNull();
+      expect(choiceToLoggingOnlyScope("input")).toBe("input");
+      expect(choiceToLoggingOnlyScope("output")).toBe("output");
+      expect(choiceToLoggingOnlyScope("both")).toBe("both");
+
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "input")).toEqual({});
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "output")).toEqual({
+        logging_only_scope: "output",
+      });
+      expect(getLoggingOnlyScopeUpdate({ logging_only_scope: "input" }, "default")).toEqual({
+        logging_only_scope: null,
+      });
+    });
+
+    it("formats every scope and falls back to default for missing or unknown values", () => {
+      expect(formatLoggingOnlyScope("input")).toBe("Input only (request)");
+      expect(formatLoggingOnlyScope("output")).toBe("Output only (response)");
+      expect(formatLoggingOnlyScope("both")).toBe("Both (request and response)");
+      expect(formatLoggingOnlyScope(undefined)).toBe("Default (request and response)");
+      expect(formatLoggingOnlyScope(null)).toBe("Default (request and response)");
+      expect(formatLoggingOnlyScope("invalid")).toBe("Default (request and response)");
+    });
+
+    it("detects logging_only in string, array, and tagged mode values", () => {
+      expect(modeIncludesLoggingOnly("logging_only")).toBe(true);
+      expect(modeIncludesLoggingOnly(["pre_call", "logging_only"])).toBe(true);
+      expect(
+        modeIncludesLoggingOnly({
+          tags: { "Service-Type: internal-service": "logging_only" },
+          default: "pre_call",
+        }),
+      ).toBe(true);
+      expect(modeIncludesLoggingOnly("pre_call")).toBe(false);
     });
   });
 

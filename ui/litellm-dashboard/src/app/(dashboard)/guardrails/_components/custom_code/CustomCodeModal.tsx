@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { CheckCircle2, ChevronRight, Code, ExternalLink, PlayCircle, Save, Users, XCircle } from "lucide-react";
 import { createGuardrailCall, updateGuardrailCall, testCustomCodeGuardrail } from "@/components/networking";
 import { toast } from "@/lib/toast";
+import { type LoggingOnlyScope } from "../guardrail_info_helpers";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -178,6 +179,7 @@ export interface EditGuardrailData {
     mode?: string | string[];
     default_on?: boolean;
     custom_code?: string;
+    logging_only_scope?: LoggingOnlyScope | null;
     [key: string]: any;
   };
 }

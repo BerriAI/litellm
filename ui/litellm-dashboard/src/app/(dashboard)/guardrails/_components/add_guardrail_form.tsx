@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { useForm, useWatch, type UseFormReturn } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import {
   createGuardrailCall,
@@ -10,18 +10,22 @@ import {
 import ContentFilterConfiguration from "./content_filter/ContentFilterConfiguration";
 import { type CompetitorIntentConfig } from "./content_filter/CompetitorIntentConfiguration";
 import {
+  choiceToLoggingOnlyScope,
   choiceToSkipSystemForCreate,
   choiceToSkipToolForCreate,
   getGuardrailLogo,
   getGuardrailProviders,
   getSupportedModesForProvider,
   guardrail_provider_map,
+  modeIncludesLoggingOnly,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
   toModeArray,
+  type LoggingOnlyScope,
+  type LoggingOnlyScopeChoice,
 } from "./guardrail_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -49,6 +53,7 @@ import {
   requiredRule,
   type GuardrailCriterion,
   type GuardrailFormValues,
+  LoggingOnlyScopeField,
   SkipMessageSelect,
 } from "./GuardrailFormField";
 import GuardrailOptionalParams from "./guardrail_optional_params";
@@ -160,6 +165,7 @@ type SkipMessageChoice = "inherit" | "yes" | "no";
 const INITIAL_VALUES: GuardrailFormValues = {
   mode: "pre_call",
   default_on: false,
+  logging_only_scope_choice: "default",
   skip_system_message_choice: "inherit",
   skip_tool_message_choice: "inherit",
 };
@@ -199,6 +205,7 @@ interface ProviderParamsResponse {
 
 const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, accessToken, onSuccess, preset }) => {
   const form = useForm<GuardrailFormValues>({ defaultValues: INITIAL_VALUES });
+  const watchedMode = useWatch({ control: form.control, name: "mode" });
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [guardrailSettings, setGuardrailSettings] = useState<GuardrailSettings | null>(null);
@@ -277,6 +284,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       guardrail_name: preset.guardrailNameSuggestion,
       mode: preset.mode,
       default_on: preset.defaultOn,
+      logging_only_scope_choice: "default",
       skip_system_message_choice: "inherit",
       skip_tool_message_choice: "inherit",
     };
@@ -439,6 +447,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         guardrail_name: string;
         litellm_params: {
           guardrail: string;
+          logging_only_scope?: LoggingOnlyScope | null;
           [key: string]: unknown; // Allow dynamic properties
         };
         guardrail_info: Record<string, unknown>;
@@ -460,6 +469,13 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       const skipToolForCreate = choiceToSkipToolForCreate(asSkipChoice(values.skip_tool_message_choice));
       if (skipToolForCreate !== undefined) {
         guardrailData.litellm_params.skip_tool_message_in_guardrail = skipToolForCreate;
+      }
+
+      const loggingOnlyScope = choiceToLoggingOnlyScope(
+        values.logging_only_scope_choice as LoggingOnlyScopeChoice | undefined,
+      );
+      if (modeIncludesLoggingOnly(values.mode) && loggingOnlyScope !== null) {
+        guardrailData.litellm_params.logging_only_scope = loggingOnlyScope;
       }
 
       // For Presidio PII, add the entity and action configurations
@@ -795,6 +811,8 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         >
           {(fieldControl) => <SkipMessageSelect control={fieldControl} />}
         </GuardrailField>
+
+        <LoggingOnlyScopeField control={form.control} mode={watchedMode} />
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
         {showProviderFields && (

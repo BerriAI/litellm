@@ -28,14 +28,17 @@ import {
   readRecord,
   requiredRule,
   type GuardrailFormValues,
+  LoggingOnlyScopeField,
   SkipMessageSelect,
 } from "./GuardrailFormField";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
+import { GuardrailModeCard, GuardrailModeRows } from "./GuardrailModeDisplay";
 import {
-  formatGuardrailMode,
+  getLoggingOnlyScopeUpdate,
   getGuardrailLogoAndName,
   guardrail_provider_map,
+  loggingOnlyScopeToChoice,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
   type SkipSystemMessageChoice,
@@ -219,6 +222,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     if (!guardrailData) return;
     form.setValue("guardrail_name", guardrailData.guardrail_name);
     form.setValue("default_on", guardrailData.litellm_params?.default_on);
+    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(guardrailData.litellm_params?.logging_only_scope));
     form.setValue(
       "skip_system_message_choice",
       skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),
@@ -282,7 +286,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
       // Prepare update data object - only include changed fields
       const updateData: any = {
-        litellm_params: {},
+        litellm_params: getLoggingOnlyScopeUpdate(guardrailData.litellm_params, values.logging_only_scope_choice),
       };
 
       // Only include guardrail_name if it has changed
@@ -556,17 +560,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                 </div>
               </Card>
 
-              <Card className="block p-6">
-                <p>Mode</p>
-                <div className="mt-2">
-                  <h3 className="text-lg font-medium">
-                    {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
-                  </h3>
-                  <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
-                    {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
-                  </Badge>
-                </div>
-              </Card>
+              <GuardrailModeCard litellmParams={guardrailData.litellm_params} />
 
               <Card className="block p-6">
                 <p>Created At</p>
@@ -745,6 +739,10 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                         >
                           {(fieldControl) => <SkipMessageSelect control={fieldControl} />}
                         </GuardrailField>
+                        <LoggingOnlyScopeField
+                          control={form.control}
+                          mode={guardrailData.litellm_params?.mode}
+                        />
                         {guardrailData.litellm_params?.guardrail === "presidio" && (
                           <>
                             <SectionHeading>PII Protection</SectionHeading>
@@ -856,10 +854,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                       <p className="font-medium">Provider</p>
                       <div>{displayName}</div>
                     </div>
-                    <div>
-                      <p className="font-medium">Mode</p>
-                      <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
-                    </div>
+                    <GuardrailModeRows litellmParams={guardrailData.litellm_params} />
                     <div>
                       <p className="font-medium">Default On</p>
                       <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>

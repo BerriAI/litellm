@@ -164,6 +164,51 @@ describe("GuardrailInfoView update payload characterization", () => {
     expect(lastPayload()).toEqual({ litellm_params: { skip_system_message_in_guardrail: true } });
   });
 
+  it("shows and updates the logging-only scope", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
+      guardrail({
+        guardrailIdentifier: "gr-abc",
+        api_key: "sk-old",
+        mode: "logging_only",
+        logging_only_scope: "input",
+      }),
+    );
+    const user = userEvent.setup({ delay: null });
+    renderView();
+
+    expect(await screen.findAllByText("Input only (request)")).toHaveLength(2);
+    await openEditor(user);
+    await chooseSelectOption(
+      user,
+      screen.getByLabelText("Logging only scope"),
+      "Output only (response)",
+    );
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({ litellm_params: { logging_only_scope: "output" } });
+  });
+
+  it("clears the logging-only scope when the edit choice returns to default", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
+      guardrail({
+        guardrailIdentifier: "gr-abc",
+        api_key: "sk-old",
+        mode: "logging_only",
+        logging_only_scope: "input",
+      }),
+    );
+    const user = userEvent.setup({ delay: null });
+    renderView();
+    await openEditor(user);
+
+    await chooseSelectOption(user, screen.getByLabelText("Logging only scope"), "Default (request and response)");
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({ litellm_params: { logging_only_scope: null } });
+  });
+
   it("parses the guardrail information textarea into an object", async () => {
     const user = userEvent.setup({ delay: null });
     renderView();

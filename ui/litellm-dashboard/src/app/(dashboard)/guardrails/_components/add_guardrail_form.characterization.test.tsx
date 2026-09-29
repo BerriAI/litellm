@@ -105,6 +105,48 @@ describe("AddGuardrailForm create payload characterization", () => {
     expect(payload()).toMatchObject({ litellm_params: { mode: ["pre_call", "post_call"] } });
   });
 
+  it("sends the selected output logging-only scope", async () => {
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      ...uiSettings,
+      supported_modes: ["pre_call", "logging_only"],
+    });
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
+    await pickProvider(user, "Bedrock Guardrail");
+    await user.click(screen.getByLabelText("Mode"));
+    await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
+    await chooseSelectOption(
+      user,
+      await screen.findByLabelText("Logging only scope"),
+      "Output only (response)",
+    );
+
+    await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(payload()?.litellm_params.logging_only_scope).toBe("output");
+  });
+
+  it("hides logging-only scope and omits it from a pre-call payload", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "my-bedrock");
+    await pickProvider(user, "Bedrock Guardrail");
+    expect(screen.queryByLabelText("Logging only scope")).not.toBeInTheDocument();
+
+    await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(payload()?.litellm_params).not.toHaveProperty("logging_only_scope");
+  });
+
   it("blocks Next when the user deselects every mode", async () => {
     const user = userEvent.setup({ delay: null });
     renderForm();
