@@ -38,8 +38,8 @@ import {
   getLoggingOnlyScopeUpdate,
   getGuardrailLogoAndName,
   guardrail_provider_map,
-  choiceToLoggingOnlyScope,
   loggingOnlyScopeToChoice,
+  normalizeLoggingOnlyScopeChoice,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
   supportsDirectionalLoggingOnlyScope,
@@ -225,25 +225,31 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   // binds are seeded: an unbound key would otherwise be submitted as if the user had set it.
   useEffect(() => {
     if (!guardrailData) return;
-    const litellmParams = guardrailData.litellm_params;
     form.setValue("guardrail_name", guardrailData.guardrail_name);
-    form.setValue("default_on", litellmParams?.default_on);
-    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(litellmParams?.logging_only_scope));
-    const skipSystemMessageChoice = skipSystemMessageToChoice(litellmParams?.skip_system_message_in_guardrail);
-    form.setValue("skip_system_message_choice", skipSystemMessageChoice);
-    form.setValue("skip_tool_message_choice", skipToolMessageToChoice(litellmParams?.skip_tool_message_in_guardrail));
-    const guardrailInfo = guardrailData.guardrail_info ? JSON.stringify(guardrailData.guardrail_info, null, 2) : "";
-    form.setValue("guardrail_info", guardrailInfo);
-    if (litellmParams?.optional_params) {
-      form.setValue("optional_params", litellmParams.optional_params);
+    form.setValue("default_on", guardrailData.litellm_params?.default_on);
+    const storedLoggingOnlyScope = guardrailData.litellm_params?.logging_only_scope;
+    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedLoggingOnlyScope));
+    form.setValue(
+      "skip_system_message_choice",
+      skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),
+    );
+    form.setValue(
+      "skip_tool_message_choice",
+      skipToolMessageToChoice(guardrailData.litellm_params?.skip_tool_message_in_guardrail),
+    );
+    form.setValue(
+      "guardrail_info",
+      guardrailData.guardrail_info ? JSON.stringify(guardrailData.guardrail_info, null, 2) : "",
+    );
+    if (guardrailData.litellm_params?.optional_params) {
+      form.setValue("optional_params", guardrailData.litellm_params.optional_params);
     }
   }, [guardrailData, guardrailProviderSpecificParams, form]);
 
   useEffect(() => {
-    const scope = choiceToLoggingOnlyScope(form.getValues("logging_only_scope_choice"));
-    if (!directionalScopeSupported && scope !== null && scope !== "both") {
-      form.setValue("logging_only_scope_choice", "default");
-    }
+    const scopeChoice = form.getValues("logging_only_scope_choice");
+    const normalizedScopeChoice = normalizeLoggingOnlyScopeChoice(scopeChoice, directionalScopeSupported);
+    if (normalizedScopeChoice !== scopeChoice) form.setValue("logging_only_scope_choice", normalizedScopeChoice);
   }, [directionalScopeSupported, form, guardrailData]);
 
   const resetToolPermissionEditor = useCallback(() => {
@@ -519,6 +525,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
   const isConfigGuardrail = guardrailData.guardrail_definition_location === "config";
 
+  /* eslint-disable max-lines -- keep edit-form scope normalization with its owning view */
   return (
     <div className="p-4">
       <div>

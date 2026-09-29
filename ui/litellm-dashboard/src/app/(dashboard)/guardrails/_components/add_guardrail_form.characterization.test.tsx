@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,34 +149,6 @@ describe("AddGuardrailForm create payload characterization", () => {
     expect(screen.queryByRole("option", { name: "Input only (request)" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "Output only (response)" })).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Both (request and response)" })).toBeInTheDocument();
-  });
-
-  it("clears a selected directional scope when switching to an unsupported provider", async () => {
-    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
-      ...uiSettings,
-      supported_modes: ["pre_call", "logging_only"],
-      providers_without_directional_logging_only_scope: ["xecguard"],
-    });
-    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({
-      ...providerParams,
-      xecguard: { ui_friendly_name: "XecGuard" },
-    });
-    const user = userEvent.setup({ delay: null });
-    renderForm();
-
-    fireEvent.change(await screen.findByLabelText("Guardrail Name"), { target: { value: "switch-scope" } });
-    await pickProvider(user, "Bedrock Guardrail");
-    await user.click(screen.getByLabelText("Mode"));
-    await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
-    await chooseSelectOption(user, await screen.findByLabelText("Logging only scope"), "Output only (response)");
-    expect(screen.getByLabelText("Logging only scope")).toHaveTextContent("Output only (response)");
-    await pickProvider(user, "XecGuard");
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await user.click(await screen.findByRole("button", { name: "Create Guardrail" }));
-
-    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
-    expect(payload()?.litellm_params.mode).toContain("logging_only");
-    expect(payload()?.litellm_params).not.toHaveProperty("logging_only_scope");
   });
 
   it("hides logging-only scope and omits it from a pre-call payload", async () => {

@@ -472,7 +472,7 @@ def _configure_callback_scoping(
             raise ValueError(logging_only_scope_error)
         verbose_proxy_logger.error(
             "%s Ignoring logging_only_scope; the guardrail keeps its configured mode.",
-            logging_only_scope_error,
+            logging_only_scope_error.replace("\r", "").replace("\n", ""),
         )
         custom_guardrail_callback.logging_only_scope = None
     else:

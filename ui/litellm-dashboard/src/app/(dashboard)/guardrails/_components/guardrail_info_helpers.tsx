@@ -118,6 +118,12 @@ export type LoggingOnlyScope = "input" | "output" | "both";
 export type LoggingOnlyScopeChoice = "default" | LoggingOnlyScope;
 export type LoggingOnlyScopeOption = { label: string; value: LoggingOnlyScopeChoice };
 
+export const normalizeLoggingOnlyScopeChoice = (
+  choice: LoggingOnlyScopeChoice,
+  directionalScopeSupported: boolean,
+): LoggingOnlyScopeChoice =>
+  directionalScopeSupported || choice === "default" || choice === "both" ? choice : "default";
+
 const LOGGING_ONLY_SCOPE_OPTIONS: LoggingOnlyScopeOption[] = [
   { label: "Default (request and response)", value: "default" },
   { label: "Input only (request)", value: "input" },

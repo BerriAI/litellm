@@ -21,6 +21,7 @@ import {
   getLoggingOnlyScopeOptions,
   formatLoggingOnlyScope,
   modeIncludesLoggingOnly,
+  normalizeLoggingOnlyScopeChoice,
   supportsDirectionalLoggingOnlyScope,
 } from "./guardrail_info_helpers";
 
@@ -248,6 +249,15 @@ describe("guardrail_info_helpers", () => {
   });
 
   describe("logging-only scope helpers", () => {
+    it("normalizes directional choices only when the provider does not support them", () => {
+      expect(normalizeLoggingOnlyScopeChoice("input", false)).toBe("default");
+      expect(normalizeLoggingOnlyScopeChoice("output", false)).toBe("default");
+      expect(normalizeLoggingOnlyScopeChoice("both", false)).toBe("both");
+      expect(normalizeLoggingOnlyScopeChoice("default", false)).toBe("default");
+      expect(normalizeLoggingOnlyScopeChoice("input", true)).toBe("input");
+      expect(normalizeLoggingOnlyScopeChoice("output", true)).toBe("output");
+    });
+
     it("maps API scope values to choices and back", () => {
       expect(loggingOnlyScopeToChoice("input")).toBe("input");
       expect(loggingOnlyScopeToChoice("output")).toBe("output");
