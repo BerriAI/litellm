@@ -27,8 +27,11 @@ class ModelInsightTask(BaseModel):
     category: str
 
 
-class ModelInsightTaskMetric(ModelInsightMetric):
-    task_type: str
+class ModelInsightTaskSummary(ModelInsightTask):
+    value: float
+    share: float
+    leader: str
+    provider: str
 
 
 class ModelInsightsResponse(BaseModel):
@@ -36,5 +39,9 @@ class ModelInsightsResponse(BaseModel):
     end_date: str
     daily: list[ModelInsightDailyMetric]
     top_models: list[ModelInsightMetric]
-    by_task: list[ModelInsightTaskMetric]
-    tasks: list[ModelInsightTask]
+
+
+class ModelInsightTasksResponse(BaseModel):
+    start_date: str
+    end_date: str
+    tasks: list[ModelInsightTaskSummary]
