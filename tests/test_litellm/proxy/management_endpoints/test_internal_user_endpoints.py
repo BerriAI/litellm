@@ -1242,6 +1242,69 @@ async def test_new_user_admin_can_set_permissions(mocker):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "limit_key",
+    ["max_batch_file_records", "max_batch_file_uploads_per_day", "max_file_downloads_per_minute"],
+)
+async def test_new_user_only_proxy_admin_sets_batch_limits_on_the_created_key(mocker, limit_key):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    async def mock_count(*args, **kwargs):
+        return 5
+
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    async def mock_check(*_args, **_kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        mock_check,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check,
+    )
+    mock_license_check = mocker.MagicMock()
+    mock_license_check.is_over_limit.return_value = False
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server._license_check", mock_license_check)
+
+    created_with: list[dict[str, object]] = []
+
+    async def stub_helper(**kwargs):
+        created_with.append(kwargs)
+        return {"user_id": "alice", "key": "sk-alice", "expires": None}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        stub_helper,
+    )
+    org_admin = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    def request(auto_create_key: bool) -> NewUserRequest:
+        return NewUserRequest(
+            user_email="alice@example.com",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            metadata={limit_key: 1000},
+            auto_create_key=auto_create_key,
+        )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(data=request(auto_create_key=True), user_api_key_dict=org_admin)
+    assert str(exc_info.value.code) == "403"
+    assert f"Only proxy admins can set {limit_key} on a key" in str(exc_info.value.message)
+    assert created_with == []
+
+    await new_user(data=request(auto_create_key=False), user_api_key_dict=org_admin)
+    await new_user(data=request(auto_create_key=True), user_api_key_dict=admin)
+    assert [call["metadata"] for call in created_with] == [{limit_key: 1000}, {limit_key: 1000}]
+
+
+@pytest.mark.asyncio
 async def test_update_single_user_non_admin_permissions_rejected(mocker):
     """`_update_single_user_helper` rejects a non-admin when `permissions`
     is present in the request body. Covers both `/user/update` and

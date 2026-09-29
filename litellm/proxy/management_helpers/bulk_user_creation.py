@@ -29,6 +29,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
+from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -215,6 +216,8 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
     try:
         validate_budget_duration(item.budget_duration)
         _check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
+        if item.auto_create_key:
+            enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
         return _error_message(exc)
     return None

@@ -682,7 +682,7 @@ async def create_file(
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
             await enforce_batch_file_upload_limit(
-                proxy_logging_obj.internal_usage_cache, user_api_key_dict, general_settings
+                proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings
             )
 
         data = {"passthrough": True} if passthrough else {}
@@ -988,7 +988,7 @@ async def get_file_content(
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
         await enforce_file_download_limit(
-            proxy_logging_obj.internal_usage_cache, user_api_key_dict, general_settings, file_id
+            proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings, file_id
         )
 
         # Include original request and headers in the data

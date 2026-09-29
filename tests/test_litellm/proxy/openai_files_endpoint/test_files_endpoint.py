@@ -4351,6 +4351,47 @@ def test_get_file_content_over_per_minute_download_limit_gets_429_per_file(monke
     assert provider_calls == ["file-out", "file-out", "file-other"]
 
 
+def test_download_counters_for_many_files_do_not_evict_rate_limit_state(monkeypatch, llm_router: Router):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setitem(ps.general_settings, "max_file_downloads_per_minute", 1000)
+    _pin_file_usage_clock(monkeypatch)
+
+    async def _mock_afile_content(**kwargs):
+        async def _stream():
+            yield b"output"
+
+        return FileContentStreamingResult(stream_iterator=_stream(), headers={"content-length": "6"})
+
+    monkeypatch.setattr(litellm, "afile_content", _mock_afile_content)
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.handle_model_based_routing",
+        AsyncMock(return_value=(False, None, None, None)),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="hashed-caller-key", user_role=LitellmUserRoles.INTERNAL_USER, user_id="test-user"
+    )
+    rate_limit_cache: Final = proxy_logging.internal_usage_cache.dual_cache
+    rate_limit_window_key: Final = "{api_key:hashed-caller-key}:window"
+    rate_limit_cache.set_cache(key=rate_limit_window_key, value=12345, local_only=True, ttl=60)
+    distinct_files: Final = rate_limit_cache.in_memory_cache.max_size_in_memory + 1
+
+    try:
+        statuses = [
+            client.get(f"/v1/files/file-{index}/content", headers={"Authorization": "Bearer test-key"}).status_code
+            for index in range(distinct_files)
+        ]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert set(statuses) == {200}
+    assert rate_limit_cache.get_cache(key=rate_limit_window_key, local_only=True) == 12345
+
+
 def test_create_file_batch_wrong_extension_rejected_before_forwarding(monkeypatch, llm_router: Router):
     forwarded_calls = _setup_batch_upload_endpoint(monkeypatch, llm_router)
 
