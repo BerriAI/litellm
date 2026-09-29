@@ -11259,6 +11259,77 @@
           "title": "GuardrailSubmissionSummary",
           "type": "object"
         },
+        "GuardrailUIAddGuardrailSettings": {
+          "properties": {
+            "content_filter_settings": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Filter Settings"
+            },
+            "pii_entity_categories": {
+              "items": {
+                "$ref": "#/components/schemas/PiiEntityCategoryMap"
+              },
+              "title": "Pii Entity Categories",
+              "type": "array"
+            },
+            "providers_without_directional_logging_only_scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Providers Without Directional Logging Only Scope",
+              "type": "array"
+            },
+            "supported_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Actions",
+              "type": "array"
+            },
+            "supported_entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Entities",
+              "type": "array"
+            },
+            "supported_modes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Modes",
+              "type": "array"
+            },
+            "supported_modes_by_provider": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Supported Modes By Provider",
+              "type": "object"
+            }
+          },
+          "required": [
+            "supported_entities",
+            "supported_actions",
+            "supported_modes",
+            "supported_modes_by_provider",
+            "providers_without_directional_logging_only_scope",
+            "pii_entity_categories"
+          ],
+          "title": "GuardrailUIAddGuardrailSettings",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -13419,6 +13490,27 @@
           "title": "PiiAction",
           "type": "string"
         },
+        "PiiEntityCategoryMap": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entities",
+              "type": "array"
+            }
+          },
+          "required": [
+            "category",
+            "entities"
+          ],
+          "title": "PiiEntityCategoryMap",
+          "type": "object"
+        },
         "PiiEntityType": {
           "enum": [
             "CREDIT_CARD",
@@ -14860,7 +14952,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/GuardrailUIAddGuardrailSettings"
+                  }
                 }
               },
               "description": "Successful Response"

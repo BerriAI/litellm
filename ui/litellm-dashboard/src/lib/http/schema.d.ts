@@ -31097,6 +31097,27 @@ export interface components {
             /** Output Text */
             output_text: string;
         };
+        /** GuardrailUIAddGuardrailSettings */
+        GuardrailUIAddGuardrailSettings: {
+            /** Content Filter Settings */
+            content_filter_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /** Pii Entity Categories */
+            pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
+            /** Providers Without Directional Logging Only Scope */
+            providers_without_directional_logging_only_scope: string[];
+            /** Supported Actions */
+            supported_actions: string[];
+            /** Supported Entities */
+            supported_entities: string[];
+            /** Supported Modes */
+            supported_modes: string[];
+            /** Supported Modes By Provider */
+            supported_modes_by_provider: {
+                [key: string]: string[];
+            };
+        };
         /**
          * HTTPAuthSecurityScheme
          * @description Defines a security scheme using HTTP authentication.
@@ -37909,6 +37930,13 @@ export interface components {
          * @enum {string}
          */
         PiiAction: "BLOCK" | "MASK";
+        /** PiiEntityCategoryMap */
+        PiiEntityCategoryMap: {
+            /** Category */
+            category: string;
+            /** Entities */
+            entities: string[];
+        };
         /**
          * PiiEntityType
          * @enum {string}
@@ -56403,7 +56431,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["GuardrailUIAddGuardrailSettings"];
                 };
             };
         };
