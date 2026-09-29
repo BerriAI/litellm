@@ -8424,6 +8424,36 @@ async def test_missing_session_id_generate_reuses_traceparent_trace_id():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+        {},
+    ],
+    ids=["with_traceparent", "no_traceparent"],
+)
+async def test_missing_session_id_generate_reuses_promoted_caller_trace_id(path: str, headers: dict[str, str]):
+    """On litellm_metadata routes the caller's metadata.trace_id still counts as caller set even though
+    it has not been promoted yet, so the generated session id derives from it instead of a fresh uuid."""
+    request = _request_for(path)
+    request.headers = headers
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "input": "hi", "metadata": {"trace_id": "caller-trace"}},
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    assert updated["litellm_session_id"] == "caller-trace"
+    assert updated["litellm_metadata"]["session_id"] == "caller-trace"
+    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True
+    assert _spend_log_session_id(updated, "litellm_metadata") == "caller-trace"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("policy", ["generate", "reject"])
 async def test_missing_session_id_policy_keeps_client_supplied_session_id(policy: str):
     request = _request_for("/v1/chat/completions")

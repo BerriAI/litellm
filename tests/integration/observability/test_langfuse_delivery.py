@@ -602,3 +602,56 @@ def test_missing_session_id_reject_accepts_caller_metadata_and_baggage_fallback(
         )
         assert third.status_code == 400, third.text
         assert upstream_targets == ["/v1/responses", "/v1/chat/completions"], upstream_targets
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "kind", "expected_target"),
+    (
+        pytest.param("/v1/responses", "responses", "/v1/responses", id="responses_caller_trace"),
+        pytest.param("/v1/messages", "messages", "/v1/responses", id="messages_caller_trace"),
+    ),
+)
+def test_missing_session_id_generate_derives_session_from_caller_trace(
+    gateway: Gateway, tmp_path: Path, endpoint: str, kind: str, expected_target: str
+) -> None:
+    marker: Final = "gen" + uuid.uuid4().hex
+    provider_secret: Final = "synthetic-provider-secret-" + marker
+    caller_trace: Final = uuid.uuid4().hex
+    upstream_targets: Final[list[str]] = []  # mutable-ok: records which upstream endpoint each call hit
+
+    def upstream(request: Request) -> Reply:
+        assert request.headers["authorization"] == f"Bearer {provider_secret}"
+        upstream_targets.append(request.target)
+        if request.target == "/v1/responses":
+            return _responses_result("resp-" + marker)
+        assert request.target == "/v1/chat/completions", request.target
+        return _completion(marker + "-answer")
+
+    def langfuse(request: Request) -> Reply:
+        if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
+            return _projects()
+        return Reply(body=b"", content_type="application/x-protobuf")
+
+    with (
+        wire_server(upstream) as provider,
+        wire_server(langfuse) as destination,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            _langfuse_environment(destination),
+            config=_langfuse_config(tmp_path, {"missing_session_id": "generate"}),
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        response: Final = candidate.request(
+            "POST",
+            endpoint,
+            _trace_body(kind, model, marker, {"trace_id": caller_trace}),
+            headers=_w3c_headers(uuid.uuid4().hex, None),
+        )
+        assert response.status_code == 200, response.text
+        assert upstream_targets == [expected_target], upstream_targets
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+        span: Final = _await_span(received, destination, response.headers["x-litellm-call-id"])
+        assert _attribute(span.attributes, "session.id") == caller_trace
