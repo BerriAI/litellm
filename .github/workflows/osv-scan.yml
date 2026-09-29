@@ -19,6 +19,7 @@ jobs:
   osv-scan:
     name: osv-scan
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
     timeout-minutes: 10
     permissions:
       contents: read

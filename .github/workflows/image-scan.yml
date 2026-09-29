@@ -41,8 +41,9 @@ jobs:
     name: image-scan
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     timeout-minutes: 30
     permissions:
       contents: read
@@ -102,8 +103,9 @@ jobs:
     name: runtime-image
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     timeout-minutes: 30
     permissions:
       contents: read
@@ -131,8 +133,9 @@ jobs:
     name: migrations-image
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     timeout-minutes: 30
     permissions:
       contents: read
@@ -162,8 +165,9 @@ jobs:
     name: gateway-image
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     timeout-minutes: 30
     permissions:
       contents: read
@@ -192,8 +196,9 @@ jobs:
     name: ui-image
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     timeout-minutes: 30
     permissions:
       contents: read
@@ -221,8 +226,9 @@ jobs:
     name: backend-image
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     timeout-minutes: 30
     permissions:
       contents: read
