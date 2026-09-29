@@ -12,20 +12,14 @@ export type ModelMetric = {
   failed_requests: number;
 };
 export type DailyMetric = ModelMetric & { date: string };
-export type TaskMetric = ModelMetric & { task_type: string };
 export type ModelInsightsResponse = {
   start_date: string;
   end_date: string;
   daily: DailyMetric[];
   top_models: ModelMetric[];
-  by_task: TaskMetric[];
-  tasks: TaskInfo[];
 };
-
-export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
-export type TaskInfo = { task_type: string; label: string; category: string };
-export type TaskTile = {
-  task: string;
+export type TaskSummary = {
+  task_type: string;
   label: string;
   category: string;
   value: number;
@@ -33,9 +27,9 @@ export type TaskTile = {
   leader: string;
   provider: string;
 };
+export type ModelInsightTasksResponse = { start_date: string; end_date: string; tasks: TaskSummary[] };
 
-const UNCATEGORIZED: Omit<TaskInfo, "task_type"> = { label: "Uncategorized", category: "General" };
-
+export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
 const DAY_MS = 86_400_000;
 const WEEK_DAYS = 7;
 
@@ -135,26 +129,4 @@ export const rankModels = (
       share: grand === 0 ? 0 : (entry.value / grand) * 100,
       delta: comparable ? later.of(model_group) - earlier.of(model_group) : 0,
     }));
-};
-
-export const buildTaskTiles = (rows: TaskMetric[], tasks: TaskInfo[], metric: Metric): TaskTile[] => {
-  const info = new Map(tasks.map((task) => [task.task_type, task]));
-  const byTask = new Map<string, TaskMetric[]>();
-  for (const row of rows) byTask.set(row.task_type, [...(byTask.get(row.task_type) ?? []), row]);
-  const tiles = [...byTask.entries()].map(([task, taskRows]) => {
-    const leader = [...taskRows].sort((a, b) => metricValue(b, metric) - metricValue(a, metric))[0];
-    return {
-      task,
-      label: (info.get(task) ?? UNCATEGORIZED).label,
-      category: (info.get(task) ?? UNCATEGORIZED).category,
-      value: taskRows.reduce((sum, row) => sum + metricValue(row, metric), 0),
-      share: 0,
-      leader: leader.model_group,
-      provider: leader.provider,
-    };
-  });
-  const grand = tiles.reduce((sum, tile) => sum + tile.value, 0);
-  return tiles
-    .map((tile) => ({ ...tile, share: grand === 0 ? 0 : (tile.value / grand) * 100 }))
-    .sort((a, b) => b.value - a.value);
 };
