@@ -4352,3 +4352,111 @@ def test_map_optional_params_verbosity_merges_into_text():
         verbosity_only_request,
     )
     assert verbosity_only_request["text"] == {"verbosity": "low"}
+
+
+@pytest.mark.parametrize(
+    "raw_output_items, expected_reasoning_ids, expected_summary_text, target_type",
+    [
+        pytest.param(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "Step 1"}],
+                    "encrypted_content": "enc1",
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_2",
+                    "summary": [{"type": "summary_text", "text": "Step 2"}],
+                    "encrypted_content": "enc2",
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "search",
+                    "arguments": "{}",
+                    "status": "completed",
+                },
+            ],
+            ["rs_1", "rs_2"],
+            "Step 1 Step 2",
+            "tool_calls",
+            id="multiple_reasoning_items_before_tool_call",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_alpha",
+                    "summary": [{"type": "summary_text", "text": "Analysis"}],
+                    "encrypted_content": "enc_a",
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_beta",
+                    "summary": [{"type": "summary_text", "text": "Conclusion"}],
+                    "encrypted_content": "enc_b",
+                },
+            ],
+            ["rs_alpha", "rs_beta"],
+            "Analysis Conclusion",
+            "message",
+            id="multiple_reasoning_items_before_output_message",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "function_call",
+                    "id": "fc_solo",
+                    "call_id": "call_solo",
+                    "name": "lookup",
+                    "arguments": "{}",
+                    "status": "completed",
+                }
+            ],
+            None,
+            None,
+            "tool_calls",
+            id="zero_reasoning_items_returns_none",
+        ),
+    ],
+)
+def test_convert_response_output_to_choices_preserves_all_reasoning_items(
+    raw_output_items: list[dict[str, object]],
+    expected_reasoning_ids: list[str] | None,
+    expected_summary_text: str | None,
+    target_type: str,
+) -> None:
+    """Verify non-streaming Responses API bridge retains all reasoning items across message and tool call turns."""
+    from openai.types.responses import ResponseOutputMessage
+    from openai.types.responses.response_output_message import ResponseOutputText
+
+    items_to_pass: Final[list[object]] = list(raw_output_items)  # mutable-ok: fixture setup
+    if target_type == "message":
+        items_to_pass.append(
+            ResponseOutputMessage(
+                id="msg_1",
+                role="assistant",
+                status="completed",
+                type="message",
+                content=[ResponseOutputText(annotations=[], text="Done", type="output_text", logprobs=[])],
+            )
+        )
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    choices: Final = handler._convert_response_output_to_choices(items_to_pass)
+
+    assert len(choices) == 1
+    msg = choices[0].message
+    reasoning_items = getattr(msg, "reasoning_items", None)
+    reasoning_content = getattr(msg, "reasoning_content", None)
+    if expected_reasoning_ids is None:
+        assert reasoning_items is None
+        assert reasoning_content is None
+    else:
+        assert reasoning_items is not None
+        assert [item["id"] for item in reasoning_items] == expected_reasoning_ids
+        assert reasoning_content == expected_summary_text
+
