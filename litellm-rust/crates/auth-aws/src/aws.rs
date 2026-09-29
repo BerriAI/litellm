@@ -457,6 +457,25 @@ pub fn sign_post(
     credentials: &Credentials,
     signing_time: SystemTime,
 ) -> Result<BTreeMap<String, String>, Error> {
+    let request = SignableRequest::new(
+        "POST",
+        url,
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str())),
+        SignableBody::Bytes(body),
+    )
+    .map_err(|error| Error::AwsSignableRequest(error.to_string()))?;
+    sign_request(request, region, service, credentials, signing_time)
+}
+
+pub fn sign_request(
+    request: SignableRequest<'_>,
+    region: &str,
+    service: &str,
+    credentials: &Credentials,
+    signing_time: SystemTime,
+) -> Result<BTreeMap<String, String>, Error> {
     let identity: Identity = credentials.clone().into();
     let params = v4::SigningParams::builder()
         .identity(&identity)
@@ -467,18 +486,16 @@ pub fn sign_post(
         .build()
         .map(SigningParams::from)
         .map_err(|error| Error::AwsSigningParameters(error.to_string()))?;
-    let header_refs = headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()));
-    let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
-        .map_err(|error| Error::AwsSignableRequest(error.to_string()))?;
     let (instructions, _) = sign(request, &params)
         .map_err(|error| Error::AwsSigning(error.to_string()))?
         .into_parts();
     Ok(instructions
         .headers()
         .map(|(name, value)| {
-            let normalized_name = SigV4Header::parse(name).map_or(name, SigV4Header::as_str);
+            let normalized_name = match SigV4Header::parse(name) {
+                Some(header) => header.as_str(),
+                None => name,
+            };
             (normalized_name.to_string(), value.to_string())
         })
         .collect())

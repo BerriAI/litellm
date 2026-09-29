@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
@@ -15,8 +16,6 @@ use crate::{
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use litellm_llms_types::providers::mistral::ocr::MistralOcrRequest;
 
-pub const AZURE_AI_OCR_PATH: [&str; 4] = ["providers", "mistral", "azure", "ocr"];
-
 const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
 
@@ -27,6 +26,16 @@ impl BaseOcrConfig for AzureAiOcrConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
     type Environment = Vec<(String, String)>;
+
+    fn matches_endpoint(&self, _model: &str, path: &str) -> Result<bool, Error> {
+        Ok(crate::azure_ai::endpoints::AzureEndpoint::Ocr
+            .path()
+            .matches(path))
+    }
+
+    fn connection_env_vars(&self) -> (Option<&'static str>, Option<&'static str>) {
+        (None, Some(AZURE_AI_API_BASE_ENV))
+    }
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
         MistralOcrConfig.get_supported_ocr_params(model)
@@ -75,9 +84,14 @@ impl BaseOcrConfig for AzureAiOcrConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
-        self.build_ocr_url(request.connection.api_base.as_deref(), &|name: &str| {
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = self.build_ocr_url(request.connection.api_base.as_deref(), &|name: &str| {
             request.connection.secret(name)
+        })?;
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
         })
     }
 
@@ -182,7 +196,14 @@ impl AzureAiOcrConfig {
     ) -> Result<String, Error> {
         let base = Self::resolve_api_base(api_base, env_lookup)?;
         ApiUrl::parse(&base)
-            .and_then(|url| url.complete_path(&AZURE_AI_OCR_PATH))
+            .and_then(|url| {
+                url.complete_path(
+                    &crate::azure_ai::endpoints::AzureEndpoint::Ocr
+                        .path()
+                        .segments()
+                        .collect::<Vec<_>>(),
+                )
+            })
             .map(|url| url.into_string())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),

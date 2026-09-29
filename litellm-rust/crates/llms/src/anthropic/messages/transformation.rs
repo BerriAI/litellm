@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
@@ -14,8 +15,8 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling, get_auth_header, has_advisor_tool,
+        has_anthropic_credential, is_tool_search_used, merge_beta_headers,
         optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks,
     },
@@ -48,8 +49,11 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
+    ) -> Result<ResolvedEndpoint, Error> {
+        crate::anthropic::endpoints::resolve_messages(
+            &crate::anthropic::common_utils::resolve_anthropic_api_base(api_base, env_lookup),
+        )
+        .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_anthropic_messages_request(
@@ -815,7 +819,9 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(api_base, "claude", &env(vars)),
+            ANTHROPIC_MESSAGES_CONFIG
+                .get_complete_url(api_base, "claude", &env(vars))
+                .map(|endpoint| endpoint.url().as_url().to_string()),
             Ok(expected.to_string())
         );
     }

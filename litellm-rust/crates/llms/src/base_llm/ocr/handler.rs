@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
@@ -214,7 +215,7 @@ pub fn transport_error(error: reqwest::Error) -> Error {
 pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     config: &C,
     request: &PreparedOcrRequest,
-    url: &str,
+    endpoint: ResolvedEndpoint,
     headers: &[(String, String)],
     body: B,
     signer: Option<&dyn RequestSigner>,
@@ -227,7 +228,11 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     )?;
     config.validate_request_body(&composed)?;
     let changed = hooks
-        .before_provider_request(wire_request(url, headers, composed))
+        .before_provider_request(wire_request(
+            endpoint.url().as_url().as_str(),
+            headers,
+            composed,
+        ))
         .await?;
     if !changed.body.is_object() {
         return Err(Error::RequestField {
@@ -236,16 +241,24 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     }
     config.validate_request_body(&changed.body)?;
     let timeout = Some(request.connection.timeout);
-    Ok(match signer {
-        Some(signer) => OutboundRequest::signed_json(
-            url.into(),
-            changed.headers,
-            &changed.body,
-            timeout,
-            signer,
-        ),
-        None => OutboundRequest::json(url.into(), changed.headers, &changed.body, timeout),
-    }?)
+    let (method, original_url) = endpoint.into_parts();
+    let url = if original_url.as_url().as_str() == changed.url {
+        original_url
+    } else {
+        litellm_core_utils::url_utils::ApiUrl::parse_exact(&changed.url).map_err(|_| {
+            Error::RequestField {
+                path: "guardrail.url".into(),
+            }
+        })?
+    };
+    Ok(OutboundRequest::endpoint_json(
+        method,
+        url,
+        changed.headers,
+        &changed.body,
+        timeout,
+        signer,
+    )?)
 }
 
 fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {

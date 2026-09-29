@@ -21,7 +21,7 @@ use super::{
     Error, MessagesCallResponse, common_utils::truncate_error_body,
     prepare::ProviderMessagesRequest,
 };
-use crate::{constants::MESSAGES_TIMEOUT_SECS, outbound::outbound_request};
+use crate::constants::MESSAGES_TIMEOUT_SECS;
 
 pub(super) async fn execute(
     http: &litellm_http::Client,
@@ -34,7 +34,7 @@ pub(super) async fn execute(
 ) -> Result<MessagesCallResponse, Error> {
     let ProviderMessagesRequest {
         provider,
-        url,
+        endpoint,
         body,
         environment,
         timeout,
@@ -53,19 +53,24 @@ pub(super) async fn execute(
         model: context.model.clone(),
         provider: context.custom_llm_provider.clone(),
     };
+    let (method, original_url) = endpoint.into_parts();
     let wire = interceptors
         .before_provider_request(
             WireRequest {
-                url,
+                url: original_url.as_url().to_string(),
                 headers: authenticated.headers,
                 body: serde_json::to_value(&body).map_err(serialize_failure)?,
             },
             context,
         )
         .await?;
+    let (wire, destination) = crate::outbound::validate_wire_url(original_url, wire)?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request =
-        crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
+    let cache_request = crate::caching::CacheRequest::from_wire_with_method(
+        identity,
+        cache.as_ref().map(|_| &wire),
+        &method,
+    );
     crate::caching::execute_streaming::<super::route::Messages, _, _>(
         cache_request,
         cache.as_ref().map(|cache| cache.service.clone()),
@@ -81,7 +86,8 @@ pub(super) async fn execute(
                     headers: wire.headers,
                     signer: authenticated.signer,
                 },
-                &wire.url,
+                method,
+                destination,
                 &wire.body,
                 timeout,
             )
@@ -130,13 +136,15 @@ fn network(error: reqwest::Error) -> Error {
 async fn send(
     http: &litellm_http::Client,
     authenticated: Authenticated,
-    url: &str,
+    method: reqwest::Method,
+    url: litellm_core_utils::url_utils::ApiUrl<litellm_core_utils::url_utils::Complete>,
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<reqwest::Response, Error> {
-    let request = outbound_request(
+    let request = crate::outbound::endpoint_request(
         authenticated,
-        url.to_string(),
+        method,
+        url,
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;

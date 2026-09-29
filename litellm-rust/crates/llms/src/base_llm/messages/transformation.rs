@@ -1,11 +1,9 @@
 use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
 
 use super::context::MessagesTransformContext;
-
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
-
-pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 
 pub trait BaseMessagesConfig: Sync {
     fn shape_request(
@@ -21,14 +19,14 @@ pub trait BaseMessagesConfig: Sync {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Result<ResolvedEndpoint, Error>;
 
     fn complete_stream_url(
         &self,
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<ResolvedEndpoint, Error> {
         self.get_complete_url(api_base, model, env_lookup)
     }
 
@@ -95,8 +93,11 @@ mod tests {
             _api_base: Option<&str>,
             _model: &str,
             _env_lookup: &dyn Fn(&str) -> Option<String>,
-        ) -> Result<String, Error> {
-            Ok(String::new())
+        ) -> Result<ResolvedEndpoint, Error> {
+            ResolvedEndpoint::parse_exact(reqwest::Method::POST, "https://example.test/messages")
+                .map_err(|error| {
+                    Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error))
+                })
         }
 
         fn validate_environment(

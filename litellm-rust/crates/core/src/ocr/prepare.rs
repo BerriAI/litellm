@@ -6,7 +6,6 @@ use litellm_llms::base_llm::ocr::{
 use litellm_secrets::source::Secrets;
 
 use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
-use crate::provider::LlmProviders;
 
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
@@ -15,21 +14,7 @@ pub(crate) fn prepare_request(
     secrets: Secrets,
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
-    let (preferred_api_key_env, api_base_env) = match request.config.provider() {
-        LlmProviders::Mistral => (
-            Some("MISTRAL_AZURE_API_KEY"),
-            Some("MISTRAL_AZURE_API_BASE"),
-        ),
-        LlmProviders::AzureAi => (None, Some("AZURE_AI_API_BASE")),
-        LlmProviders::Anthropic
-        | LlmProviders::AwsTextract
-        | LlmProviders::Bedrock
-        | LlmProviders::Cohere
-        | LlmProviders::Openai
-        | LlmProviders::OpenaiLike
-        | LlmProviders::Reducto
-        | LlmProviders::VertexAi => (None, None),
-    };
+    let (preferred_api_key_env, api_base_env) = request.config.connection_env_vars();
     let secret = |name: &str| secrets.truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
         credentials.api_key.clone().or_else(|| {

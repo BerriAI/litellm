@@ -171,3 +171,27 @@ async fn a_multi_page_rejection_reaches_the_caller_with_the_single_page_limit(#[
         "{body}"
     );
 }
+
+#[rstest]
+#[tokio::test]
+async fn a_hook_destination_is_the_destination_signed_and_sent() {
+    let upstream = upstream([textract_response()]).await;
+    let destination = format!("{}/custom?tenant=a%2fb", upstream.uri());
+    let rewritten = destination.clone();
+    let host = LocalOcrHost::new(textract_request(DETECT, &upstream.uri())).with_before_send(
+        move |wire, _| {
+            Ok(WireRequest {
+                url: rewritten.clone(),
+                ..wire
+            })
+        },
+    );
+    perform_with(host).await.unwrap();
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), "/custom");
+    assert_eq!(sent.url.query(), Some("tenant=a%2fb"));
+    assert_eq!(
+        sent.header("authorization"),
+        Some(expected_authorization(&destination, &sent).as_str())
+    );
+}

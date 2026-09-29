@@ -4,6 +4,7 @@ macro_rules_attribute::attribute_alias! {
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
+pub mod endpoint;
 pub mod formats;
 pub mod headers;
 pub mod providers;

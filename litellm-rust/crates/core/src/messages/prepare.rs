@@ -26,7 +26,7 @@ struct ResolvedProvider {
 
 pub(super) struct ProviderMessagesRequest {
     pub(super) provider: MessagesProvider,
-    pub(super) url: String,
+    pub(super) endpoint: litellm_llms::base_llm::endpoint::ResolvedEndpoint,
     pub(super) body: MessagesRequest,
     pub(super) environment: ValidatedEnvironment,
     pub(super) timeout: Option<Duration>,
@@ -107,7 +107,7 @@ fn prepare_provider_request(
         auth: validated.auth,
     };
 
-    let url = if transformed.params.stream == Some(true) {
+    let endpoint = if transformed.params.stream == Some(true) {
         config.complete_stream_url(api_base.as_deref(), &transformed.model, &env_lookup)?
     } else {
         config.get_complete_url(api_base.as_deref(), &transformed.model, &env_lookup)?
@@ -115,7 +115,7 @@ fn prepare_provider_request(
 
     Ok(ProviderMessagesRequest {
         provider,
-        url,
+        endpoint,
         body: transformed,
         environment,
         timeout,
@@ -241,7 +241,7 @@ mod tests {
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         assert_eq!(
-            (auth.as_slice(), prepared.url.as_str()),
+            (auth.as_slice(), prepared.endpoint.url().as_url().as_str()),
             (expected_auth, expected_url)
         );
     }

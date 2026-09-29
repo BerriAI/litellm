@@ -30,7 +30,7 @@ pub type ResponsesOutput = CallOutput<ResponsesApiResponse, ResponsesStreamHead,
 pub(super) struct ProviderResponsesRequest {
     pub config: &'static dyn BaseResponsesApiConfig,
     pub environment: ValidatedEnvironment,
-    pub url: String,
+    pub endpoint: litellm_llms::base_llm::endpoint::ResolvedEndpoint,
     pub body: Value,
     pub context: litellm_host::interceptors::RequestContext,
     pub timeout: Option<Duration>,

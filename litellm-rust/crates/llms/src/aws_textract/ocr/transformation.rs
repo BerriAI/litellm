@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use litellm_core_utils::call_arguments::CallArguments;
 use serde::{Deserialize, Serialize};
 
@@ -63,8 +64,13 @@ impl BaseOcrConfig for TextractDetectTextConfig {
         request: &PreparedOcrRequest,
         _optional_params: &(),
         environment: &TextractEnvironment,
-    ) -> Result<String, Error> {
-        Ok(endpoint(request, environment))
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = endpoint(request, environment);
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
+        })
     }
 
     fn transform_ocr_request(

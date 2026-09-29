@@ -10,3 +10,6 @@ pub mod secret_redaction;
 pub mod serde_compat;
 pub mod settings;
 pub mod url_utils;
+
+mod error;
+pub use error::ApiUrlError;

@@ -1,4 +1,4 @@
-use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams};
 
 use crate::base_llm::ocr::{
     error::Error,
@@ -10,7 +10,11 @@ use crate::base_llm::ocr::{
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use litellm_llms_types::providers::mistral::ocr::{MistralOcrRequest, MistralOcrResponse};
 
-const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
+use crate::mistral::endpoints::DEFAULT_API_BASE as MISTRAL_OCR_API_BASE;
+use crate::{
+    base_llm::endpoint::{ProviderEndpoint, ResolvedEndpoint},
+    mistral::endpoints::{MistralEndpoint, legacy_target},
+};
 
 const MISTRAL_OCR_API_KEY_ENV_VAR: &str = "MISTRAL_API_KEY";
 
@@ -21,6 +25,13 @@ impl BaseOcrConfig for MistralOcrConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
     type Environment = Vec<(String, String)>;
+
+    fn connection_env_vars(&self) -> (Option<&'static str>, Option<&'static str>) {
+        (
+            Some("MISTRAL_AZURE_API_KEY"),
+            Some("MISTRAL_AZURE_API_BASE"),
+        )
+    }
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &[
@@ -77,8 +88,8 @@ impl BaseOcrConfig for MistralOcrConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
-        self.build_ocr_url(request.connection.api_base.as_deref())
+    ) -> Result<ResolvedEndpoint, Error> {
+        self.build_ocr_endpoint(request.connection.api_base.as_deref())
     }
 
     fn transform_ocr_request(
@@ -136,17 +147,28 @@ impl MistralOcrConfig {
         )
     }
 
-    fn build_ocr_url(&self, api_base: Option<&str>) -> Result<String, Error> {
-        let base = api_base
-            .map(str::trim)
-            .filter(|base| !base.is_empty())
-            .unwrap_or(MISTRAL_OCR_API_BASE);
-        ApiUrl::parse(base)
-            .and_then(|url| url.complete_path(&["v1", "ocr"]))
-            .map(|url| url.into_string())
+    fn build_ocr_endpoint(&self, api_base: Option<&str>) -> Result<ResolvedEndpoint, Error> {
+        MistralEndpoint::Ocr
+            .resolve(
+                &legacy_target(
+                    api_base
+                        .map(str::trim)
+                        .filter(|base| !base.is_empty())
+                        .unwrap_or(MISTRAL_OCR_API_BASE),
+                )
+                .map_err(|_| Error::RequestField {
+                    path: "api_base".into(),
+                })?,
+            )
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
             })
+    }
+
+    #[cfg(test)]
+    fn build_ocr_url(&self, api_base: Option<&str>) -> Result<String, Error> {
+        self.build_ocr_endpoint(api_base)
+            .map(|endpoint| endpoint.url().as_url().to_string())
     }
 }
 

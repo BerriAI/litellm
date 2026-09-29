@@ -8,6 +8,8 @@ pub enum TlsSource {
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
+    #[error(transparent)]
+    Url(#[from] litellm_core_utils::ApiUrlError),
     #[error("could not read {}: {message}", path.display())]
     Read {
         path: PathBuf,

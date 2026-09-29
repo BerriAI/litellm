@@ -477,3 +477,30 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
     );
     assert!(!format!("{:?}", traces.records()).contains("private-"));
 }
+
+#[rstest]
+#[case::v1("/v1", "/v1/responses")]
+#[case::v2("/v2", "/v2/responses")]
+#[case::complete("/v2/responses", "/v2/responses")]
+#[tokio::test]
+async fn preparation_preserves_version_and_completes_before_query(
+    call: ResponsesCall,
+    #[case] suffix: &str,
+    #[case] expected: &str,
+) {
+    let upstream = upstream([json_response(
+        json!({"id":"response-1","model":"test-model","output":[]}),
+    )])
+    .await;
+    let call = ResponsesCall {
+        api_base: Some(format!("{}{suffix}?tenant=a%2fb&tenant=c", upstream.uri())),
+        ..call
+    };
+    responses_route(no_secrets())
+        .execute(call, &(), None)
+        .await
+        .unwrap();
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), expected);
+    assert_eq!(sent.url.query(), Some("tenant=a%2fb&tenant=c"));
+}

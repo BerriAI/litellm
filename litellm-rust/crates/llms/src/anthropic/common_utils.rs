@@ -14,7 +14,7 @@ use litellm_llms_types::{
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::base_llm::messages::transformation::MESSAGES_PATH_SUFFIX;
+use crate::anthropic::endpoints::{DEFAULT_API_BASE, resolve_messages};
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
     base_llm::auth::{AuthScheme, Headers},
@@ -27,7 +27,6 @@ const THOUGHT_SIGNATURE_SEPARATOR: &str = "__thought__";
 const BETA_HEADER: &str = "anthropic-beta";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
-pub const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
 pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
 const API_KEY_HEADER: &str = API_KEY_PLACEMENT.header_name();
 const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();
@@ -144,20 +143,18 @@ pub fn resolve_anthropic_api_base(
         env_lookup,
         &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
     )
-    .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string())
+    .unwrap_or_else(|| DEFAULT_API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> String {
-    let api_base = resolve_anthropic_api_base(api_base, env_lookup);
-
-    let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
-        return api_base.to_string();
-    }
-    format!("{api_base}{MESSAGES_PATH_SUFFIX}")
+) -> Result<String, crate::Error> {
+    resolve_messages(&resolve_anthropic_api_base(api_base, env_lookup))
+        .map(|endpoint| endpoint.url().as_url().to_string())
+        .map_err(|error| {
+            crate::Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error))
+        })
 }
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {

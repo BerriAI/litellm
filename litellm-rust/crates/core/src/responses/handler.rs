@@ -25,19 +25,24 @@ pub(super) async fn execute(
         model: request.context.model.clone(),
         provider: request.context.custom_llm_provider.clone(),
     };
+    let (method, original_url) = request.endpoint.into_parts();
     let wire = interceptors
         .before_provider_request(
             WireRequest {
-                url: request.url,
+                url: original_url.as_url().to_string(),
                 headers: authenticated.headers,
                 body: request.body,
             },
             request.context,
         )
         .await?;
+    let (wire, destination) = crate::outbound::validate_wire_url(original_url, wire)?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request =
-        crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
+    let cache_request = crate::caching::CacheRequest::from_wire_with_method(
+        identity,
+        cache.as_ref().map(|_| &wire),
+        &method,
+    );
     crate::caching::execute_streaming::<super::route::Responses, _, _>(
         cache_request,
         cache.as_ref().map(|cache| cache.service.clone()),
@@ -50,12 +55,13 @@ pub(super) async fn execute(
                 Some(serde_json::Value::Bool(value)) => *value,
                 Some(_) => return Err(Error::InvalidRequest("stream must be a boolean".into())),
             };
-            let outbound = crate::outbound::outbound_request(
+            let outbound = crate::outbound::endpoint_request(
                 Authenticated {
                     headers: wire.headers,
                     signer: authenticated.signer,
                 },
-                wire.url,
+                method,
+                destination,
                 &wire.body,
                 Some(request.timeout.unwrap_or(Duration::from_secs(600))),
             )?;

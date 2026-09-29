@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::formats::messages::{
@@ -19,15 +20,13 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
-            context::MessagesTransformContext,
-            normalization::fold_system_role_messages,
-            transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
+            context::MessagesTransformContext, normalization::fold_system_role_messages,
+            transformation::BaseMessagesConfig,
         },
     },
 };
 
 const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
-const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 
 pub struct AzureAnthropicMessagesConfig;
 
@@ -48,8 +47,9 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        complete_azure_anthropic_url(api_base, env_lookup)
+    ) -> Result<ResolvedEndpoint, Error> {
+        crate::azure_ai::endpoints::resolve_messages(&resolve_azure_api_base(api_base, env_lookup)?)
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_anthropic_messages_request(
@@ -115,18 +115,9 @@ pub fn complete_azure_anthropic_url(
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
     let api_base = resolve_azure_api_base(api_base, env_lookup)?;
-
-    let api_base = api_base.trim_end_matches('/');
-
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
-        return Ok(api_base.to_string());
-    }
-
-    let with_anthropic = match api_base.split_once(ANTHROPIC_PATH_SEGMENT) {
-        Some((prefix, _)) => format!("{prefix}{ANTHROPIC_PATH_SEGMENT}"),
-        None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
-    };
-    Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
+    crate::azure_ai::endpoints::resolve_messages(&api_base)
+        .map(|endpoint| endpoint.url().as_url().to_string())
+        .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
 }
 
 fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {

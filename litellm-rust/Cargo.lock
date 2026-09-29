@@ -3366,6 +3366,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-types",
  "litellm-auth-types",
+ "litellm-core-utils",
  "litellm-http",
  "moka",
  "reqwest 0.12.28",

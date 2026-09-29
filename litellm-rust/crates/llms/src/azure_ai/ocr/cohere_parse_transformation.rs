@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
 use serde_json::Value;
 
@@ -14,8 +15,6 @@ use crate::{
 };
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
-pub const AZURE_COHERE_PARSE_PATH: [&str; 4] = ["providers", "cohere", "v2", "parse"];
-
 #[derive(Default)]
 pub struct AzureAICohereParseConfig;
 
@@ -23,6 +22,10 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
     type OcrParams = CohereOptions;
     type ProviderRequest = CohereRequest;
     type Environment = Vec<(String, String)>;
+
+    fn connection_env_vars(&self) -> (Option<&'static str>, Option<&'static str>) {
+        super::transformation::AzureAiOcrConfig.connection_env_vars()
+    }
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         super::transformation::AzureAiOcrConfig.get_api_key_env_var()
@@ -54,12 +57,17 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<ResolvedEndpoint, Error> {
         let base = super::transformation::AzureAiOcrConfig::resolve_api_base(
             request.connection.api_base.as_deref(),
             &|name: &str| request.connection.secret(name),
         )?;
-        self.get_complete_url(&base)
+        let url = self.get_complete_url(&base)?;
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
+        })
     }
 
     fn transform_ocr_request(
@@ -70,6 +78,12 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         headers: &[(String, String)],
     ) -> Result<CohereRequest, Error> {
         CohereParseConfig.transform_ocr_request(model, document, params, headers)
+    }
+
+    fn matches_endpoint(&self, _model: &str, path: &str) -> Result<bool, Error> {
+        Ok(crate::azure_ai::endpoints::AzureEndpoint::CohereParse
+            .path()
+            .matches(path))
     }
 
     fn get_supported_ocr_params(&self, model: &str) -> &'static [&'static str] {
@@ -131,7 +145,14 @@ impl AzureAICohereParseConfig {
         }
         url.set_path(path.strip_suffix("/models").unwrap_or(&path));
         ApiUrl::parse(url.as_str())
-            .and_then(|url| url.complete_path(&AZURE_COHERE_PARSE_PATH))
+            .and_then(|url| {
+                url.complete_path(
+                    &crate::azure_ai::endpoints::AzureEndpoint::CohereParse
+                        .path()
+                        .segments()
+                        .collect::<Vec<_>>(),
+                )
+            })
             .map(|url| url.into_string())
             .map_err(|_| invalid_api_base())
     }

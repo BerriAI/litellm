@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use litellm_auth_gcp as vertex;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
@@ -135,16 +136,21 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<ResolvedEndpoint, Error> {
         let config = vertex_config(request)?;
         let location =
             vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
                 .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
-        self.get_complete_url(
+        let url = self.get_complete_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,
             &location,
-        )
+        )?;
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
+        })
     }
 
     async fn async_transform_ocr_request(

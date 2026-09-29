@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use std::convert::Infallible;
 
 use crate::{
@@ -98,8 +99,10 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_PATH))
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = invoke_url(api_base, model, env_lookup, INVOKE_PATH);
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url)
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn complete_stream_url(
@@ -107,8 +110,10 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH))
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH);
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url)
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_anthropic_messages_request(
@@ -535,7 +540,7 @@ mod tests {
         assert_eq!(sse, expected);
     }
 
-    #[test]
+    #[rstest]
     fn config_uses_the_streaming_url_only_for_streams() {
         let env = |_: &str| -> Option<String> { None };
         let config = AmazonAnthropicClaudeMessagesConfig;
@@ -543,10 +548,16 @@ mod tests {
         assert_eq!(
             config
                 .get_complete_url(None, "anthropic.claude-3", &env)
-                .unwrap(),
+                .unwrap()
+                .url()
+                .as_url()
+                .as_str(),
             config
                 .complete_stream_url(None, "anthropic.claude-3", &env)
                 .unwrap()
+                .url()
+                .as_url()
+                .as_str()
                 .replace(INVOKE_STREAM_PATH, INVOKE_PATH)
         );
     }

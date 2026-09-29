@@ -1,3 +1,6 @@
+use crate::base_llm::endpoint::{ProviderEndpoint, ResolvedEndpoint};
+use crate::openai::endpoints::{OpenAiEndpoint, legacy_responses_target};
+use litellm_core_utils::url_utils::{Complete, WebSocketUrl};
 use litellm_llms_types::formats::responses::{
     ResponsesApiResponse, ResponsesInput, ResponsesRequest, streaming_websocket::ResponsesWsEvent,
 };
@@ -16,8 +19,7 @@ use crate::{
     },
 };
 
-pub const OPENAI_RESPONSES_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
-pub const OPENAI_RESPONSES_PATH: &str = "/responses";
+use crate::openai::endpoints::DEFAULT_API_BASE as OPENAI_RESPONSES_DEFAULT_API_BASE;
 
 pub struct OpenAiResponsesApiConfig;
 
@@ -28,8 +30,16 @@ impl ResponsesWebSocketProviderConfig for OpenAiResponsesApiConfig {
         true
     }
 
-    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> String {
-        complete_websocket_url(api_base, model)
+    fn complete_websocket_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+    ) -> Result<WebSocketUrl<Complete>, Error> {
+        crate::openai::endpoints::resolve_websocket(
+            api_base.unwrap_or(OPENAI_RESPONSES_DEFAULT_API_BASE),
+            model,
+        )
+        .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_ws_request(
@@ -49,56 +59,6 @@ impl ResponsesWebSocketProviderConfig for OpenAiResponsesApiConfig {
     ) -> Result<ResponsesWsTransformResult, Error> {
         Ok(ResponsesWsTransformResult::passthrough(event.clone()))
     }
-}
-
-fn complete_websocket_url(api_base: Option<&str>, model: &str) -> String {
-    let base = api_base
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(OPENAI_RESPONSES_DEFAULT_API_BASE);
-    let (base_without_query, query) = base
-        .split_once('?')
-        .map_or((base, None), |(value, query)| (value, Some(query)));
-    let response_url = format!(
-        "{}{}",
-        base_without_query.trim_end_matches('/'),
-        OPENAI_RESPONSES_PATH
-    );
-    let scheme_flipped = if let Some(rest) = response_url.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if let Some(rest) = response_url.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else {
-        response_url
-    };
-    let url = query.map_or(scheme_flipped.clone(), |value| {
-        format!("{scheme_flipped}?{value}")
-    });
-    if query.is_some_and(|value| {
-        value
-            .split('&')
-            .any(|part| part.split('=').next() == Some("model"))
-    }) {
-        return url;
-    }
-    format!(
-        "{url}{}model={}",
-        if query.is_some() { "&" } else { "?" },
-        percent_encode(model)
-    )
-}
-
-fn percent_encode(value: &str) -> String {
-    value
-        .bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                format!("{}", byte as char)
-            } else {
-                format!("%{byte:02X}")
-            }
-        })
-        .collect()
 }
 
 impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
@@ -149,14 +109,19 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         &self,
         api_base: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> String {
+    ) -> Result<ResolvedEndpoint, Error> {
         let base = api_base
             .filter(|base| !base.is_empty())
             .map(str::to_owned)
             .or_else(|| lookup("OPENAI_BASE_URL"))
             .or_else(|| lookup("OPENAI_API_BASE"))
             .unwrap_or_else(|| OPENAI_RESPONSES_DEFAULT_API_BASE.into());
-        format!("{}/responses", base.trim_end_matches('/'))
+        let target = legacy_responses_target(&base).map_err(|error| {
+            Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error))
+        })?;
+        OpenAiEndpoint::Responses
+            .resolve(&target)
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_responses_api_request(
@@ -200,19 +165,30 @@ mod tests {
     fn default_endpoint_belongs_to_openai(#[case] api_base: Option<&str>) {
         let expected_base = OPENAI_RESPONSES_DEFAULT_API_BASE.replacen("https://", "wss://", 1);
         assert_eq!(
-            OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(api_base, "test-model"),
-            format!("{expected_base}{OPENAI_RESPONSES_PATH}?model=test-model")
+            OPENAI_RESPONSES_WS_CONFIG
+                .complete_websocket_url(api_base, "test-model")
+                .unwrap()
+                .as_url()
+                .as_str(),
+            format!(
+                "{expected_base}/{}?model=test-model",
+                OpenAiEndpoint::Responses
+                    .path()
+                    .segments()
+                    .collect::<Vec<_>>()
+                    .join("/")
+            )
         );
     }
 
     #[rstest::rstest]
     #[case::http(
         "http://localhost:8080/",
-        "ws://localhost:8080/responses?model=test%20model"
+        "ws://localhost:8080/responses?model=test+model"
     )]
     #[case::query(
         "https://example.test/v1?foo=bar",
-        "wss://example.test/v1/responses?foo=bar&model=test%20model"
+        "wss://example.test/v1/responses?foo=bar&model=test+model"
     )]
     #[case::existing_model(
         "https://example.test?model=existing",
@@ -220,7 +196,11 @@ mod tests {
     )]
     fn provider_url_preserves_query_and_encodes_model(#[case] base: &str, #[case] expected: &str) {
         assert_eq!(
-            OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(Some(base), "test model"),
+            OPENAI_RESPONSES_WS_CONFIG
+                .complete_websocket_url(Some(base), "test model")
+                .unwrap()
+                .as_url()
+                .as_str(),
             expected
         );
     }

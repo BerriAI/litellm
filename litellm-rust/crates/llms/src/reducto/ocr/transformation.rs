@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use std::collections::BTreeMap;
 
 use litellm_core_utils::{
@@ -12,7 +13,7 @@ use serde_json::{Map, Value, json};
 use crate::base_llm::ocr::{
     document::InlineDocument,
     error::Error,
-    handler::{CallHooks, OcrClient, build_http_request, guardrail_document},
+    handler::{CallHooks, OcrClient, guardrail_document},
     transformation::{
         BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, OcrRequestContext, PreparedOcrRequest,
         decode_and_normalize_response,
@@ -106,8 +107,13 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
-        build_ocr_url(request.connection.api_base.as_deref())
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = build_ocr_url(request.connection.api_base.as_deref())?;
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
+        })
     }
 
     fn transform_ocr_request(
@@ -198,7 +204,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         request: &PreparedOcrRequest,
         optional_params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<ResolvedEndpoint, Error> {
         ReductoParseV3Config.get_complete_url(request, optional_params, environment)
     }
 
@@ -257,8 +263,9 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
 ) -> Result<OutboundRequest, Error> {
     let params = config.map_ocr_params(&request.optional_params, &request.model)?;
     let headers = config.validate_environment(request, client).await?;
-    let url = config.get_complete_url(request, &params, &headers)?;
-    let (document, headers) = guardrail_document(request, &url, &headers, hooks).await?;
+    let endpoint = config.get_complete_url(request, &params, &headers)?;
+    let url = endpoint.url().as_url().as_str();
+    let (document, headers) = guardrail_document(request, url, &headers, hooks).await?;
     let body = config
         .async_transform_ocr_request(
             &request.model,
@@ -276,7 +283,15 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
         &body,
         config.get_supported_ocr_params(&request.model),
     )?;
-    build_http_request(request, url, headers, &body)
+    let (method, url) = endpoint.into_parts();
+    Ok(OutboundRequest::endpoint_json(
+        method,
+        url,
+        headers,
+        &body,
+        Some(request.connection.timeout),
+        None,
+    )?)
 }
 
 fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {

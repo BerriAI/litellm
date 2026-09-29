@@ -1,13 +1,12 @@
+use crate::anthropic::endpoints::{AnthropicEndpoint, BatchId, RetrieveBatch, legacy_batch_mount};
+use crate::base_llm::endpoint::ProviderEndpoint;
 use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
 use litellm_llms_types::formats::messages::MessagesResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
-use url::Url;
 
 use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
-
-const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicBatchRequestCounts {
@@ -100,31 +99,20 @@ fn timestamp(value: Option<&str>) -> Option<i64> {
         .map(OffsetDateTime::unix_timestamp)
 }
 
-fn batches_base_url(
-    api_base: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Url, Error> {
-    let api_base = resolve_anthropic_api_base(api_base, env_lookup);
-    let api_base = api_base.trim_end_matches('/');
-    let complete_url = if api_base.ends_with(BATCHES_PATH_SUFFIX) {
-        api_base.to_string()
-    } else if let Some(base) = api_base.strip_suffix("/v1/messages") {
-        format!("{base}{BATCHES_PATH_SUFFIX}")
-    } else {
-        format!("{api_base}{BATCHES_PATH_SUFFIX}")
-    };
-    Url::parse(&complete_url).map_err(|error| {
-        Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
-    })
-}
-
 impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
     fn create_batch_url(
         &self,
         api_base: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(batches_base_url(api_base, env_lookup)?.into())
+        AnthropicEndpoint::CreateBatch
+            .resolve(
+                &legacy_batch_mount(&resolve_anthropic_api_base(api_base, env_lookup)).map_err(
+                    |error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)),
+                )?,
+            )
+            .map(|endpoint| endpoint.url().as_url().to_string())
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_create_batch_request(&self) -> Result<Value, Error> {
@@ -148,11 +136,17 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         if batch_id.is_empty() {
             return Err(Error::MissingField("batch_id"));
         }
-        let mut url = batches_base_url(api_base, env_lookup)?;
-        url.path_segments_mut()
-            .map_err(|_| Error::InvalidRequest("Anthropic API base cannot be a base URL".into()))?
-            .push(batch_id);
-        Ok(url.into())
+        let id = BatchId::new(batch_id).map_err(|error| {
+            Error::InvalidRequest(crate::ErrorDetail::invalid("batch_id", error))
+        })?;
+        let target = legacy_batch_mount(&resolve_anthropic_api_base(api_base, env_lookup))
+            .map_err(|error| {
+                Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error))
+            })?;
+        RetrieveBatch { id }
+            .resolve(&target)
+            .map(|endpoint| endpoint.url().as_url().to_string())
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_retrieve_batch_request(&self) -> Value {

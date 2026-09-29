@@ -15,29 +15,19 @@ pub enum MistralBatchStatus {
     Cancelled,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Copy, Eq)]
-pub enum MistralBatchEndpoint {
-    #[serde(rename = "/v1/chat/completions")]
-    ChatCompletions,
-    #[serde(rename = "/v1/embeddings")]
-    Embeddings,
-    #[serde(rename = "/v1/fim/completions")]
-    FimCompletions,
-    #[serde(rename = "/v1/moderations")]
-    Moderations,
-    #[serde(rename = "/v1/chat/moderations")]
-    ChatModerations,
-    #[serde(rename = "/v1/ocr")]
-    Ocr,
-    #[serde(rename = "/v1/classifications")]
-    Classifications,
-    #[serde(rename = "/v1/chat/classifications")]
-    ChatClassifications,
-    #[serde(rename = "/v1/conversations")]
-    Conversations,
-    #[serde(rename = "/v1/audio/transcriptions")]
-    AudioTranscriptions,
+crate::wire_endpoint_enum! {
+    pub enum MistralBatchEndpoint {
+        ChatCompletions => "/v1/chat/completions",
+        Embeddings => "/v1/embeddings",
+        FimCompletions => "/v1/fim/completions",
+        Moderations => "/v1/moderations",
+        ChatModerations => "/v1/chat/moderations",
+        Ocr => "/v1/ocr",
+        Classifications => "/v1/classifications",
+        ChatClassifications => "/v1/chat/classifications",
+        Conversations => "/v1/conversations",
+        AudioTranscriptions => "/v1/audio/transcriptions",
+    }
 }
 
 #[macro_rules_attribute::apply(wire_type)]
@@ -206,6 +196,40 @@ mod tests {
     use crate::recognized::Recognized;
     use rstest::rstest;
     use serde_json::{Value, json};
+
+    #[rstest]
+    #[case::chatcompletions(MistralBatchEndpoint::ChatCompletions)]
+    #[case::embeddings(MistralBatchEndpoint::Embeddings)]
+    #[case::fimcompletions(MistralBatchEndpoint::FimCompletions)]
+    #[case::moderations(MistralBatchEndpoint::Moderations)]
+    #[case::chatmoderations(MistralBatchEndpoint::ChatModerations)]
+    #[case::ocr(MistralBatchEndpoint::Ocr)]
+    #[case::classifications(MistralBatchEndpoint::Classifications)]
+    #[case::chatclassifications(MistralBatchEndpoint::ChatClassifications)]
+    #[case::conversations(MistralBatchEndpoint::Conversations)]
+    #[case::audiotranscriptions(MistralBatchEndpoint::AudioTranscriptions)]
+    fn endpoint_paths_agree_with_wire_values(#[case] endpoint: MistralBatchEndpoint) {
+        let wire = serde_json::to_value(endpoint).unwrap();
+        let path = format!(
+            "/{}",
+            endpoint.path().segments().collect::<Vec<_>>().join("/")
+        );
+        assert_eq!(wire, path);
+        assert_eq!(
+            serde_json::from_value::<MistralBatchEndpoint>(wire).unwrap(),
+            endpoint
+        );
+    }
+
+    #[cfg(feature = "schema")]
+    #[rstest]
+    fn endpoint_schema_agrees_with_wire_contract() {
+        let schema = serde_json::to_value(schemars::schema_for!(MistralBatchEndpoint)).unwrap();
+        for value in schema["enum"].as_array().unwrap() {
+            let endpoint = serde_json::from_value::<MistralBatchEndpoint>(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(endpoint).unwrap(), *value);
+        }
+    }
 
     #[rstest]
     #[case::files(json!({"input_files":["file-id"]}))]
