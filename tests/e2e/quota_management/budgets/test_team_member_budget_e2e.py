@@ -61,6 +61,25 @@ def member(client: BudgetClient) -> Iterator[_Member]:
         resources.teardown()
 
 
+@pytest.fixture(scope="class")
+def member_without_membership(client: BudgetClient) -> Iterator[_Member]:
+    resources = ResourceManager(client=client.proxy)
+    try:
+        marker = unique_marker()
+        team_id = client.create_team(
+            alias=f"e2e-team-member-no-membership-{marker}",
+            team_member_budget=TEAM_BUDGET,
+        )
+        resources.defer(lambda: client.delete_team(team_id))
+        user_id = client.create_user(max_budget=TEAM_BUDGET)
+        resources.defer(lambda: client.delete_user(user_id))
+        key = client.generate_key(team_id=team_id, user_id=user_id)
+        resources.defer(lambda: client.delete_key(key))
+        yield _Member(team_id=team_id, user_id=user_id, key=key)
+    finally:
+        resources.teardown()
+
+
 def _send(client: BudgetClient, key: str) -> str | None:
     """One member call; its response id (== the spend-log request_id) if it went
     through, else None."""
@@ -106,3 +125,17 @@ class TestTeamMemberBudget:
             require_successful_call(result)
             time.sleep(2)
         pytest.fail("per-member budget never enforced within the call budget")
+
+
+class TestFailClosedTeamMemberBudgetWithoutMembership:
+    @pytest.mark.covers("quota_management.budget.team_member.missing_membership_counts_as_verified_zero_spend")
+    def test_missing_membership_counts_as_verified_zero_spend(
+        self, client: BudgetClient, member_without_membership: _Member
+    ) -> None:
+        result = client.chat(
+            member_without_membership.key,
+            MODEL,
+            f"missing membership {unique_marker()}",
+            max_tokens=16,
+        )
+        assert result.status_code == 200, result.body
