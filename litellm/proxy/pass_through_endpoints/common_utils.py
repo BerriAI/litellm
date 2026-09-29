@@ -14,7 +14,6 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helpe
 # user_api_key_auth reads straight from general_settings, so it stays plaintext.
 _CALLER_KEY_HEADER_NAME: Final = "litellm_user_api_key"
 _GCM_CIPHERTEXT_PREFIX: Final = "v2:gcm:"
-# Smallest encrypt_value_helper output for a one-byte value: nonce + tag (AES-GCM), nonce + MAC (nacl).
 _MIN_GCM_CIPHERTEXT_BYTES: Final = 29
 _MIN_NACL_CIPHERTEXT_BYTES: Final = 41
 
@@ -71,7 +70,6 @@ def _has_ciphertext_shape(payload: str) -> bool:
 
 
 def _is_marked(value: object) -> bool:
-    """True for a `litellm_enc::` value whose payload has the shape encrypt_value_helper produces."""
     return (
         isinstance(value, str)
         and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
