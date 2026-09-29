@@ -1485,9 +1485,6 @@ def test_audit_malformed_w3c_headers_are_ignored(audit_rig: _AuditRig) -> None:
         assert row["session_id"], row
 
 
-
-
-
 def test_audit_unauthenticated_call_leaves_no_spend_row(audit_rig: _AuditRig) -> None:
     marker: Final = "auditunauth" + uuid.uuid4().hex
     provider_secret: Final = "synthetic-provider-secret-" + marker
