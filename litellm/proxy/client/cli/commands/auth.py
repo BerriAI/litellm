@@ -3,18 +3,20 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, Final, TypeVar
 from urllib.parse import urlencode
 
 import click
 import requests
-from filelock import BaseFileLock, FileLock, Timeout
+from filelock import Timeout
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+from litellm.litellm_core_utils.cli_credential_lock import credential_lock
 from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     SYSTEM_KEYRING,
@@ -241,8 +243,8 @@ def _renewal_reader(vault: SecretVault) -> Callable[[], Mapping[str, object] | N
     return reload
 
 
-def _credential_lock() -> BaseFileLock:
-    return FileLock(str(Path.home() / ".litellm-token.lock"), timeout=30, mode=0o600)
+def _credential_lock() -> AbstractContextManager[None]:
+    return credential_lock(Path.home())
 
 
 def get_stored_api_key(
