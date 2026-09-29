@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env*
+!.env.example
+
+# OAuth credentials - NEVER commit these
+gcp-oauth.keys.json
+!gcp-oauth.keys.example.json
+client_secret.json
+client_secret_*
+
+# Token files - NEVER commit these
+google-tokens.json
+.gcp-saved-tokens.json
+.config/
+~/.config/google-drive-mcp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Agent/tool config
+.codex/
+.claude/settings.local.json
+AGENTS.local.md
+CLAUDE.local.md
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.tmp-test/

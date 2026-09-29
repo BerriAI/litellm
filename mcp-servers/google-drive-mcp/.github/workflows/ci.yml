@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Validate MCP Registry metadata
+        # Blocks on genuinely invalid metadata (exit 1) but soft-passes when the
+        # live registry is merely unreachable (exit 3), so unrelated PRs are not
+        # failed by a registry outage. The release workflow validates again.
+        run: |
+          set +e
+          npm run registry:validate
+          status=$?
+          set -e
+          if [ "$status" -eq 3 ]; then
+            echo "::warning::MCP Registry unreachable; skipping validation gate"
+            exit 0
+          fi
+          exit "$status"
+
+      - name: Test
+        run: npm test

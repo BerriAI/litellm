@@ -1,0 +1,26 @@
+mcp_servers:
+  google_drive:
+    transport: stdio
+    command: /usr/bin/node
+    args:
+      - /app/mcp/google-drive-mcp/dist/index.js
+    env:
+      GOOGLE_DRIVE_OAUTH_CREDENTIALS: /config/gcp-oauth.keys.json
+      GOOGLE_DRIVE_MCP_TOKEN_PATH: /config/tokens.json
+    allowed_tools:
+      - search
+      - listFolder
+      - createFolder
+      - createTextFile
+      - readTextFile
+      - copyFile
+      - getFileMetadata
+      - readGoogleDoc
+      - createGoogleDoc
+      - getGoogleDocContent
+      - appendToDoc
+      - insertTextInDoc
+      - readGoogleSheet
+      - createGoogleSheet
+      - getGoogleSheetContent
+      - createGoogleSlides

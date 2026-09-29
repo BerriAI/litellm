@@ -56,3 +56,10 @@ litellm/rust_bridge/_native*.so
 *.log
 .env
 .env.local
+!mcp-servers/
+!mcp-servers/google-drive-mcp/
+!mcp-servers/google-drive-mcp/node_modules/
+!mcp-servers/google-drive-mcp/node_modules/**
+!mcp-servers/google-drive-mcp/dist/
+!mcp-servers/google-drive-mcp/dist/**
+!.mcp-build/**

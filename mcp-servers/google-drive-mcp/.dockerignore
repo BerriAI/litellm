@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log
+.env*
+!.env.example
+.git
+.gitignore
+.DS_Store
+*.log
+src/
+scripts/
+tsconfig.json
+.vscode/
+.idea/
+gcp-oauth.keys.json
+tokens.json
+auth.log

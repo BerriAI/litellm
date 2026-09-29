@@ -1,0 +1,38 @@
+# Source files (only publish dist)
+src/
+
+# Configuration and credentials
+.env
+.env.*
+!.env.example
+google-tokens.json
+gcp-oauth.keys.json
+!gcp-oauth.keys.example.json
+.gcp-saved-tokens.json
+client_secret.json
+client_secret_*
+
+# Development files
+*.log
+.DS_Store
+tsconfig.json
+settings.json
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Documentation patterns
+patterns/
+
+# Other
+node_modules/
+.config/

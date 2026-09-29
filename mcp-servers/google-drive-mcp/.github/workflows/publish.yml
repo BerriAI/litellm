@@ -1,0 +1,121 @@
+name: Publish release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+
+      # Ensure npm supports OIDC well (Node 20 may ship an older npm)
+      - name: Upgrade npm
+        run: npm i -g npm@latest && npm --version
+
+      # Kill any token-based auth that might exist (repo .npmrc, runner ~/.npmrc, etc.)
+      - name: Ensure no npm token auth is configured
+        run: |
+          rm -f .npmrc || true
+          rm -f ~/.npmrc || true
+          npm config delete //registry.npmjs.org/:_authToken || true
+          npm config delete _authToken || true
+          npm config set registry https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # Registry metadata is validated pre-merge in CI and again in the
+      # publish-registry job. Keeping it out of this job means a registry outage
+      # cannot block the npm release, which depends only on npmjs.org + OIDC.
+      - name: Verify version matches tag
+        run: |
+          PACKAGE_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PACKAGE_VERSION" != "${{ github.event.release.tag_name }}" ]; then
+            echo "Tag ${{ github.event.release.tag_name }} does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
+
+      - name: Publish (OIDC Trusted Publishing)
+        run: npm publish
+
+  publish-registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    env:
+      MCP_PUBLISHER_VERSION: v1.7.9
+      MCP_PUBLISHER_LINUX_AMD64_SHA256: ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # The version-vs-tag check already ran in the publish job (needs: publish),
+      # which checked out the same immutable release tag, so it is not repeated here.
+      - name: Validate MCP Registry metadata
+        run: npm run registry:validate
+
+      - name: Check for an existing Registry record
+        id: registry-record
+        run: |
+          set +e
+          npm run registry:verify
+          status=$?
+          set -e
+
+          case "$status" in
+            0)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              ;;
+            2)
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              exit "$status"
+              ;;
+          esac
+
+      - name: Install mcp-publisher
+        if: steps.registry-record.outputs.publish == 'true'
+        run: |
+          curl --fail --location --show-error \
+            --output mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_LINUX_AMD64_SHA256}  mcp-publisher.tar.gz" | sha256sum --check --strict
+          tar -xzf mcp-publisher.tar.gz mcp-publisher
+          chmod +x mcp-publisher
+
+      - name: Authenticate to MCP Registry
+        if: steps.registry-record.outputs.publish == 'true'
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        if: steps.registry-record.outputs.publish == 'true'
+        run: ./mcp-publisher publish server.json
+
+      - name: Verify published Registry record
+        env:
+          MCP_REGISTRY_VERIFY_ATTEMPTS: 6
+        run: npm run registry:verify

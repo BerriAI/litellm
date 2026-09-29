@@ -1,0 +1,33 @@
+{
+    "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+    "name": "io.github.piotr-agier/google-drive-mcp",
+    "title": "Google Drive MCP",
+    "description": "Secure access to Google Drive, Docs, Sheets, Slides, and Calendar through MCP.",
+    "repository": {
+        "url": "https://github.com/piotr-agier/google-drive-mcp",
+        "source": "github",
+        "id": "1028345101"
+    },
+    "websiteUrl": "https://github.com/piotr-agier/google-drive-mcp#readme",
+    "version": "2.11.0",
+    "packages": [
+        {
+            "registryType": "npm",
+            "identifier": "@piotr-agier/google-drive-mcp",
+            "version": "2.11.0",
+            "runtimeHint": "npx",
+            "transport": {
+                "type": "stdio"
+            },
+            "environmentVariables": [
+                {
+                    "name": "GOOGLE_DRIVE_OAUTH_CREDENTIALS",
+                    "description": "Path to a Google OAuth 2.0 Desktop app credentials JSON file.",
+                    "format": "filepath",
+                    "isRequired": true,
+                    "isSecret": true
+                }
+            ]
+        }
+    ]
+}

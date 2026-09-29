@@ -1,0 +1,348 @@
+{
+  "properties": {
+    "title": "GDMCP structured read probe"
+  },
+  "sheets": [
+    {
+      "properties": {
+        "sheetId": 0,
+        "title": "Probe"
+      },
+      "data": [
+        {
+          "rowData": [
+            {
+              "values": [
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=IF(C$27<>\"\",0,SUM(B1:B3))"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 504
+                  },
+                  "formattedValue": "504"
+                },
+                {
+                  "userEnteredValue": {
+                    "boolValue": true
+                  },
+                  "effectiveValue": {
+                    "boolValue": true
+                  },
+                  "formattedValue": "TRUE",
+                  "dataValidation": {
+                    "condition": {
+                      "type": "BOOLEAN"
+                    },
+                    "strict": true
+                  }
+                },
+                {
+                  "userEnteredValue": {
+                    "stringValue": "28206"
+                  },
+                  "effectiveValue": {
+                    "stringValue": "28206"
+                  },
+                  "formattedValue": "28206",
+                  "note": "probe note on C1"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 104
+                  },
+                  "formattedValue": "104"
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "userEnteredValue": {
+                    "stringValue": "Comma, inside \"quotes\""
+                  },
+                  "effectiveValue": {
+                    "stringValue": "Comma, inside \"quotes\""
+                  },
+                  "formattedValue": "Comma, inside \"quotes\""
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 202
+                  },
+                  "formattedValue": "202"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 203
+                  },
+                  "formattedValue": "203"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 204
+                  },
+                  "formattedValue": "204"
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=1/0"
+                  },
+                  "effectiveValue": {
+                    "errorValue": {
+                      "type": "DIVIDE_BY_ZERO",
+                      "message": "Function DIVIDE parameter 2 cannot be zero."
+                    }
+                  },
+                  "formattedValue": "#DIV/0!"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 302
+                  },
+                  "formattedValue": "302"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 303
+                  },
+                  "formattedValue": "303"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 304
+                  },
+                  "formattedValue": "304"
+                }
+              ]
+            },
+            {
+              "values": [
+                {},
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 402
+                  },
+                  "formattedValue": "402"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 403
+                  },
+                  "formattedValue": "403"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 404
+                  },
+                  "formattedValue": "404"
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "userEnteredValue": {
+                    "numberValue": 0.1
+                  },
+                  "effectiveValue": {
+                    "numberValue": 0.1
+                  },
+                  "formattedValue": "10.00%"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 502
+                  },
+                  "formattedValue": "502"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 503
+                  },
+                  "formattedValue": "503"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 504
+                  },
+                  "formattedValue": "504"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "startRow": 6,
+          "rowData": [
+            {
+              "values": [
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 701
+                  },
+                  "formattedValue": "701"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 702
+                  },
+                  "formattedValue": "702"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 703
+                  },
+                  "formattedValue": "703"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 704
+                  },
+                  "formattedValue": "704"
+                }
+              ]
+            },
+            {
+              "values": [
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 801
+                  },
+                  "formattedValue": "801"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 802
+                  },
+                  "formattedValue": "802"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 803
+                  },
+                  "formattedValue": "803"
+                },
+                {
+                  "userEnteredValue": {
+                    "formulaValue": "=ROW()*100+COLUMN()"
+                  },
+                  "effectiveValue": {
+                    "numberValue": 804
+                  },
+                  "formattedValue": "804"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "merges": [
+        {
+          "startRowIndex": 0,
+          "endRowIndex": 1,
+          "startColumnIndex": 3,
+          "endColumnIndex": 6
+        }
+      ]
+    },
+    {
+      "properties": {
+        "sheetId": 1,
+        "title": "Probe 2"
+      },
+      "data": [
+        {
+          "rowData": [
+            {
+              "values": [
+                {
+                  "userEnteredValue": {
+                    "stringValue": "p2-a1"
+                  },
+                  "effectiveValue": {
+                    "stringValue": "p2-a1"
+                  },
+                  "formattedValue": "p2-a1"
+                },
+                {
+                  "userEnteredValue": {
+                    "stringValue": "p2-b1"
+                  },
+                  "effectiveValue": {
+                    "stringValue": "p2-b1"
+                  },
+                  "formattedValue": "p2-b1"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
