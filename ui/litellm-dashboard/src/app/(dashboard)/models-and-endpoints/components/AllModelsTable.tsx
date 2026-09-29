@@ -312,13 +312,13 @@ export function AllModelsTable({
                       ] ?? ROUTING_STATUS_FILTER_VALUES.all}
                     </SelectTrigger>
                     <SelectContent>
-                      {(Object.keys(ROUTING_STATUS_FILTER_VALUES) as Array<keyof typeof ROUTING_STATUS_FILTER_VALUES>).map(
-                        (value) => (
-                          <SelectItem key={value} value={value}>
-                            {ROUTING_STATUS_FILTER_VALUES[value]}
-                          </SelectItem>
-                        ),
-                      )}
+                      {(
+                        Object.keys(ROUTING_STATUS_FILTER_VALUES) as Array<keyof typeof ROUTING_STATUS_FILTER_VALUES>
+                      ).map((value) => (
+                        <SelectItem key={value} value={value}>
+                          {ROUTING_STATUS_FILTER_VALUES[value]}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </DataTableFilterField>

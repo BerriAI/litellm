@@ -14692,11 +14692,19 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
+    model_name_condition: Final[dict[str, Any]] = (
+        {"model_name": {"contains": search_lower, "mode": "insensitive"}}
+        if model_name is None
+        else {"model_name": model_name}
+    )
     match_conditions: list[dict[str, Any]] = (
         [
             {
                 "OR": [
-                    {"model_name": {"contains": search_lower, "mode": "insensitive"}},
+                    model_name_condition,
+                    # Substring search also matches the underlying LiteLLM model
+                    # name (e.g. "openrouter/deepseek/deepseek-chat"), so users
+                    # can find deployments by provider or upstream model id.
                     # JSON string_contains is case-sensitive on Postgres (see
                     # note above); router-side matching below covers the
                     # case-insensitive path for rows already in the router.
@@ -14705,7 +14713,7 @@ async def _fetch_db_models_for_search(
             }
         ]
         if model_name is None
-        else [{"model_name": model_name}]
+        else [model_name_condition]
     )
     # Status filter runs inside the DB query too: the fetch is capped, so
     # matches of the other status must not consume the page budget.
@@ -14713,7 +14721,12 @@ async def _fetch_db_models_for_search(
         match_conditions.append({"model_info": {"path": ["blocked"], "equals": blocked}})
     if db_model_ids_in_router:
         match_conditions.append({"model_id": {"not": {"in": list(db_model_ids_in_router)}}})
-    db_where_condition: Final[dict[str, Any]] = {"AND": match_conditions}
+    # Keep the single-condition shape flat: it is what existing callers (and
+    # tests) assert, and Prisma treats both forms identically.
+    if len(match_conditions) == 1:
+        db_where_condition: Final[dict[str, Any]] = match_conditions[0]
+    else:
+        db_where_condition = {"AND": match_conditions}
 
     # Unsorted searches only need enough DB rows to fill the current
     # page after counting router-side matches. Sorted searches need
