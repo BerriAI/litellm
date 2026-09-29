@@ -23,6 +23,7 @@ from litellm.proxy.video_endpoints.utils import (
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     routing_model_for_id,
+    video_id_for_provider,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -276,6 +277,7 @@ async def video_status(
         resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, video_id)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -376,6 +378,7 @@ async def video_content(
         resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, video_id)
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -484,6 +487,7 @@ async def video_remix(
         resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, video_id)
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -799,6 +803,7 @@ async def video_edit(
         resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, data["video_id"])
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -897,6 +902,7 @@ async def video_extension(
         resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
         if resolved_model:
             data["model"] = resolved_model
+        data["video_id"] = video_id_for_provider(llm_router, data["video_id"])
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:

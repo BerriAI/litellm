@@ -39,10 +39,12 @@ import respx
 import litellm
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
+from litellm.llms.fal_ai.videos.transformation import FalAIVideoConfig
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -821,6 +823,8 @@ async def test_extension__reencodes_id_with_model_id(harness):
 #   Follow-up calls against a real Router                                     #
 # =========================================================================== #
 
+FAL_MODEL = "fal-ai/kling-video/v2/master/text-to-video"
+
 
 def _video_router() -> Router:
     # weight 0 keeps the group from ever picking deployment-b, so only a pin reaches it
@@ -845,6 +849,11 @@ def _video_router() -> Router:
                     "weight": 0,
                 },
                 "model_info": {"id": "deployment-b"},
+            },
+            {
+                "model_name": "kling",
+                "litellm_params": {"model": f"fal_ai/{FAL_MODEL}", "api_key": "sk-mock-fal"},
+                "model_info": {"id": "deployment-fal"},
             },
         ]
     )
@@ -904,3 +913,19 @@ async def test_status__real_router_reaches_the_creating_deployment(harness, monk
 
     assert deployment_b.call_count == 1
     assert status.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_status__fal_id_keeps_the_model_path_fal_reads(harness):
+    with patch.object(proxy_server, "llm_router", _video_router()):
+        await call_status(harness, encode_video_id_with_provider("req-123", "fal_ai", "deployment-fal"))
+    data = harness.processor_data()
+    url, _ = FalAIVideoConfig().transform_video_status_retrieve_request(
+        video_id=data["video_id"],
+        api_base="https://queue.fal.run",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert data["model"] == "deployment-fal"
+    assert url == "https://queue.fal.run/fal-ai/kling-video/requests/req-123/status"

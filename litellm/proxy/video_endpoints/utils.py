@@ -3,6 +3,7 @@ from typing import Any, Final
 
 import orjson
 
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.router import Router
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -78,6 +79,20 @@ def routing_model_for_id(llm_router: Router, model_id: str) -> str | None:
     if llm_router.has_model_id(model_id):
         return model_id
     return llm_router.resolve_model_name_from_model_id(model_id)
+
+
+def video_id_for_provider(llm_router: Router, video_id: str) -> str:
+    # fal.ai reads its model path back from the id, so swap the deployment id for the model the deployment calls
+    decoded: Final = decode_video_id_with_provider(video_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    deployment: Final = llm_router.get_deployment(model_id=decoded.get("model_id") or "")
+    if provider is None or deployment is None:
+        return video_id
+    provider_model: Final = get_llm_provider(
+        model=deployment.litellm_params.model,
+        custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+    )[0]
+    return encode_video_id_with_provider(video_id=decoded["video_id"], provider=provider, model_id=provider_model)
 
 
 def encode_video_id_in_response(response: object, fallback_model: str | None) -> object:
