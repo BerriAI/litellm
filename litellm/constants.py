@@ -1904,6 +1904,7 @@ SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
 SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
 SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS: Final = 5000
+SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE: Final = 100
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
 # staleness so a transient DB error (which surfaces as an empty list) cannot

@@ -21,6 +21,7 @@ from litellm.constants import (
     SPEND_LOG_KEY_METADATA_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
+    SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE,
 )
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_details,
@@ -739,6 +740,49 @@ async def test_recover_key_metadata_from_spend_logs_reads_two_rows_per_key_howev
     assert {digest: meta.get("user_id") for digest, meta in result.items()} == owners
     rows_read: Final = conn.execute(_SPEND_LOG_ROWS_READ_IN_THIS_TRANSACTION_SQL).fetchone()  # pyright: ignore[reportArgumentType]  # SQL literal
     assert rows_read is not None and rows_read[0] <= 2 * len(owners)
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_walks_a_bounded_number_of_nameless_rows_per_key(
+    _spend_logs_postgresql: psycopg.Connection,
+):
+    conn: Final = _spend_logs_postgresql
+    _create_spend_logs_table(conn)
+    nameless_rows: Final = 3 * SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE
+    named_late: Final[Mapping[str, str]] = {hash_token(f"cli-session-late-{i}"): f"user-{i}" for i in range(3)}
+    never_named: Final = frozenset(hash_token(f"cli-session-never-{i}") for i in range(3))
+    for digest in (*named_late, *never_named):
+        conn.execute(
+            """
+            INSERT INTO "LiteLLM_SpendLogs" (request_id, api_key, "startTime")
+            SELECT %(digest)s || '-' || g, %(digest)s, %(start)s + g * interval '1 minute'
+            FROM generate_series(1, %(rows)s) g
+            """,
+            {"digest": digest, "start": datetime(2026, 9, 7), "rows": nameless_rows},
+        )
+    for digest, owner in named_late.items():
+        conn.execute(
+            """
+            INSERT INTO "LiteLLM_SpendLogs" (request_id, api_key, "startTime", "user", metadata)
+            VALUES (%(digest)s || '-newest', %(digest)s, %(logged_at)s, %(owner)s,
+                jsonb_build_object('user_api_key_alias', 'cli-session-' || %(owner)s))
+            """,
+            {"digest": digest, "owner": owner, "logged_at": datetime(2026, 9, 9)},
+        )
+    conn.execute('ANALYZE "LiteLLM_SpendLogs"')
+    conn.commit()
+
+    result = await recover_key_metadata_from_spend_logs(
+        _psycopg_prisma(conn),
+        frozenset(named_late) | never_named,
+        (datetime(2026, 9, 7), datetime(2026, 9, 10)),
+        cache=InMemoryCache(),
+    )
+
+    assert {digest: meta.get("user_id") for digest, meta in result.items()} == named_late
+    rows_read: Final = conn.execute(_SPEND_LOG_ROWS_READ_IN_THIS_TRANSACTION_SQL).fetchone()  # pyright: ignore[reportArgumentType]  # SQL literal
+    assert rows_read is not None
+    assert rows_read[0] <= 2 * SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE * (len(named_late) + len(never_named))
 
 
 @pytest.mark.asyncio

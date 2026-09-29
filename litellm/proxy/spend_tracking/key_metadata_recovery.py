@@ -17,6 +17,7 @@ from litellm.constants import (
     SPEND_LOG_KEY_METADATA_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
+    SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE,
 )
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.utils import PrismaClient
@@ -48,10 +49,15 @@ def _named_spend_log_edge_row_sql(direction: Literal["ASC", "DESC"]) -> str:
             NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
             COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
             COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
-        FROM "LiteLLM_SpendLogs"
-        WHERE api_key = keys.digest
-          AND "startTime" >= $2::timestamp
-          AND "startTime" < $3::timestamp
+        FROM (
+            SELECT "startTime", metadata, team_id, "user"
+            FROM "LiteLLM_SpendLogs"
+            WHERE api_key = keys.digest
+              AND "startTime" >= $2::timestamp
+              AND "startTime" < $3::timestamp
+            ORDER BY "startTime" {direction}
+            LIMIT {SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE}
+        ) edge
     ) named
     WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
     ORDER BY "startTime" {direction}
@@ -68,8 +74,8 @@ SELECT keys.digest,
     first_row.user_id AS first_owner,
     last_row.user_id AS last_owner
 FROM unnest($1::text[]) AS keys(digest)
-CROSS JOIN LATERAL ({_named_spend_log_edge_row_sql("ASC")}) first_row
-CROSS JOIN LATERAL ({_named_spend_log_edge_row_sql("DESC")}) last_row
+LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("ASC")}) first_row ON true
+LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("DESC")}) last_row ON true
 """
 
 _SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
