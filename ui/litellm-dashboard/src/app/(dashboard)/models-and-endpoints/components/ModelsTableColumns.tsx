@@ -508,7 +508,7 @@ export const getModelsTableColumns = ({
   },
   {
     id: "actions",
-    meta: { title: "Actions", className: "text-right", headerClassName: "text-right" },
+    meta: { title: "Actions", className: "text-right", headerClassName: "text-right", pinned: "right" },
     header: "Actions",
     enableSorting: false,
     enableHiding: false,
