@@ -46,6 +46,19 @@ def _starlette_request(body: bytes, content_type: str) -> Request:
     return Request(scope, receive)
 
 
+@pytest.mark.parametrize("body", [b"[]", b"123", b'"str"', b"true", b"null"])
+@pytest.mark.asyncio
+async def test_read_request_body_rejects_non_object_json(body: bytes):
+    request = _starlette_request(body, "application/json")
+
+    with pytest.raises(ProxyException) as error:
+        await _read_request_body(request)
+
+    assert error.value.code == "400"
+    assert "JSON request body must be an object" in error.value.message
+    assert _safe_get_request_parsed_body(request) is None
+
+
 @pytest.mark.asyncio
 async def test_read_raw_json_body_returns_the_bytes_the_parsed_body_came_from():
     body = b'{"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}]}'
