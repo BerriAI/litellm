@@ -127,7 +127,14 @@ async def _read_request_body(request: Request | None) -> dict:
     - request: The request object to read the body from
 
     Returns:
-    - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
+    - dict: Parsed request data as a dictionary. A body that is valid JSON but not an
+      object reads as ``{}``, the same as an empty body: every field a caller can look
+      for is a key, so a non-object body carries none of them. Honouring the annotation
+      matters because auth reads the body before any route does, and both read it with
+      ``.get(...)``, so returning a list here surfaced as AttributeError -> 500 (#43711)
+
+    Raises:
+    - ProxyException: 400, when the body is present but malformed
     """
     try:
         if request is None:
@@ -208,9 +215,11 @@ async def _read_request_body(request: Request | None) -> dict:
                             code=status.HTTP_400_BAD_REQUEST,
                         )
 
-        # Cache the parsed result
-        _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
-        return parsed_body
+        # Cache the parsed result. Raw passthrough forwarding re-reads ``request.body()``,
+        # so dropping a non-object body here never changes what reaches the provider.
+        object_body: Final[dict] = parsed_body if isinstance(parsed_body, dict) else {}
+        _safe_set_request_parsed_body(request=request, parsed_body=object_body)
+        return object_body
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is

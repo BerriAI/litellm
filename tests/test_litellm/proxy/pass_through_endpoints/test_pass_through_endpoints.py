@@ -32,6 +32,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    _parse_request_data_by_content_type,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _with_trace_context,
@@ -7622,3 +7623,54 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key"] == "cli-session-alice"
     assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
+
+
+def _json_request(body: bytes, content_type: str = "application/json") -> Request:
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/anthropic/v1/messages",
+            "headers": [(b"content-type", content_type.encode())],
+            "query_string": b"",
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"[]", id="empty-array"),
+        pytest.param(b'[{"role": "user", "content": "hi"}]', id="array-of-objects"),
+        pytest.param(b"123", id="number"),
+        pytest.param(b'"claude-sonnet-4-5"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_passthrough_body_carries_no_envelope_fields(body: bytes):
+    """A passthrough body is the caller's own provider payload, so it need not be a JSON
+    object. Reading a list or scalar as the query_params/custom_body envelope raised
+    AttributeError and the caller got a bare 500 (#43711)."""
+    query_params_data, custom_body_data, file_data, stream = await _parse_request_data_by_content_type(
+        _json_request(body)
+    )
+
+    assert (query_params_data, custom_body_data, file_data, stream) == (None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_object_passthrough_body_still_yields_its_envelope_fields():
+    """The guard must only fire on a non-object body: a real envelope is unaffected."""
+    body = json.dumps({"query_params": {"alt": "sse"}, "custom_body": {"model": "x"}, "stream": True}).encode()
+
+    query_params_data, custom_body_data, _, stream = await _parse_request_data_by_content_type(_json_request(body))
+
+    assert query_params_data == {"alt": "sse"}
+    assert custom_body_data == {"model": "x"}
+    assert stream is True

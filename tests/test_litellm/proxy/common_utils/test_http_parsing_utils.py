@@ -505,6 +505,66 @@ def _make_json_request(body: bytes) -> MagicMock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"[]", id="empty-array"),
+        pytest.param(b'[{"model": "gpt-4o"}]', id="array-of-objects"),
+        pytest.param(b"123", id="integer"),
+        pytest.param(b"1.5", id="float"),
+        pytest.param(b'"gpt-4o"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_json_body_reads_as_no_fields(body: bytes):
+    """
+    ``orjson.loads`` returns whatever JSON kind it found, so this ``-> dict`` used to hand
+    back a list/int/str. Auth reads the body before any route does, and both read it with
+    ``.get(...)``, so that surfaced as AttributeError -> 500 (#43711). Every field a caller
+    looks for is a key, so a non-object body carries none of them and reads as ``{}``.
+    """
+    assert await _read_request_body(_make_json_request(body)) == {}
+
+
+@pytest.mark.asyncio
+async def test_non_object_body_is_not_cached_for_later_readers():
+    """The coercion only helps if a second read, or a route reading the cache after auth,
+    cannot pull the list back out and call ``.get()`` on it."""
+    request = _starlette_request(b"[1, 2, 3]", "application/json")
+
+    assert await _read_request_body(request) == {}
+    assert _safe_get_request_parsed_body(request=request) == {}
+    assert await _read_request_body(request) == {}
+
+
+@pytest.mark.asyncio
+async def test_non_object_body_still_reaches_the_provider_verbatim():
+    """Passthrough forwards the raw bytes, not the parsed body, so coercing the parsed view
+    must not change what a provider actually receives."""
+    body = b'[{"role": "user", "content": "hi"}]'
+    request = _starlette_request(body, "application/json")
+
+    assert await _read_request_body(request) == {}
+    assert await read_raw_json_body(request) == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        pytest.param(b"{}", {}, id="empty-object"),
+        pytest.param(b"", {}, id="empty-body"),
+        pytest.param(b'{"model": "gpt-4o", "n": [1, 2]}', {"model": "gpt-4o", "n": [1, 2]}, id="object"),
+    ],
+)
+async def test_object_bodies_are_untouched(body: bytes, expected: dict):
+    """The coercion must only ever fire on a non-object body: an object's own list values
+    stay exactly as the caller sent them."""
+    assert await _read_request_body(_make_json_request(body)) == expected
+
+
+@pytest.mark.asyncio
 async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     """
     The surrogate-repair fallback runs two full-body re.sub passes that block the

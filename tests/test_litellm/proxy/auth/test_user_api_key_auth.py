@@ -53,6 +53,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _ensure_parent_otel_span_on_request_state,
     _PendingAutoRegister,
     _matches_routing_override,
+    _read_request_body_deferring_parse_failure,
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
@@ -6417,6 +6418,43 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"[]", id="array"),
+        pytest.param(b'[{"role": "user"}]', id="array-of-objects"),
+        pytest.param(b"123", id="number"),
+        pytest.param(b'"gpt-4o"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_auth_reads_a_non_object_body_as_no_fields(body: bytes):
+    """Auth reads the body before any route does and then treats it as a mapping, in
+    ``pre_db_read_auth_checks`` and again in ``populate_request_with_path_params``. A body
+    that parsed to a list/int/str raised AttributeError in both, and in the handler meant
+    to turn the first one into a response, so the caller got a bare 500 (#43711)."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+            "path_params": {"vector_store_id": "vs-1"},
+        }
+    )
+    request._url = URL(url="/v1/vector_stores/vs-1/search")
+    request._body = body
+
+    request_data, parse_exception = await _read_request_body_deferring_parse_failure(request=request)
+
+    assert parse_exception is None
+    assert request_data == {"vector_store_id": "vs-1", "vector_store_ids": ["vs-1"]}
 
 
 async def _run_auth_with_malformed_body(post_call_failure_hook):
