@@ -5,7 +5,7 @@ from typing import Annotated, Final
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, TypeAdapter
 
-from litellm.constants import MODEL_INSIGHTS_MAX_RANGE_DAYS, MODEL_INSIGHTS_TASK_ROWS, MODEL_INSIGHTS_TOP_MODELS
+from litellm.constants import MODEL_INSIGHTS_MAX_RANGE_DAYS, MODEL_INSIGHTS_TOP_MODELS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
@@ -161,7 +161,6 @@ async def get_model_insights(
             sum=_SUM_FIELDS,
             where=date_window,
             order={"_sum": {"completion_tokens": "desc"}},
-            take=MODEL_INSIGHTS_TASK_ROWS,
         )
     )
     return ModelInsightsResponse(
