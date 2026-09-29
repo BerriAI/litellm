@@ -165,24 +165,19 @@ describe("GuardrailInfoView update payload characterization", () => {
   });
 
   it("shows and updates the logging-only scope", async () => {
-    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
-      guardrail({
-        guardrailIdentifier: "gr-abc",
-        api_key: "sk-old",
-        mode: "logging_only",
-        logging_only_scope: "input",
-      }),
-    );
+    const guardrailParams = {
+      guardrailIdentifier: "gr-abc",
+      api_key: "sk-old",
+      mode: "logging_only",
+      logging_only_scope: "input",
+    };
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(guardrail(guardrailParams));
     const user = userEvent.setup({ delay: null });
     renderView();
 
     expect(await screen.findAllByText("Input only (request)")).toHaveLength(2);
     await openEditor(user);
-    await chooseSelectOption(
-      user,
-      screen.getByLabelText("Logging only scope"),
-      "Output only (response)",
-    );
+    await chooseSelectOption(user, screen.getByLabelText("Logging only scope"), "Output only (response)");
     await saveChanges(user);
 
     await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
@@ -190,14 +185,13 @@ describe("GuardrailInfoView update payload characterization", () => {
   });
 
   it("clears the logging-only scope when the edit choice returns to default", async () => {
-    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
-      guardrail({
-        guardrailIdentifier: "gr-abc",
-        api_key: "sk-old",
-        mode: "logging_only",
-        logging_only_scope: "input",
-      }),
-    );
+    const guardrailParams = {
+      guardrailIdentifier: "gr-abc",
+      api_key: "sk-old",
+      mode: "logging_only",
+      logging_only_scope: "input",
+    };
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(guardrail(guardrailParams));
     const user = userEvent.setup({ delay: null });
     renderView();
     await openEditor(user);
