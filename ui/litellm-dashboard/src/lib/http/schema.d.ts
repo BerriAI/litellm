@@ -9189,6 +9189,40 @@ export interface paths {
         patch: operations["mistral_proxy_route_mistral__endpoint__patch"];
         trace?: never;
     };
+    "/model-insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insights */
+        get: operations["get_model_insights_model_insights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-insights/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insight Tasks */
+        get: operations["get_model_insight_tasks_model_insights_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/block": {
         parameters: {
             query?: never;
@@ -19557,6 +19591,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/server/{server_id}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin Mcp Server Tools
+         * @description Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.
+         */
+        post: operations["pin_mcp_server_tools_v1_mcp_server__server_id__pin_post"];
+        /**
+         * Unpin Mcp Server Tools
+         * @description Unpin the server's tool list (admin only); tools/list serves the live upstream catalog again.
+         */
+        delete: operations["unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/server/{server_id}/reject": {
         parameters: {
             query?: never;
@@ -24471,7 +24529,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -32404,6 +32462,10 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /** Pinned Tools */
+            pinned_tools?: {
+                [key: string]: components["schemas"]["PinnedMCPTool"];
+            } | null;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -34287,6 +34349,11 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Gateway Name
+             * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
+             */
+            gateway_name?: string | null;
+            /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.
              */
@@ -35945,6 +36012,87 @@ export interface components {
         ModelInfoDelete: {
             /** Id */
             id: string;
+        };
+        /** ModelInsightDailyMetric */
+        ModelInsightDailyMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightMetric */
+        ModelInsightMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightTaskSummary */
+        ModelInsightTaskSummary: {
+            /** Category */
+            category: string;
+            /** Label */
+            label: string;
+            /** Leader */
+            leader: string;
+            /** Provider */
+            provider: string;
+            /** Share */
+            share: number;
+            /** Task Type */
+            task_type: string;
+            /** Value */
+            value: number;
+        };
+        /** ModelInsightTasksResponse */
+        ModelInsightTasksResponse: {
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Tasks */
+            tasks: components["schemas"]["ModelInsightTaskSummary"][];
+        };
+        /** ModelInsightsResponse */
+        ModelInsightsResponse: {
+            /** Daily */
+            daily: components["schemas"]["ModelInsightDailyMetric"][];
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Top Models */
+            top_models: components["schemas"]["ModelInsightMetric"][];
         };
         /** ModelParams */
         ModelParams: {
@@ -37761,6 +37909,21 @@ export interface components {
          * @enum {string}
          */
         PiiEntityType: "CREDIT_CARD" | "CRYPTO" | "DATE_TIME" | "EMAIL_ADDRESS" | "IBAN_CODE" | "IP_ADDRESS" | "NRP" | "LOCATION" | "PERSON" | "PHONE_NUMBER" | "MEDICAL_LICENSE" | "URL" | "MAC_ADDRESS" | "UUID" | "US_BANK_NUMBER" | "US_DRIVER_LICENSE" | "US_ITIN" | "US_PASSPORT" | "US_SSN" | "US_MBI" | "US_NPI" | "UK_NHS" | "UK_NINO" | "UK_PASSPORT" | "UK_POSTCODE" | "UK_VEHICLE_REGISTRATION" | "UK_DRIVING_LICENCE" | "ES_NIF" | "ES_NIE" | "ES_PASSPORT" | "IT_FISCAL_CODE" | "IT_DRIVER_LICENSE" | "IT_VAT_CODE" | "IT_PASSPORT" | "IT_IDENTITY_CARD" | "PL_PESEL" | "SG_NRIC_FIN" | "SG_UEN" | "AU_ABN" | "AU_ACN" | "AU_TFN" | "AU_MEDICARE" | "IN_PAN" | "IN_AADHAAR" | "IN_VEHICLE_REGISTRATION" | "IN_VOTER" | "IN_PASSPORT" | "IN_GSTIN" | "FI_PERSONAL_IDENTITY_CODE" | "DE_TAX_ID" | "DE_TAX_NUMBER" | "DE_VAT_ID" | "DE_PASSPORT" | "DE_ID_CARD" | "DE_FUEHRERSCHEIN" | "DE_SOCIAL_SECURITY" | "DE_HEALTH_INSURANCE" | "DE_LANR" | "DE_BSNR" | "DE_KFZ" | "DE_HANDELSREGISTER" | "DE_PLZ" | "KR_RRN" | "KR_FRN" | "KR_PASSPORT" | "KR_DRIVER_LICENSE" | "KR_BRN" | "CA_SIN" | "SE_PERSONNUMMER" | "SE_ORGANISATIONSNUMMER" | "TH_TNIN" | "TR_NATIONAL_ID" | "TR_LICENSE_PLATE" | "NG_NIN" | "NG_VEHICLE_REGISTRATION" | "PH_TIN" | "PH_UMID" | "PH_PASSPORT" | "ZA_ID_NUMBER";
+        /**
+         * PinnedMCPTool
+         * @description One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.
+         */
+        PinnedMCPTool: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * PipelineTestRequest
          * @description Request body for testing a guardrail pipeline with sample messages.
@@ -59289,6 +59452,78 @@ export interface operations {
             };
         };
     };
+    get_model_insights_model_insights_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric the top models are ranked by */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insight_tasks_model_insights_tasks_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric task shares are computed from */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightTasksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     block_model_model_block_post: {
         parameters: {
             query?: never;
@@ -72278,6 +72513,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPOAuthUserCredentialStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pin_mcp_server_tools_v1_mcp_server__server_id__pin_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["PinnedMCPTool"];
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -1571,12 +1571,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 gemini_call_id = part["functionCall"].get("id")
 
                 if is_function_call is True:
-                    function_dict: dict[str, Any] = dict(_function_chunk)
-                    if thought_signature:
-                        if "provider_specific_fields" not in function_dict:
-                            function_dict["provider_specific_fields"] = {}
-                        function_dict["provider_specific_fields"]["thought_signature"] = thought_signature
-                    function = cast(ChatCompletionToolCallFunctionChunk, function_dict)
+                    function = (
+                        {**_function_chunk, "provider_specific_fields": {"thought_signature": thought_signature}}
+                        if thought_signature
+                        else {**_function_chunk}
+                    )
                 else:
                     _tool_response_chunk: ChatCompletionToolCallChunk = {
                         "id": f"call_{uuid.uuid4().hex[:28]}",
