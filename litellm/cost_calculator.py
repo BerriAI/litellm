@@ -1410,9 +1410,6 @@ def completion_cost(
         )
         rerank_billed_units: RerankBilledUnits | None = None
 
-        # An explicit argument that normalizes to a concrete tier is a caller override
-        # (the Responses WS partitioner); otherwise the tier the provider served beats
-        # the tier the caller requested
         explicit_tier: Final = _normalize_service_tier(service_tier)
         if explicit_tier is not None:
             service_tier = explicit_tier
