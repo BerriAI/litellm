@@ -2522,6 +2522,230 @@ def test_prompts_only_toggle_is_exposed_to_admin_ui_for_both_s3_callbacks(callba
     assert "S3_LOG_PROMPTS_ONLY" in CustomLogger.get_callback_env_vars(callback_name)
 
 
+_PARTITION_START: Final = datetime(2026, 9, 29, 14, 5, 9, 123456)
+_PARTITION_ID: Final = "chatcmpl-partition"
+
+
+def _partition_payload(response_id: str = _PARTITION_ID) -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id=response_id,
+        metadata={"user_api_key_team_alias": "team-a", "user_api_key_alias": "key-a"},
+        messages=[],
+    )
+
+
+def _partition_logger(
+    monkeypatch: pytest.MonkeyPatch, callback_params: dict[str, object], **kwargs: object
+) -> S3Logger:
+    import litellm
+
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {"s3_bucket_name": "test-bucket", "s3_region_name": "us-east-1", "s3_path": "logs", **callback_params},
+    )
+    return S3Logger(
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_use_team_prefix=True,
+        s3_use_key_prefix=True,
+        **kwargs,
+    )
+
+
+_DAILY_KEY: Final = f"logs/team-a/key-a/2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
+_HOURLY_KEY: Final = f"logs/team-a/key-a/2026-09-29/14/time-14-05-09-123456_{_PARTITION_ID}.json"
+
+
+@pytest.mark.parametrize(
+    ("callback_params", "expected_key"),
+    [
+        ({}, _DAILY_KEY),
+        ({"s3_partition_granularity": None}, _DAILY_KEY),
+        ({"s3_partition_granularity": "day"}, _DAILY_KEY),
+        ({"s3_partition_granularity": "hour"}, _HOURLY_KEY),
+    ],
+)
+def test_partition_granularity_sets_request_log_folder(
+    monkeypatch: pytest.MonkeyPatch, callback_params: dict[str, object], expected_key: str
+) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = _partition_logger(monkeypatch, callback_params)
+
+    element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+
+    assert element is not None
+    assert element.s3_object_key == expected_key
+
+
+@pytest.mark.parametrize("invalid", ["hourly", "HOUR", "1", 1, True])
+def test_invalid_partition_granularity_warns_and_keeps_daily_folder(
+    monkeypatch: pytest.MonkeyPatch, invalid: object
+) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    with patch("litellm.integrations.s3.verbose_logger") as mock_logger:
+        logger = _partition_logger(monkeypatch, {"s3_partition_granularity": invalid})
+        element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+        second = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+
+    assert element is not None
+    assert second is not None
+    assert element.s3_object_key == second.s3_object_key == _DAILY_KEY
+    mock_logger.warning.assert_called_once()
+    assert mock_logger.warning.call_args.args[1:] == (invalid,)
+
+
+def test_partition_granularity_reads_admin_ui_env_var_below_callback_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("S3_PARTITION_GRANULARITY", "hour")
+
+    from_env = _partition_logger(monkeypatch, {}).create_s3_batch_logging_element(
+        _PARTITION_START, _partition_payload()
+    )
+    from_params = _partition_logger(monkeypatch, {"s3_partition_granularity": "day"}).create_s3_batch_logging_element(
+        _PARTITION_START, _partition_payload()
+    )
+
+    assert from_env is not None and from_env.s3_object_key == _HOURLY_KEY
+    assert from_params is not None and from_params.s3_object_key == _DAILY_KEY
+
+
+def test_partition_granularity_constructor_argument_and_os_environ_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setenv("MY_S3_PARTITION", "hour")
+
+    from_ctor = _partition_logger(monkeypatch, {}, s3_partition_granularity="hour")
+    from_secret = _partition_logger(monkeypatch, {"s3_partition_granularity": "os.environ/MY_S3_PARTITION"})
+
+    for logger in (from_ctor, from_secret):
+        element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+        assert element is not None and element.s3_object_key == _HOURLY_KEY
+
+
+def test_hourly_partition_long_key_keeps_hour_folder_within_s3_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = _partition_logger(monkeypatch, {"s3_partition_granularity": "hour", "s3_path": "p" * 1100})
+
+    element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload("r" * 600))
+
+    assert element is not None
+    assert len(element.s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert re.search(r"/2026-09-29/14/[0-9a-f]{64}\.json$", element.s3_object_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("granularity", "hour_folder"), [("hour", True), ("day", False), (None, False)])
+async def test_audit_log_key_follows_audit_callback_params_partition_granularity(
+    monkeypatch: pytest.MonkeyPatch, granularity: str | None, hour_folder: bool
+) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = S3Logger(
+        s3_callback_params_override={
+            "s3_bucket_name": "audit-bucket",
+            "s3_path": "audit",
+            "s3_partition_granularity": granularity,
+        }
+    )
+
+    await logger.async_log_audit_log_event({"id": "audit-1"})
+
+    (element,) = logger.log_queue
+    match = re.fullmatch(
+        r"audit/audit_logs/\d{4}-\d{2}-\d{2}/(?:(\d{2})/)?(\d{2})-\d{2}-\d{2}_audit-1\.json", element.s3_object_key
+    )
+    assert match is not None, element.s3_object_key
+    assert (match.group(1) is not None) is hour_folder
+    if hour_folder:
+        assert match.group(1) == match.group(2)
+
+
+@pytest.mark.asyncio
+async def test_hourly_batch_file_upload_writes_one_file_per_hour_folder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = _partition_logger(monkeypatch, {"s3_partition_granularity": "hour"}, s3_batch_file_upload=True)
+    put = _RecordingPut()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    before = logger.create_s3_batch_logging_element(datetime(2026, 9, 29, 13, 59, 59), _partition_payload("before"))
+    after = logger.create_s3_batch_logging_element(datetime(2026, 9, 29, 14, 0, 1), _partition_payload("after"))
+    assert before is not None and after is not None
+    logger.log_queue = [before, after]
+
+    await logger.async_send_batch()
+
+    by_folder = {
+        re.sub(r"/batch_\d{2}-\d{2}-\d{2}_[0-9a-f]{32}\.jsonl$", "", url.split(".com/", 1)[-1]): data
+        for url, data, _headers in put.calls
+    }
+    assert sorted(by_folder) == ["logs/team-a/key-a/2026-09-29/13", "logs/team-a/key-a/2026-09-29/14"]
+    assert [json.loads(line)["id"] for line in (by_folder["logs/team-a/key-a/2026-09-29/13"] or "").splitlines()] == [
+        "before"
+    ]
+    assert [json.loads(line)["id"] for line in (by_folder["logs/team-a/key-a/2026-09-29/14"] or "").splitlines()] == [
+        "after"
+    ]
+
+
+@pytest.mark.parametrize("granularity", [None, "day", "hour"])
+def test_cold_storage_object_key_matches_the_uploaded_request_log_key(
+    monkeypatch: pytest.MonkeyPatch, granularity: str | None
+) -> None:
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {"s3_bucket_name": "test-bucket", "s3_path": "coldlogs", "s3_partition_granularity": granularity},
+    )
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    logger = S3Logger()
+    uploaded = logger.create_s3_batch_logging_element(
+        _PARTITION_START, StandardLoggingPayload(id=_PARTITION_ID, metadata={}, messages=[])
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    cold_key = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+        start_time=_PARTITION_START, response_id=_PARTITION_ID
+    )
+
+    assert uploaded is not None
+    assert cold_key == uploaded.s3_object_key
+    assert ("/2026-09-29/14/" in cold_key) is (granularity == "hour")
+
+
+def test_cold_storage_key_matches_upload_when_env_var_changes_mid_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "test-bucket", "s3_path": "coldlogs"})
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    logger = S3Logger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    cold_key = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+        start_time=_PARTITION_START, response_id=_PARTITION_ID
+    )
+    monkeypatch.setenv("S3_PARTITION_GRANULARITY", "hour")
+    uploaded = logger.create_s3_batch_logging_element(
+        _PARTITION_START,
+        StandardLoggingPayload(id=_PARTITION_ID, metadata={"cold_storage_object_key": cold_key}, messages=[]),
+    )
+
+    assert uploaded is not None
+    assert cold_key == uploaded.s3_object_key == f"coldlogs/2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
+
+
+@pytest.mark.parametrize("callback_name", ["s3", "s3_v2"])
+def test_partition_granularity_is_exposed_to_admin_ui(callback_name: str) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    assert "S3_PARTITION_GRANULARITY" in CustomLogger.get_callback_env_vars(callback_name)
+
+
 def _element(payload: dict[str, object], key_suffix: str) -> s3BatchLoggingElement:
     return s3BatchLoggingElement(
         s3_object_key=f"2025-09-14/test-{key_suffix}.json",

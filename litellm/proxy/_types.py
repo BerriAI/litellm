@@ -3916,6 +3916,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
             "S3_LOG_PROMPTS_ONLY",
+            "S3_PARTITION_GRANULARITY",
         ],
     )
 

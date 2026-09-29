@@ -115,6 +115,7 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
+from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
@@ -6032,6 +6033,7 @@ class StandardLoggingPayloadSetup:
 
             # Get the actual s3_path from the configured cold storage logger instance
             s3_path = ""  # default value
+            partition_granularity: S3PartitionGranularity = "day"
 
             # Try to get the actual logger instance from the logger name
             try:
@@ -6040,6 +6042,8 @@ class StandardLoggingPayloadSetup:
                 )
                 if custom_logger and hasattr(custom_logger, "s3_path") and getattr(custom_logger, "s3_path"):
                     s3_path = getattr(custom_logger, "s3_path")
+                if isinstance(custom_logger, S3V2Logger):
+                    partition_granularity = custom_logger.resolve_partition_granularity()
             except Exception:
                 # If any error occurs in getting the logger instance, use default empty s3_path
                 pass
@@ -6049,6 +6053,7 @@ class StandardLoggingPayloadSetup:
                 prefix="",  # Don't split by team alias for cold storage
                 start_time=start_time,
                 s3_file_name=s3_file_name,
+                partition_granularity=partition_granularity,
             )
 
             return s3_object_key
