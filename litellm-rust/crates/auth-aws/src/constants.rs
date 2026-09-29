@@ -28,29 +28,49 @@ pub const SECRET_NAMES: &[&str] = &[
     AWS_EXTERNAL_ID,
 ];
 
-/// Headers SigV4 covers, beyond the `x-amz-` / `x-amzn-` prefixes. Mirrors
-/// Python's `_filter_headers_for_aws_signature` allowlist.
-pub const AWS_SIGNED_HEADER_NAMES: &[&str] = &[
-    "host",
-    "content-type",
-    "date",
-    "x-amz-date",
-    "x-amz-security-token",
-    "x-amz-content-sha256",
-    "x-amz-algorithm",
-    "x-amz-credential",
-    "x-amz-signedheaders",
-    "x-amz-signature",
-];
-/// Headers the signer emits itself. Mirrors Python's `SIGV4_COMPUTED_HEADERS`,
-/// which the reattach loop skips so a caller's copy cannot ride alongside the
-/// computed one.
-pub const SIGV4_COMPUTED_HEADER_NAMES: &[&str] = &[
-    "authorization",
-    "x-amz-date",
-    "x-amz-security-token",
-    "date",
-];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SigV4Header {
+    Authorization,
+    Host,
+    ContentType,
+    Date,
+    AmzDate,
+    AmzSecurityToken,
+}
+
+impl SigV4Header {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authorization => "Authorization",
+            Self::Host => "Host",
+            Self::ContentType => "Content-Type",
+            Self::Date => "Date",
+            Self::AmzDate => "X-Amz-Date",
+            Self::AmzSecurityToken => "X-Amz-Security-Token",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        [
+            Self::Authorization,
+            Self::Host,
+            Self::ContentType,
+            Self::Date,
+            Self::AmzDate,
+            Self::AmzSecurityToken,
+        ]
+        .into_iter()
+        .find(|header| name.eq_ignore_ascii_case(header.as_str()))
+    }
+
+    pub const fn is_computed(self) -> bool {
+        matches!(
+            self,
+            Self::Authorization | Self::Date | Self::AmzDate | Self::AmzSecurityToken
+        )
+    }
+}
+
 pub const BEDROCK_SERVICE: &str = "bedrock";
 pub const DEFAULT_SESSION_NAME_PREFIX: &str = "litellm-session";
 pub const DEFAULT_BEDROCK_REGION: &str = "us-west-2";
