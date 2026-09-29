@@ -208,6 +208,14 @@ async def _read_request_body(request: Request | None) -> dict:
                             code=status.HTTP_400_BAD_REQUEST,
                         )
 
+        if not isinstance(parsed_body, dict):
+            raise ProxyException(
+                message="Invalid JSON request body: expected an object",
+                type="invalid_request_error",
+                param="request_body",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
