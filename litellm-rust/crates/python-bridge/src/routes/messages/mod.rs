@@ -1,22 +1,10 @@
 mod host;
 
 use host::MessagesPythonHost;
-use litellm_callbacks_legacy_python::{
-    LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
-};
-use litellm_core::messages::route::messages_machine;
+use litellm_callbacks_legacy_python::LoggingOperation;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
-};
-
-const SURFACE: LegacySurface = LegacySurface {
-    call_type: "anthropic_messages",
-    input_description: "Messages",
-    stream: Some(PassThroughStream {
-        url_route: "/v1/messages",
-        endpoint_type: "anthropic",
-    }),
 };
 
 fn run_messages(
@@ -26,17 +14,53 @@ fn run_messages(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let secrets = crate::secrets::source(py)?;
-    let config = crate::http::call_config(py, &kwargs, asynchronous)?;
-    let machine = messages_machine(crate::http::resources(), &config, secrets)
-        .map_err(crate::http::client_error)?;
-    run_legacy_call(
+    let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        SURFACE,
-        PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(machine),
-        MessagesPythonHost::new(request.unbind()),
-        crate::preflight::sdk_preflight,
+        LoggingOperation::Messages,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
+        move |py, arguments, request| {
+            let builder = litellm_core::messages::MessagesRoute::builder()
+                .with_http(
+                    crate::http::provider_client(py, arguments, asynchronous)?
+                        .map_err(crate::http::client_error)?,
+                )
+                .with_auth(crate::http::resources().auth.clone())
+                .with_secrets(crate::secrets::source(py)?);
+            let route = builder.build();
+            Ok(litellm_host::call::hosted_call(
+                request,
+                None,
+                move |(call, selection): (_, crate::cache::Selection),
+                      services,
+                      interceptors,
+                      observers| async move {
+                    let (cache, options) = selection.attach(services);
+                    let route = match cache {
+                        Some(cache) => route.with_cache(cache),
+                        None => route,
+                    };
+                    route
+                        .execute(
+                            call,
+                            &interceptors,
+                            litellm_core::CallOptions {
+                                cache: Some(options),
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
+        },
+        MessagesPythonHost::new(request.unbind(), asynchronous),
+        hooks,
         asynchronous,
     )
 }

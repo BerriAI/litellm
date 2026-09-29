@@ -470,7 +470,7 @@ if MCP_AVAILABLE:
         "_run_post_mcp_call_guardrails",
         "_server_answers_to",
         "_tool_name_matches",
-        "apply_tool_overrides",
+        "apply_display_name_overrides",
         "call_mcp_tool",
         "execute_mcp_tool",
         "filter_tools_by_allowed_tools",
@@ -990,7 +990,7 @@ if MCP_AVAILABLE:
         _raise_if_initialize_grants_no_mcp_servers,
         _server_answers_to,
         _tool_name_matches,
-        apply_tool_overrides,
+        apply_display_name_overrides,
         filter_tools_by_allowed_tools,
         raise_denied_scoped_mcp_access,
     )
