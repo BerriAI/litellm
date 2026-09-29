@@ -9206,6 +9206,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model-insights/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insight Tasks */
+        get: operations["get_model_insight_tasks_model_insights_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/block": {
         parameters: {
             query?: never;
@@ -36007,50 +36024,40 @@ export interface components {
             /** Successful Requests */
             successful_requests: number;
         };
-        /** ModelInsightTask */
-        ModelInsightTask: {
+        /** ModelInsightTaskSummary */
+        ModelInsightTaskSummary: {
             /** Category */
             category: string;
             /** Label */
             label: string;
-            /** Task Type */
-            task_type: string;
-        };
-        /** ModelInsightTaskMetric */
-        ModelInsightTaskMetric: {
-            /** Completion Tokens */
-            completion_tokens: number;
-            /** Failed Requests */
-            failed_requests: number;
-            /** Model */
-            model: string;
-            /** Model Group */
-            model_group: string;
-            /** Prompt Tokens */
-            prompt_tokens: number;
+            /** Leader */
+            leader: string;
             /** Provider */
             provider: string;
-            /** Requests */
-            requests: number;
-            /** Spend */
-            spend: number;
-            /** Successful Requests */
-            successful_requests: number;
+            /** Share */
+            share: number;
             /** Task Type */
             task_type: string;
+            /** Value */
+            value: number;
+        };
+        /** ModelInsightTasksResponse */
+        ModelInsightTasksResponse: {
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Tasks */
+            tasks: components["schemas"]["ModelInsightTaskSummary"][];
         };
         /** ModelInsightsResponse */
         ModelInsightsResponse: {
-            /** By Task */
-            by_task: components["schemas"]["ModelInsightTaskMetric"][];
             /** Daily */
             daily: components["schemas"]["ModelInsightDailyMetric"][];
             /** End Date */
             end_date: string;
             /** Start Date */
             start_date: string;
-            /** Tasks */
-            tasks: components["schemas"]["ModelInsightTask"][];
             /** Top Models */
             top_models: components["schemas"]["ModelInsightMetric"][];
         };
@@ -59420,6 +59427,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelInsightsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insight_tasks_model_insights_tasks_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric task shares are computed from */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightTasksResponse"];
                 };
             };
             /** @description Validation Error */
