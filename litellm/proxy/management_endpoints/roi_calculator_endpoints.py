@@ -171,11 +171,7 @@ def _public_settings(settings: ROISettings) -> ROISettingsResponse:
         has_github_token=bool(settings.github_token.get_secret_value()),
         default_prompt=DEFAULT_PROMPT,
         available_models=models,
-        ready=bool(
-            settings.repos
-            and settings.estimator_model
-            and settings.estimator_model in models
-        ),
+        ready=bool(settings.repos and settings.estimator_model and settings.estimator_model in models),
     )
 
 
@@ -251,9 +247,7 @@ async def update_roi_calculator_settings(
     current: Final = await _load_settings(repository)
     if "github_api_url" in patch.model_fields_set and patch.github_api_url is None:
         raise HTTPException(status_code=422, detail="GitHub API URL cannot be null.")
-    github_api_url: Final = (
-        patch.github_api_url if patch.github_api_url is not None else current.github_api_url
-    )
+    github_api_url: Final = patch.github_api_url if patch.github_api_url is not None else current.github_api_url
     github_url_changed: Final = github_api_url.rstrip("/") != current.github_api_url.rstrip("/")
     token_was_supplied: Final = "github_token" in patch.model_fields_set
     plaintext_token, encrypted_token = (
@@ -273,19 +267,11 @@ async def update_roi_calculator_settings(
             github_api_url=github_api_url,
             github_token=SecretStr(plaintext_token),
             repos=patch.repos if patch.repos is not None else current.repos,
-            estimator_model=(
-                patch.estimator_model
-                if patch.estimator_model is not None
-                else current.estimator_model
-            ),
+            estimator_model=(patch.estimator_model if patch.estimator_model is not None else current.estimator_model),
             estimator_prompt=(
-                patch.estimator_prompt
-                if patch.estimator_prompt is not None
-                else current.estimator_prompt
+                patch.estimator_prompt if patch.estimator_prompt is not None else current.estimator_prompt
             ),
-            backfill_days=(
-                patch.backfill_days if patch.backfill_days is not None else current.backfill_days
-            ),
+            backfill_days=(patch.backfill_days if patch.backfill_days is not None else current.backfill_days),
             identity_map=current.identity_map,
         )
     except ValidationError as exc:
@@ -315,8 +301,7 @@ async def get_roi_calculator_repositories(
         await github.close()
     return ROIRepositoriesResponse(
         repositories=tuple(
-            ROIRepository(name=name, visibility=visibility, archived=archived)
-            for name, visibility, archived in repos
+            ROIRepository(name=name, visibility=visibility, archived=archived) for name, visibility, archived in repos
         ),
         page=page,
         has_more=has_more,
@@ -403,11 +388,7 @@ async def update_roi_calculator_identity_map(
     if not login or (update.email is not None and not new_email):
         raise HTTPException(status_code=422, detail="Enter a GitHub login and a valid email address.")
     identity_map: Final[Mapping[str, str]] = MappingProxyType(
-        {
-            key: value
-            for key, value in current.identity_map.items()
-            if update.email is None and key != login
-        }
+        {key: value for key, value in current.identity_map.items() if update.email is None and key != login}
         if update.email is None
         else {**current.identity_map, login: new_email}
     )

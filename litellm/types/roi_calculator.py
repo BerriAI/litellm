@@ -47,13 +47,9 @@ class ROISettings(BaseModel):
     def validate_repositories(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         import re
 
-        normalized_values: Final = tuple(
-            repo.strip().rstrip("/").removesuffix(".git") for repo in values
-        )
+        normalized_values: Final = tuple(repo.strip().rstrip("/").removesuffix(".git") for repo in values)
         normalized: Final = tuple(
-            repo
-            for index, repo in enumerate(normalized_values)
-            if repo not in normalized_values[:index]
+            repo for index, repo in enumerate(normalized_values) if repo not in normalized_values[:index]
         )
         invalid_repositories: Final = tuple(
             repo
@@ -84,8 +80,7 @@ class ROISettings(BaseModel):
             {
                 login.strip().casefold(): normalize_email(address)
                 for login, address in values.items()
-                if re.fullmatch(r"[A-Za-z0-9_\[\]-]+", login.strip()) is not None
-                and normalize_email(address)
+                if re.fullmatch(r"[A-Za-z0-9_\[\]-]+", login.strip()) is not None and normalize_email(address)
             }
         )
         if len(normalized) != len(values):

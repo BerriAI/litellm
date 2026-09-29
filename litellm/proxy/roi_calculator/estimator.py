@@ -123,18 +123,14 @@ class Estimator:
             missing_metadata_estimate: Final[ROIEstimate] = {
                 "status": "needs_review",
                 "hours": None,
-                "reasoning": (
-                    "GitHub did not provide all file or commit metadata. It was not sent for estimation."
-                ),
+                "reasoning": ("GitHub did not provide all file or commit metadata. It was not sent for estimation."),
             }
             return missing_metadata_estimate
         if len(evidence) > MAX_EVIDENCE_CHARS:
             oversized_evidence_estimate: Final[ROIEstimate] = {
                 "status": "needs_review",
                 "hours": None,
-                "reasoning": (
-                    "This PR exceeds the estimator's input limit. It was not truncated or scored."
-                ),
+                "reasoning": ("This PR exceeds the estimator's input limit. It was not truncated or scored."),
             }
             return oversized_evidence_estimate
         system_message: Final[ROICompletionMessage] = {

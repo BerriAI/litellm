@@ -175,12 +175,8 @@ class _GraphQLPayload(TypedDict):
     variables: ReadOnly[_GraphQLVariables]
 
 
-_REPOSITORIES: Final[TypeAdapter[tuple[_RepositoryItem, ...]]] = TypeAdapter(
-    tuple[_RepositoryItem, ...]
-)
-_PULLS: Final[TypeAdapter[tuple[GitHubPullListItem, ...]]] = TypeAdapter(
-    tuple[GitHubPullListItem, ...]
-)
+_REPOSITORIES: Final[TypeAdapter[tuple[_RepositoryItem, ...]]] = TypeAdapter(tuple[_RepositoryItem, ...])
+_PULLS: Final[TypeAdapter[tuple[GitHubPullListItem, ...]]] = TypeAdapter(tuple[GitHubPullListItem, ...])
 _PULL_FILES: Final[TypeAdapter[tuple[_PullFile, ...]]] = TypeAdapter(tuple[_PullFile, ...])
 _REST_COMMITS: Final[TypeAdapter[tuple[_RestCommit, ...]]] = TypeAdapter(tuple[_RestCommit, ...])
 _GRAPHQL_RESPONSE: Final = TypeAdapter(_GraphQLResponse)
@@ -332,9 +328,7 @@ class GitHub:
             ),
         )
         try:
-            repositories: Final[tuple[_RepositoryItem, ...]] = _REPOSITORIES.validate_python(
-                response.json()
-            )
+            repositories: Final[tuple[_RepositoryItem, ...]] = _REPOSITORIES.validate_python(response.json())
         except Exception:
             raise SourceError("GitHub returned an unexpected repository list.") from None
         filtered: Final = tuple(
@@ -393,11 +387,7 @@ class GitHub:
             address
             for address in (
                 profile_email,
-                *(
-                    normalize_email(author[1])
-                    for author in authors
-                    if author[0].casefold() == login.casefold()
-                ),
+                *(normalize_email(author[1]) for author in authors if author[0].casefold() == login.casefold()),
             )
             if address
         )
@@ -437,6 +427,7 @@ class GitHub:
         self, repo: str, number: int, detail: _PullDetail
     ) -> tuple[tuple[ROIPullCommit, ...], tuple[tuple[str, str], ...], int]:
         if not self.client.headers.get("Authorization"):
+
             async def commit_pages() -> AsyncIterator[_RestCommit]:
                 async for page in _pages(
                     self.client,
@@ -448,9 +439,7 @@ class GitHub:
                         yield item
 
             rest_commits: Final = await _collect(commit_pages())
-            commits: Final[tuple[ROIPullCommit, ...]] = tuple(
-                _rest_commit_evidence(item) for item in rest_commits
-            )
+            commits: Final[tuple[ROIPullCommit, ...]] = tuple(_rest_commit_evidence(item) for item in rest_commits)
             authors: Final = tuple(
                 (
                     item.author.login if item.author and item.author.login else "",

@@ -32,9 +32,7 @@ def match_identity(
     if mapped:
         return normalize_email(mapped), "manual"
     candidates: Final = frozenset(
-        address
-        for address in (normalize_email(candidate) for candidate in pull["emails"])
-        if address
+        address for address in (normalize_email(candidate) for candidate in pull["emails"]) if address
     )
     matched: Final = candidates & observed_emails
     if len(matched) == 1:
@@ -84,32 +82,22 @@ def _summarize_person(
     pulls: tuple[tuple[ROIPullRecord, str, str], ...],
 ) -> ROIPersonSummary:
     spend_rows: Final = tuple(
-        row
-        for row in spend
-        if _person_key(normalize_email(row["email"]), "gateway:" + row["user_id"]) == key
+        row for row in spend if _person_key(normalize_email(row["email"]), "gateway:" + row["user_id"]) == key
     )
     person_pulls: Final = tuple(
-        pull
-        for pull in pulls
-        if _person_key(pull[1], "github:" + pull[0]["login"].casefold()) == key
+        pull for pull in pulls if _person_key(pull[1], "github:" + pull[0]["login"].casefold()) == key
     )
     addresses: Final = tuple(normalize_email(row["email"]) for row in spend_rows if row["email"])
     person_email: Final = addresses[0] if addresses else (person_pulls[0][1] if person_pulls else "")
     spend_total: Final[float | None] = sum(row["spend"] for row in spend_rows) if spend_rows else None
     login_values: Final = tuple(pull[0]["login"] for pull in person_pulls)
-    logins: Final = tuple(
-        login for index, login in enumerate(login_values) if login not in login_values[:index]
-    )
+    logins: Final = tuple(login for index, login in enumerate(login_values) if login not in login_values[:index])
     method_values: Final = tuple(pull[2] for pull in person_pulls)
-    methods: Final = tuple(
-        method for index, method in enumerate(method_values) if method not in method_values[:index]
-    )
+    methods: Final = tuple(method for index, method in enumerate(method_values) if method not in method_values[:index])
     estimates: Final = tuple(pull[0]["estimate"] for pull in person_pulls)
     estimated_count: Final = sum(estimate["status"] == "estimated" for estimate in estimates)
     pending_count: Final = len(estimates) - estimated_count
-    hours: Final = sum(
-        estimate["hours"] or 0.0 for estimate in estimates if estimate["status"] == "estimated"
-    )
+    hours: Final = sum(estimate["hours"] or 0.0 for estimate in estimates if estimate["status"] == "estimated")
     eligible: Final = spend_total is not None and estimated_count > 0 and pending_count == 0
     return ROIPersonSummary(
         id=key,
@@ -128,20 +116,16 @@ def _summarize_person(
 
 def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
     observed: Final = frozenset(
-        normalized
-        for normalized in (normalize_email(row["email"]) for row in report["spend"])
-        if normalized
+        normalized for normalized in (normalize_email(row["email"]) for row in report["spend"]) if normalized
     )
     matched_pulls: Final[tuple[tuple[ROIPullRecord, str, str], ...]] = tuple(
         (pull, *match_identity(pull, observed, mappings)) for pull in report["pulls"]
     )
     gateway_people: Final = frozenset(
-        _person_key(normalize_email(row["email"]), "gateway:" + row["user_id"])
-        for row in report["spend"]
+        _person_key(normalize_email(row["email"]), "gateway:" + row["user_id"]) for row in report["spend"]
     )
     github_people: Final = frozenset(
-        _person_key(address, "github:" + pull["login"].casefold())
-        for pull, address, _ in matched_pulls
+        _person_key(address, "github:" + pull["login"].casefold()) for pull, address, _ in matched_pulls
     )
     people_keys: Final = gateway_people | github_people
     people: Final = tuple(
@@ -178,8 +162,7 @@ def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
                 and pull["estimate"]["status"] == "estimated"
             ),
             prs=sum(
-                pull["email"] in eligible_emails
-                and pull["estimate"]["status"] == "estimated"
+                pull["email"] in eligible_emails and pull["estimate"]["status"] == "estimated"
                 for pull in pull_summaries
                 if pull["merged_at"][:10] == day
             ),
@@ -206,12 +189,8 @@ def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
         people_with_prs=sum(person["prs"] > 0 for person in people),
         pending_prs=sum(person["pending_prs"] for person in people),
     )
-    summary_people: Final = tuple(
-        sorted(people, key=lambda person: (-person["hours"], person["id"]))
-    )
-    summary_pulls: Final = tuple(
-        sorted(pull_summaries, key=lambda pull: pull["merged_at"], reverse=True)
-    )
+    summary_people: Final = tuple(sorted(people, key=lambda person: (-person["hours"], person["id"])))
+    summary_pulls: Final = tuple(sorted(pull_summaries, key=lambda pull: pull["merged_at"], reverse=True))
     return ROISummary(
         id=report.get("id"),
         mode=report["mode"],
