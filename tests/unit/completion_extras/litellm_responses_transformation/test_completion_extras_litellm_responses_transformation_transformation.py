@@ -4408,6 +4408,25 @@ def test_map_optional_params_verbosity_merges_into_text():
         pytest.param(
             [
                 {
+                    "type": "reasoning",
+                    "id": "rs_raw_1",
+                    "summary": [{"type": "summary_text", "text": "Raw Step 1"}],
+                    "encrypted_content": "enc_raw",
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Raw response text"}],
+                },
+            ],
+            ["rs_raw_1"],
+            "Raw Step 1",
+            "raw_dict_message",
+            id="reasoning_items_before_raw_dict_message",
+        ),
+        pytest.param(
+            [
+                {
                     "type": "function_call",
                     "id": "fc_solo",
                     "call_id": "call_solo",
@@ -4446,7 +4465,10 @@ def test_convert_response_output_to_choices_preserves_all_reasoning_items(
         )
 
     handler: Final = LiteLLMResponsesTransformationHandler()
-    choices: Final = handler._convert_response_output_to_choices(items_to_pass)
+    choices: Final = handler._convert_response_output_to_choices(
+        items_to_pass,
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
 
     assert len(choices) == 1
     msg = choices[0].message

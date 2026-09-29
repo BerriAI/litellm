@@ -780,6 +780,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
                     if choice is not None:
+                        if pending_reasoning_items:
+                            choice.message.reasoning_items = _as_chat_reasoning_items(pending_reasoning_items)
+                            if reasoning_content:
+                                choice.message.reasoning_content = reasoning_content
+                            pending_reasoning_items.clear()
+                            reasoning_content = None
                         choices.append(choice)
             else:
                 pass  # don't fail request if item in list is not supported
