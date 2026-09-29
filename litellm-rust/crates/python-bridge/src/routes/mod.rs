@@ -7,10 +7,10 @@ pub(crate) mod ocr;
 pub(crate) mod responses;
 pub(crate) mod token_counter;
 
+use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
-use litellm_types::Operation;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -18,7 +18,7 @@ use pyo3::{
 
 fn call_hooks(
     py: Python<'_>,
-    operation: Operation,
+    operation: LoggingOperation,
     request: &Bound<'_, PyAny>,
     args: &Bound<'_, PyTuple>,
     kwargs: &Bound<'_, PyDict>,

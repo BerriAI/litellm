@@ -13,7 +13,7 @@ use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
 pub use crate::error::RouteError as Error;
-pub use types::{MessagesCall, MessagesResponse, MessagesShaping, messages_body};
+pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
 
 #[derive(Clone)]
 pub struct MessagesRoute {
@@ -50,7 +50,7 @@ impl MessagesRoute {
         call: MessagesCall,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<crate::CallOptions>,
-    ) -> Result<MessagesResponse, Error> {
+    ) -> Result<MessagesCallResponse, Error> {
         let context = CallContext::new(interceptors, options.into());
         litellm_host::lifecycle::observe_call(context.observers.clone(), self.run(call, context))
             .await
@@ -68,7 +68,7 @@ impl MessagesRoute {
         &self,
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
-    ) -> Result<MessagesResponse, Error> {
+    ) -> Result<MessagesCallResponse, Error> {
         crate::diagnostic::call(async {
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
             crate::diagnostic::provider(&prepared.body.model, prepared.provider.as_str());

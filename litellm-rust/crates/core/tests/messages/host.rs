@@ -1,7 +1,7 @@
 use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
-use litellm_core::messages::{MessagesResponse, route::Messages};
+use litellm_core::messages::{MessagesCallResponse, route::Messages};
 use litellm_host::{
     interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
     lifecycle::CallEvent,
@@ -170,8 +170,8 @@ async fn rejected_results_are_not_delivered_or_cached(
             .map(|_| ())
         } else {
             match route.execute(host.request().unwrap(), &host, None).await {
-                Ok(MessagesResponse::Complete(_)) => Ok(()),
-                Ok(MessagesResponse::Stream { chunks, .. }) => {
+                Ok(MessagesCallResponse::Complete(_)) => Ok(()),
+                Ok(MessagesCallResponse::Stream { chunks, .. }) => {
                     chunks.try_collect::<Vec<_>>().await.map(|_| ())
                 }
                 Err(error) => Err(error),
@@ -281,14 +281,14 @@ async fn response_mode_follows_the_intercepted_request(
                 .execute(host.request()?, &host, None)
                 .await?;
             match output {
-                MessagesResponse::Stream { chunks, .. } => {
+                MessagesCallResponse::Stream { chunks, .. } => {
                     assert_eq!(expected_stream, Some(true));
                     assert_eq!(
                         chunks.try_collect::<Vec<_>>().await?.concat(),
                         sse.as_bytes()
                     );
                 }
-                MessagesResponse::Complete(message) => {
+                MessagesCallResponse::Complete(message) => {
                     assert_eq!(expected_stream, Some(false));
                     assert_eq!(*message, serde_json::from_value(message_body()).unwrap());
                 }

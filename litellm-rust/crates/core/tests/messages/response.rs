@@ -1,4 +1,4 @@
-use litellm_core::messages::{MessagesResponse, messages_body};
+use litellm_core::messages::{MessagesCallResponse, messages_body};
 use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
@@ -33,7 +33,7 @@ async fn calls_defer_execution_until_polled(
     let request = host.request().unwrap();
     let observer: Option<litellm_host::observation::ObservationSender> =
         with_observer.then(|| host.events.0.sender.clone());
-    let future: BoxFuture<'_, Result<MessagesResponse, Error>> = if with_hooks {
+    let future: BoxFuture<'_, Result<MessagesCallResponse, Error>> = if with_hooks {
         Box::pin(route.execute(request, &host, observer))
     } else {
         Box::pin(route.execute(request, &(), observer))
@@ -43,7 +43,7 @@ async fn calls_defer_execution_until_polled(
     assert!(host.events.0.lock().unwrap().is_empty());
     assert!(received(&upstream).await.is_empty());
 
-    let MessagesResponse::Complete(response) = future.await.unwrap() else {
+    let MessagesCallResponse::Complete(response) = future.await.unwrap() else {
         panic!("expected a completed message");
     };
     assert_eq!(
@@ -286,7 +286,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     .await
     .expect("messages request succeeds");
 
-    let MessagesResponse::Complete(message) = response else {
+    let MessagesCallResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
     };
     assert_eq!(message.id, "msg_1");
@@ -373,7 +373,8 @@ async fn route_uses_injected_dependencies_and_optional_cache(
             api_base: Some(upstream.uri()),
             ..super::call()
         };
-        let MessagesResponse::Complete(response) = route.execute(request, &(), None).await.unwrap()
+        let MessagesCallResponse::Complete(response) =
+            route.execute(request, &(), None).await.unwrap()
         else {
             panic!("expected a completed message");
         };
@@ -444,7 +445,7 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
             ttl: Some(Duration::from_secs(30)),
             ..CachePolicy::default()
         };
-        let MessagesResponse::Complete(response) =
+        let MessagesCallResponse::Complete(response) =
             route.execute(request, &(), override_options).await.unwrap()
         else {
             panic!("expected a completed message");
