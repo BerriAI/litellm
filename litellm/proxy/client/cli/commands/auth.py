@@ -3,11 +3,13 @@ import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Final, TypeVar
 from urllib.parse import urlencode
 
 import click
 import requests
+from filelock import BaseFileLock, FileLock, Timeout
 from rich.console import Console
 from rich.table import Table
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
@@ -239,6 +241,10 @@ def _renewal_reader(vault: SecretVault) -> Callable[[], Mapping[str, object] | N
     return reload
 
 
+def _credential_lock() -> BaseFileLock:
+    return FileLock(str(Path.home() / ".litellm-token.lock"), timeout=30, mode=0o600)
+
+
 def get_stored_api_key(
     expected_base_url: str | None = None,
     *,
@@ -256,6 +262,26 @@ def get_stored_api_key(
         return None
     if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
         return None
+    if is_cli_token_fresh(token_data) or not token_data.get("refresh_token"):
+        return _key_from_record(token_data, vault)
+    try:
+        with _credential_lock():
+            return _get_stored_api_key(expected_base_url, vault)
+    except (OSError, Timeout) as error:
+        _warn(f"Could not lock the saved login: {error}")
+        return None
+
+
+def _get_stored_api_key(expected_base_url: str | None, vault: SecretVault) -> str | None:
+    token_data: Final = load_token(vault=vault)
+    if token_data is None:
+        return None
+    if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
+        return None
+    return _key_from_record(token_data, vault)
+
+
+def _key_from_record(token_data: Mapping[str, object], vault: SecretVault) -> str | None:
     return fresh_api_key(
         token_data,
         _renewal_saver(vault),
@@ -868,6 +894,14 @@ def _replace_stored_token(
                 "it expires on its own."
             )
         raise click.ClickException("The login did not select the requested team; your saved login has not changed")
+    try:
+        with _credential_lock():
+            return _persist_replacement(record, http, vault)
+    except (OSError, Timeout) as error:
+        return CredentialNotSaved(f"Could not lock the saved login: {error}")
+
+
+def _persist_replacement(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
     previous: Final = load_token(vault=vault)
     previous_secret: Final = vault.read()
     stored: Final = save_token(record, vault=vault)
@@ -1051,6 +1085,14 @@ def login_to_proxy(
 def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
     vault: Final = context_secret_vault(ctx)
+    try:
+        with _credential_lock():
+            _logout(vault)
+    except (OSError, Timeout) as error:
+        raise click.ClickException(f"Could not lock the saved login: {error}") from error
+
+
+def _logout(vault: SecretVault) -> None:
     token_data: Final = load_token(vault=vault)
     revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
     match revocation:
@@ -1124,15 +1166,13 @@ def print_token(ctx: click.Context):
         click.echo(keychain_unreadable_notice(vault), err=True)
         sys.exit(1)
 
+    saved_base_url: Final = token_data.get("base_url")
     api_key: Final = (
         ctx_obj.get("api_key")
         if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
-        else fresh_api_key(
-            token_data,
-            _renewal_saver(vault),
-            requests.Session(),
-            reload=_renewal_reader(vault),
-            warn=_warn,
+        else get_stored_api_key(
+            saved_base_url if isinstance(saved_base_url, str) else None,
+            vault=vault,
         )
     )
     if not api_key:

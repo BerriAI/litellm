@@ -2,8 +2,10 @@ import json
 import os
 import stat
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from unittest.mock import Mock, patch
 
 
@@ -28,6 +30,7 @@ from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
 from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 from litellm.proxy.client.cli.commands.auth import (
+    _replace_stored_token,
     get_stored_api_key,
     load_token,
     login,
@@ -2326,6 +2329,91 @@ def test_assign_key_handles_keychain_update_without_metadata(isolated_home, secr
             )
         ]
     )
+
+
+@pytest.mark.parametrize("reader", ["stored-key", "print-token"])
+def test_partial_replacement_preserves_a_concurrently_refreshed_login(isolated_home, secret_vault_factory, reader):
+    vault = secret_vault_factory()
+    save_cli_token(CliTokenRecord(**_pkce_record(team_id="team-a")), vault=vault)
+    refreshing = Event()
+    replacement_staged = Event()
+    rotation_saved = Event()
+    replace_file = os.replace
+    http = Mock()
+
+    def refresh_response(*_, **__):
+        refreshing.set()
+        replacement_staged.wait(1)
+        return _FakeHttpResponse(200, {**PKCE_TOKEN_RESPONSE, "team_id": "team-a"})
+
+    def commit_metadata(source, target):
+        if json.loads(Path(source).read_text())["team_id"] == "team-b":
+            replacement_staged.set()
+            assert rotation_saved.wait(5), "renewal did not persist its rotated credential"
+            raise OSError("cannot replace team metadata")
+        replace_file(source, target)
+        rotation_saved.set()
+
+    def read_key():
+        if reader == "stored-key":
+            return get_stored_api_key(PKCE_BASE_URL, vault=vault)
+        result = CliRunner().invoke(print_token, obj={"base_url": PKCE_BASE_URL, "secret_vault": vault})
+        assert result.exit_code == 0, result.output
+        return result.output.strip()
+
+    http.post.side_effect = refresh_response
+    with (
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session", return_value=http),
+        patch("litellm.litellm_core_utils.private_json.os.replace", side_effect=commit_metadata),
+        ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        renewal = executor.submit(read_key)
+        assert refreshing.wait(5), "renewal did not reach the proxy"
+        replacement = executor.submit(
+            _replace_stored_token,
+            _pkce_record(key="session-new", refresh_token="llm_srefresh_new", team_id="team-b"),
+            _FakeSession(),
+            vault,
+            "team-b",
+        )
+        assert renewal.result(timeout=10) == "sk-cli-rotated"
+        assert isinstance(replacement.result(timeout=10), CredentialNotSaved)
+
+    saved = load_token(vault=vault)
+    assert (saved["key"], saved["refresh_token"], saved["team_id"]) == (
+        "sk-cli-rotated",
+        "llm_srefresh_rotated",
+        "team-a",
+    )
+
+
+def test_reading_a_fresh_login_does_not_need_a_writable_lock(isolated_home, secret_vault_factory, capsys):
+    vault = secret_vault_factory()
+    (isolated_home / ".litellm-token.lock").mkdir()
+    assert get_stored_api_key(PKCE_BASE_URL, vault=vault) is None
+    save_cli_token(CliTokenRecord(**_pkce_record(expires_at=time.time() + 3600)), vault=vault)
+
+    assert get_stored_api_key(PKCE_BASE_URL, vault=vault) == "sk-cli-old"
+    assert capsys.readouterr().err == ""
+
+
+def test_lock_failure_leaves_saved_login_and_refresh_token_untouched(isolated_home, secret_vault_factory):
+    vault = secret_vault_factory()
+    save_cli_token(CliTokenRecord(**_pkce_record(team_id="team-a")), vault=vault)
+    before = load_token(vault=vault)
+    (isolated_home / ".litellm-token.lock").mkdir()
+    http = _FakeSession()
+
+    assert get_stored_api_key(PKCE_BASE_URL, vault=vault) is None
+    outcome = _replace_stored_token(_pkce_record(team_id="team-b"), http, vault, "team-b")
+    result = CliRunner().invoke(logout, obj={"secret_vault": vault})
+
+    assert isinstance(outcome, CredentialNotSaved)
+    assert "Could not lock the saved login" in outcome.detail
+    assert result.exit_code == 1, result.output
+    assert "Could not lock the saved login" in result.output
+    assert load_token(vault=vault) == before
+    assert http.posts == []
 
 
 def test_assign_key_warns_when_a_rejected_login_cannot_be_revoked(isolated_home, monkeypatch):
