@@ -3159,6 +3159,8 @@ jobs:
     resource_class: large
     working_directory: ~/project
     parallelism: << parameters.parallelism >>
+    environment:
+      MCP_CONFORMANCE_CODECOV_FLAG: mcp-conformance
     steps:
       - setup_litellm_test_deps
       - when:
@@ -3212,7 +3214,7 @@ jobs:
           steps:
             - codecov/upload:
                 file: test-results/integration-mcp/conformance-coverage.xml
-                flags: mcp-conformance
+                flags: MCP_CONFORMANCE_CODECOV_FLAG
       - run:
           name: Stop owned database and Redis
           when: always
@@ -3222,8 +3224,18 @@ jobs:
             docker logs redis-cache > test-results/services-<< parameters.suite >>-<< parameters.mode >>/redis.log 2>&1 || true
             docker rm -f postgres-db redis-cache
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
-      - store_test_results:
-          path: test-results
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - store_test_results:
+                path: test-results/integration-mcp/junit.xml
+      - unless:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - store_test_results:
+                path: test-results
       - store_artifacts:
           path: test-results
 
