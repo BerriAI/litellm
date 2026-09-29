@@ -45,19 +45,17 @@ def _strip_known_provider_prefix(model: str, known_providers: frozenset[str]) ->
 
 
 def _wildcard_health_check_models(
-    wildcard_suffix: str, custom_llm_provider: str, cheapest_models: Sequence[str]
+    wildcard_suffix: str, custom_llm_provider: str, candidate_models: Sequence[str]
 ) -> tuple[str, ...]:
     if wildcard_suffix == "*":
-        return tuple(cheapest_models)
+        return tuple(candidate_models[:3])
     known_providers: Final = frozenset(provider.value for provider in LlmProviders)
     literal_prefix: Final = wildcard_suffix.replace("*", "")
-    stripped_ids: Final = tuple(_strip_known_provider_prefix(model, known_providers) for model in cheapest_models)
-    return tuple(
-        f"{custom_llm_provider}/{stripped}"
-        if stripped.startswith(literal_prefix)
-        else f"{custom_llm_provider}/{wildcard_suffix.replace('*', stripped, 1)}"
-        for stripped in stripped_ids
-    )
+    stripped_ids: Final = tuple(_strip_known_provider_prefix(model, known_providers) for model in candidate_models)
+    matching: Final = [stripped for stripped in stripped_ids if stripped.startswith(literal_prefix)]
+    if matching:
+        return tuple(f"{custom_llm_provider}/{stripped}" for stripped in matching[:3])
+    return tuple(f"{custom_llm_provider}/{wildcard_suffix.replace('*', stripped, 1)}" for stripped in stripped_ids[:3])
 
 
 class HealthCheckHelpers:
@@ -74,13 +72,13 @@ class HealthCheckHelpers:
         )
 
         # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=3)
+        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=10_000)
         if len(cheapest_models) == 0:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
             )
         candidates: Final = _wildcard_health_check_models(
-            wildcard_suffix=model, custom_llm_provider=custom_llm_provider, cheapest_models=cheapest_models
+            wildcard_suffix=model, custom_llm_provider=custom_llm_provider, candidate_models=cheapest_models
         )
         fallback_models: Final = list(candidates[1:]) or None
         model_params["model"] = candidates[0]
