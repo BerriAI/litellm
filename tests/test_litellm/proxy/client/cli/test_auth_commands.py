@@ -44,6 +44,9 @@ from litellm.proxy.client.cli.commands.auth import (
 from litellm.proxy.client.cli.commands.pkce_login import PkceFailure, RevocationUnavailable
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
+if sys.platform != "win32":
+    import fcntl
+
 
 @pytest.fixture
 def isolated_home(monkeypatch, tmp_path):
@@ -2497,6 +2500,52 @@ def windows_mutex_api():
         patch("ctypes.WinError", side_effect=lambda code=0: OSError(code, "Win32 error"), create=True),
     ):
         yield api
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX filesystem locking")
+def test_saved_login_operations_do_not_lock_network_home_directories(isolated_home, secret_vault_factory):
+    vault = secret_vault_factory()
+    save_cli_token(CliTokenRecord(**_pkce_record(team_id="team-a")), vault=vault)
+    flock = fcntl.flock
+
+    def network_flock(fd, operation):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(9, "network filesystem requires a write-open regular file")
+        return flock(fd, operation)
+
+    with (
+        patch("fcntl.flock", side_effect=network_flock),
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session") as session,
+    ):
+        session.return_value.post.return_value = _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+        assert get_stored_api_key(PKCE_BASE_URL, vault=vault) == "sk-cli-rotated"
+        outcome = _replace_stored_token(_pkce_record(team_id="team-b"), _FakeSession(), vault, "team-b")
+        assert isinstance(outcome, SecretStored)
+        assert load_token(vault=vault)["team_id"] == "team-b"
+        result = CliRunner().invoke(logout, obj={"secret_vault": vault})
+        assert result.exit_code == 0, result.output
+        assert load_token(vault=vault) is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX filesystem locking")
+@pytest.mark.parametrize("unsafe", ["directory-permissions", "directory-owner", "file-owner", "hardlink"])
+def test_credential_lock_refuses_unsafe_filesystem_state(isolated_home, unsafe):
+    fstat = os.fstat
+
+    def unsafe_stat(fd):
+        original = fstat(fd)
+        directory = stat.S_ISDIR(original.st_mode)
+        if unsafe == "directory-permissions" and directory:
+            return os.stat_result((original.st_mode | 0o020, *original[1:]))
+        if (unsafe == "directory-owner" and directory) or (unsafe == "file-owner" and not directory):
+            return os.stat_result((*original[:4], original.st_uid + 1, *original[5:]))
+        if unsafe == "hardlink" and not directory:
+            return os.stat_result((*original[:3], 2, *original[4:]))
+        return original
+
+    with patch("os.fstat", side_effect=unsafe_stat), pytest.raises(PermissionError, match="CLI lock"):
+        with credential_lock(isolated_home):
+            pytest.fail("unsafe lock entered the credential operation")
 
 
 @pytest.mark.parametrize("wait_result", [0, 0x80])
