@@ -15,18 +15,12 @@ import {
 import type { ChartConfig } from "@/components/ui/chart";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import {
-  coverageLabel,
-  effortNote,
-  estimateLabel,
-  formatMoney,
-  formatNumber,
-} from "./roiCalculatorData";
+import { coverageLabel, effortNote, estimateLabel, formatMoney, formatNumber } from "./roiCalculatorData";
 import type { ROIPerson, ROIPull, ROISummary } from "./roiCalculatorData";
 
 const CHART_CONFIG = {
-  spend: { label: "Matched spend", color: "hsl(var(--chart-1))" },
-  hours: { label: "Estimated hours", color: "hsl(var(--chart-2))" },
+  spend: { label: "Matched spend", color: "var(--chart-1)" },
+  hours: { label: "Estimated hours", color: "var(--chart-2)" },
 } satisfies ChartConfig;
 
 export function ROIOverview({
@@ -56,8 +50,8 @@ export function ROIOverview({
         <MetricCard title="PR email coverage" value={coverageLabel(summary)} />
       </section>
       <p className="text-sm text-muted-foreground">
-        {formatMoney(metrics.excluded_spend)} of {formatMoney(metrics.total_spend)} total gateway spend is excluded
-        from the matched cohort.
+        {formatMoney(metrics.excluded_spend)} of {formatMoney(metrics.total_spend)} total gateway spend is excluded from
+        the matched cohort.
       </p>
       <details className="rounded-lg border p-4 text-sm">
         <summary className="cursor-pointer font-medium">Calculation details</summary>
@@ -68,14 +62,14 @@ export function ROIOverview({
               : "A rate is available when matched estimated hours are greater than zero."}
           </p>
           <p>
-            The comparison includes {metrics.cohort_people} matched{" "}
-            {metrics.cohort_people === 1 ? "person" : "people"} with complete PR estimates, for the same period in
-            UTC. {metrics.matched_prs} of {metrics.merged_prs} PRs have email matches. {formatMoney(metrics.excluded_spend)}{" "}
-            of {formatMoney(metrics.total_spend)} total gateway spend is excluded.
+            The comparison includes {metrics.cohort_people} matched {metrics.cohort_people === 1 ? "person" : "people"}{" "}
+            with complete PR estimates, for the same period in UTC. {metrics.matched_prs} of {metrics.merged_prs} PRs
+            have email matches. {formatMoney(metrics.excluded_spend)} of {formatMoney(metrics.total_spend)} total
+            gateway spend is excluded.
           </p>
           <p>
-            Gateway spend includes all of each person’s usage, across repositories. This does not measure hours saved
-            by AI or financial returns.
+            Gateway spend includes all of each person’s usage, across repositories. This does not measure hours saved by
+            AI or financial returns.
           </p>
           <Button variant="link" className="h-auto p-0" onClick={onViewPeople}>
             Review email matches
@@ -96,7 +90,7 @@ export function ROIOverview({
               <CartesianGrid vertical={false} />
               <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={36} />
               <YAxis yAxisId="spend" tickFormatter={(value) => formatMoney(Number(value))} />
-              <YAxis yAxisId="hours" orientation="right" />
+              <YAxis yAxisId="hours" orientation="right" domain={[0, "auto"]} />
               <ChartTooltip content={<ChartTooltipContent />} />
               <ChartLegend content={<ChartLegendContent />} />
               <Bar yAxisId="spend" dataKey="spend" fill="var(--color-spend)" isAnimationActive={false} />
@@ -206,10 +200,12 @@ export function ROIPeopleView({
   summary,
   identityMap,
   onMatch,
+  readOnly = false,
 }: {
   summary: ROISummary;
   identityMap: Record<string, string>;
   onMatch: (person: ROIPerson, login: string) => void;
+  readOnly?: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -234,16 +230,20 @@ export function ROIPeopleView({
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-2">
                       {person.logins.length ? (
-                        person.logins.map((login) => (
-                          <Button
-                            key={login}
-                            variant="link"
-                            className="h-auto p-0"
-                            onClick={() => onMatch(person, login)}
-                          >
-                            {login}
-                          </Button>
-                        ))
+                        person.logins.map((login) =>
+                          readOnly ? (
+                            <span key={login}>{login}</span>
+                          ) : (
+                            <Button
+                              key={login}
+                              variant="link"
+                              className="h-auto p-0"
+                              onClick={() => onMatch(person, login)}
+                            >
+                              {login}
+                            </Button>
+                          ),
+                        )
                       ) : (
                         <span>Unassigned gateway spend</span>
                       )}

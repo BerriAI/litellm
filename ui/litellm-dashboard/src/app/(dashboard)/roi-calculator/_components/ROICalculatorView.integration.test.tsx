@@ -156,6 +156,37 @@ describe("ROICalculatorView", () => {
     );
   });
 
+  it("lets a view-only admin read the report without write controls", async () => {
+    const runningStatus = {
+      ...idleStatus,
+      running: true,
+      phase: "estimating",
+      stage: "Estimating pull requests",
+      total: 1,
+    };
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (path === "/roi-calculator/report") return Promise.resolve({ report: summary });
+      return Promise.resolve(runningStatus);
+    });
+
+    render(<ROICalculatorView accessToken="token" userRole="Admin" isViewOnly />);
+
+    expect(await screen.findByText("Spend per estimated engineering hour")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("Read-only access");
+    expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel sync" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "People" }));
+    expect(screen.getByText("alice-work")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "alice-work" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getByLabelText("GitHub token")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
+  });
+
   it("lets an admin open the people view and save a manual email match", async () => {
     render(<ROICalculatorView accessToken="token" />);
 
@@ -188,7 +219,7 @@ describe("ROICalculatorView", () => {
     expect(screen.getAllByText("Connect GitHub to get started")).toHaveLength(1);
   });
 
-  it("shows the completed report after polling a running sync", async () => {
+  it("returns to Overview and shows the last sync time when completion is polled from Settings", async () => {
     const runningStatus = {
       ...idleStatus,
       running: true,
@@ -212,8 +243,10 @@ describe("ROICalculatorView", () => {
     render(<ROICalculatorView accessToken="token" />);
 
     expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connect GitHub to get started" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Up to date · Last synced Sep 30, 2026, 12:00 PM UTC");
   });
 
   it("shows the sync error returned by the status endpoint", async () => {

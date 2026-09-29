@@ -9,9 +9,7 @@ from pydantic import SecretStr
 from litellm.proxy.roi_calculator.github import GitHub, SourceError
 from litellm.types.roi_calculator import ROISettings
 
-_NEXT_PAGE_HEADERS: Final = MappingProxyType(
-    {"link": '<https://api.github.com/next>; rel="next"'}
-)
+_NEXT_PAGE_HEADERS: Final = MappingProxyType({"link": '<https://api.github.com/next>; rel="next"'})
 _PULLS_PAGE_ONE_JSON: Final = """[
   {
     "number": 1,
@@ -61,6 +59,11 @@ def _settings() -> ROISettings:
     )
 
 
+def _github(transport: httpx.MockTransport) -> GitHub:
+    client: Final = httpx.AsyncClient(transport=transport, timeout=45, follow_redirects=False)
+    return GitHub(_settings(), client=client)
+
+
 @pytest.mark.parametrize("repo", ("../user", "org/.."))
 def test_github_rejects_repository_path_segments(repo: str) -> None:
     with pytest.raises(ValueError, match="owner/repo format"):
@@ -79,7 +82,7 @@ async def test_github_paginates_and_filters_merged_pull_requests_to_the_requeste
             )
         return httpx.Response(200, content=_PULLS_PAGE_TWO_JSON)
 
-    github: Final = GitHub(_settings(), httpx.MockTransport(respond))
+    github: Final = _github(httpx.MockTransport(respond))
     try:
         pulls: Final = await github.pulls("org/repo", date(2026, 9, 1), date(2026, 9, 30))
     finally:
@@ -93,7 +96,7 @@ async def test_github_maps_upstream_errors_without_returning_response_secrets() 
     def respond(_: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="private token response")
 
-    github: Final = GitHub(_settings(), httpx.MockTransport(respond))
+    github: Final = _github(httpx.MockTransport(respond))
     try:
         with pytest.raises(SourceError) as error:
             await github.repositories()
@@ -117,7 +120,7 @@ async def test_github_repository_listing_applies_search_and_reports_next_page() 
             content=_REPOSITORIES_JSON,
         )
 
-    github: Final = GitHub(_settings(), httpx.MockTransport(respond))
+    github: Final = _github(httpx.MockTransport(respond))
     try:
         repositories, has_more = await github.repositories(query="BACK", page=2)
     finally:

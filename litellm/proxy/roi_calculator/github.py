@@ -9,7 +9,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.roi_calculator.analytics import normalize_email
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROIPullCommit, ROIPullEvidence, ROIPullFile, ROISettings
 
 _T: Final = TypeVar("_T")
@@ -240,6 +242,7 @@ async def _fetch_page(
     adapter: TypeAdapter[tuple[_T, ...]],
     params: Mapping[str, str | int] | None,
     page: int,
+    headers: Mapping[str, str] | None = None,
 ) -> tuple[tuple[_T, ...], bool]:
     response: Final = await _request(
         client,
@@ -252,6 +255,7 @@ async def _fetch_page(
                 "page": page,
             }
         ),
+        headers=headers,
     )
     try:
         parsed: Final[tuple[_T, ...]] = adapter.validate_python(response.json())
@@ -266,9 +270,10 @@ async def _pages(
     adapter: TypeAdapter[tuple[_T, ...]],
     params: Mapping[str, str | int] | None = None,
     limit: int = 10000,
+    headers: Mapping[str, str] | None = None,
 ) -> AsyncIterator[tuple[_T, ...]]:
     for page in range(1, limit + 1):
-        result = await _fetch_page(client, path, adapter, params, page)
+        result = await _fetch_page(client, path, adapter, params, page, headers)
         yield result[0]
         if not result[1]:
             return
@@ -285,9 +290,16 @@ class _GitHubUserProfile(_GitHubModel):
 
 
 class GitHub:
-    def __init__(self, settings: ROISettings, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        settings: ROISettings,
+        transport: httpx.AsyncBaseTransport | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        if client is not None and transport is not None:
+            raise ValueError("Pass either an injected GitHub client or a transport.")
         token: Final = settings.github_token.get_secret_value()
-        headers: Final[Mapping[str, str]] = (
+        self._headers: Final[Mapping[str, str]] = (
             MappingProxyType(
                 {
                     "Accept": "application/vnd.github+json",
@@ -297,16 +309,28 @@ class GitHub:
             if token
             else MappingProxyType({"Accept": "application/vnd.github+json"})
         )
-        self.client: Final = httpx.AsyncClient(
-            base_url=settings.github_api_url + "/",
-            headers=headers,
-            timeout=45,
-            transport=transport,
-            follow_redirects=False,
+        self._api_url: Final = settings.github_api_url.rstrip("/")
+        client_params: Final[dict[str, object]] = {
+            "timeout": 45,
+            "follow_redirects": False,
+            **({"transport": transport} if transport is not None else {}),
+        }
+        self.client: Final[httpx.AsyncClient] = (
+            client
+            if client is not None
+            else get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.ROICalculator,
+                params=client_params,
+            ).client
         )
+        self._close_client: Final = client is not None or transport is not None
 
     async def close(self) -> None:
-        await self.client.aclose()
+        if self._close_client:
+            await self.client.aclose()
+
+    def _url(self, path: str) -> str:
+        return f"{self._api_url}/{path.lstrip('/')}"
 
     async def repositories(
         self,
@@ -316,7 +340,7 @@ class GitHub:
         response: Final = await _request(
             self.client,
             "GET",
-            "user/repos",
+            self._url("user/repos"),
             params=MappingProxyType(
                 {
                     "per_page": 100,
@@ -326,6 +350,7 @@ class GitHub:
                     "affiliation": "owner,collaborator,organization_member",
                 }
             ),
+            headers=self._headers,
         )
         try:
             repositories: Final[tuple[_RepositoryItem, ...]] = _REPOSITORIES.validate_python(response.json())
@@ -346,9 +371,10 @@ class GitHub:
         async def pull_pages() -> AsyncIterator[GitHubPullListItem]:
             async for page in _pages(
                 self.client,
-                f"repos/{repo}/pulls",
+                self._url(f"repos/{repo}/pulls"),
                 _PULLS,
                 MappingProxyType({"state": "closed", "sort": "updated", "direction": "desc"}),
+                headers=self._headers,
             ):
                 for pull in page:
                     yield pull
@@ -363,7 +389,12 @@ class GitHub:
         return await _collect(matching_pulls())
 
     async def evidence(self, repo: str, pull: GitHubPullListItem) -> ROIPullEvidence:
-        detail_response: Final = await _request(self.client, "GET", f"repos/{repo}/pulls/{pull.number}")
+        detail_response: Final = await _request(
+            self.client,
+            "GET",
+            self._url(f"repos/{repo}/pulls/{pull.number}"),
+            headers=self._headers,
+        )
         try:
             detail: Final = _PullDetail.model_validate(detail_response.json())
         except Exception:
@@ -373,9 +404,10 @@ class GitHub:
         async def file_pages() -> AsyncIterator[_PullFile]:
             async for page in _pages(
                 self.client,
-                f"repos/{repo}/pulls/{pull.number}/files",
+                self._url(f"repos/{repo}/pulls/{pull.number}/files"),
                 _PULL_FILES,
                 limit=30,
+                headers=self._headers,
             ):
                 for item in page:
                     yield item
@@ -415,7 +447,10 @@ class GitHub:
 
     async def _profile_email(self, login: str) -> str:
         try:
-            response: Final = await self.client.get(f"users/{quote(login, safe='')}")
+            response: Final = await self.client.get(
+                self._url(f"users/{quote(login, safe='')}"),
+                headers=self._headers,
+            )
             if response.status_code != 200:
                 return ""
             profile: Final = _GitHubUserProfile.model_validate(response.json())
@@ -426,14 +461,15 @@ class GitHub:
     async def _commit_metadata(
         self, repo: str, number: int, detail: _PullDetail
     ) -> tuple[tuple[ROIPullCommit, ...], tuple[tuple[str, str], ...], int]:
-        if not self.client.headers.get("Authorization"):
+        if not self._headers.get("Authorization"):
 
             async def commit_pages() -> AsyncIterator[_RestCommit]:
                 async for page in _pages(
                     self.client,
-                    f"repos/{repo}/pulls/{number}/commits",
+                    self._url(f"repos/{repo}/pulls/{number}/commits"),
                     _REST_COMMITS,
                     limit=3,
+                    headers=self._headers,
                 ):
                     for item in page:
                         yield item
@@ -449,7 +485,7 @@ class GitHub:
             )
             count: Final = detail.commits if detail.commits is not None else len(commits)
             return commits, authors, count
-        base: Final = str(self.client.base_url).rstrip("/")
+        base: Final = self._api_url
         endpoint: Final = (
             base.removesuffix("/api/v3") + "/api/graphql" if base.endswith("/api/v3") else base + "/graphql"
         )
@@ -474,7 +510,7 @@ class GitHub:
             self.client,
             "POST",
             endpoint,
-            headers=MappingProxyType({"Authorization": self.client.headers["Authorization"]}),
+            headers=self._headers,
             json_body=_GraphQLPayload(
                 query=_GRAPHQL_QUERY,
                 variables=_GraphQLVariables(owner=owner, name=name, number=number, cursor=cursor),

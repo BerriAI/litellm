@@ -4,7 +4,14 @@ import React from "react";
 
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { effortNote, estimateLabel } from "./roiCalculatorData";
@@ -29,7 +36,9 @@ export function PullReasoningDialog({
           <>
             <DialogHeader>
               <DialogTitle>{pull.title}</DialogTitle>
-              <DialogDescription>{pull.repo} #{pull.number} · {pull.login}</DialogDescription>
+              <DialogDescription>
+                {pull.repo} #{pull.number} · {pull.login}
+              </DialogDescription>
             </DialogHeader>
             <div>
               <p className="text-sm text-muted-foreground">Estimated engineering hours</p>
@@ -45,7 +54,9 @@ export function PullReasoningDialog({
             </div>
             <section>
               <h3 className="mb-2 font-medium">Reasoning</h3>
-              <p className="whitespace-pre-wrap leading-relaxed">{pull.estimate.reasoning || "No estimate available."}</p>
+              <p className="whitespace-pre-wrap leading-relaxed">
+                {pull.estimate.reasoning || "No estimate available."}
+              </p>
             </section>
             <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-2 text-xs">
               <dt className="text-muted-foreground">Model</dt>
@@ -132,14 +143,20 @@ export function IdentityMatchDialog({
               required
             />
           </div>
-          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
           <DialogFooter>
             {existingEmail && (
               <Button disabled={busy} type="button" variant="outline" onClick={() => void save(null)}>
                 Use automatic match
               </Button>
             )}
-            <Button disabled={busy || !email.trim()} type="submit">{busy ? "Saving…" : "Save match"}</Button>
+            <Button disabled={busy || !email.trim()} type="submit">
+              {busy ? "Saving…" : "Save match"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

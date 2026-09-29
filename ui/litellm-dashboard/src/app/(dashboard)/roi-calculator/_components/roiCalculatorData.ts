@@ -13,6 +13,16 @@ export type ROIReportResponse = components["schemas"]["ROIReportResponse"];
 export type ROIIdentityMapUpdate = components["schemas"]["ROIIdentityMapUpdate"];
 export type ROIIdentityMapResponse = components["schemas"]["ROIIdentityMapResponse"];
 
+const SYNCED_AT_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+  timeZoneName: "short",
+};
+
 export const formatMoney = (value: number | null | undefined): string =>
   value == null
     ? "—"
@@ -25,6 +35,12 @@ export const formatMoney = (value: number | null | undefined): string =>
 export const formatNumber = (value: number | null | undefined): string =>
   value == null ? "—" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 
+export const formatSyncedAt = (value: string): string => {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Intl.DateTimeFormat("en-US", SYNCED_AT_FORMAT_OPTIONS).format(timestamp);
+};
+
 export const effortNote = (basis: string | null | undefined): string =>
   basis === "without_ai"
     ? "Estimated engineering hours without AI assistance, not actual hours worked or hours saved."
@@ -32,8 +48,7 @@ export const effortNote = (basis: string | null | undefined): string =>
 
 export const coverageLabel = (summary: {
   metrics: Pick<ROISummary["metrics"], "matched_prs" | "merged_prs">;
-}): string =>
-  `${summary.metrics.matched_prs} of ${summary.metrics.merged_prs} PRs have email matches`;
+}): string => `${summary.metrics.matched_prs} of ${summary.metrics.merged_prs} PRs have email matches`;
 
 export const estimateLabel = (estimate: ROIEstimate): string => {
   if (estimate.status === "estimated") return `${formatNumber(estimate.hours)} hrs`;

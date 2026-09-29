@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date
 from enum import Enum
 from types import MappingProxyType
@@ -12,7 +12,7 @@ from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKey
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.roi_calculator.analytics import normalize_email, summarize
-from litellm.proxy.roi_calculator.estimator import CompletionCaller
+from litellm.proxy.roi_calculator.estimator import CompletionCaller, EstimatorModel
 from litellm.proxy.roi_calculator.github import GitHub, SourceError
 from litellm.proxy.roi_calculator.sync import SpendReader, SyncManager, read_spend, spend_prisma_client
 from litellm.repositories.config_repository import ConfigRepository
@@ -51,6 +51,27 @@ class _StoredSettings(BaseModel):
     estimator_prompt: str = DEFAULT_PROMPT
     backfill_days: int = Field(default=7, ge=1, le=3650)
     identity_map: Mapping[str, str] = Field(default_factory=lambda: MappingProxyType({}))
+
+
+class _RouterEstimatorParams(BaseModel):
+    model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+    model: str | None = None
+    base_model: str | None = None
+    custom_llm_provider: str | None = None
+
+
+class _RouterEstimatorModelInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+    base_model: str | None = None
+
+
+class _RouterEstimatorDeployment(BaseModel):
+    model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+    litellm_params: _RouterEstimatorParams
+    model_info: _RouterEstimatorModelInfo | None = None
 
 
 async def _read_admin(
@@ -93,8 +114,39 @@ def get_github_transport() -> httpx.AsyncBaseTransport | None:
     return None
 
 
+_ROUTER_ESTIMATOR_DEPLOYMENTS: Final = TypeAdapter(tuple[_RouterEstimatorDeployment, ...])
 _MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
 _ROUTER_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
+
+
+def _estimator_models_from_deployments(deployments: Sequence[object]) -> tuple[EstimatorModel, ...]:
+    parsed_deployments: Final = _ROUTER_ESTIMATOR_DEPLOYMENTS.validate_python(deployments)
+    return tuple(
+        estimator_model
+        for deployment in parsed_deployments
+        if (estimator_model := _estimator_model(deployment)) is not None
+    )
+
+
+def _estimator_model(deployment: _RouterEstimatorDeployment) -> EstimatorModel | None:
+    parameters: Final = deployment.litellm_params
+    model: Final = (
+        (deployment.model_info.base_model if deployment.model_info is not None else None)
+        or parameters.base_model
+        or parameters.model
+    )
+    if model is None:
+        return None
+    return model, parameters.custom_llm_provider
+
+
+def _router_estimator_models(model_group: str) -> tuple[EstimatorModel, ...]:
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return ()
+    deployments: Final = llm_router.get_model_list(model_name=model_group) or ()
+    return _estimator_models_from_deployments(deployments)
 
 
 def _router_models() -> tuple[str, ...]:
@@ -336,7 +388,14 @@ async def start_roi_calculator_sync(
     public: Final = _public_settings(settings)
     if not public.ready:
         raise HTTPException(status_code=409, detail="Connect GitHub, select repositories, and choose a router model.")
-    if not manager.start(settings, repository, _spend_reader(repository), _completion_caller(), transport):
+    if not manager.start(
+        settings,
+        repository,
+        _spend_reader(repository),
+        _completion_caller(),
+        transport,
+        _router_estimator_models(settings.estimator_model),
+    ):
         raise HTTPException(status_code=409, detail="A sync is already running.")
     return manager.status
 

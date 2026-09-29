@@ -11,10 +11,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { isProxyAdminTierRole } from "@/utils/roles";
 import ROISettingsPanel from "./ROISettingsPanel";
 import { IdentityMatchDialog, type PersonMatchSelection, PullReasoningDialog } from "./ROICalculatorDialogs";
 import { ROIOverview, ROIPeopleView } from "./ROICalculatorViews";
-import { filterPulls } from "./roiCalculatorData";
+import { filterPulls, formatSyncedAt } from "./roiCalculatorData";
 import type {
   ROIIdentityMapResponse,
   ROIIdentityMapUpdate,
@@ -39,7 +40,16 @@ const IDLE_STATUS: ROISyncStatus = {
   error: null,
 };
 
-export default function ROICalculatorView({ accessToken }: { accessToken: string | null }) {
+export default function ROICalculatorView({
+  accessToken,
+  userRole = null,
+  isViewOnly = false,
+}: {
+  accessToken: string | null;
+  userRole?: string | null;
+  isViewOnly?: boolean;
+}) {
+  const readOnly = isViewOnly && isProxyAdminTierRole(userRole ?? "");
   const [view, setView] = React.useState<View>("overview");
   const [settings, setSettings] = React.useState<ROISettings | null>(null);
   const [summary, setSummary] = React.useState<ROISummary | null>(null);
@@ -93,6 +103,7 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
             const report = await loadReport();
             if (cancelled) return;
             setSummary(report);
+            if (view === "settings") setView("overview");
           }
           if (!cancelled) setStatus(nextStatus);
         })
@@ -107,30 +118,30 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [accessToken, loadReport, status.running]);
+  }, [accessToken, loadReport, status.running, view]);
 
   const startSync = React.useCallback(async () => {
-    if (!accessToken) return;
+    if (!accessToken || readOnly) return;
     try {
       setError(null);
       setStatus(await apiClient.post<ROISyncStatus>("/roi-calculator/sync", { accessToken }));
     } catch (reason) {
       setError(extractErrorMessage(reason));
     }
-  }, [accessToken]);
+  }, [accessToken, readOnly]);
 
   const cancelSync = React.useCallback(async () => {
-    if (!accessToken) return;
+    if (!accessToken || readOnly) return;
     try {
       setStatus(await apiClient.delete<ROISyncStatus>("/roi-calculator/sync", { accessToken }));
     } catch (reason) {
       setError(extractErrorMessage(reason));
     }
-  }, [accessToken]);
+  }, [accessToken, readOnly]);
 
   const updateIdentity = React.useCallback(
     async (payload: ROIIdentityMapUpdate) => {
-      if (!accessToken) return;
+      if (!accessToken || readOnly) return;
       const response: ROIIdentityMapResponse = await apiClient.put("/roi-calculator/identity-map", {
         accessToken,
         body: payload,
@@ -138,7 +149,7 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
       setSummary(response.report);
       setSettings((current) => (current ? { ...current, identity_map: response.identity_map } : current));
     },
-    [accessToken],
+    [accessToken, readOnly],
   );
 
   const filteredPulls = React.useMemo(() => (summary ? filterPulls(summary.pulls, query) : []), [query, summary]);
@@ -164,6 +175,9 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
   }
 
   const progress = status.total > 0 ? Math.min(100, (status.done / status.total) * 100) : 0;
+  const statusIsIdleOrComplete = status.phase === "idle" || status.phase === "complete";
+  const syncIsUpToDate = !status.running && statusIsIdleOrComplete;
+  const syncedAt = syncIsUpToDate ? summary?.synced_at : null;
 
   return (
     <main className="w-full space-y-6 p-8">
@@ -171,11 +185,23 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
         icon={<BarChart3 />}
         title="ROI Calculator"
         subtitle={
-          summary
-            ? `${summary.start} through ${summary.end} · UTC`
-            : "Compare gateway spend with estimated engineering effort for merged pull requests"
+          <>
+            {summary
+              ? `${summary.start} through ${summary.end} · UTC`
+              : "Compare gateway spend with estimated engineering effort for merged pull requests"}
+            {syncedAt && (
+              <span className="mt-1 block text-xs text-muted-foreground" role="status">
+                Up to date · Last synced {formatSyncedAt(syncedAt)}
+              </span>
+            )}
+          </>
         }
       />
+      {readOnly && (
+        <p className="text-sm text-muted-foreground" role="note">
+          Read-only access. Settings, analysis runs, and email matches are unavailable.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs value={view} onValueChange={(value) => setView(value as View)}>
@@ -185,7 +211,7 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
             <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
         </Tabs>
-        {view !== "settings" && (
+        {view !== "settings" && !readOnly && (
           <Button onClick={() => void startSync()} disabled={status.running || !settings.ready}>
             <RefreshCw className={status.running ? "animate-spin" : ""} />
             {status.running ? "Syncing…" : "Run analysis"}
@@ -230,9 +256,11 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
                 {status.done} of {status.total} pull requests processed · {status.reused} reused
               </p>
             </div>
-            <Button variant="outline" onClick={() => void cancelSync()}>
-              Cancel sync
-            </Button>
+            {!readOnly && (
+              <Button variant="outline" onClick={() => void cancelSync()}>
+                Cancel sync
+              </Button>
+            )}
           </CardContent>
         </Card>
       )}
@@ -245,6 +273,7 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
           onboarding={!summary}
           onSaved={setSettings}
           onStartSync={startSync}
+          readOnly={readOnly}
           syncDisabled={status.running}
         />
       ) : null}
@@ -263,16 +292,19 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
           summary={summary}
           identityMap={settings.identity_map}
           onMatch={(person, login) => setMatchingPerson({ person, login })}
+          readOnly={readOnly}
         />
       )}
       <PullReasoningDialog pull={selectedPull} summary={summary} onClose={() => setSelectedPull(null)} />
-      <IdentityMatchDialog
-        key={matchingPerson?.login.toLowerCase() ?? "closed"}
-        selection={matchingPerson}
-        identityMap={settings.identity_map}
-        onClose={() => setMatchingPerson(null)}
-        onSave={updateIdentity}
-      />
+      {!readOnly && (
+        <IdentityMatchDialog
+          key={matchingPerson?.login.toLowerCase() ?? "closed"}
+          selection={matchingPerson}
+          identityMap={settings.identity_map}
+          onClose={() => setMatchingPerson(null)}
+          onSave={updateIdentity}
+        />
+      )}
     </main>
   );
 }

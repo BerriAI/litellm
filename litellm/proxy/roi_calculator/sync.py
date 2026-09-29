@@ -9,7 +9,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
-from litellm.proxy.roi_calculator.estimator import CompletionCaller, Estimator, cache_context
+from litellm.proxy.roi_calculator.estimator import CompletionCaller, Estimator, EstimatorModel, cache_context
 from litellm.proxy.roi_calculator.github import GitHub, GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.pull_cache import cache_key, settings_fingerprint
 from litellm.types.roi_calculator import (
@@ -114,20 +114,15 @@ async def read_spend(
     group_by: Final[list[Literal["user_id", "date"]]] = [
         "user_id",
         "date",
-    ]  # mutable-ok: prisma client serializer only accepts builtin dict/list
-    sums: Final[dict[str, object]] = {
-        "spend": True,
-        "api_requests": True,
-    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
+    ]
+    sums: Final[dict[str, object]] = {"spend": True, "api_requests": True}
     date_filter: Final[dict[str, object]] = {
         "date": {
             "gte": start.isoformat(),
             "lte": end.isoformat(),
         }
-    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
-    order: Final[dict[str, object]] = {
-        "date": "asc"
-    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
+    }
+    order: Final[dict[str, object]] = {"date": "asc"}
     groups: Final = _DAILY_SPEND_GROUPS.validate_python(
         await daily_table.group_by(
             by=group_by,
@@ -138,9 +133,7 @@ async def read_spend(
     )
     user_ids: Final = tuple(sorted(frozenset(group.user_id for group in groups if group.user_id)))
     user_table: Final = database.litellm_usertable
-    user_filter: Final[dict[str, object]] = {
-        "user_id": {"in": list(user_ids)}
-    }  # mutable-ok: prisma client serializer only accepts builtin dict/list
+    user_filter: Final[dict[str, object]] = {"user_id": {"in": list(user_ids)}}
     users: Final = _USER_EMAILS.validate_python(
         await user_table.find_many(
             where=user_filter,
@@ -246,6 +239,7 @@ class SyncManager:
         spend_reader: SpendReader,
         complete: CompletionCaller,
         github_transport: httpx.AsyncBaseTransport | None = None,
+        estimator_models: tuple[EstimatorModel, ...] | None = None,
     ) -> bool:
         if self._status.running or not settings.repos or not settings.estimator_model:
             return False
@@ -260,7 +254,9 @@ class SyncManager:
             needs_attention=0,
             error=None,
         )
-        self._task = asyncio.create_task(self._run(settings, repository, spend_reader, complete, github_transport))
+        self._task = asyncio.create_task(
+            self._run(settings, repository, spend_reader, complete, github_transport, estimator_models)
+        )
         return True
 
     async def cancel(self) -> bool:
@@ -282,6 +278,7 @@ class SyncManager:
         spend_reader: SpendReader,
         complete: CompletionCaller,
         github_transport: httpx.AsyncBaseTransport | None,
+        estimator_models: tuple[EstimatorModel, ...] | None,
     ) -> None:
         github: Final = self._github_factory(settings, github_transport)
         try:
@@ -295,7 +292,7 @@ class SyncManager:
                     ((repo, pull) for pull in pulls) for repo, pulls in zip(settings.repos, pull_groups, strict=True)
                 )
             )
-            context: Final = cache_context(settings)
+            context: Final = cache_context(settings, estimator_models)
             previous: Final = await self._previous_report(repository)
             previous_pulls: Final[Mapping[str, ROIPullRecord]] = MappingProxyType(
                 {
@@ -329,7 +326,7 @@ class SyncManager:
                 reused=reused_count,
             )
             semaphore: Final = asyncio.Semaphore(PR_CONCURRENCY)
-            estimator: Final = Estimator(settings, complete)
+            estimator: Final = Estimator(settings, complete, estimator_models)
 
             async def process(
                 item: tuple[int, str, GitHubPullListItem, str | None],

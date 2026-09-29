@@ -5,7 +5,8 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.proxy.roi_calculator.estimator import Estimator
+import litellm
+from litellm.proxy.roi_calculator.estimator import Estimator, estimator_options
 from litellm.proxy.roi_calculator.github import SourceError
 from litellm.types.roi_calculator import (
     ROICompletionRequest,
@@ -15,6 +16,7 @@ from litellm.types.roi_calculator import (
     ROIResponseFormat,
     ROISettings,
 )
+from litellm.utils import supports_none_reasoning_effort
 
 
 def _pull() -> ROIPullEvidence:
@@ -44,6 +46,14 @@ def _settings() -> ROISettings:
     return ROISettings(estimator_model="test-estimator")
 
 
+def _model_with_none_reasoning_effort() -> str:
+    return next(
+        model
+        for model, metadata in litellm.model_cost.items()
+        if metadata.get("supports_none_reasoning_effort") is True and supports_none_reasoning_effort(model)
+    )
+
+
 def _completion(content: str) -> Mapping[str, object]:
     message: Final = MappingProxyType({"content": content})
     choice: Final = MappingProxyType({"finish_reason": "stop", "message": message})
@@ -62,6 +72,7 @@ def _completion(content: str) -> Mapping[str, object]:
 @pytest.mark.asyncio
 async def test_estimator_sends_metadata_only_json_request_and_parses_valid_result(content: str) -> None:
     async def complete(request: ROICompletionRequest) -> object:
+        assert request.reasoning_effort is None
         evidence: Final = TypeAdapter(ROIEstimatorEvidence).validate_json(request.messages[1]["content"])
         assert request.temperature == 0
         expected_response_format: Final[ROIResponseFormat] = {"type": "json_object"}
@@ -78,6 +89,27 @@ async def test_estimator_sends_metadata_only_json_request_and_parses_valid_resul
 
     assert result["hours"] == 4.25
     assert result.get("effort_basis") == "without_ai"
+
+
+def test_estimator_options_follow_underlying_model_metadata() -> None:
+    supported_model: Final = _model_with_none_reasoning_effort()
+
+    assert estimator_options(((supported_model, None),)) == {"reasoning_effort": "none"}
+    assert estimator_options(((supported_model, None), ("unknown-model", None))) == {}
+    assert estimator_options((("unknown-model", None),)) == {}
+
+
+@pytest.mark.asyncio
+async def test_estimator_sets_none_reasoning_effort_for_supported_underlying_model() -> None:
+    supported_model: Final = _model_with_none_reasoning_effort()
+
+    async def complete(request: ROICompletionRequest) -> object:
+        assert request.reasoning_effort == "none"
+        return _completion('{"hours": 1, "reasoning": "Metadata-backed capability."}')
+
+    result: Final = await Estimator(_settings(), complete, ((supported_model, None),)).estimate(_pull())
+
+    assert result["hours"] == 1
 
 
 @pytest.mark.parametrize(

@@ -17,6 +17,7 @@ export default function ROISettingsPanel({
   onboarding,
   onSaved,
   onStartSync,
+  readOnly,
   syncDisabled,
 }: {
   accessToken: string | null;
@@ -24,6 +25,7 @@ export default function ROISettingsPanel({
   onboarding: boolean;
   onSaved: (settings: ROISettings) => void;
   onStartSync: () => Promise<void>;
+  readOnly: boolean;
   syncDisabled: boolean;
 }) {
   const [apiUrl, setApiUrl] = React.useState(initialSettings.github_api_url);
@@ -52,9 +54,7 @@ export default function ROISettingsPanel({
         accessToken,
         query: { query: repositoryQuery, page },
       });
-      setAvailableRepos((current) =>
-        page === 1 ? response.repositories : [...current, ...response.repositories],
-      );
+      setAvailableRepos((current) => (page === 1 ? response.repositories : [...current, ...response.repositories]));
       setHasMoreRepos(response.has_more);
       setRepositoryPage(page);
       setError(null);
@@ -67,7 +67,7 @@ export default function ROISettingsPanel({
 
   const saveSettings = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!accessToken) return;
+    if (!accessToken || readOnly) return;
     const body: ROISettingsUpdate = {
       github_api_url: apiUrl,
       repos,
@@ -94,9 +94,7 @@ export default function ROISettingsPanel({
   };
 
   const toggleRepository = (name: string) => {
-    setRepos((current) =>
-      current.includes(name) ? current.filter((repo) => repo !== name) : [...current, name],
-    );
+    setRepos((current) => (current.includes(name) ? current.filter((repo) => repo !== name) : [...current, name]));
   };
 
   return (
@@ -112,17 +110,31 @@ export default function ROISettingsPanel({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
-        {message && <p className="text-sm text-emerald-700" role="status">{message}</p>}
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        {message && (
+          <p className="text-sm text-emerald-700" role="status">
+            {message}
+          </p>
+        )}
         <form className="space-y-5" onSubmit={(event) => void saveSettings(event)}>
           <div className="grid gap-2">
             <Label htmlFor="roi-github-url">GitHub API URL</Label>
-            <Input id="roi-github-url" value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} />
+            <Input
+              disabled={readOnly}
+              id="roi-github-url"
+              value={apiUrl}
+              onChange={(event) => setApiUrl(event.target.value)}
+            />
           </div>
           <div className="grid gap-2">
             <Label htmlFor="roi-github-token">GitHub token</Label>
             <Input
               autoComplete="new-password"
+              disabled={readOnly}
               id="roi-github-token"
               type="password"
               value={token}
@@ -147,6 +159,7 @@ export default function ROISettingsPanel({
                 <input
                   aria-label="Clear saved GitHub token"
                   checked={clearToken}
+                  disabled={readOnly}
                   type="checkbox"
                   onChange={(event) => setClearToken(event.target.checked)}
                 />
@@ -184,17 +197,21 @@ export default function ROISettingsPanel({
                   <input
                     aria-label={`Select ${repository.name}`}
                     checked={repos.includes(repository.name)}
+                    disabled={readOnly}
                     type="checkbox"
                     onChange={() => toggleRepository(repository.name)}
                   />
                   <span>{repository.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {repository.visibility}{repository.archived ? " · archived" : ""}
+                    {repository.visibility}
+                    {repository.archived ? " · archived" : ""}
                   </span>
                 </label>
               ))}
               {availableRepos.length === 0 && (
-                <p className="text-sm text-muted-foreground">Load repositories to choose which pull requests to analyze.</p>
+                <p className="text-sm text-muted-foreground">
+                  Load repositories to choose which pull requests to analyze.
+                </p>
               )}
             </div>
             {hasMoreRepos && (
@@ -214,13 +231,16 @@ export default function ROISettingsPanel({
             <select
               id="roi-estimator-model"
               className="h-9 rounded-md border bg-background px-3 text-sm"
+              disabled={readOnly}
               value={model}
               onChange={(event) => setModel(event.target.value)}
             >
               <option value="">Select a router model</option>
               {model && !initialSettings.available_models.includes(model) && <option value={model}>{model}</option>}
               {initialSettings.available_models.map((availableModel) => (
-                <option key={availableModel} value={availableModel}>{availableModel}</option>
+                <option key={availableModel} value={availableModel}>
+                  {availableModel}
+                </option>
               ))}
             </select>
           </div>
@@ -229,6 +249,7 @@ export default function ROISettingsPanel({
             <Textarea
               id="roi-estimator-prompt"
               rows={5}
+              disabled={readOnly}
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
             />
@@ -240,21 +261,26 @@ export default function ROISettingsPanel({
               min={1}
               max={3650}
               type="number"
+              disabled={readOnly}
               value={backfillDays}
               onChange={(event) => setBackfillDays(event.target.value)}
             />
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button disabled={busy} type="submit">{busy ? "Saving…" : "Save settings"}</Button>
-            <Button
-              disabled={!initialSettings.ready || syncDisabled || busy}
-              type="button"
-              variant="outline"
-              onClick={() => void onStartSync()}
-            >
-              Run analysis
-            </Button>
-          </div>
+          {!readOnly && (
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={busy} type="submit">
+                {busy ? "Saving…" : "Save settings"}
+              </Button>
+              <Button
+                disabled={!initialSettings.ready || syncDisabled || busy}
+                type="button"
+                variant="outline"
+                onClick={() => void onStartSync()}
+              >
+                Run analysis
+              </Button>
+            </div>
+          )}
         </form>
       </CardContent>
     </Card>

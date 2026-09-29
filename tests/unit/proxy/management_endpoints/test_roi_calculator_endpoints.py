@@ -11,9 +11,11 @@ from pydantic import TypeAdapter
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
+    _estimator_models_from_deployments,
     get_roi_config_repository,
     router,
 )
+from litellm.proxy.roi_calculator.estimator import estimator_options
 from litellm.types.roi_calculator import ROISettings
 
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
@@ -52,6 +54,28 @@ def _client(role: LitellmUserRoles, repository: _ConfigRepository) -> TestClient
     return TestClient(app)
 
 
+def test_router_group_uses_underlying_model_metadata_for_reasoning_option() -> None:
+    import litellm
+
+    supported_model: Final = next(
+        model
+        for model, metadata in litellm.model_cost.items()
+        if metadata.get("supports_none_reasoning_effort") is True
+    )
+    deployments: Final = (
+        {
+            "model_name": "roi-estimator",
+            "litellm_params": {"model": "custom-deployment"},
+            "model_info": {"base_model": supported_model},
+        },
+    )
+
+    estimator_models: Final = _estimator_models_from_deployments(deployments)
+
+    assert estimator_models == ((supported_model, None),)
+    assert estimator_options(estimator_models) == {"reasoning_effort": "none"}
+
+
 def test_non_admin_cannot_read_roi_settings() -> None:
     client: Final = _client(LitellmUserRoles.INTERNAL_USER, _ConfigRepository())
 
@@ -79,19 +103,14 @@ def test_github_token_is_never_returned_and_url_change_clears_it(monkeypatch: py
 
     saved: Final = client.put(
         "/roi-calculator/settings",
-        content=(
-            '{"github_token":"private-test-token","repos":["org/repo"],'
-            '"estimator_model":"test-estimator"}'
-        ),
+        content=('{"github_token":"private-test-token","repos":["org/repo"],"estimator_model":"test-estimator"}'),
         headers=_JSON_HEADERS,
     )
 
     assert saved.status_code == 200
     assert saved.json()["has_github_token"] is True
     assert "private-test-token" not in saved.text
-    stored_settings: Final = TypeAdapter(ROISettings).validate_python(
-        repository.values["roi_calculator_settings"]
-    )
+    stored_settings: Final = TypeAdapter(ROISettings).validate_python(repository.values["roi_calculator_settings"])
     encrypted_token: Final = stored_settings.github_token.get_secret_value()
     assert encrypted_token != "private-test-token"
     assert "private-test-token" not in encrypted_token

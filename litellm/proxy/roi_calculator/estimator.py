@@ -1,8 +1,7 @@
 import hashlib
 import json
-import re
 from collections.abc import Awaitable
-from typing import Final, Literal, Protocol
+from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -24,9 +23,11 @@ from litellm.types.roi_calculator import (
     ROIResponseFormat,
     ROISettings,
 )
+from litellm.utils import supports_none_reasoning_effort
 
 MAX_EVIDENCE_CHARS: Final = 160000
 ESTIMATE_VERSION: Final = "estimate-v3-without-ai"
+EstimatorModel: TypeAlias = tuple[str, str | None]
 RESPONSE_CONTRACT: Final = (
     'Return only a JSON object with "hours" (a nonnegative number) and "reasoning" (a short string). '
     "Hours mean estimated engineering effort to complete the work without AI assistance, not actual time worked or "
@@ -62,33 +63,39 @@ def metadata_evidence(pull: ROIPullEvidence) -> ROIEstimatorEvidence:
     )
 
 
-def estimator_options(model: str) -> _EstimatorOptions:
-    if _requires_no_reasoning(model):
+def estimator_options(models: tuple[EstimatorModel, ...]) -> _EstimatorOptions:
+    if models and all(
+        supports_none_reasoning_effort(model, custom_llm_provider=provider) for model, provider in models
+    ):
         options_without_reasoning: Final[_EstimatorOptions] = {"reasoning_effort": "none"}
         return options_without_reasoning
     default_options: Final[_EstimatorOptions] = {}
     return default_options
 
 
-def _requires_no_reasoning(model: str) -> bool:
-    return re.search(r"(?:^|[/.])gpt-6-(?:luna|sol)$", model) is not None
+def _configured_models(settings: ROISettings, models: tuple[EstimatorModel, ...] | None) -> tuple[EstimatorModel, ...]:
+    return models if models is not None else ((settings.estimator_model, None),)
 
 
-def cache_context(settings: ROISettings) -> str:
+def cache_context(settings: ROISettings, models: tuple[EstimatorModel, ...] | None = None) -> str:
     context: Final = json.dumps(
         (
             ESTIMATE_VERSION,
             settings.estimator_model,
             settings.estimator_prompt,
             RESPONSE_CONTRACT,
-            estimator_options(settings.estimator_model),
+            estimator_options(_configured_models(settings, models)),
         ),
         ensure_ascii=False,
     )
     return hashlib.sha256(context.encode()).hexdigest()
 
 
-def pull_cache_key(settings: ROISettings, pull: ROIPullEvidence) -> str:
+def pull_cache_key(
+    settings: ROISettings,
+    pull: ROIPullEvidence,
+    models: tuple[EstimatorModel, ...] | None = None,
+) -> str:
     evidence: Final = json.dumps(
         metadata_evidence(pull).model_dump(exclude_unset=True),
         ensure_ascii=False,
@@ -99,7 +106,7 @@ def pull_cache_key(settings: ROISettings, pull: ROIPullEvidence) -> str:
             settings.estimator_model,
             settings.estimator_prompt,
             RESPONSE_CONTRACT,
-            estimator_options(settings.estimator_model),
+            estimator_options(_configured_models(settings, models)),
             pull["repo"],
             pull["number"],
             pull["head_sha"],
@@ -111,9 +118,15 @@ def pull_cache_key(settings: ROISettings, pull: ROIPullEvidence) -> str:
 
 
 class Estimator:
-    def __init__(self, settings: ROISettings, complete: CompletionCaller) -> None:
+    def __init__(
+        self,
+        settings: ROISettings,
+        complete: CompletionCaller,
+        models: tuple[EstimatorModel, ...] | None = None,
+    ) -> None:
         self.settings: Final = settings
         self.complete: Final = complete
+        self.models: Final = _configured_models(settings, models)
 
     async def estimate(self, pull: ROIPullEvidence) -> ROIEstimate:
         evidence: Final = json.dumps(
@@ -152,7 +165,7 @@ class Estimator:
             response_format=response_format,
             max_tokens=1200,
             metadata=metadata,
-            reasoning_effort="none" if _requires_no_reasoning(self.settings.estimator_model) else None,
+            reasoning_effort="none" if estimator_options(self.models) else None,
         )
         try:
             response: Final = await self.complete(request)
