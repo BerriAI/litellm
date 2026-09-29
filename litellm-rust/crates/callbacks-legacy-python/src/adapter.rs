@@ -56,6 +56,7 @@ pub struct LegacyLogging {
     stream: Option<DeliveredStream>,
     asynchronous: bool,
     internal: bool,
+    cache_key: Option<String>,
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
@@ -80,6 +81,7 @@ impl LegacyLogging {
             stream: None,
             asynchronous,
             internal: false,
+            cache_key: None,
         }
     }
 
@@ -207,10 +209,10 @@ impl LegacyLogging {
                 logger.object(py),
                 billing.url_route,
                 billing.endpoint_type,
-                &self
-                    .request
-                    .as_ref()
-                    .map(|request| request.body.clone_ref(py)),
+                &self.request.as_ref().map_or_else(
+                    || self.call.kwargs().clone_ref(py),
+                    |request| request.body.clone_ref(py),
+                ),
                 &stream.chunks,
                 &self.start,
                 &self.end,
@@ -246,10 +248,10 @@ impl LegacyLogging {
             (
                 logger.object(py),
                 billing.endpoint_type,
-                &self
-                    .request
-                    .as_ref()
-                    .map(|request| request.body.clone_ref(py)),
+                &self.request.as_ref().map_or_else(
+                    || self.call.kwargs().clone_ref(py),
+                    |request| request.body.clone_ref(py),
+                ),
                 &stream.chunks,
                 error,
             ),
@@ -428,6 +430,40 @@ impl LegacyLogging {
         self.finalize(py)
     }
 
+    pub(crate) fn result_ready(
+        &mut self,
+        py: Python<'_>,
+        facts: &litellm_host::interceptors::ExecutionFacts,
+    ) -> PyResult<HookStep<Self, ()>> {
+        use litellm_host::interceptors::ResultSource;
+
+        let logger = self.logger()?.object(py);
+        let params = logger
+            .getattr("litellm_params")?
+            .cast_into::<PyDict>()?
+            .copy()?;
+        params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        crate::python::Logging::Update.call(
+            py,
+            (
+                &logger,
+                self.call.kwargs(),
+                &facts.provider.model,
+                logger.getattr("optional_params")?,
+                params,
+                &facts.provider.provider,
+            ),
+        )?;
+        let details = logger.getattr("model_call_details")?;
+        self.cache_key = match &facts.source {
+            ResultSource::Provider => None,
+            ResultSource::Cache { key } => Some(key.clone()),
+        };
+        details.set_item("cache_hit", self.cache_key.is_some())?;
+        details.set_item("cache_key", self.cache_key.as_deref())?;
+        Ok(HookStep::Ready(()))
+    }
+
     pub(crate) fn post_call(
         &mut self,
         py: Python<'_>,
@@ -485,9 +521,13 @@ impl LegacyLogging {
         self.dispatch_failure(py)
     }
 
-    pub(crate) fn stream_opened(&mut self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn stream_opened(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
         if self.stream_billing().is_none() {
             return Err(missing_state());
+        }
+        if let Some(key) = &self.cache_key {
+            head.bind(py).set_item("cache_key", key)?;
+            head.bind(py).set_item("cache_hit", true)?;
         }
         Streaming::Opened.call(py, (self.logger()?.object(py),))?;
         self.stream = Some(DeliveredStream {
@@ -1726,7 +1766,9 @@ assert logger.calls[1][1] is response
                 operation: litellm_types::Operation::Messages,
                 ..logged(py, &locals, true)
             };
-            logging.on_stream_open(py).unwrap();
+            logging
+                .on_stream_open(py, &pyo3::types::PyDict::new(py).into_any().unbind())
+                .unwrap();
             logging
                 .on_stream_chunk(py, &local(&locals, "first").unbind())
                 .unwrap();

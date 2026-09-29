@@ -322,6 +322,7 @@ model LiteLLM_MCPServerTable {
   allowed_tools String[]      @default([])
   tool_name_to_display_name Json? @default("{}")
   tool_name_to_description   Json? @default("{}")
+  pinned_tools Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
   // Admin-configured environment variables interpolated into static_headers
@@ -1260,6 +1261,26 @@ model LiteLLM_DailyToolSpend {
   updated_at    DateTime @updatedAt
 
   @@id([date, tool_name])
+}
+
+model LiteLLM_DailyModelUsage {
+  date                String
+  model_group         String
+  model               String
+  custom_llm_provider String
+  task_type           String
+  spend               Float    @default(0.0)
+  prompt_tokens       BigInt   @default(0)
+  completion_tokens   BigInt   @default(0)
+  request_count       BigInt   @default(0)
+  successful_requests BigInt   @default(0)
+  failed_requests     BigInt   @default(0)
+  created_at          DateTime @default(now())
+  updated_at          DateTime @updatedAt
+
+  @@id([date, model_group, model, custom_llm_provider, task_type])
+  @@index([date])
+  @@index([model_group])
 }
 
 // Gateway request counts recorded at the ASGI edge by
