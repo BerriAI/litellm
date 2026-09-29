@@ -122,7 +122,7 @@ def test_model_insights_scopes_daily_to_ranked_deployments() -> None:
 def _task_rows() -> list[dict[str, object]]:
     def row(task: str, group: str, requests: str, spend: float) -> dict[str, object]:
         base = _grouped_row(task_type=task, model_group=group, model=group, custom_llm_provider="openai")
-        base["_sum"].update({"request_count": requests, "spend": spend})  # type: ignore[union-attr]
+        base["_sum"].update({"request_count": requests, "spend": spend})
         return base
 
     return [

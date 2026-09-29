@@ -1,3 +1,5 @@
+import functools
+import itertools
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Final
@@ -111,14 +113,20 @@ def _daily_metric(row: _GroupedDaily) -> ModelInsightDailyMetric:
 
 def _summarize_tasks(rows: list[_GroupedTask], metric: ModelInsightsMetric) -> list[ModelInsightTaskSummary]:
     catalog: Final = load_model_insight_tasks()
-    totals: Final[dict[str, float]] = {}
-    leaders: Final[dict[str, _GroupedTask]] = {}
-    for row in rows:
-        value = _rank_value(row, metric)
-        totals[row.task_type] = totals.get(row.task_type, 0.0) + value
-        leader = leaders.get(row.task_type)
-        if leader is None or value > _rank_value(leader, metric):
-            leaders[row.task_type] = row
+    first_seen: Final = {task: index for index, task in enumerate(dict.fromkeys(row.task_type for row in rows))}
+    by_task: Final = {
+        task: tuple(group)
+        for task, group in itertools.groupby(
+            sorted(rows, key=lambda row: first_seen[row.task_type]), key=lambda row: row.task_type
+        )
+    }
+    totals: Final = {
+        task: functools.reduce(lambda total, row: total + _rank_value(row, metric), task_rows, 0.0)
+        for task, task_rows in by_task.items()
+    }
+    leaders: Final = {
+        task: max(task_rows, key=lambda row: _rank_value(row, metric)) for task, task_rows in by_task.items()
+    }
     grand: Final = sum(totals.values())
     return [
         ModelInsightTaskSummary(
