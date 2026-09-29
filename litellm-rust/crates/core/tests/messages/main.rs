@@ -8,10 +8,8 @@ use litellm_core::messages::{
     route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_http::{HttpSettings, Resolution};
+use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
 use litellm_secrets::source::SecretSource;
-use litellm_types::llms::anthropic_messages::{
-    anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
-};
 use rstest::fixture;
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;
@@ -35,7 +33,7 @@ fn object(value: Value) -> Map<String, Value> {
     map
 }
 
-fn body(value: Value) -> AnthropicMessagesRequest {
+fn body(value: Value) -> MessagesRequest {
     serde_json::from_value(value).unwrap()
 }
 
@@ -116,7 +114,7 @@ async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
     run_with(Arc::new(RecordingSecrets::empty()), call).await
 }
 
-async fn run_message(call: MessagesCall) -> AnthropicMessagesResponse {
+async fn run_message(call: MessagesCall) -> MessagesResponse {
     match run(call).await.expect("messages call succeeds") {
         MessagesOutput::Complete(message) => *message,
         MessagesOutput::StreamEnded | MessagesOutput::Detached => {

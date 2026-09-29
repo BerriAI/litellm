@@ -3,11 +3,8 @@ use std::{collections::BTreeSet, time::Duration};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
-use litellm_core_utils::{
-    call_arguments::CallArguments,
-    serde_compat::{FiniteF64, LaxI64},
-    url_utils::ApiUrl,
-};
+use litellm_core_utils::{call_arguments::CallArguments, url_utils::ApiUrl};
+use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -20,11 +17,13 @@ use crate::base_llm::ocr::{
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-        OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
+        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
         ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
 
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";

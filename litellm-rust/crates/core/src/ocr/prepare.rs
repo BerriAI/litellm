@@ -85,12 +85,13 @@ mod tests {
         base_llm::ocr::{
             error::Error,
             handler::{CallHooks, OcrClient},
-            transformation::{BaseOcrConfig, OcrResponseFormat},
+            transformation::BaseOcrConfig,
         },
         cohere::ocr::transformation::CohereParseConfig,
         mistral::ocr::transformation::MistralOcrConfig,
         vertex_ai::ocr::transformation::VertexAiOcrConfig,
     };
+    use litellm_llms_types::formats::ocr::OcrResponseFormat;
     use serde_json::{Value, json};
 
     use super::*;

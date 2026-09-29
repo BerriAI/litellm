@@ -1,7 +1,6 @@
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct AudioTranscriptionResponseData {
     pub text: String,
 }

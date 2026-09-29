@@ -411,7 +411,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
     #[case] poisoned: Value,
 ) {
     use litellm_core::responses::route::Responses;
-    use litellm_types::responses::main::ResponsesApiResponse;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
         ResponseCache::new(Arc::new(InMemoryCache::default())),
@@ -461,7 +461,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
     #[case] changed: Value,
 ) {
     use litellm_core::messages::route::Messages;
-    use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+    use litellm_llms_types::formats::messages::MessagesResponse;
 
     let calls = AtomicUsize::new(0);
     for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
@@ -487,7 +487,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                 None,
                 || async {
                     let call = calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(Box::new(serde_json::from_value::<AnthropicMessagesResponse>(json!({
+                    Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({
                     "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
                     "content":[{"type":"text","text":format!("answer {call}")}],
                     "stop_reason":"end_turn", "stop_sequence":null
@@ -843,7 +843,7 @@ async fn responses_cache_only_reuses_completed_responses(
     #[case] expected_calls: usize,
 ) {
     use litellm_core::responses::route::Responses;
-    use litellm_types::responses::main::ResponsesApiResponse;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let calls = AtomicUsize::new(0);
     for _ in 0..2 {

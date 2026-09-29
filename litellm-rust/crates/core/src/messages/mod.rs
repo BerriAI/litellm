@@ -10,7 +10,7 @@ use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
 pub use crate::error::RouteError as Error;
-pub use types::{MessagesCall, MessagesResponse, MessagesShaping, messages_body};
+pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
 
 #[derive(Clone)]
 pub struct MessagesRoute {
@@ -103,7 +103,7 @@ impl MessagesRoute {
         call: MessagesCall,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<crate::CallOptions>,
-    ) -> Result<MessagesResponse, Error> {
+    ) -> Result<MessagesCallResponse, Error> {
         let crate::CallOptions {
             cache: cache_options,
             observers,
@@ -129,7 +129,7 @@ impl MessagesRoute {
         cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<MessagesResponse, Error> {
+    ) -> Result<MessagesCallResponse, Error> {
         crate::diagnostic::call(async {
             self.run_provider(call, cache_options, interceptors, observers)
                 .await
@@ -143,10 +143,10 @@ impl MessagesRoute {
         cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<MessagesResponse, Error> {
+    ) -> Result<MessagesCallResponse, Error> {
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
         crate::diagnostic::provider(&request.body.model, request.provider.as_str());
-        let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
+        let execute: futures_util::future::BoxFuture<'_, Result<MessagesCallResponse, Error>> =
             Box::pin(handler::execute(
                 &self.http,
                 &self.auth,

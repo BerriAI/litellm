@@ -8,8 +8,9 @@ use reqwest::Url;
 
 use crate::base_llm::ocr::{
     error::Error,
-    transformation::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS, OcrConnection, OcrDocument},
+    transformation::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS, OcrConnection},
 };
+use litellm_llms_types::formats::ocr::OcrDocument;
 
 pub struct InlineDocument<'a>(DataUrl<'a>);
 

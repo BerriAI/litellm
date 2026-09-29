@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use futures_util::{StreamExt, stream::BoxStream};
 use litellm_framing::{frames, sse::SseCodec};
-use litellm_types::messages::streaming::MessagesStreamEvent;
+use litellm_llms_types::formats::messages::streaming::MessagesStreamEvent;
 
 use crate::Error;
 pub use crate::base_llm::base_model_iterator::ByteStream;
@@ -38,7 +38,9 @@ pub fn encode_anthropic_sse(event: &MessagesStreamEvent) -> Result<Bytes, Error>
 #[cfg(test)]
 mod tests {
     use futures_util::{StreamExt, TryStreamExt, stream};
-    use litellm_types::messages::streaming::{MessagesContentBlockDelta, MessagesStreamUsage};
+    use litellm_llms_types::formats::messages::streaming::{
+        MessagesContentBlockDelta, MessagesStreamUsage,
+    };
     use serde_json::json;
 
     use super::*;

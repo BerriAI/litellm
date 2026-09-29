@@ -5,7 +5,7 @@ use litellm_host::{
     call::{HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_types::responses::main::ResponsesApiResponse;
+use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
 use super::{
     Error, ResponsesRoute,

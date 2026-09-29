@@ -6,7 +6,7 @@ use std::{
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
 use litellm_core::messages::{
-    MessagesResponse,
+    MessagesCallResponse,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_tracing::{Logger, Metadata, Record, Sink};
@@ -353,7 +353,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         .await
         .unwrap();
 
-    let MessagesResponse::Stream { head, chunks } = response else {
+    let MessagesCallResponse::Stream { head, chunks } = response else {
         panic!("a streaming request returns a stream");
     };
     for (name, value) in UPSTREAM_HEADERS {
@@ -407,7 +407,7 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
     .expect("messages() returns before the upstream finishes")
     .unwrap();
 
-    let MessagesResponse::Stream { mut chunks, .. } = response else {
+    let MessagesCallResponse::Stream { mut chunks, .. } = response else {
         panic!("a streaming request returns a stream");
     };
     if read_chunk {
@@ -442,7 +442,7 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
         .await
         .unwrap();
 
-    let MessagesResponse::Stream { mut chunks, .. } = response else {
+    let MessagesCallResponse::Stream { mut chunks, .. } = response else {
         panic!("a streaming request returns a stream");
     };
     assert_eq!(

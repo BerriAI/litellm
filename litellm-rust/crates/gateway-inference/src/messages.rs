@@ -12,7 +12,7 @@ use axum::{
 };
 use litellm_core::messages::{MessagesCall, messages_body, route::Messages};
 use litellm_host_http::Sse;
-use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
 use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
