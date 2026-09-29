@@ -5,9 +5,9 @@ For diagnostic tracing changes, follow [.agents/skills/rust-tracing/SKILL.md](.a
 ## Test placement
 
 - Never create a `tests.rs` (or `test.rs`) file under `src/`, and never `#[path = "tests.rs"] mod tests;`
-- A test that reaches private items lives inline, in a `#[cfg(test)] mod tests { ... }` at the bottom of the file that owns those items
-- A test that only uses the crate's public API lives in `crates/<crate>/tests/<subject>.rs`, next to `src/`
-- Split a mixed test file along that line instead of widening visibility to move it
+- Prefer isolated unit tests inline, in a `#[cfg(test)] mod tests { ... }` at the bottom of the implementation file, even when they only use public items
+- Use `crates/<crate>/tests/<subject>.rs` for integration scenarios that exercise multiple APIs together or require shared integration setup. Local fixtures alone do not make a test an integration test
+- Keep tests of private items inline; never widen visibility just to move a test into `tests/`
 - A test for another crate's item belongs in that crate, not in a downstream one
 - Never set `autotests = false` or hand-list `[[test]]` targets; every file directly under `tests/` is discovered by cargo, and a shared helper goes in `tests/<name>/mod.rs` or `tests/<subject>/support.rs` so it is not picked up as a test crate of its own
 
