@@ -9638,6 +9638,10 @@ class ProviderConfigManager:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
             return get_hosted_vllm_video_config(model)
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.videos.transformation import MinimaxVideoConfig
+
+            return MinimaxVideoConfig()
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
         return None

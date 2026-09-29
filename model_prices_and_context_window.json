@@ -37986,6 +37986,60 @@
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000
     },
+    "minimax/MiniMax-H3": {
+        "litellm_provider": "minimax",
+        "mode": "video_generation",
+        "source": "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "output_cost_per_second_2k": 0.13,
+        "input_cost_per_image": 0.04,
+        "provider_specific_entry": {
+            "minimax_free_input_images": 5
+        },
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "V2 async task API. Pay-as-you-go list price $0.08/s at 768P and $0.13/s at 2K, plus $0.04 per input image beyond the first 5. Audio input is free. Reference video input is rejected, since MiniMax bills its duration only after the create call."
+        }
+    },
+    "minimax/MiniMax-H3-Max": {
+        "litellm_provider": "minimax",
+        "mode": "video_generation",
+        "source": "https://platform.minimax.io/docs/guides/pricing-paygo",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.08,
+        "input_cost_per_image": 0.074,
+        "provider_specific_entry": {
+            "minimax_free_input_images": 2
+        },
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "V2 async task API, fast tier. Pay-as-you-go list price $0.05/s at 480P and $0.08/s at 768P; no 2K. Plus $0.074 per input image beyond the first 2. Audio input is free. Reference video input is rejected, since MiniMax bills its duration only after the create call."
+        }
+    },
     "mistral.devstral-2-123b": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "bedrock_converse",
