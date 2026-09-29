@@ -187,4 +187,59 @@ describe("ROICalculatorView", () => {
     expect(screen.getByLabelText("GitHub token")).toHaveAttribute("type", "password");
     expect(screen.getAllByText("Connect GitHub to get started")).toHaveLength(1);
   });
+
+  it("shows the completed report after polling a running sync", async () => {
+    const runningStatus = {
+      ...idleStatus,
+      running: true,
+      phase: "estimating",
+      stage: "Estimating pull requests",
+      total: 1,
+    };
+    const completedStatus = { ...idleStatus, phase: "complete", done: 1, total: 1 };
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce(settings)
+      .mockResolvedValueOnce({ report: null })
+      .mockResolvedValueOnce(runningStatus)
+      .mockResolvedValueOnce(completedStatus)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            window.setTimeout(() => resolve({ report: summary }), 25);
+          }),
+      );
+
+    render(<ROICalculatorView accessToken="token" />);
+
+    expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
+    expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connect GitHub to get started" })).not.toBeInTheDocument();
+  });
+
+  it("shows the sync error returned by the status endpoint", async () => {
+    const runningStatus = {
+      ...idleStatus,
+      running: true,
+      phase: "estimating",
+      stage: "Estimating pull requests",
+      total: 1,
+    };
+    const errorStatus = {
+      ...idleStatus,
+      phase: "error",
+      error: "The estimator could not score a pull request.",
+    };
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce(settings)
+      .mockResolvedValueOnce({ report: null })
+      .mockResolvedValueOnce(runningStatus)
+      .mockResolvedValueOnce(errorStatus);
+
+    render(<ROICalculatorView accessToken="token" />);
+
+    expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(
+      "The estimator could not score a pull request.",
+    );
+    expect(screen.getByText("Sync failed")).toBeInTheDocument();
+  });
 });

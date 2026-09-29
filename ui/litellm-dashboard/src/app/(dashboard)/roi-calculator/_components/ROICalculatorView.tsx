@@ -12,11 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import ROISettingsPanel from "./ROISettingsPanel";
-import {
-  IdentityMatchDialog,
-  type PersonMatchSelection,
-  PullReasoningDialog,
-} from "./ROICalculatorDialogs";
+import { IdentityMatchDialog, type PersonMatchSelection, PullReasoningDialog } from "./ROICalculatorDialogs";
 import { ROIOverview, ROIPeopleView } from "./ROICalculatorViews";
 import { filterPulls } from "./roiCalculatorData";
 import type {
@@ -93,11 +89,12 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
         .get<ROISyncStatus>("/roi-calculator/sync", { accessToken })
         .then(async (nextStatus) => {
           if (cancelled) return;
-          setStatus(nextStatus);
           if (!nextStatus.running && nextStatus.phase === "complete") {
             const report = await loadReport();
-            if (!cancelled) setSummary(report);
+            if (cancelled) return;
+            setSummary(report);
           }
+          if (!cancelled) setStatus(nextStatus);
         })
         .catch((reason: unknown) => {
           if (!cancelled) setError(extractErrorMessage(reason));
@@ -144,10 +141,7 @@ export default function ROICalculatorView({ accessToken }: { accessToken: string
     [accessToken],
   );
 
-  const filteredPulls = React.useMemo(
-    () => (summary ? filterPulls(summary.pulls, query) : []),
-    [query, summary],
-  );
+  const filteredPulls = React.useMemo(() => (summary ? filterPulls(summary.pulls, query) : []), [query, summary]);
 
   if (error && !settings) {
     return (

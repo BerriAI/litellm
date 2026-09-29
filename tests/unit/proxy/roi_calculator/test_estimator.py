@@ -32,9 +32,7 @@ def _pull() -> ROIPullEvidence:
         "additions": 1,
         "deletions": 1,
         "changed_files": 1,
-        "files": (
-            {"filename": "time.py", "status": "modified", "additions": 1, "deletions": 1},
-        ),
+        "files": ({"filename": "time.py", "status": "modified", "additions": 1, "deletions": 1},),
         "commits": ({"sha": "abcdef", "message": "Fix timezone conversion"},),
         "commit_count": 1,
         "incomplete_metadata": False,
@@ -53,8 +51,16 @@ def _completion(content: str) -> Mapping[str, object]:
     return response
 
 
+@pytest.mark.parametrize(
+    "content",
+    (
+        '{"hours": 4.25, "reasoning": "Timezone conversion and regression verification."}',
+        '```json\n{"hours": 4.25, "reasoning": "Timezone conversion and regression verification."}\n```',
+        'The estimate is:\n{"hours": 4.25, "reasoning": "Timezone conversion and regression verification."}\nDone.',
+    ),
+)
 @pytest.mark.asyncio
-async def test_estimator_sends_metadata_only_json_request_and_parses_valid_result() -> None:
+async def test_estimator_sends_metadata_only_json_request_and_parses_valid_result(content: str) -> None:
     async def complete(request: ROICompletionRequest) -> object:
         evidence: Final = TypeAdapter(ROIEstimatorEvidence).validate_json(request.messages[1]["content"])
         assert request.temperature == 0
@@ -66,7 +72,7 @@ async def test_estimator_sends_metadata_only_json_request_and_parses_valid_resul
         assert evidence.changes == expected_changes
         assert evidence.commits[0].message == "Fix timezone conversion"
         assert "without AI assistance" in request.messages[0]["content"]
-        return _completion('{"hours": 4.25, "reasoning": "Timezone conversion and regression verification."}')
+        return _completion(content)
 
     result: Final = await Estimator(_settings(), complete).estimate(_pull())
 
@@ -83,6 +89,8 @@ async def test_estimator_sends_metadata_only_json_request_and_parses_valid_resul
         '{"hours": true, "reasoning": "invalid"}',
         '{"hours": 4}',
         '{"hours": 4, "reasoning": "  "}',
+        '```json\n{"hours": -1, "reasoning": "invalid"}\n```',
+        '```json\n{"hours": "4", "reasoning": "invalid"}\n```',
         "not json",
     ),
 )

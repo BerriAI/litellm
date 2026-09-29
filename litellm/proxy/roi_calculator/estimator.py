@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy.roi_calculator.github import SourceError
+from litellm.router_strategy.complexity_router.capability_classifier import extract_classifier_json
 from litellm.types.roi_calculator import (
     ROICompletionMessage,
     ROICompletionMetadata,
@@ -159,7 +160,7 @@ class Estimator:
             choice: Final = parsed_response.choices[0]
             if choice.finish_reason not in (None, "stop") or choice.message.content is None:
                 raise ValueError("incomplete estimator response")
-            result: Final = ROIEstimatorResult.model_validate_json(choice.message.content)
+            result: Final = ROIEstimatorResult.model_validate_json(extract_classifier_json(choice.message.content))
         except Exception:
             raise SourceError(
                 "The estimator did not return valid hours and reasoning. Check the selected model and prompt."
