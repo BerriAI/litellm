@@ -49,7 +49,7 @@ from litellm.integrations.otel.model.payloads import (
     is_mcp_list_tools,
     is_mcp_tool_call,
 )
-from litellm.integrations.otel.model.semconv import Error
+from litellm.integrations.otel.model.semconv import Error, LiteLLMError
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
@@ -98,6 +98,20 @@ if TYPE_CHECKING:
 LITELLM_TRACER_NAME: Final = "litellm"
 _published_v2_provider: ApiTracerProvider | None = None
 _GLOBAL_REDACTION_PROBE: Final[dict[str, object]] = {}  # mutable-ok: read-only global-redaction probe
+
+
+def _span_failure_redact(span: "Span") -> bool:
+    """Redaction decision for re-stamping a span the failure hook may have
+    already marked: an existing ``error.message``/stack-trace attribute keeps
+    its request-aware value, so a later restamp with the global probe can't
+    leak an opt-in's raw text or clobber a valid opt-out."""
+    attributes: Final = getattr(span, "attributes", None) or {}
+    if Error.MESSAGE in attributes or LiteLLMError.STACK_TRACE in attributes:
+        return (
+            attributes.get(Error.MESSAGE) == REDACTED_BY_LITELLM
+            or attributes.get(LiteLLMError.STACK_TRACE) == REDACTED_BY_LITELLM
+        )
+    return should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
 
 
 def _span_error_from_exception(
@@ -747,18 +761,22 @@ class OpenTelemetryV2(CustomLogger):
     @contextmanager
     def start_phase_span(self, name: str) -> "Iterator[Span]":
         span: Final = self._emitter.start_span(SpanRole.SERVICE, name)
-        with use_span(span, end_on_exit=True):
+        redact: Final = should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
+        with use_span(
+            span,
+            end_on_exit=True,
+            record_exception=not redact,
+            set_status_on_exception=not redact,
+        ):
             try:
                 yield span
             except Exception as exc:
                 if is_recordable_span(span):
                     stamp_error(
                         span,
-                        _span_error_from_exception(
-                            exc, redact_content=should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
-                        ),
-                        record_event=False,
-                        set_status=False,
+                        _span_error_from_exception(exc, redact_content=redact),
+                        record_event=redact,
+                        set_status=redact,
                     )
                 raise
 
@@ -803,7 +821,7 @@ class OpenTelemetryV2(CustomLogger):
             _span_error_from_exception(
                 exception,
                 status_code=status_code,
-                redact_content=should_redact_message_logging(_GLOBAL_REDACTION_PROBE),
+                redact_content=_span_failure_redact(span),
             ),
             record_event=not already_stamped,
         )

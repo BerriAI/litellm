@@ -3292,3 +3292,92 @@ def test_async_post_call_failure_hook_keeps_error_text_when_not_gated():
     server.end()
     (span,) = exporter.get_finished_spans()
     assert secret in span.attributes["error.message"]
+
+
+def test_record_error_attributes_on_span_preserves_request_opt_in_redaction():
+    """Global flag off but the request opts in via header: the failure hook
+    stamps redacted values on the SERVER span; the exception-handler restamp
+    must keep them instead of re-writing raw error text from the global probe."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    litellm.turn_off_message_logging = False
+    try:
+        logger, exporter = _logger()
+        server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+        set_request_root_span(server)
+        secret = "secret-prompt-marker"
+        exc = _proxy_exc(f"Unsupported content: {secret}", 400)
+        asyncio.run(
+            logger.async_post_call_failure_hook(
+                request_data={"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+                original_exception=exc,
+                user_api_key_dict=UserAPIKeyAuth(),
+                traceback_str=f"Traceback ... {secret} ...",
+            )
+        )
+        logger.record_error_attributes_on_span(server, exc, 400)
+        server.end()
+        (span,) = exporter.get_finished_spans()
+        assert secret not in str(dict(span.attributes or {}))
+        assert secret not in str([dict(e.attributes or {}) for e in span.events])
+        assert secret not in str(span.status.description or "")
+        assert span.attributes["error.message"] == "redacted-by-litellm"
+        assert span.attributes["litellm.provider.error.code"] == "400"
+    finally:
+        litellm.turn_off_message_logging = False
+
+
+def test_record_error_attributes_on_span_preserves_opt_out_raw_message():
+    """Global flag on but the request opts out via header: the failure hook
+    stamps the raw error text; the restamp must not overwrite it with the
+    redaction marker."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    litellm.turn_off_message_logging = True
+    try:
+        logger, exporter = _logger()
+        server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+        set_request_root_span(server)
+        secret = "secret-prompt-marker"
+        exc = _proxy_exc(f"Unsupported content: {secret}", 400)
+        asyncio.run(
+            logger.async_post_call_failure_hook(
+                request_data={"metadata": {"headers": {"litellm-disable-message-redaction": "true"}}},
+                original_exception=exc,
+                user_api_key_dict=UserAPIKeyAuth(),
+                traceback_str=f"Traceback ... {secret} ...",
+            )
+        )
+        logger.record_error_attributes_on_span(server, exc, 400)
+        server.end()
+        (span,) = exporter.get_finished_spans()
+        assert secret in span.attributes["error.message"]
+        assert span.attributes["litellm.provider.error.code"] == "400"
+    finally:
+        litellm.turn_off_message_logging = False
+
+
+def test_start_phase_span_does_not_record_raw_exception_when_gated():
+    """With message redaction on, an exception raised inside a phase span must
+    not leak through use_span's automatic exception recording: exactly one
+    exception event lands, carrying only the redaction marker."""
+    import litellm
+
+    litellm.turn_off_message_logging = True
+    try:
+        logger, exporter = _logger()
+        secret = "secret-prompt-marker"
+        with pytest.raises(RuntimeError):
+            with logger.start_phase_span("auth"):
+                raise RuntimeError(f"auth exploded: {secret}")
+        (span,) = exporter.get_finished_spans()
+        assert secret not in str(dict(span.attributes or {}))
+        assert secret not in str([dict(e.attributes or {}) for e in span.events])
+        assert secret not in str(span.status.description or "")
+        exception_events = [e for e in span.events if e.name == "exception"]
+        assert len(exception_events) == 1
+        assert (exception_events[0].attributes or {}).get("exception.message") == "redacted-by-litellm"
+    finally:
+        litellm.turn_off_message_logging = False

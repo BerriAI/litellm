@@ -6843,3 +6843,49 @@ class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
         stamped = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
         assert stamped.get("error.message") == "redacted-by-litellm"
         assert stamped.get("error.type") == "BadRequestError"
+
+    def _restamped_span(self, stamped_message, redact, exception):
+        original = litellm.turn_off_message_logging
+        litellm.turn_off_message_logging = redact
+        try:
+            exporter = InMemorySpanExporter()
+            provider = TracerProvider()
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            otel = OpenTelemetry()
+            otel.tracer = provider.get_tracer(__name__)
+            span = otel.tracer.start_span("Received Proxy Server Request")
+            otel.safe_set_attribute(span=span, key="error.message", value=stamped_message)
+            otel.record_error_attributes_on_span(span=span, exception=exception, status_code=400)
+            span.end()
+            return exporter.get_finished_spans()[0]
+        finally:
+            litellm.turn_off_message_logging = original
+
+    def test_record_error_attributes_on_span_preserves_request_opt_in_redaction(self):
+        """Global flag off but the request opted in: the failure hook already
+        stamped the redaction marker on the SERVER span; the exception-handler
+        restamp must keep it instead of writing raw error text."""
+        span = self._restamped_span(
+            "redacted-by-litellm",
+            redact=False,
+            exception=litellm.BadRequestError(
+                message=f"Unsupported content: {SECRET_PROMPT}", model="gpt-4o", llm_provider="openai"
+            ),
+        )
+        assert span.attributes["error.message"] == "redacted-by-litellm"
+        assert span.attributes["error.code"] == "400"
+        assert SECRET_PROMPT not in str(dict(span.attributes or {}))
+
+    def test_record_error_attributes_on_span_preserves_opt_out_raw_message(self):
+        """Global flag on but the request opted out: the failure hook stamped
+        the raw error text; the restamp must not overwrite it with the
+        redaction marker."""
+        span = self._restamped_span(
+            f"Unsupported content: {SECRET_PROMPT}",
+            redact=True,
+            exception=litellm.BadRequestError(
+                message=f"Unsupported content: {SECRET_PROMPT}", model="gpt-4o", llm_provider="openai"
+            ),
+        )
+        assert SECRET_PROMPT in span.attributes["error.message"]
+        assert span.attributes["error.code"] == "400"

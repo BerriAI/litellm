@@ -379,6 +379,23 @@ class OpenTelemetryConfig:
         )
 
 
+def _server_span_failure_redact(span: "Span") -> bool:
+    """Redaction decision for re-stamping a SERVER span the failure hook may
+    have already marked: an existing error message/stack-trace attribute keeps
+    its request-aware value, so a restamp with the global-only probe can't leak
+    an opt-in's raw text or clobber a valid opt-out."""
+    from litellm.integrations._types.open_inference import ErrorAttributes
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    attributes: Final = getattr(span, "attributes", None) or {}
+    if ErrorAttributes.ERROR_MESSAGE in attributes or ErrorAttributes.ERROR_STACK_TRACE in attributes:
+        return (
+            attributes.get(ErrorAttributes.ERROR_MESSAGE) == REDACTED_BY_LITELLM
+            or attributes.get(ErrorAttributes.ERROR_STACK_TRACE) == REDACTED_BY_LITELLM
+        )
+    return should_redact_message_logging({})  # mutable-ok: read-only probe for the global flag
+
+
 class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def __init__(
         self,
@@ -3596,12 +3613,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
-        from litellm.litellm_core_utils.redact_messages import (
-            redact_error_information,
-            should_redact_message_logging,
-        )
+        from litellm.litellm_core_utils.redact_messages import redact_error_information
 
-        redact: Final = should_redact_message_logging({})  # mutable-ok: read-only probe for the global flag
+        redact: Final = _server_span_failure_redact(span)
         error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=exception)
         error_information["error_code"] = str(status_code)
         self._record_exception_on_span(

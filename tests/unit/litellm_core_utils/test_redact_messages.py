@@ -1177,3 +1177,23 @@ class TestShouldRedactFailedRequest:
 
         litellm.turn_off_message_logging = True
         assert should_redact_failed_request(_request_data(turn_off_message_logging=False)) is False
+
+    def test_dynamic_param_in_metadata_slot(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        assert should_redact_failed_request(_request_data(metadata={"turn_off_message_logging": True})) is True
+
+    def test_dynamic_param_in_litellm_metadata_slot(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        assert should_redact_failed_request(_request_data(litellm_metadata={"turn_off_message_logging": True})) is True
+
+    def test_top_level_dynamic_param_beats_metadata_slot(self):
+        from litellm.litellm_core_utils.redact_messages import should_redact_failed_request
+
+        litellm.turn_off_message_logging = True
+        request_data = _request_data(
+            metadata={"turn_off_message_logging": True},
+            turn_off_message_logging=False,
+        )
+        assert should_redact_failed_request(request_data) is False

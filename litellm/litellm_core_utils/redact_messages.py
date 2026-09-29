@@ -21,6 +21,9 @@ from litellm.litellm_core_utils.classifier_logging import without_classifier_aud
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    iter_client_callback_metadata_dicts,
+)
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
@@ -221,7 +224,23 @@ def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
     only receive ``request_data`` (the Logging object is popped before hooks run).
     ``litellm_metadata`` is included only when present so
     ``get_metadata_variable_name_from_kwargs`` resolves ``metadata`` for chat routes.
+    ``turn_off_message_logging`` resolves like ``initialize_standard_callback_dynamic_params``:
+    the top-level value when present, else the first client-metadata slot carrying it.
     """
+    dynamic_param: Final = (
+        request_data["turn_off_message_logging"]
+        if "turn_off_message_logging" in request_data
+        else next(
+            (
+                slot["turn_off_message_logging"]
+                for _, slot in iter_client_callback_metadata_dicts(
+                    cast(dict[str, Any], request_data)  # cast-ok: the helper only reads mapping keys
+                )
+                if "turn_off_message_logging" in slot
+            ),
+            None,
+        )
+    )
     litellm_params: Final = MappingProxyType(
         {
             key: request_data.get(key)
@@ -233,7 +252,7 @@ def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
         {  # mutable-ok: the model_call_details shape the decision helper reads
             "litellm_params": litellm_params,
             "standard_callback_dynamic_params": {  # mutable-ok: dynamic-params slot the helper reads
-                "turn_off_message_logging": request_data.get("turn_off_message_logging")
+                "turn_off_message_logging": dynamic_param
             },
         }
     )
