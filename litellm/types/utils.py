@@ -3207,6 +3207,10 @@ class StandardLoggingHiddenParams(TypedDict):
     api_base: str | None
     response_cost: str | float | None
     litellm_overhead_time_ms: float | None
+    timing_pre_processing_ms: NotRequired[float]
+    timing_llm_api_ms: NotRequired[float]
+    timing_post_processing_ms: NotRequired[float]
+    timing_message_copy_ms: NotRequired[float]
     additional_headers: StandardLoggingAdditionalHeaders | None
     batch_models: list[str] | None
     batch_successful_requests: ReadOnly[int | None]

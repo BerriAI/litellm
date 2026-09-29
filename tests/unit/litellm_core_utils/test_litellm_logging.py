@@ -9029,3 +9029,24 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+def test_get_hidden_params_keeps_detailed_timings():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    timings = {
+        "timing_pre_processing_ms": 20.0,
+        "timing_llm_api_ms": 500.0,
+        "timing_post_processing_ms": 10.0,
+        "timing_message_copy_ms": 2.5,
+    }
+    result = StandardLoggingPayloadSetup.get_hidden_params({"model_id": "m1", **timings})
+    assert {key: result.get(key) for key in timings} == timings
+    assert result["model_id"] == "m1"
+
+
+def test_get_hidden_params_has_no_timing_keys_when_none_recorded():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup.get_hidden_params({"model_id": "m1"})
+    assert not [key for key in result if key.startswith("timing_")]
