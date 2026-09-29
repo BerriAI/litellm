@@ -86,6 +86,14 @@ def _bodies(model: str, marker: str) -> tuple[tuple[str, dict[str, JsonValue]], 
     return chat + messages + responses
 
 
+def _json_body_ok(body: bytes) -> bool:
+    try:
+        json.loads(body)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
 def _fire(rig: Rig, bodies: tuple[tuple[str, dict[str, JsonValue]], ...]) -> tuple[tuple[int, str | None], ...]:
     def call(item: tuple[str, dict[str, JsonValue]]) -> tuple[int, str | None]:
         try:
@@ -231,16 +239,30 @@ def test_g3_proxy_restart_mid_burst(tmp_path: Path) -> None:
                     [],
                 )
 
+                probes: list[tuple[int, str]] = []  # mutable-ok: readiness polls are real served requests
+
                 def served() -> tuple[int, ...]:
-                    probe: Final = rig_two.proxy.request("POST", *bodies[BURST // 2])
+                    try:
+                        probe: Final = rig_two.proxy.request("POST", *bodies[BURST // 2])
+                    except httpx.HTTPError:
+                        return (-1,)
+                    probes.append((probe.status_code, probe.headers.get("x-litellm-call-id") or ""))
                     return (probe.status_code,)
 
                 eventually(served, lambda statuses: statuses[0] == 400, seconds=60)
                 second: Final = _fire(rig_two, bodies[BURST // 2 :])
-            answered: Final = first + second
+            answered: Final = first + second + tuple(probes)
             assert all(status in (400, 500) for status, _ in answered), answered
             assert any(status == 400 for status, _ in answered), answered
-            events: Final = tuple(object_value(event) for batch in endpoint.drain() for event in json.loads(batch.body))
+            batches: Final = endpoint.drain()
+            empty: Final = tuple(batch for batch in batches if not _json_body_ok(batch.body))
+            assert all(not batch.body.strip() for batch in empty), empty
+            events: Final = tuple(
+                object_value(event)
+                for batch in batches
+                if _json_body_ok(batch.body)
+                for event in json.loads(batch.body)
+            )
             call_ids: Final = tuple(str(event.get("litellm_call_id")) for event in events if event)
             assert len(call_ids) == len(set(call_ids)), ("duplicate events after restart", call_ids)
             for event in events:

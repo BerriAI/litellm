@@ -682,6 +682,67 @@ def test_b10_global_on_team_permission_opt_out_keeps_raw(rig: Rig) -> None:
         _assert_failure_raw(rig, model, secret, _call_id(response))
 
 
+def _logging_callback_vars(flag: bool) -> dict[str, JsonValue]:
+    return {"logging": [{"callback_name": "generic_api", "callback_vars": {"turn_off_message_logging": flag}}]}
+
+
+def _event_for_call(rig: Rig, model: str, call_id: str) -> dict[str, JsonValue]:
+    return eventually(
+        lambda: tuple(event for event in rig.failure_events(model) if event.get("litellm_call_id") == call_id),
+        lambda values: len(values) == 1,
+        seconds=90,
+    )[0]
+
+
+def _assert_callback_vars_decision(rig: Rig, model: str, flag: bool, key: str) -> None:
+    ok_secret: Final = f"ok {_secret_prompt()}"
+    succeeded: Final = rig.proxy.request(
+        "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": ok_secret}]}, key=key
+    )
+    assert succeeded.status_code == 200, succeeded.text
+    success_event: Final = _event_for_call(rig, model, _call_id(succeeded))
+    assert (ok_secret not in json.dumps(success_event)) == flag, json.dumps(success_event)
+    fail_secret: Final = _secret_prompt()
+    failed: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": fail_secret}]},
+        key=key,
+    )
+    assert failed.status_code == 400, failed.text
+    if flag:
+        _assert_failure_redacted(rig, model, fail_secret, _call_id(failed))
+    else:
+        _assert_failure_raw(rig, model, fail_secret, _call_id(failed))
+
+
+@pytest.mark.timeout(280)
+@pytest.mark.parametrize("global_flag", ["on", "off"])
+@pytest.mark.parametrize("flag", [True, False], ids=["vars_true", "vars_false"])
+def test_b6_key_logging_callback_vars_drive_the_failure_decision(
+    request: pytest.FixtureRequest, global_flag: str, flag: bool
+) -> None:
+    rig: Final = request.getfixturevalue("rig" if global_flag == "on" else "rig_off")
+    with rig.proxy.scenario() as scenario:
+        model: Final = scenario.model(api_base=rig.provider.url + "/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[model], metadata=_logging_callback_vars(flag))
+        _assert_callback_vars_decision(rig, model, flag, key)
+
+
+@pytest.mark.timeout(280)
+@pytest.mark.parametrize("global_flag", ["on", "off"])
+@pytest.mark.parametrize("flag", [True, False], ids=["vars_true", "vars_false"])
+def test_b7_team_logging_callback_vars_drive_the_failure_decision(
+    request: pytest.FixtureRequest, global_flag: str, flag: bool
+) -> None:
+    rig: Final = request.getfixturevalue("rig" if global_flag == "on" else "rig_off")
+    with rig.proxy.scenario() as scenario:
+        model: Final = scenario.model(api_base=rig.provider.url + "/v1", api_key="synthetic-provider-key")
+        team: Final = scenario.team(metadata=_logging_callback_vars(flag))
+        key: Final = scenario.key(models=[model], team_id=team)
+        _assert_callback_vars_decision(rig, model, flag, key)
+
+
 # --- C. Callback registration modes (YAML global on) ----------------------------------
 
 
@@ -988,6 +1049,41 @@ def test_f3_team_opt_out_permission_flip_takes_effect(rig: Rig) -> None:
             return (secret not in json.dumps(events[0]),)
 
         converged: Final = eventually(now_redacted, lambda values: values[0], seconds=120)
+        assert converged[0]
+
+
+@pytest.mark.timeout(280)
+def test_f3_key_logging_callback_vars_flip_takes_effect(rig: Rig) -> None:
+    secret: Final = _secret_prompt()
+    with rig.proxy.scenario() as scenario:
+        model: Final = scenario.model(api_base=rig.provider.url + "/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[model], metadata=_logging_callback_vars(True))
+        denied: Final = rig.proxy.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": secret}]}, key=key
+        )
+        assert denied.status_code == 400, denied.text
+        _assert_failure_redacted(rig, model, secret, _call_id(denied))
+        rig.proxy.post("/key/update", {"key": key, "metadata": _logging_callback_vars(False)})
+
+        def now_raw() -> tuple[bool, ...]:
+            probe: Final = _secret_prompt()
+            fired: Final = rig.proxy.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": probe}]},
+                key=key,
+            )
+            assert fired.status_code == 400, fired.text
+            events: Final = eventually(
+                lambda: tuple(
+                    event for event in rig.failure_events(model) if event.get("litellm_call_id") == _call_id(fired)
+                ),
+                lambda values: len(values) == 1,
+                seconds=20,
+            )
+            return (probe in json.dumps(events[0]),)
+
+        converged: Final = eventually(now_raw, lambda values: values[0], seconds=120)
         assert converged[0]
 
 
