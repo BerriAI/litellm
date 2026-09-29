@@ -9,6 +9,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -809,7 +810,12 @@ def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(clie
 
 @pytest.fixture
 def routing_status_router(monkeypatch):
-    """Router with one paused (blocked) deployment and two active ones."""
+    """Router with one paused (blocked) deployment and two active ones.
+
+    The real `_apply_search_filter_to_models` runs (its search path is what
+    the combined search+status tests exercise); only the bounded DB fetch is
+    stubbed so tests don't need Prisma.
+    """
     model_list = [
         {
             "model_name": "paused-model",
@@ -836,11 +842,11 @@ def routing_status_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
-    monkeypatch.setattr(
-        proxy_server,
-        "_apply_search_filter_to_models",
-        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
-    )
+
+    async def fake_fetch_db_models_for_search(**kwargs):
+        return [], 0
+
+    monkeypatch.setattr(proxy_server, "_fetch_db_models_for_search", fake_fetch_db_models_for_search)
     monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
 
     import litellm.proxy.agent_endpoints.model_list_helpers as mlh
@@ -875,6 +881,58 @@ def test_v2_model_info_sort_by_blocked_puts_active_first(client, auth_as, routin
         response = client.get("/v2/model/info", params={"sortBy": "blocked", "sortOrder": "asc"})
     assert response.status_code == 200
     assert _model_names(response.json()) == ["active-model", "another-active", "paused-model"]
+
+
+def test_v2_model_info_search_and_blocked_filter_combine(client, auth_as, routing_status_router):
+    """`search` + `blocked` compose: matches of the other status are excluded
+    and the totals describe exactly the filtered set."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"search": "openai", "blocked": "true"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert _model_names(payload) == ["paused-model"]
+    assert payload["total_count"] == 1
+
+
+def test_fetch_db_models_for_search_pushes_blocked_into_the_where(monkeypatch):
+    """The bounded DB fetch must filter by routing status itself, or rows of
+    the other status consume the page budget before status filtering runs."""
+    captured: dict = {}
+
+    class FakeTable:
+        async def count(self, where=None):
+            captured["count_where"] = where
+            return 0
+
+        async def find_many(self, where=None, take=None):
+            captured["find_where"] = where
+            return []
+
+    class FakeRepository:
+        def __init__(self, client):
+            self.table = FakeTable()
+
+    monkeypatch.setattr(proxy_server, "ModelRepository", FakeRepository)
+
+    async def run():
+        await proxy_server._fetch_db_models_for_search(
+            prisma_client=MagicMock(),
+            proxy_config=MagicMock(),
+            search_lower="openai",
+            db_model_ids_in_router=set(),
+            router_models_count=0,
+            page=1,
+            size=50,
+            sort_by=None,
+            is_byok_outside_caller_teams=lambda info: False,
+            blocked=True,
+        )
+
+    asyncio.run(run())
+
+    where = captured["count_where"]
+    assert {"model_info": {"path": ["blocked"], "equals": True}} in where["AND"]
+    assert {"model_info": {"path": ["blocked"], "equals": False}} not in where["AND"]
 
 
 def test_v2_model_info_search_matches_litellm_model_name(client, auth_as, monkeypatch):

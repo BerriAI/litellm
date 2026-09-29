@@ -14675,6 +14675,7 @@ async def _fetch_db_models_for_search(
     sort_by: str | None,
     is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
     model_name: str | None = None,
+    blocked: bool | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
@@ -14706,6 +14707,10 @@ async def _fetch_db_models_for_search(
         if model_name is None
         else [{"model_name": model_name}]
     )
+    # Status filter runs inside the DB query too: the fetch is capped, so
+    # matches of the other status must not consume the page budget.
+    if blocked is not None:
+        match_conditions.append({"model_info": {"path": ["blocked"], "equals": blocked}})
     if db_model_ids_in_router:
         match_conditions.append({"model_id": {"not": {"in": list(db_model_ids_in_router)}}})
     db_where_condition: Final[dict[str, Any]] = {"AND": match_conditions}
@@ -14754,6 +14759,7 @@ async def _apply_search_filter_to_models(
     size: int = 50,
     sort_by: str | None = None,
     model_name: str | None = None,
+    blocked: bool | None = None,
 ) -> tuple[list[dict[str, Any]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -14774,6 +14780,9 @@ async def _apply_search_filter_to_models(
         sort_by: Sort field. When set, results must be sorted across the
             full match set, so the DB fetch is capped at
             ``_SORTED_SEARCH_DB_FETCH_CAP`` instead of one page.
+        blocked: Routing-status filter (false = active, true = paused). Applied
+        to the router matches and pushed into the DB query, so rows of the
+        other status never consume the bounded fetch.
         model_name: Exact ``model_name`` the caller already narrowed
             ``all_models`` to (``?model=``). The DB query matches it
             exactly instead of the substring, and is skipped when the
@@ -14819,7 +14828,9 @@ async def _apply_search_filter_to_models(
     filtered_router_models: Final = [
         m
         for m in all_models
-        if _model_matches_search(m) and not _is_byok_outside_caller_teams(m.get("model_info") or {})
+        if _model_matches_search(m)
+        and _matches_routing_status(m, blocked)
+        and not _is_byok_outside_caller_teams(m.get("model_info") or {})
     ]
 
     # Separate filtered models into config vs db models, and track db model IDs
@@ -14856,6 +14867,7 @@ async def _apply_search_filter_to_models(
                 sort_by=sort_by,
                 is_byok_outside_caller_teams=_is_byok_outside_caller_teams,
                 model_name=model_name,
+                blocked=blocked,
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
@@ -15028,6 +15040,19 @@ def _model_in_access_group(model: Mapping[str, object], access_group: str) -> bo
     return isinstance(access_groups, (list, tuple)) and access_group in access_groups
 
 
+def _matches_routing_status(model: Mapping[str, object], blocked: bool | None) -> bool:
+    """True when the deployment matches the requested routing status.
+
+    Guarded on `is True` / `is False` because direct calls that bypass FastAPI
+    pass the truthy Query sentinel as the default, which must not filter (same
+    pattern as `exclude_auto_routers`). Entries without a `blocked` flag (e.g.
+    A2A agents) are neither active nor paused, so they match neither status.
+    """
+    if blocked is True or blocked is False:
+        return (model.get("model_info") or {}).get("blocked") is blocked
+    return True
+
+
 def _matches_model_info_filters(
     model: Mapping[str, object],
     exclude_auto_routers: bool | None,
@@ -15039,14 +15064,8 @@ def _matches_model_info_filters(
         return False
     if isinstance(access_group, str) and not _model_in_access_group(model, access_group):
         return False
-    # Routing-status filter. Guarded on `is True` / `is False` because direct
-    # calls that bypass FastAPI pass the truthy Query sentinel as the default,
-    # which must not filter (same pattern as `exclude_auto_routers`). Entries
-    # without a `blocked` flag (e.g. A2A agents) are neither active nor paused,
-    # so they drop out of both filtered views.
-    if blocked is True or blocked is False:
-        if (model.get("model_info") or {}).get("blocked") is not blocked:
-            return False
+    if not _matches_routing_status(model, blocked):
+        return False
     return wildcard_only is not True or "*" in str(model.get("model_name") or "")
 
 
@@ -15476,6 +15495,7 @@ async def model_info_v2(
             size=size,
             sort_by=sortBy,
             model_name=model,
+            blocked=blocked,
         )
 
     if user_models_only:
