@@ -61,6 +61,15 @@ OFF_PEAK_WINDOW: Final[JsonSchema] = {
 }
 
 OBJECT_KEYS: dict[str, JsonSchema] = {
+    "bedrock_mantle": {
+        "type": "object",
+        "description": (
+            "Bedrock Mantle ids this runtime row also serves, each mapped to that surface's own limits, endpoints "
+            "and capability flags. litellm derives a bedrock_mantle/<id> entry priced from this row."
+        ),
+        "additionalProperties": {"type": "object"},
+        "minProperties": 1,
+    },
     "off_peak_pricing": {
         "type": "object",
         "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",

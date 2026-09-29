@@ -176,6 +176,32 @@ def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
     assert not validator.is_valid({"some-model": {**OFF_PEAK_ENTRY, "off_peak_pricing": block}})
 
 
+MANTLE_HOST_ENTRY: Final = MappingProxyType(
+    {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "input_cost_per_token": 5e-06,
+        "bedrock_mantle": {"openai.gpt-x": {"mode": "responses", "supported_endpoints": ["/v1/responses"]}},
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "block,valid",
+    [
+        ({"openai.gpt-x": {"mode": "responses"}}, True),
+        ({}, False),
+        ({"openai.gpt-x": "responses"}, False),
+        ("openai.gpt-x", False),
+    ],
+)
+def test_generator_classifies_bedrock_mantle_as_a_map_of_surface_blocks(block: object, valid: bool):
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(MANTLE_HOST_ENTRY)})))
+    validator = build_validator(schema)
+    assert validator.is_valid({"some-model": {**MANTLE_HOST_ENTRY, "bedrock_mantle": block}}) is valid
+
+
 def find_duplicate_keys(path: Path) -> list[str]:
     duplicates: list[str] = []
 
