@@ -300,7 +300,7 @@
       "registry_url": null,
       "transport": "stdio",
       "command": "npx",
-      "args": ["-y", "@supabase/mcp-server-supabase"],
+      "args": ["-y", "@supabase/mcp-server-supabase", "--read-only", "--project-ref=<your-project-ref>"],
       "env_vars": [
         {"name": "SUPABASE_ACCESS_TOKEN", "description": "Supabase Personal Access Token", "secret": true}
       ]
