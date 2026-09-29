@@ -5791,6 +5791,7 @@ async def _check_team_member_budget(
                 counter_key=f"spend:team_member:{valid_token.user_id}:{team_object.team_id}",
                 fallback_spend=team_member_spend,
                 max_budget=team_member_budget,
+                fallback_authoritative=loaded_membership is None,
             )
 
             if not math.isfinite(team_member_budget):
