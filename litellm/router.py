@@ -178,6 +178,7 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.router_utils.common_utils import (
     _is_proxy_admin_request,
     filter_team_based_models,
+    filter_tool_protocol_deployments,
     filter_web_search_deployments,
     format_fallback_outcome_message,
     format_no_fallback_group_message,
@@ -12972,6 +12973,11 @@ class Router:
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
+        healthy_deployments = filter_tool_protocol_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
                 raise litellm.ServiceUnavailableError(
@@ -14150,6 +14156,11 @@ class Router:
             healthy_deployments = _pre_cooldown_deployments
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
+
+        healthy_deployments = filter_tool_protocol_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
 
         # filter pre-call checks
         if self.enable_pre_call_checks and (messages is not None or input is not None):

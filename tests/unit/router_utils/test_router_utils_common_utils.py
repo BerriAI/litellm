@@ -11,6 +11,7 @@ from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
     filter_team_based_models,
+    filter_tool_protocol_deployments,
     filter_web_search_deployments,
     provider_for_generic_call,
     resolve_model_group_alias,
@@ -352,6 +353,69 @@ class TestFilterWebSearchDeployments:
         result = filter_web_search_deployments(deployment, request_kwargs)
         # Should return the dict unchanged, not filter it
         assert result == deployment
+
+
+class TestFilterToolProtocolDeployments:
+    """Regression tests for BerriAI/litellm#43685: an OpenAI-format tool-calling
+    request must not be routed to a non-OpenAI-protocol deployment when an
+    OpenAI-protocol deployment is available in the same model group."""
+
+    @pytest.fixture
+    def mixed_protocol_deployments(self) -> list[dict]:
+        return [
+            {
+                "model_name": "claude-4.6-sonnet",
+                "litellm_params": {"model": "openai/claude-4.6-sonnet"},
+                "model_info": {"id": "openai-deployment"},
+            },
+            {
+                "model_name": "claude-4.6-sonnet",
+                "litellm_params": {"model": "anthropic/claude-4.6-sonnet"},
+                "model_info": {"id": "anthropic-deployment"},
+            },
+        ]
+
+    @staticmethod
+    def _openai_tool_kwargs() -> dict:
+        return {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
+
+    def test_openai_tool_request_keeps_only_openai_protocol(self, mixed_protocol_deployments):
+        result = filter_tool_protocol_deployments(mixed_protocol_deployments, self._openai_tool_kwargs())
+        assert [d["model_info"]["id"] for d in result] == ["openai-deployment"]
+
+    def test_no_tools_keeps_all(self, mixed_protocol_deployments):
+        assert filter_tool_protocol_deployments(mixed_protocol_deployments, {}) == mixed_protocol_deployments
+
+    def test_empty_tools_keeps_all(self, mixed_protocol_deployments):
+        assert filter_tool_protocol_deployments(mixed_protocol_deployments, {"tools": []}) == mixed_protocol_deployments
+
+    def test_anthropic_format_tools_keeps_all(self, mixed_protocol_deployments):
+        request_kwargs = {"tools": [{"name": "get_weather", "input_schema": {"type": "object"}}]}
+        assert (
+            filter_tool_protocol_deployments(mixed_protocol_deployments, request_kwargs) == mixed_protocol_deployments
+        )
+
+    def test_no_openai_protocol_deployment_keeps_all_for_translation(self):
+        deployments = [
+            {"litellm_params": {"model": "anthropic/claude"}, "model_info": {"id": "a1"}},
+            {"litellm_params": {"model": "bedrock/anthropic.claude"}, "model_info": {"id": "b1"}},
+        ]
+        result = filter_tool_protocol_deployments(deployments, self._openai_tool_kwargs())
+        assert result == deployments
+
+    def test_unresolvable_provider_is_kept(self, mixed_protocol_deployments):
+        deployments = mixed_protocol_deployments + [
+            {"litellm_params": {"model": "no-provider-knows-this-model"}, "model_info": {"id": "mystery"}}
+        ]
+        result = filter_tool_protocol_deployments(deployments, self._openai_tool_kwargs())
+        assert [d["model_info"]["id"] for d in result] == ["openai-deployment", "mystery"]
+
+    def test_dict_deployment_passthrough(self):
+        deployment = {"litellm_params": {"model": "anthropic/x"}, "model_info": {"id": "d1"}}
+        assert filter_tool_protocol_deployments(deployment, self._openai_tool_kwargs()) is deployment
+
+    def test_none_kwargs_passthrough(self, mixed_protocol_deployments):
+        assert filter_tool_protocol_deployments(mixed_protocol_deployments, None) == mixed_protocol_deployments
 
 
 def test_invalidate_model_group_info_cache():

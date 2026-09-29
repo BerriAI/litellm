@@ -18803,3 +18803,44 @@ async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: E
             await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]
+
+
+def _mixed_protocol_model_list():
+    return [
+        {
+            "model_name": "claude-4.6-sonnet",
+            "litellm_params": {"model": "openai/claude-4.6-sonnet", "api_key": "fake-key"},
+        },
+        {
+            "model_name": "claude-4.6-sonnet",
+            "litellm_params": {"model": "anthropic/claude-4.6-sonnet", "api_key": "fake-key"},
+        },
+    ]
+
+
+def test_router_openai_tool_request_selects_openai_protocol_deployment():
+    """BerriAI/litellm#43685: in a mixed-protocol model group, an OpenAI-format
+    tool-calling request must only select the OpenAI-protocol deployment."""
+    router = litellm.Router(model_list=_mixed_protocol_model_list(), routing_strategy="simple-shuffle")
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
+    for _ in range(20):
+        deployment = router.get_available_deployment(
+            model="claude-4.6-sonnet",
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={"tools": tools},
+        )
+        assert deployment["litellm_params"]["model"] == "openai/claude-4.6-sonnet"
+
+
+@pytest.mark.asyncio
+async def test_router_openai_tool_request_selects_openai_protocol_deployment_async():
+    """BerriAI/litellm#43685: same guarantee on the async deployment-selection path."""
+    router = litellm.Router(model_list=_mixed_protocol_model_list(), routing_strategy="simple-shuffle")
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
+    for _ in range(20):
+        deployment = await router.async_get_available_deployment(
+            model="claude-4.6-sonnet",
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={"tools": tools},
+        )
+        assert deployment["litellm_params"]["model"] == "openai/claude-4.6-sonnet"
