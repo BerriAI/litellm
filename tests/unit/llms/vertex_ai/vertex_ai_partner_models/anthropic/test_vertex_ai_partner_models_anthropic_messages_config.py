@@ -126,6 +126,60 @@ def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
     assert "dangerous-tool-use-2026-09-03" not in updated_headers.get("anthropic-beta", "")
 
 
+def _validate_vertex_headers(client_headers, messages):
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "global",
+        "vertex_credentials": "{}",
+    }
+
+    with (
+        patch.object(config, "_ensure_access_token", return_value=("token", "test-project")),
+        patch.object(config, "get_complete_vertex_url", return_value="https://mock-url"),
+    ):
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers=client_headers,
+            model="claude-opus-5-5",
+            messages=messages,
+            optional_params={"max_tokens": 64},
+            litellm_params=litellm_params,
+            api_base=None,
+        )
+    return updated_headers
+
+
+@pytest.mark.parametrize(
+    "client_headers",
+    [{"anthropic-beta": "per-turn-control-2026-07-01"}, {}],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+def test_per_message_output_config_reaches_vertex_with_per_turn_control_beta(client_headers, monkeypatch):
+    """Vertex rejects a message-level `output_config` as an extra input unless the per-turn-control beta is present, so the beta must survive the Vertex beta filter."""
+    from litellm import anthropic_beta_headers_manager
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        {"role": "system", "content": [{"type": "text", "text": "# Environment"}], "output_config": {"effort": "low"}},
+    ]
+
+    filtered = update_headers_with_filtered_beta(
+        headers=_validate_vertex_headers(client_headers, messages), provider="vertex_ai"
+    )
+
+    assert filtered["anthropic-beta"].split(",").count("per-turn-control-2026-07-01") == 1
+
+
+def test_no_per_message_output_config_leaves_per_turn_control_beta_out():
+    headers = _validate_vertex_headers({}, [{"role": "user", "content": "Hello"}])
+
+    assert "per-turn-control-2026-07-01" not in headers.get("anthropic-beta", "")
+
+
 def test_web_search_header_not_added_without_tool():
     """Test that beta header is NOT added when web search tool is not present"""
     config = VertexAIPartnerModelsAnthropicMessagesConfig()
