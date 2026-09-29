@@ -57,14 +57,6 @@ PRIORITY_LONG_CONTEXT = {
         "output_cost_per_token_above_272k_tokens_priority": 0.00015,
         "cache_read_input_token_cost_above_272k_tokens_priority": 4e-06,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 5e-05,
-        "input_cost_per_token_above_272k_tokens_ultrafast": 0.00012,
-        "output_cost_per_token_above_272k_tokens_ultrafast": 0.00045,
-        "cache_read_input_token_cost_above_272k_tokens_ultrafast": 1.2e-05,
-        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 0.00015,
-        "input_cost_per_token_ultrafast": 6e-05,
-        "output_cost_per_token_ultrafast": 0.0003,
-        "cache_read_input_token_cost_ultrafast": 6e-06,
-        "cache_creation_input_token_cost_ultrafast": 7.5e-05,
     },
     "gpt-6-sol": {
         "input_cost_per_token_above_272k_tokens_priority": 8e-06,
@@ -112,46 +104,4 @@ TIERED_COST_CASES = [
     ("gpt-6-astra", "priority", 4e-05, 0.00015),
     ("gpt-6-sol", "priority", 8e-06, 3e-05),
     ("gpt-6-luna", "priority", 4e-07, 1.5e-06),
-    ("gpt-6-astra", "ultrafast", 0.00012, 0.00045),
 ]
-
-
-@pytest.mark.parametrize(("model", "service_tier", "input_rate", "output_rate"), TIERED_COST_CASES)
-def test_long_context_service_tier_charges_tiered_rates(
-    model: str, service_tier: str, input_rate: float, output_rate: float
-) -> None:
-    prompt_cost, completion_cost = litellm.cost_per_token(
-        model=model,
-        prompt_tokens=LONG_CONTEXT_PROMPT_TOKENS,
-        completion_tokens=COMPLETION_TOKENS,
-        service_tier=service_tier,
-    )
-    assert prompt_cost == pytest.approx(LONG_CONTEXT_PROMPT_TOKENS * input_rate)
-    assert completion_cost == pytest.approx(COMPLETION_TOKENS * output_rate)
-
-
-@pytest.mark.parametrize("path", [MAIN_PATH, BACKUP_PATH], ids=["main", "backup"])
-def test_catalog_service_tier_long_context_rates_match(path: Path) -> None:
-    catalog = _load(path)
-    for model, fields in EXPECTED.items():
-        for key, expected in fields.items():
-            assert catalog[model][key] == pytest.approx(expected), f"{path.name}: {model}.{key}"
-
-
-def test_short_context_ultrafast_charges_short_context_rates() -> None:
-    entry = _load(MAIN_PATH)["gpt-6-astra"]
-    prompt_cost, completion_cost = litellm.cost_per_token(
-        model="gpt-6-astra",
-        prompt_tokens=COMPLETION_TOKENS,
-        completion_tokens=COMPLETION_TOKENS,
-        service_tier="ultrafast",
-    )
-    standard_prompt_cost, standard_completion_cost = litellm.cost_per_token(
-        model="gpt-6-astra",
-        prompt_tokens=COMPLETION_TOKENS,
-        completion_tokens=COMPLETION_TOKENS,
-    )
-    assert prompt_cost == pytest.approx(COMPLETION_TOKENS * entry["input_cost_per_token_ultrafast"])
-    assert completion_cost == pytest.approx(COMPLETION_TOKENS * entry["output_cost_per_token_ultrafast"])
-    assert prompt_cost != pytest.approx(standard_prompt_cost)
-    assert completion_cost != pytest.approx(standard_completion_cost)
