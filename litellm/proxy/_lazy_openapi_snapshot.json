@@ -40534,6 +40534,400 @@
       }
     }
   },
+  "model_insights": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ModelInsightDailyMetric": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "failed_requests": {
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "model_group": {
+              "title": "Model Group",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "provider": {
+              "title": "Provider",
+              "type": "string"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "title": "Successful Requests",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "model_group",
+            "model",
+            "provider",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests",
+            "successful_requests",
+            "failed_requests",
+            "date"
+          ],
+          "title": "ModelInsightDailyMetric",
+          "type": "object"
+        },
+        "ModelInsightMetric": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "failed_requests": {
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "model_group": {
+              "title": "Model Group",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "provider": {
+              "title": "Provider",
+              "type": "string"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "title": "Successful Requests",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "model_group",
+            "model",
+            "provider",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests",
+            "successful_requests",
+            "failed_requests"
+          ],
+          "title": "ModelInsightMetric",
+          "type": "object"
+        },
+        "ModelInsightTask": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "task_type": {
+              "title": "Task Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_type",
+            "label",
+            "category"
+          ],
+          "title": "ModelInsightTask",
+          "type": "object"
+        },
+        "ModelInsightTaskMetric": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "failed_requests": {
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "model_group": {
+              "title": "Model Group",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "provider": {
+              "title": "Provider",
+              "type": "string"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "title": "Successful Requests",
+              "type": "integer"
+            },
+            "task_type": {
+              "title": "Task Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model_group",
+            "model",
+            "provider",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests",
+            "successful_requests",
+            "failed_requests",
+            "task_type"
+          ],
+          "title": "ModelInsightTaskMetric",
+          "type": "object"
+        },
+        "ModelInsightsResponse": {
+          "properties": {
+            "by_task": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightTaskMetric"
+              },
+              "title": "By Task",
+              "type": "array"
+            },
+            "daily": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightDailyMetric"
+              },
+              "title": "Daily",
+              "type": "array"
+            },
+            "end_date": {
+              "title": "End Date",
+              "type": "string"
+            },
+            "start_date": {
+              "title": "Start Date",
+              "type": "string"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightTask"
+              },
+              "title": "Tasks",
+              "type": "array"
+            },
+            "top_models": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightMetric"
+              },
+              "title": "Top Models",
+              "type": "array"
+            }
+          },
+          "required": [
+            "start_date",
+            "end_date",
+            "daily",
+            "top_models",
+            "by_task",
+            "tasks"
+          ],
+          "title": "ModelInsightsResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/model-insights": {
+        "get": {
+          "operationId": "get_model_insights_model_insights_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD, defaults to 365 days ago",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to 365 days ago",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD, defaults to today",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to today",
+                "title": "End Date"
+              }
+            },
+            {
+              "description": "Metric the top models are ranked by",
+              "in": "query",
+              "name": "metric",
+              "required": false,
+              "schema": {
+                "default": "tokens",
+                "description": "Metric the top models are ranked by",
+                "enum": [
+                  "requests",
+                  "spend",
+                  "tokens"
+                ],
+                "title": "Metric",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelInsightsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Model Insights",
+          "tags": [
+            "model_insights"
+          ]
+        }
+      }
+    }
+  },
   "policies": {
     "components": {
       "schemas": {
