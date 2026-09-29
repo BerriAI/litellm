@@ -32,7 +32,11 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
 )
-from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry, _configured_event_hooks
+from litellm.proxy.guardrails.guardrail_registry import (
+    GuardrailRegistry,
+    _configured_event_hooks,
+    parse_tolerant_litellm_params,
+)
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.prisma_protocols import TableActions
@@ -1212,7 +1216,10 @@ async def patch_guardrail(
 
         # Update litellm_params if default_on is provided or pii_entities_config is provided
         existing_litellm_params: Final = _as_str_object_mapping(dict(existing_guardrail.get("litellm_params", {})))
-        current_litellm_params: Final = LitellmParams(**existing_litellm_params)
+        current_litellm_params: Final = parse_tolerant_litellm_params(
+            existing_litellm_params,
+            existing_guardrail.get("guardrail_name") or "Unknown",
+        )
         requested_litellm_params: Final = (
             request.litellm_params.model_dump(exclude_unset=True) if request.litellm_params is not None else {}
         )
@@ -1281,7 +1288,10 @@ async def patch_guardrail(
                 guardrail=Guardrail(
                     guardrail_id=guardrail_id,
                     guardrail_name=existing_guardrail.get("guardrail_name") or "",
-                    litellm_params=LitellmParams(**existing_litellm_params),
+                    litellm_params=parse_tolerant_litellm_params(
+                        existing_litellm_params,
+                        existing_guardrail.get("guardrail_name") or "Unknown",
+                    ),
                     guardrail_info=existing_guardrail.get(
                         "guardrail_info",
                         {},  # mutable-ok: Guardrail's own constructor takes a plain dict

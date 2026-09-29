@@ -1393,8 +1393,9 @@ def test_logging_only_scope_observes_only_the_configured_direction_without_block
             assert detail["requestsEvaluated"] == len(scanned_directions), detail
 
 
-def test_logging_only_scope_without_logging_only_mode_is_ignored_at_load_and_keeps_blocking(
-    gateway: Gateway, tmp_path: Path
+@pytest.mark.parametrize("logging_only_scope", ("input", "Input"))
+def test_logging_only_scope_literal_or_mode_mismatch_is_ignored_at_load_and_keeps_blocking(
+    gateway: Gateway, tmp_path: Path, logging_only_scope: str
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
     prompt: Final = "synthetic invalid-scope prompt pineapple " + identity
@@ -1433,7 +1434,7 @@ def test_logging_only_scope_without_logging_only_mode_is_ignored_at_load_and_kee
                 "litellm_params": {
                     "guardrail": "generic_guardrail_api",
                     "mode": "pre_call",
-                    "logging_only_scope": "input",
+                    "logging_only_scope": logging_only_scope,
                     "default_on": True,
                     "blocked_words": [{"keyword": "pineapple", "action": "BLOCK"}],
                     "api_base": policy.url,

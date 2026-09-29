@@ -499,6 +499,24 @@ def _configure_callback_scoping(
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
 
 
+def parse_tolerant_litellm_params(
+    litellm_params_data: Mapping[str, object],
+    guardrail_name: str,
+) -> LitellmParams:
+    try:
+        return LitellmParams(**litellm_params_data)
+    except ValidationError as validation_error:
+        if any(tuple(error["loc"]) != ("logging_only_scope",) for error in validation_error.errors()):
+            raise
+        verbose_proxy_logger.error(
+            "Guardrail %s: logging_only_scope=%r is not one of 'input', 'output' or 'both'. "
+            "Ignoring logging_only_scope; the guardrail keeps its configured mode.",
+            guardrail_name.replace("\r", "").replace("\n", ""),
+            str(litellm_params_data.get("logging_only_scope")).replace("\r", "").replace("\n", "")[:100],
+        )
+        return LitellmParams(**{**litellm_params_data, "logging_only_scope": None})
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -557,7 +575,10 @@ class InMemoryGuardrailHandler:
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
-            litellm_params = LitellmParams(**litellm_params_data)
+            if reject_invalid_logging_only_scope:
+                litellm_params = LitellmParams(**litellm_params_data)
+            else:
+                litellm_params = parse_tolerant_litellm_params(litellm_params_data, guardrail["guardrail_name"])
         else:
             litellm_params = litellm_params_data
 
@@ -803,6 +824,7 @@ class InMemoryGuardrailHandler:
     @staticmethod
     def _normalize_litellm_params_for_comparison(
         params: LitellmParams | Mapping[str, object] | None,
+        guardrail_name: str,
     ) -> Mapping[str, object] | None:
         """
         Render litellm_params to a canonical dict so an in-memory LitellmParams and
@@ -819,7 +841,7 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return LitellmParams(**params).model_dump()
+                return parse_tolerant_litellm_params(params, guardrail_name).model_dump()
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",
@@ -842,8 +864,12 @@ class InMemoryGuardrailHandler:
             return True
 
         # Compare litellm_params
-        existing_dict: Final = self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
-        new_dict: Final = self._normalize_litellm_params_for_comparison(new_guardrail.get("litellm_params"))
+        existing_dict: Final = self._normalize_litellm_params_for_comparison(
+            existing.get("litellm_params"), existing.get("guardrail_name", "Unknown")
+        )
+        new_dict: Final = self._normalize_litellm_params_for_comparison(
+            new_guardrail.get("litellm_params"), new_guardrail.get("guardrail_name", "Unknown")
+        )
 
         # Compare and identify specific differences
         changed_fields = {}

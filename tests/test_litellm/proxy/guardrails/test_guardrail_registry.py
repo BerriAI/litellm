@@ -7,11 +7,12 @@ from pydantic import ValidationError
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
-    get_guardrail_initializer_from_hooks,
     GuardrailRegistry,
     InMemoryGuardrailHandler,
+    get_guardrail_initializer_from_hooks,
+    parse_tolerant_litellm_params,
 )
-from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams, LoggingOnlyScope, Mode
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams, LoggingOnlyScope, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -473,6 +474,24 @@ def test_unnormalizable_db_params_register_as_changed_without_raising():
     malformed = {**raw, "default_on": "not-a-bool-xyz"}
     new = Guardrail(guardrail_id=gid, guardrail_name="cf", litellm_params=malformed)
     assert handler._has_guardrail_params_changed(gid, new) is True
+
+
+def test_invalid_scope_literal_db_params_compare_equal_after_normalization():
+    handler = InMemoryGuardrailHandler()
+    raw = _db_litellm_params()
+    gid = "77777777-7777-7777-7777-777777777777"
+    handler.IN_MEMORY_GUARDRAILS[gid] = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params=LitellmParams(**{**raw, "logging_only_scope": None}),
+    )
+    new = Guardrail(
+        guardrail_id=gid,
+        guardrail_name="cf",
+        litellm_params={**raw, "logging_only_scope": "Input"},
+    )
+
+    assert handler._has_guardrail_params_changed(gid, new) is False
 
 
 def _all_callback_lists():
@@ -960,6 +979,19 @@ class _LoggingOnlyScopeNativeGuardrail(_LoggingOnlyScopeSupportedGuardrail):
     use_native_lifecycle_hooks: ClassVar[bool] = True
 
 
+def _invalid_scope_content_filter_guardrail() -> Guardrail:
+    return Guardrail(
+        guardrail_id="invalid-scope-content-filter-test",
+        guardrail_name="invalid-scope-content-filter",
+        litellm_params={
+            "guardrail": "litellm_content_filter",
+            "mode": "pre_call",
+            "logging_only_scope": "Input",
+            "blocked_words": [{"keyword": "pineapple", "action": "BLOCK"}],
+        },
+    )
+
+
 class TestLoggingOnlyScopeValidation:
     def _initialize(
         self,
@@ -1093,6 +1125,57 @@ class TestLoggingOnlyScopeValidation:
     def test_invalid_scope_fails_litellm_params_validation(self) -> None:
         with pytest.raises(ValidationError):
             LitellmParams(guardrail="test", mode="logging_only", logging_only_scope="request")
+
+    def test_invalid_scope_literal_keeps_content_filter_registered_and_blocking(self) -> None:
+        import litellm
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+
+        handler: Final = InMemoryGuardrailHandler()
+        callback_lists: Final = _all_callback_lists()
+        callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+        guardrail: Final = _invalid_scope_content_filter_guardrail()
+
+        try:
+            result: Final = handler.initialize_guardrail(guardrail=guardrail, source="config")
+            assert result is not None
+            callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+            assert isinstance(callback, ContentFilterGuardrail)
+            assert callback in litellm.callbacks
+            assert callback.logging_only_scope is None
+            assert callback.event_hook == GuardrailEventHooks.pre_call
+            assert callback._check_blocked_words("pineapple") is not None
+        finally:
+            handler.delete_in_memory_guardrail(guardrail["guardrail_id"])
+            for callback_list, snapshot in zip(callback_lists, callback_snapshots):
+                callback_list[:] = snapshot
+
+    def test_invalid_scope_literal_is_rejected_for_strict_initialization_without_callback_leakage(self) -> None:
+        handler: Final = InMemoryGuardrailHandler()
+        callback_lists: Final = _all_callback_lists()
+        callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
+
+        with pytest.raises(ValueError):
+            handler.initialize_guardrail(
+                guardrail=_invalid_scope_content_filter_guardrail(),
+                source="config",
+                reject_invalid_logging_only_scope=True,
+            )
+
+        assert all(callback_list == snapshot for callback_list, snapshot in zip(callback_lists, callback_snapshots))
+
+    def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_tolerant_litellm_params(
+                {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "pre_call",
+                    "logging_only_scope": "Input",
+                    "default_on": "not-a-bool",
+                },
+                "invalid-scope-content-filter",
+            )
 
 
 @pytest.mark.asyncio
