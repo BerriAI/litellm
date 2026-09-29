@@ -146,5 +146,7 @@ def test_model_info_keeps_provider_model_for_expanded_deployments(wildcard_proxy
         )
     )
 
-    bad = [row.model_name for row in info.data if "system.ai.databricks/" in row.litellm_params.model]
+    expanded = [row for row in info.data if row.model_name.startswith("databricks/system.ai.")]
+    assert expanded, "model/info returned no expanded rows for databricks/system.ai.*"
+    bad = [row.model_name for row in expanded if "system.ai.databricks/" in row.litellm_params.model]
     assert not bad, f"litellm_params.model carries the corrupted expanded name: {bad}"
