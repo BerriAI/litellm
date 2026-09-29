@@ -278,11 +278,7 @@ class GraySwanGuardrail(CustomGuardrail):
         messages: Final = (
             *context,
             *(_MonitorMessage(role=role, content=text) for text in texts),
-            *(
-                (_MonitorMessage(role="assistant", tool_calls=response_tool_calls),)
-                if response_tool_calls
-                else ()
-            ),
+            *((_MonitorMessage(role="assistant", tool_calls=response_tool_calls),) if response_tool_calls else ()),
         )
 
         # Get dynamic params from request metadata
@@ -622,9 +618,7 @@ class GraySwanGuardrail(CustomGuardrail):
         request_route: Final = (
             litellm_metadata.get("user_api_key_request_route") if isinstance(litellm_metadata, Mapping) else None
         )
-        route_call_types: Final = (
-            get_call_types_for_route(request_route) if isinstance(request_route, str) else None
-        )
+        route_call_types: Final = get_call_types_for_route(request_route) if isinstance(request_route, str) else None
         call_type: Final = (
             (route_call_types[0].value if route_call_types else None)
             or (logging_obj.call_type if logging_obj is not None else None)
