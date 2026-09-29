@@ -12,12 +12,14 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
+from litellm.proxy.db.db_lookup_gate import LoopBoundSemaphore, db_lookup_stall_tracker
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
@@ -67,12 +69,14 @@ class _FakePrismaClient:
         error: Exception | None = None,
         end_user_row: SimpleNamespace | None = None,
         end_user_error: Exception | None = None,
+        project_row: SimpleNamespace | None = None,
     ) -> None:
         self.db = SimpleNamespace(
             litellm_budgetwindowspend=_FakeFindUniqueTable(row=row, error=error),
             litellm_spendlogs=_FakeSpendLogsTable(total=spend_logs_total),
             litellm_endusertable=_FakeFindUniqueTable(row=end_user_row, error=end_user_error),
             litellm_verificationtoken=_InFlightCountingTable(),
+            litellm_projecttable=_FakeFindUniqueTable(row=project_row),
         )
 
 
@@ -426,6 +430,46 @@ async def test_from_db_bounds_in_flight_prisma_requests_across_counter_keys():
 
     assert results == [1.0] * burst
     assert prisma.db.litellm_verificationtoken.max_in_flight == PROXY_DB_LOOKUP_MAX_CONCURRENCY
+
+
+@pytest.mark.asyncio
+async def test_from_db_reseeds_project_counter_from_the_project_row():
+    prisma: Final = _FakePrismaClient(project_row=SimpleNamespace(project_id="proj-1", spend=7.25))
+
+    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:project:proj-1") == 7.25
+    assert prisma.db.litellm_projecttable.where_clauses == [{"project_id": "proj-1"}]
+
+
+@pytest.mark.asyncio
+async def test_from_db_returns_none_for_a_missing_project_row():
+    prisma: Final = _FakePrismaClient(project_row=None)
+
+    assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:project:proj-1") is None
+
+
+@pytest.mark.asyncio
+async def test_from_db_deadline_covers_the_wait_for_a_gate_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A saturated gate must fail the lookup at the deadline instead of parking
+    the request on a gate slot outside the bounded window."""
+    gate: Final = LoopBoundSemaphore(1)
+    monkeypatch.setattr("litellm.proxy.db.spend_counter_reseed.db_lookup_gate", gate)
+    monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05)
+    find_unique: Final = AsyncMock()
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_verificationtoken=SimpleNamespace(find_unique=find_unique))
+    )
+    db_lookup_stall_tracker.clear()
+    try:
+        async with gate.current():
+            result: Final = await asyncio.wait_for(
+                SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:key:abc"),
+                timeout=1.0,
+            )
+        assert result is None
+        assert db_lookup_stall_tracker.stalled_within(60.0)
+        find_unique.assert_not_called()
+    finally:
+        db_lookup_stall_tracker.clear()
 
 
 @pytest.mark.asyncio

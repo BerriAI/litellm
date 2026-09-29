@@ -7,6 +7,8 @@ export interface AgentAttachedKey {
 }
 
 export type AgentObjectPermission = components["schemas"]["AgentObjectPermission"];
+export type AgentKillSwitchConfig = components["schemas"]["AgentKillSwitchConfig"];
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
 
 export interface Agent {
   agent_id: string;
@@ -21,6 +23,8 @@ export interface Agent {
     [key: string]: any;
   };
   object_permission?: AgentObjectPermission;
+  access_group_ids?: string[] | null;
+  kill_switch?: AgentKillSwitchConfig | null;
   keys?: AgentAttachedKey[] | null;
   spend?: number;
   tpm_limit?: number | null;

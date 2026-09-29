@@ -42,6 +42,7 @@ vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => 
 }));
 
 vi.mock("./PromptCompressionTab", () => ({ __esModule: true, default: () => <div /> }));
+vi.mock("./PromptCachingRequestsTable", () => ({ default: () => <div /> }));
 
 import CostOptimizationView from "./CostOptimizationView";
 

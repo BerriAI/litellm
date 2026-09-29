@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import contextvars
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
@@ -288,9 +290,12 @@ def _highlighted_choice(session: AppSession) -> Optional[str]:
     if session.app is None:
         return None
     controls = [c for c in session.app.layout.find_all_controls() if isinstance(c, InquirerPyFuzzyControl)]
-    if not controls or controls[0].choice_count == 0:
+    if not controls:
         return None
-    return controls[0].selection["name"]
+    try:
+        return controls[0].selection["name"]
+    except IndexError:
+        return None
 
 
 async def _wait_until_highlighted(session: AppSession, name: str) -> None:
@@ -309,21 +314,35 @@ def _drive_fuzzy_pick(
 ) -> List[str]:
     """Drives the real InquirerPy fuzzy prompt through prompt_toolkit's own test input/output,
     exercising the actual widget (filtering, tab-to-toggle, enter-to-confirm) rather than mocking
-    it away. asyncio.to_thread propagates the create_app_session context into the worker thread
-    running _fuzzy_pick's synchronous .execute() call. Each key event names the choice the widget
-    must highlight before the next key is sent (None sends the next key immediately)."""
+    it away. The worker thread running _fuzzy_pick's synchronous .execute() call inherits the
+    create_app_session context. Each key event names the choice the widget must highlight before
+    the next key is sent (None sends the next key immediately). The widget swaps its filtered list
+    before it clamps the highlight index on the next redraw, so the poller only reads a name once
+    the index is in range. If driving the widget fails, ctrl-c ends the prompt so the worker thread
+    exits and the failure surfaces instead of hanging the event loop shutdown."""
 
     async def _run() -> List[str]:
         with create_pipe_input() as pipe_input:
             with create_app_session(input=pipe_input, output=DummyOutput()) as session:
-                task = asyncio.ensure_future(
-                    asyncio.to_thread(wizard_module._fuzzy_pick, models, prompt_label, multiselect)
+                prompt = asyncio.get_running_loop().run_in_executor(
+                    None,
+                    contextvars.copy_context().run,
+                    wizard_module._fuzzy_pick,
+                    models,
+                    prompt_label,
+                    multiselect,
                 )
-                for text, highlighted in key_events:
-                    pipe_input.send_text(text)
-                    if highlighted is not None:
-                        await _wait_until_highlighted(session, highlighted)
-                return await task
+                try:
+                    for text, highlighted in key_events:
+                        pipe_input.send_text(text)
+                        if highlighted is not None:
+                            await _wait_until_highlighted(session, highlighted)
+                except BaseException:
+                    pipe_input.send_text("\x03")
+                    with contextlib.suppress(BaseException):
+                        await prompt
+                    raise
+                return await prompt
 
     return asyncio.run(_run())
 

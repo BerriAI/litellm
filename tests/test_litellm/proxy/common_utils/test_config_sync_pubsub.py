@@ -47,6 +47,7 @@ _EXPECTED_CONFIG_SYNCED_TABLE_NAMES = frozenset(
         "litellm_proxymodeltable",
         "litellm_searchtoolstable",
         "litellm_ssoconfig",
+        "litellm_uisettings",
     }
 )
 
@@ -80,13 +81,24 @@ class _FailingPublishRedisClient(Redis):
         raise ConnectionError("redis down")
 
 
-class _NotRedisClient:
-    def __init__(self) -> None:
+class _ScriptedPubSubClient:
+    """Pub/sub-capable client that is not a redis.asyncio.Redis.
+
+    Mirrors what RedisCache.init_pubsub_client returns for a cluster backend:
+    a node-level client exposing publish/pubsub without being an instance of
+    the standalone Redis class.
+    """
+
+    def __init__(self, pubsubs: Iterable["_QueuePubSub"]) -> None:
+        self._scripted_pubsubs = iter(pubsubs)
         self.published: List[Tuple[str, str]] = []
 
     async def publish(self, channel: str, message: str) -> int:
         self.published.append((channel, message))
         return 1
+
+    def pubsub(self) -> "_QueuePubSub":
+        return next(self._scripted_pubsubs)
 
 
 class _QueuePubSub:
@@ -158,14 +170,14 @@ class _FakeRedisCache:
         self._client = client
         self.namespace = namespace
 
-    def init_async_client(self) -> object:
+    def init_pubsub_client(self) -> object:
         return self._client
 
 
 class _ExplodingRedisCache:
     namespace: Optional[str] = None
 
-    def init_async_client(self) -> object:
+    def init_pubsub_client(self) -> object:
         raise ConnectionError("cannot connect")
 
 
@@ -214,13 +226,17 @@ async def test_publish_swallows_client_init_errors() -> None:
     await publish_config_change(redis_cache=_ExplodingRedisCache(), object_type="litellm_proxymodeltable")
 
 
-async def test_publish_skips_clients_without_pubsub_support() -> None:
-    client = _NotRedisClient()
+async def test_publish_reaches_cluster_derived_pubsub_clients() -> None:
+    """LIT-8543: a cluster-backed cache returns a node-level client from
+    init_pubsub_client; publishes must go out on it instead of being skipped."""
+    client = _ScriptedPubSubClient(pubsubs=[])
     cache = _FakeRedisCache(client)
 
     await publish_config_change(redis_cache=cache, object_type="litellm_proxymodeltable")
 
-    assert client.published == []
+    assert client.published == [
+        (CONFIG_SYNC_CHANNEL, json.dumps({"object_type": "litellm_proxymodeltable"}))
+    ]
 
 
 async def test_subscriber_runs_injected_callbacks_in_order_on_message() -> None:
@@ -557,20 +573,26 @@ async def test_stop_before_start_is_a_noop() -> None:
     await subscriber.stop()
 
 
-async def test_subscriber_exits_without_callbacks_when_client_lacks_pubsub() -> None:
-    cache = _FakeRedisCache(_NotRedisClient())
+async def test_subscriber_subscribes_on_cluster_derived_pubsub_client() -> None:
+    """LIT-8543: the subscriber used to disable itself on cluster caches; now it
+    subscribes on the node-level client init_pubsub_client returns."""
+    pubsub = _QueuePubSub(initial_messages=[json.dumps({"object_type": "litellm_proxymodeltable"})])
+    cache = _FakeRedisCache(_ScriptedPubSubClient(pubsubs=[pubsub]))
     resyncs: List[str] = []
+    fired = asyncio.Event()
     subscriber = ConfigSyncSubscriber(
         redis_cache=cache,
-        resync_callbacks=(_recording_callback(resyncs, "resync", asyncio.Event()),),
+        resync_callbacks=(_recording_callback(resyncs, "resync", fired),),
+        debounce_seconds=0.01,
+        jitter_max_seconds=0.0,
     )
 
     subscriber.start()
-    task = subscriber._task
-    assert task is not None
-    await asyncio.wait_for(task, timeout=5)
+    await asyncio.wait_for(fired.wait(), timeout=5)
+    await subscriber.stop()
 
-    assert resyncs == []
+    assert pubsub.subscribed_channels == [CONFIG_SYNC_CHANNEL]
+    assert resyncs == ["resync"]
 
 
 class _FakeTableActions:
@@ -700,6 +722,33 @@ async def test_model_repository_write_publishes_via_live_coordination_cache() ->
     channel, message = client.published[0]
     assert channel == CONFIG_SYNC_CHANNEL
     assert json.loads(message) == {"object_type": "litellm_proxymodeltable"}
+
+
+async def test_ui_settings_write_publishes_via_live_coordination_cache() -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.proxy_server import _set_redis_usage_cache
+    from litellm.repositories.table_repositories import UISettingsRepository
+
+    client = _RecordingRedisClient()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_uisettings.upsert = AsyncMock(return_value={"id": "ui_settings"})
+    table = UISettingsRepository(prisma_client).table
+    assert isinstance(table, _PublishOnWriteActions)
+
+    previous_cache = proxy_server.redis_usage_cache
+    _set_redis_usage_cache(_FakeRedisCache(client))
+    try:
+        await table.upsert(
+            where={"id": "ui_settings"},
+            data={"create": {"id": "ui_settings"}, "update": {"ui_settings": "{}"}},
+        )
+    finally:
+        _set_redis_usage_cache(previous_cache)
+
+    assert len(client.published) == 1
+    channel, message = client.published[0]
+    assert channel == CONFIG_SYNC_CHANNEL
+    assert json.loads(message) == {"object_type": "litellm_uisettings"}
 
 
 async def _publish_calls_for_invalidated_param(param_name: str) -> List[Tuple[str, str]]:
