@@ -2,6 +2,7 @@
 Test for response_api_endpoints/endpoints.py
 """
 
+import logging
 import unittest
 from collections.abc import Mapping
 from typing import Any, Final, Literal
@@ -2583,24 +2584,35 @@ class TestStoreBackgroundResponseInManagedObjects:
         }
 
     @pytest.mark.asyncio
-    async def test_missing_enterprise_package_is_noop(self):
+    async def test_missing_enterprise_package_is_noop(self, caplog: pytest.LogCaptureFixture):
         import sys
 
         from litellm.proxy.response_api_endpoints.endpoints import (
             _store_background_response_in_managed_objects,
         )
 
+        response = self._response()
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.get_proxy_hook = MagicMock()
 
-        with patch.dict(sys.modules, {"litellm_enterprise": None}):
-            await _store_background_response_in_managed_objects(
-                response=self._response(),
-                proxy_logging_obj=proxy_logging_obj,
-                llm_router=MagicMock(),
-                user_api_key_dict=MagicMock(),
-            )
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            with patch.dict(sys.modules, {"litellm_enterprise": None}):
+                result = await _store_background_response_in_managed_objects(
+                    response=response,
+                    proxy_logging_obj=proxy_logging_obj,
+                    llm_router=MagicMock(),
+                    user_api_key_dict=MagicMock(),
+                )
 
+        assert result is None
+        assert response.id == "resp_bg123"
+        assert response.status == "queued"
+        assert any(
+            record.levelno == logging.DEBUG
+            and "litellm_enterprise not installed" in record.getMessage()
+            and response.id in record.getMessage()
+            for record in caplog.records
+        )
         proxy_logging_obj.get_proxy_hook.assert_not_called()
 
     @pytest.mark.asyncio
@@ -2659,7 +2671,7 @@ class TestStoreBackgroundResponseInManagedObjects:
         assert kwargs["file_purpose"] == "response"
 
     @pytest.mark.asyncio
-    async def test_skips_when_no_model_id(self):
+    async def test_skips_when_no_model_id(self, caplog: pytest.LogCaptureFixture):
         import sys
         import types
 
@@ -2675,18 +2687,29 @@ class TestStoreBackgroundResponseInManagedObjects:
 
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.get_proxy_hook = MagicMock(return_value=managed_files_obj)
+        response = self._response(model_id=None)
 
-        with patch.dict(
-            sys.modules,
-            self._enterprise_modules(managed_files_module=fake_module),
-        ):
-            await _store_background_response_in_managed_objects(
-                response=self._response(model_id=None),
-                proxy_logging_obj=proxy_logging_obj,
-                llm_router=MagicMock(),
-                user_api_key_dict=MagicMock(),
-            )
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+            with patch.dict(
+                sys.modules,
+                self._enterprise_modules(managed_files_module=fake_module),
+            ):
+                result = await _store_background_response_in_managed_objects(
+                    response=response,
+                    proxy_logging_obj=proxy_logging_obj,
+                    llm_router=MagicMock(),
+                    user_api_key_dict=MagicMock(),
+                )
 
+        assert result is None
+        assert response.id == "resp_bg123"
+        assert response.status == "queued"
+        assert any(
+            record.levelno == logging.WARNING
+            and "No model_id found" in record.getMessage()
+            and response.id in record.getMessage()
+            for record in caplog.records
+        )
         managed_files_obj.store_unified_object_id.assert_not_awaited()
 
     @pytest.mark.asyncio

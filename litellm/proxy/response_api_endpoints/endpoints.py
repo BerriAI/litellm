@@ -73,16 +73,17 @@ async def _store_background_response_in_managed_objects(
 ) -> None:
     try:
         importlib.import_module("litellm_enterprise")
-    except ImportError:
+        from litellm_enterprise.proxy.hooks.managed_files import (
+            _PROXY_LiteLLMManagedFiles,
+        )
+    except ImportError as error:
+        if error.name != "litellm_enterprise":
+            raise
         verbose_proxy_logger.debug(
             "litellm_enterprise not installed; skipping managed-object storage for background response %s",
             response.id,
         )
         return
-
-    from litellm_enterprise.proxy.hooks.managed_files import (
-        _PROXY_LiteLLMManagedFiles,
-    )
 
     managed_files_obj: Final = cast(
         _PROXY_LiteLLMManagedFiles | None,
