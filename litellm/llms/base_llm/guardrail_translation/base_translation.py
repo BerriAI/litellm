@@ -86,6 +86,7 @@ class BaseTranslation(ABC):
         """The authenticated key's identity as prefixed metadata, an allowlist safe to hand to guardrail vendors."""
         if user_api_key_dict is None:
             return {}
+        # Lazy: `import litellm` loads this module before litellm.Router exists, and litellm_pre_call_utils imports it
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         return {

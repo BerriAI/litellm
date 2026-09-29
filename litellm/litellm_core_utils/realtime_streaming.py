@@ -12,7 +12,9 @@ import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
@@ -29,7 +31,6 @@ if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
     from websockets.exceptions import ConnectionClosed
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import GuardrailEventHooks
 
     CLIENT_CONNECTION_CLASS = ClientConnection
@@ -124,9 +125,7 @@ DefaultLoggedRealTimeEventTypes: Final = [
 ]
 
 
-def _as_user_api_key_auth(user_api_key_dict: object) -> "UserAPIKeyAuth | None":
-    from litellm.proxy._types import UserAPIKeyAuth
-
+def _as_user_api_key_auth(user_api_key_dict: object) -> UserAPIKeyAuth | None:
     return user_api_key_dict if isinstance(user_api_key_dict, UserAPIKeyAuth) else None
 
 
@@ -838,7 +837,6 @@ class RealTimeStreaming:
         typed user messages and tool outputs use ``pre_call``.
         """
         from litellm.integrations.custom_guardrail import CustomGuardrail
-        from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
         from litellm.types.guardrails import GuardrailEventHooks
 
         if event_hooks is None:

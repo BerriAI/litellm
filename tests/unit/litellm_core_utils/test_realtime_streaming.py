@@ -17,6 +17,8 @@ from litellm.litellm_core_utils.realtime_streaming import (
     client_sent_openai_beta_realtime_header,
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import GraySwanGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -3555,11 +3557,6 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
 @pytest.mark.asyncio
 async def test_realtime_transcript_guardrail_receives_authenticated_identity(monkeypatch: pytest.MonkeyPatch):
     """Transcript guardrails get the session key's identity in litellm_metadata, as the chat path provides it."""
-    import litellm
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.guardrails import GuardrailEventHooks
-
     received_request_data = []
 
     class IdentityRecordingGuardrail(CustomGuardrail):
@@ -3594,11 +3591,6 @@ async def test_realtime_transcript_guardrail_receives_authenticated_identity(mon
 @pytest.mark.asyncio
 async def test_realtime_grayswan_payload_carries_only_identity(monkeypatch: pytest.MonkeyPatch):
     """Gray Swan forwards litellm_metadata verbatim, so realtime must hand it identity and no key secrets."""
-    import litellm
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import GraySwanGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
-
     vendor_payloads: list[dict[str, object]] = []
 
     class RecordingGraySwan(GraySwanGuardrail):
@@ -3652,10 +3644,6 @@ async def test_realtime_guardrail_gets_no_identity_from_non_auth_sdk_value(
     monkeypatch: pytest.MonkeyPatch, sdk_value: object
 ):
     """Only a proxy-authenticated UserAPIKeyAuth yields identity; an SDK-supplied value never raises or fakes one."""
-    import litellm
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
-
     received_request_data: list[dict[str, object]] = []
 
     class IdentityRecordingGuardrail(CustomGuardrail):
