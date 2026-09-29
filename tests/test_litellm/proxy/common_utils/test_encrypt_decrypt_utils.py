@@ -6,12 +6,16 @@ gate, and the backward-compatibility guarantees that let legacy XSalsa20-Poly130
 (nacl) ciphertext and new AES values coexist and decrypt correctly.
 """
 
+import re
+
 import pytest
 
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _V2_GCM_PREFIX,
+    decrypt_bearer_token,
     decrypt_value_helper,
+    encrypt_bearer_token,
     encrypt_value_helper,
 )
 
@@ -185,3 +189,30 @@ def test_decrypt_failure_debug_log_omits_raw_value(monkeypatch):
         "the failing key should still be named in the breadcrumb"
     )
     assert result == secret
+
+
+def test_bearer_token_opens_only_under_its_own_prefix():
+    token = encrypt_bearer_token("session", prefix="kind_a_")
+    relabeled = "kind_b_" + token.removeprefix("kind_a_")
+
+    assert decrypt_bearer_token(token, prefix="kind_a_") == "session"
+    assert decrypt_bearer_token(token, prefix="kind_b_") is None
+    assert decrypt_bearer_token(relabeled, prefix="kind_b_") is None
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_stored_value_is_not_a_bearer_token_even_when_reshaped(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+    stored = encrypt_value_helper("stored-secret")
+
+    for candidate in (stored, "kind_a_" + stored.removeprefix(_V2_GCM_PREFIX).rstrip("=")):
+        assert decrypt_bearer_token(candidate, prefix="kind_a_") is None
+
+
+@pytest.mark.parametrize("length", range(6))
+def test_bearer_token_uses_only_header_safe_characters(length: int):
+    token = encrypt_bearer_token("x" * length, prefix="kind_a_")
+
+    assert re.fullmatch(r"kind_a_[A-Za-z0-9_-]+", token), token
+    assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length
