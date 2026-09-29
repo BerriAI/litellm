@@ -4291,12 +4291,19 @@ def test_create_file_batch_uploads_over_daily_limit_get_429_and_only_valid_files
 
     try:
         invalid = _upload_batch(b"not json\n")
+        malformed_expiry = client.post(
+            "/v1/files",
+            files={"file": ("batch.jsonl", VALID_BATCH_LINE, "application/jsonl")},
+            data={"purpose": "batch", "expires_after[anchor]": "created_at"},
+            headers={"Authorization": "Bearer test-key"},
+        )
         allowed = [_upload_batch(VALID_BATCH_LINE) for _ in range(2)]
         rejected = _upload_batch(VALID_BATCH_LINE)
     finally:
         _teardown_batch_upload_endpoint()
 
     assert invalid.status_code == 400, invalid.text
+    assert malformed_expiry.status_code == 400, malformed_expiry.text
     assert [response.status_code for response in allowed] == [200, 200]
     assert rejected.status_code == 429, rejected.text
     assert rejected.headers["retry-after"] == str(86400 - 3615)

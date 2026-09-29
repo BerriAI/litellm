@@ -85,6 +85,12 @@ def test_record_limit_is_the_lowest_applicable_limit(key_metadata, team_metadata
             {},
             (),
         ),
+        (
+            UserAPIKeyAuth(api_key=None, user_id="u1", team_id="t1"),
+            {"max_batch_file_uploads_per_day": 5},
+            (_scoped("user", "u1", 5, "general_settings"),),
+        ),
+        (UserAPIKeyAuth(api_key=None), {"max_batch_file_uploads_per_day": 5}, ()),
     ],
 )
 def test_counter_scopes_pair_each_limit_with_its_own_counter(caller, general_settings, expected):
@@ -180,3 +186,18 @@ async def test_no_configured_limit_never_rejects():
     for _ in range(50):
         await enforce_batch_file_upload_limit(cache, caller, {}, clock=lambda: MIDDAY)
         await enforce_file_download_limit(cache, caller, {}, "file-a", clock=lambda: MIDDAY)
+
+
+async def test_a_caller_without_a_key_is_counted_per_user():
+    cache: Final = _cache()
+    general_settings: Final = {"max_file_downloads_per_minute": 1}
+    jwt_caller: Final = UserAPIKeyAuth(api_key=None, user_id="u1")
+
+    await enforce_file_download_limit(cache, jwt_caller, general_settings, "file-a", clock=lambda: MIDDAY)
+    await enforce_file_download_limit(
+        cache, UserAPIKeyAuth(api_key=None, user_id="u2"), general_settings, "file-a", clock=lambda: MIDDAY
+    )
+    with pytest.raises(ProxyException) as exc:
+        await enforce_file_download_limit(cache, jwt_caller, general_settings, "file-a", clock=lambda: MIDDAY)
+
+    assert "max_file_downloads_per_minute is 1 for user u1 (set in general_settings)" in exc.value.message

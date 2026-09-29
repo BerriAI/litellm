@@ -2784,15 +2784,18 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     max_batch_file_records: int | None = Field(
         None,
-        description="max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key or team can carry its own value in metadata, set by a proxy admin, and the lowest applicable value wins. Unset means no limit",
+        gt=0,
+        description="max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit",
     )
     max_batch_file_uploads_per_day: int | None = Field(
         None,
-        description="max /v1/files uploads with purpose=batch per key per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
+        gt=0,
+        description="max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
     )
     max_file_downloads_per_minute: int | None = Field(
         None,
-        description="max GET /v1/files/{file_id}/content calls per key per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
+        gt=0,
+        description="max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
     )
     max_file_size_mb: int | None = Field(
         None,

@@ -25,7 +25,7 @@ FileUsageSetting: TypeAlias = Literal[
     "max_file_downloads_per_minute",
 ]
 LimitSource: TypeAlias = Literal["key", "team", "general_settings"]
-CounterScope: TypeAlias = Literal["key", "team"]
+CounterScope: TypeAlias = Literal["key", "user", "team"]
 
 _COUNTER_PREFIX: Final = "litellm:file_usage"
 _DAY_SECONDS: Final = 24 * 60 * 60
@@ -65,9 +65,8 @@ def _read_limit(
         return FileUsageLimit(setting=setting, value=_LIMIT_ADAPTER.validate_python(raw), source=source)
     except ValidationError:
         verbose_proxy_logger.warning(
-            "Ignoring invalid %s value %r in %s; expected a positive integer",
+            "Ignoring invalid %s in %s; expected a positive integer",
             setting,
-            raw,
             source,
         )
         return None
@@ -103,17 +102,24 @@ def batch_file_record_limit(
     return min(applicable, key=lambda limit: limit.value, default=None)
 
 
+def _caller_counter(user_api_key_dict: UserAPIKeyAuth, limit: FileUsageLimit | None) -> ScopedFileUsageLimit | None:
+    if limit is None:
+        return None
+    if user_api_key_dict.api_key:
+        return ScopedFileUsageLimit(scope="key", scope_id=user_api_key_dict.api_key, limit=limit)
+    if user_api_key_dict.user_id:
+        return ScopedFileUsageLimit(scope="user", scope_id=user_api_key_dict.user_id, limit=limit)
+    return None
+
+
 def resolve_scoped_limits(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
     setting: FileUsageSetting,
 ) -> tuple[ScopedFileUsageLimit, ...]:
-    key_limit: Final = _key_limit(user_api_key_dict, general_settings, setting)
     team_limit: Final = _team_limit(user_api_key_dict, setting)
     candidates: Final = (
-        ScopedFileUsageLimit(scope="key", scope_id=user_api_key_dict.api_key, limit=key_limit)
-        if key_limit is not None and user_api_key_dict.api_key
-        else None,
+        _caller_counter(user_api_key_dict, _key_limit(user_api_key_dict, general_settings, setting)),
         ScopedFileUsageLimit(scope="team", scope_id=user_api_key_dict.team_id, limit=team_limit)
         if team_limit is not None and user_api_key_dict.team_id
         else None,
@@ -172,17 +178,19 @@ def describe_limit_source(source: LimitSource) -> str:
         case "general_settings":
             return "in general_settings"
         case _:
-            assert_never(source)
+            return assert_never(source)
 
 
 def _describe_scope(scoped: ScopedFileUsageLimit) -> str:
     match scoped.scope:
         case "key":
             return "this key"
+        case "user":
+            return f"user {scoped.scope_id}"
         case "team":
             return f"team {scoped.scope_id}"
         case _:
-            assert_never(scoped.scope)
+            return assert_never(scoped.scope)
 
 
 def _raise_limit_exceeded(exceeded: FileUsageLimitExceeded, what_ran_out: str, when_it_resets: str) -> NoReturn:

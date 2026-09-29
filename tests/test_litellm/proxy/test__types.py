@@ -395,3 +395,15 @@ def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
     for model in (NewMCPServerRequest, UpdateMCPServerRequest):
         with pytest.raises(ValidationError):
             model.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "setting", ["max_batch_file_records", "max_batch_file_uploads_per_day", "max_file_downloads_per_minute"]
+)
+def test_batch_file_caps_accept_only_positive_limits(setting):
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    for invalid in (0, -5):
+        with pytest.raises(ValidationError):
+            ConfigGeneralSettings.model_validate({setting: invalid})
+    assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3

@@ -681,9 +681,6 @@ async def create_file(
             )
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
-            await enforce_batch_file_upload_limit(
-                proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings
-            )
 
         data = {"passthrough": True} if passthrough else {}
 
@@ -755,6 +752,11 @@ async def create_file(
             expires_after = FileExpiresAfter(
                 anchor="created_at",  # Literal, not expires_after_anchor variable
                 seconds=expires_after_seconds,
+            )
+
+        if purpose == "batch":
+            await enforce_batch_file_upload_limit(
+                proxy_logging_obj.file_usage_cache, user_api_key_dict, general_settings
             )
 
         # Include original request and headers in the data
