@@ -210,7 +210,7 @@ class InMemoryCache(BaseCache):
         return False
 
     @staticmethod
-    def _copy_cached_value(value: Any) -> Any:
+    def _copy_cached_value(value: object) -> object:
         """Return a read-isolated value without making the cache brittle.
 
         In-memory cache entries can contain Pydantic models and mutable
@@ -227,7 +227,7 @@ class InMemoryCache(BaseCache):
         except Exception:  # noqa: BLE001 - cache reads must tolerate non-copyable values
             return value
 
-    def _get_cache_value(self, key, *, copy_value: bool) -> Any:
+    def _get_cache_value(self, key, *, copy_value: bool) -> object:
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None

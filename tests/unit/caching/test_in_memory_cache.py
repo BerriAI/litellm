@@ -79,6 +79,19 @@ def test_in_memory_cache_returns_read_isolated_pydantic_models():
     assert stored.metadata == {"region": "us"}
 
 
+def test_in_memory_cache_preserves_non_copyable_mutable_values():
+    cache = InMemoryCache()
+    cache.set_cache("payload", ["unchanged"])
+
+    with patch(
+        "litellm.caching.in_memory_cache.copy.deepcopy",
+        side_effect=RuntimeError("not copyable"),
+    ):
+        cached = cache.get_cache("payload")
+
+    assert cached is cache.cache_dict["payload"]
+
+
 def test_in_memory_openai_obj_cache():
     from openai import OpenAI
 
