@@ -392,7 +392,10 @@ _SDK_CLIENTS: Final = ("openai_sync", "openai_async", "httpx")
 def _chat_call(rig: Rig, client: str, model: str, secret: str, stream: bool) -> str:
     messages: Final = [{"role": "user", "content": secret}]
     if client == "httpx":
-        response: Final = _chat(rig, model, messages)
+        response: Final = rig.proxy.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": messages, "stream": stream}
+        )
+        response.read()
         assert response.status_code == 400, response.text
         return _call_id(response)
     if client == "openai_sync":
@@ -448,8 +451,11 @@ def _messages_call(rig: Rig, client: str, model: str, secret: str, stream: bool)
     messages: Final = [{"role": "user", "content": secret}]
     if client == "httpx":
         response: Final = rig.proxy.request(
-            "POST", "/v1/messages", {"model": model, "max_tokens": 16, "messages": messages}
+            "POST",
+            "/v1/messages",
+            {"model": model, "max_tokens": 16, "messages": messages, "stream": stream},
         )
+        response.read()
         assert response.status_code == 400, response.text
         return _call_id(response)
     if client == "openai_sync":

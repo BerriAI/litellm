@@ -253,18 +253,29 @@ def test_g3_proxy_restart_mid_burst(tmp_path: Path) -> None:
                 second: Final = _fire(rig_two, bodies[BURST // 2 :])
             answered: Final = first + second + tuple(probes)
             assert all(status in (400, 500) for status, _ in answered), answered
-            assert any(status == 400 for status, _ in answered), answered
-            batches: Final = endpoint.drain()
-            empty: Final = tuple(batch for batch in batches if not _json_body_ok(batch.body))
-            assert all(not batch.body.strip() for batch in empty), empty
+            post_restart_ids: Final = frozenset(cid for status, cid in second + tuple(probes) if status == 400 and cid)
+            assert post_restart_ids, answered
+            assert any(marker.encode() in request.body for request in provider.drain())
+            collected: list[Request] = []  # mutable-ok: drain consumes batches, later polls keep earlier ones
+
+            def landed() -> tuple[str, ...]:
+                collected.extend(endpoint.drain())
+                return tuple(
+                    str(event.get("litellm_call_id"))
+                    for batch in collected
+                    if _json_body_ok(batch.body)
+                    for event in json.loads(batch.body)
+                )
+
+            landed_ids: Final = eventually(landed, lambda ids: post_restart_ids <= set(ids), seconds=60)
+            assert all(not batch.body.strip() for batch in collected if not _json_body_ok(batch.body)), collected
+            assert len(landed_ids) == len(set(landed_ids)), ("duplicate events after restart", landed_ids)
             events: Final = tuple(
                 object_value(event)
-                for batch in batches
+                for batch in collected
                 if _json_body_ok(batch.body)
                 for event in json.loads(batch.body)
             )
-            call_ids: Final = tuple(str(event.get("litellm_call_id")) for event in events if event)
-            assert len(call_ids) == len(set(call_ids)), ("duplicate events after restart", call_ids)
             for event in events:
                 assert marker not in json.dumps(event), json.dumps(event)[:400]
 
