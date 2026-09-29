@@ -351,7 +351,7 @@ class TestAllowFlow:
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
         schema: Final = {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]}
-        await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_tool_input_schema=schema))
+        await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_input_schema=schema))
         assert handler.calls[1].json["tool"] == {
             "name": "send_email",
             "description": "Send an email",
@@ -366,7 +366,7 @@ class TestAllowFlow:
     async def test_evaluate_payload_omits_missing_or_malformed_tool_metadata(self, description, schema):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
         guardrail: Final = _make_guardrail(handler)
-        await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_tool_input_schema=schema))
+        await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_input_schema=schema))
         assert handler.calls[1].json["tool"] == {"name": "send_email"}
 
     @pytest.mark.asyncio

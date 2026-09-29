@@ -183,7 +183,7 @@ __all__ = (
     "_run_post_mcp_call_guardrails",
     "_server_answers_to",
     "_tool_name_matches",
-    "apply_tool_overrides",
+    "apply_display_name_overrides",
     "call_mcp_tool",
     "execute_mcp_tool",
     "filter_tools_by_allowed_tools",
@@ -611,18 +611,13 @@ def filter_tools_by_allowed_tools(
     return tools_to_return
 
 
-def apply_tool_overrides(
+def apply_display_name_overrides(
     tools: list[MCPTool],
     mcp_server: MCPServer,
 ) -> list[MCPTool]:
-    """Apply admin-configured display name/description overrides to tools.
-
-    Overrides are keyed by the unprefixed tool name, same convention as
-    allowed_tools configuration.
-    """
+    """Apply admin-configured display name overrides, keyed by the unprefixed tool name like allowed_tools."""
     display_name_map: Final = mcp_server.tool_name_to_display_name or {}
-    description_map: Final = mcp_server.tool_name_to_description or {}
-    if not display_name_map and not description_map:
+    if not display_name_map:
         return tools
 
     for tool in tools:
@@ -630,8 +625,6 @@ def apply_tool_overrides(
         lookup_key = unprefixed or tool.name
         if lookup_key in display_name_map:
             tool.name = display_name_map[lookup_key]
-        if lookup_key in description_map:
-            tool.description = description_map[lookup_key]
     return tools
 
 
@@ -1125,6 +1118,8 @@ async def _get_tools_from_mcp_servers(
                 server_auth_header = await _get_byok_credential(server, user_api_key_auth)
 
             try:
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
                 tools: Final = await global_mcp_server_manager._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
@@ -1134,6 +1129,7 @@ async def _get_tools_from_mcp_servers(
                     client_ip=client_ip,
                     user_api_key_auth=user_api_key_auth,
                     oauth2_headers=oauth2_headers,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -1150,7 +1146,7 @@ async def _get_tools_from_mcp_servers(
                         with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools
                     ]
                 else:
-                    filtered_tools = apply_tool_overrides(filtered_tools, server)
+                    filtered_tools = apply_display_name_overrides(filtered_tools, server)
 
                 verbose_logger.debug(
                     "Successfully fetched %s tools from server %s, %s after filtering",

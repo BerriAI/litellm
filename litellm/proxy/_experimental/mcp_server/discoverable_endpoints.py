@@ -3,7 +3,8 @@ import html as _html
 import json
 import secrets
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -107,8 +108,13 @@ _OAUTH_METADATA_CACHE_MAX_SIZE: Final = 128
 # Per-(server_id, resource_url) async locks so concurrent discovery requests
 # coalesce onto a single upstream fetch instead of issuing N parallel calls.
 _OAUTH_METADATA_FETCH_LOCKS: Final[dict[tuple[str, str], asyncio.Lock]] = {}
+# Callers inside ``_oauth_metadata_fetch_slot`` per cache key, lock waiters included. ``Lock.locked()``
+# reads False between one holder's release and the next waiter's wake-up, so it cannot tell an
+# idle lock from one being handed off.
+_OAUTH_METADATA_FETCHERS: Final[dict[tuple[str, str], int]] = {}
 # Per-server_id generation, bumped on invalidation so a fetch that started before the server
-# definition changed cannot repopulate the cache with the stale reply.
+# definition changed cannot repopulate the cache with the stale reply. Only servers with a fetch
+# in flight carry an entry; the rest are pruned with the cache.
 _OAUTH_METADATA_GENERATIONS: Final[dict[str, int]] = {}
 
 router: Final = APIRouter(
@@ -133,25 +139,52 @@ def _prune_oauth_metadata_cache(now: float | None = None) -> None:
         for cache_key in cache_keys_by_expiry[:overflow]:
             _OAUTH_METADATA_CACHE.pop(cache_key, None)
 
-    # Drop locks whose cache entry has been evicted and that aren't currently
-    # held; held locks stay so in-flight callers continue to coalesce.
+    # Drop locks whose cache entry has been evicted and that nobody holds or
+    # waits on; the rest stay so in-flight callers continue to coalesce.
     for cache_key in list(_OAUTH_METADATA_FETCH_LOCKS):
-        if cache_key in _OAUTH_METADATA_CACHE:
-            continue
-        lock = _OAUTH_METADATA_FETCH_LOCKS.get(cache_key)
-        if lock is None or lock.locked():
+        if cache_key in _OAUTH_METADATA_CACHE or not _oauth_metadata_lock_idle(cache_key):
             continue
         _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
+
+    for server_id in [sid for sid in _OAUTH_METADATA_GENERATIONS if not _oauth_metadata_fetch_in_flight(sid)]:
+        _OAUTH_METADATA_GENERATIONS.pop(server_id, None)
+
+
+def _oauth_metadata_fetch_in_flight(server_id: str) -> bool:
+    return any(cache_key[0] == server_id for cache_key in _OAUTH_METADATA_FETCHERS)
+
+
+def _oauth_metadata_lock_idle(cache_key: tuple[str, str]) -> bool:
+    if cache_key in _OAUTH_METADATA_FETCHERS:
+        return False
+    lock: Final = _OAUTH_METADATA_FETCH_LOCKS.get(cache_key)
+    return lock is None or not lock.locked()
+
+
+@asynccontextmanager
+async def _oauth_metadata_fetch_slot(cache_key: tuple[str, str]) -> AsyncIterator[None]:
+    _OAUTH_METADATA_FETCHERS[cache_key] = _OAUTH_METADATA_FETCHERS.get(cache_key, 0) + 1
+    try:
+        async with _OAUTH_METADATA_FETCH_LOCKS.setdefault(cache_key, asyncio.Lock()):
+            yield
+    finally:
+        remaining: Final = _OAUTH_METADATA_FETCHERS.get(cache_key, 0) - 1
+        if remaining > 0:
+            _OAUTH_METADATA_FETCHERS[cache_key] = remaining
+        else:
+            _OAUTH_METADATA_FETCHERS.pop(cache_key, None)
 
 
 def invalidate_oauth_metadata_cache(server_id: str) -> None:
     """Drop cached upstream IdP metadata for a server whose definition changed."""
-    _OAUTH_METADATA_GENERATIONS[server_id] = _OAUTH_METADATA_GENERATIONS.get(server_id, 0) + 1
+    if _oauth_metadata_fetch_in_flight(server_id):
+        _OAUTH_METADATA_GENERATIONS[server_id] = _OAUTH_METADATA_GENERATIONS.get(server_id, 0) + 1
+    else:
+        _OAUTH_METADATA_GENERATIONS.pop(server_id, None)
     for cache_key in [key for key in _OAUTH_METADATA_CACHE if key[0] == server_id]:
         del _OAUTH_METADATA_CACHE[cache_key]
     for cache_key in [key for key in _OAUTH_METADATA_FETCH_LOCKS if key[0] == server_id]:
-        lock = _OAUTH_METADATA_FETCH_LOCKS.get(cache_key)
-        if lock is None or lock.locked():
+        if not _oauth_metadata_lock_idle(cache_key):
             continue
         _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
 
@@ -2375,8 +2408,7 @@ async def fetch_upstream_oauth_protected_resource(
     if cached is not None and cached[0] > now:
         return cached[1]
 
-    lock: Final = _OAUTH_METADATA_FETCH_LOCKS.setdefault(cache_key, asyncio.Lock())
-    async with lock:
+    async with _oauth_metadata_fetch_slot(cache_key):
         now = time.time()
         cached = _OAUTH_METADATA_CACHE.get(cache_key)
         if cached is not None and cached[0] > now:

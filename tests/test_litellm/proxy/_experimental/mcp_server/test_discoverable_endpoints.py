@@ -12686,6 +12686,76 @@ async def test_metadata_fetched_before_invalidation_does_not_repopulate_the_cach
             release.set()
             assert await in_flight == {"authorization_servers": ["old-idp"]}
         assert cache_key not in discoverable_endpoints._OAUTH_METADATA_CACHE
+        discoverable_endpoints._prune_oauth_metadata_cache()
+        assert server.server_id not in discoverable_endpoints._OAUTH_METADATA_GENERATIONS
     finally:
         discoverable_endpoints._OAUTH_METADATA_CACHE.pop(cache_key, None)
         discoverable_endpoints._OAUTH_METADATA_GENERATIONS.pop(server.server_id, None)
+
+
+@pytest.mark.asyncio
+async def test_fetch_waiting_on_a_lock_handoff_stays_tracked_through_invalidation():
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        fetch_upstream_oauth_protected_resource,
+        invalidate_oauth_metadata_cache,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="handoff-server", name="handoff", url="http://upstream/mcp", transport=MCPTransport.http
+    )
+    cache_key: Final = (server.server_id, server.url)
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def slow_get(url: str, headers: dict[str, str]) -> MagicMock:
+        started.set()
+        await release.wait()
+        return MagicMock(status_code=200, json=MagicMock(return_value={"authorization_servers": ["pre-save-idp"]}))
+
+    client = MagicMock()
+    client.get = slow_get
+    discoverable_endpoints._OAUTH_METADATA_CACHE.pop(cache_key, None)
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=client,
+        ):
+            async with discoverable_endpoints._oauth_metadata_fetch_slot(cache_key):
+                shared_lock: Final = discoverable_endpoints._OAUTH_METADATA_FETCH_LOCKS[cache_key]
+                waiting: Final = asyncio.create_task(fetch_upstream_oauth_protected_resource(server))
+                for _ in range(3):
+                    await asyncio.sleep(0)
+                assert not started.is_set() and not waiting.done()
+            invalidate_oauth_metadata_cache(server.server_id)
+            assert discoverable_endpoints._OAUTH_METADATA_FETCH_LOCKS.get(cache_key) is shared_lock
+            assert discoverable_endpoints._oauth_metadata_fetch_in_flight(server.server_id)
+            await started.wait()
+            invalidate_oauth_metadata_cache(server.server_id)
+            release.set()
+            assert await waiting == {"authorization_servers": ["pre-save-idp"]}
+        assert cache_key not in discoverable_endpoints._OAUTH_METADATA_CACHE
+        assert not discoverable_endpoints._oauth_metadata_fetch_in_flight(server.server_id)
+    finally:
+        discoverable_endpoints._OAUTH_METADATA_CACHE.pop(cache_key, None)
+        discoverable_endpoints._OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
+        discoverable_endpoints._OAUTH_METADATA_FETCHERS.pop(cache_key, None)
+        discoverable_endpoints._OAUTH_METADATA_GENERATIONS.pop(server.server_id, None)
+
+
+def test_invalidating_an_idle_server_leaves_no_generation_behind():
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import invalidate_oauth_metadata_cache
+
+    server_ids: Final = tuple(f"churned-server-{i}" for i in range(50))
+    try:
+        for server_id in server_ids:
+            invalidate_oauth_metadata_cache(server_id)
+        assert not set(server_ids) & set(discoverable_endpoints._OAUTH_METADATA_GENERATIONS)
+    finally:
+        for server_id in server_ids:
+            discoverable_endpoints._OAUTH_METADATA_GENERATIONS.pop(server_id, None)

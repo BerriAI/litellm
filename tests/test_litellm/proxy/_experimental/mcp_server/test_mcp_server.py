@@ -5283,11 +5283,10 @@ def test_filter_tools_by_allowed_tools():
     assert filtered_tools[1].name == "my_api_mcp-findpetsbystatus"
 
 
-def test_apply_tool_overrides():
-    """Test that apply_tool_overrides applies custom display names and descriptions."""
+def test_apply_display_name_overrides_leaves_descriptions_to_the_catalog_guard():
     from mcp.types import Tool
 
-    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.proxy._experimental.mcp_server.server import apply_display_name_overrides
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -5317,21 +5316,18 @@ def test_apply_tool_overrides():
         ),
     ]
 
-    result = apply_tool_overrides(tools, mcp_server)
+    result = apply_display_name_overrides(tools, mcp_server)
 
-    # First tool should have overridden name and description
-    assert result[0].name == "Get Pet"
-    assert result[0].description == "Custom description for get pet"
-    # Second tool should be unchanged
-    assert result[1].name == "my_api_mcp-findpetsbystatus"
-    assert result[1].description == "Finds Pets by status"
+    assert [(tool.name, tool.description) for tool in result] == [
+        ("Get Pet", "Original description"),
+        ("my_api_mcp-findpetsbystatus", "Finds Pets by status"),
+    ]
 
 
-def test_apply_tool_overrides_no_overrides():
-    """Test that apply_tool_overrides returns tools unchanged when no overrides are set."""
+def test_apply_display_name_overrides_no_overrides():
     from mcp.types import Tool
 
-    from litellm.proxy._experimental.mcp_server.server import apply_tool_overrides
+    from litellm.proxy._experimental.mcp_server.server import apply_display_name_overrides
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -5351,7 +5347,7 @@ def test_apply_tool_overrides_no_overrides():
         ),
     ]
 
-    result = apply_tool_overrides(tools, mcp_server)
+    result = apply_display_name_overrides(tools, mcp_server)
     assert result[0].name == "my_api_mcp-getpetbyid"
     assert result[0].description == "Original description"
 

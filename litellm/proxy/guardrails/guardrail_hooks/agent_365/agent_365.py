@@ -412,7 +412,7 @@ class Agent365Guardrail(CustomGuardrail):
         tool_reference: Final = _ToolReference(
             name=tool_name,
             description=description if isinstance(description, str) and description else None,
-            input_schema=_parse_tool_input_schema(data.get("mcp_tool_input_schema")),
+            input_schema=_parse_tool_input_schema(data.get("mcp_input_schema")),
         )
         payload: Final[dict[str, object]] = {  # mutable-ok: JSON body with optional fields added below
             "tool": tool_reference.model_dump(by_alias=True, exclude_none=True),

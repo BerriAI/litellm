@@ -414,13 +414,13 @@ def test_mcp_tool_metadata_flows_from_kwargs_to_synthetic_data(proxy_logging):
         }
     )
     out = proxy_logging._convert_mcp_to_llm_format(request_obj=obj, kwargs={})
-    assert (out["mcp_tool_description"], out["mcp_tool_input_schema"]) == ("Adds numbers", schema)
+    assert (out["mcp_tool_description"], out["mcp_input_schema"]) == ("Adds numbers", schema)
 
 
 def test_mcp_tool_metadata_absent_when_tool_was_never_listed(proxy_logging):
     obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs={"name": "calc", "arguments": {}})
     out = proxy_logging._convert_mcp_to_llm_format(request_obj=obj, kwargs={})
-    assert (out["mcp_tool_description"], out["mcp_tool_input_schema"]) == (None, None)
+    assert "mcp_tool_description" not in out and "mcp_input_schema" not in out
 
 
 def test_create_mcp_request_object_from_kwargs_empty(proxy_logging):
@@ -483,3 +483,23 @@ def test_convert_mcp_hook_response_to_kwargs_invalid_original_raises(proxy_loggi
         proxy_logging._convert_mcp_hook_response_to_kwargs(
             response_data={"modified_arguments": {"a": 1}}, original_kwargs=None  # type: ignore[arg-type]
         )
+
+
+def test_convert_mcp_to_llm_format_carries_tool_text_for_a_discovery_scan(proxy_logging, make_mcp_request_obj):
+    req = make_mcp_request_obj(tool_name="delete_note", arguments={})
+    schema = {"type": "object", "properties": {"id": {"type": "string", "description": "Note id"}}}
+    out = proxy_logging._convert_mcp_to_llm_format(
+        request_obj=req,
+        kwargs={"mcp_tool_description": "Delete a note", "mcp_input_schema": schema},
+    )
+    assert out["mcp_tool_description"] == "Delete a note"
+    assert out["mcp_input_schema"] == schema
+    assert "Description: Delete a note" in out["messages"][0]["content"]
+
+
+def test_convert_mcp_to_llm_format_has_no_description_keys_at_call_time(proxy_logging, make_mcp_request_obj):
+    req = make_mcp_request_obj(tool_name="delete_note", arguments={"id": "1"})
+    out = proxy_logging._convert_mcp_to_llm_format(request_obj=req, kwargs={})
+    assert "mcp_tool_description" not in out
+    assert "mcp_input_schema" not in out
+    assert "Description:" not in out["messages"][0]["content"]

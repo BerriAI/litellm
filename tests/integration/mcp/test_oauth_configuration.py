@@ -166,6 +166,14 @@ def _advertised_authorization_servers(gateway: Gateway, alias: str) -> tuple[str
     return tuple(TypeAdapter(list[str]).validate_python(response.json()["authorization_servers"]))
 
 
+def _eventually_advertises(gateway: Gateway, alias: str, issuer: str) -> None:
+    eventually(
+        lambda: gateway.client.get(f"/.well-known/oauth-protected-resource/{alias}/mcp"),
+        lambda response: response.status_code == 200 and response.json()["authorization_servers"] == [issuer],
+        seconds=40,
+    )
+
+
 def test_saving_a_pass_through_server_refetches_its_upstream_oauth_metadata(gateway: Gateway) -> None:
     moved: Final = threading.Event()
     with wire_server(_idp_upstream(lambda: wire.url, moved)) as wire, gateway.scenario() as scenario:
@@ -181,6 +189,22 @@ def test_saving_a_pass_through_server_refetches_its_upstream_oauth_metadata(gate
         assert any(request.target.startswith("/.well-known/oauth-protected-resource") for request in wire.drain()), (
             "the save must send protected-resource discovery back to the upstream"
         )
+
+
+def test_peer_worker_stops_advertising_the_old_idp_after_a_save_on_another_worker(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    moved: Final = threading.Event()
+    with wire_server(_idp_upstream(lambda: wire.url, moved)) as wire, gateway.scenario() as scenario:
+        alias: Final = "pt" + uuid.uuid4().hex[:8]
+        identity: Final = _register_pass_through(scenario, wire, alias)
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-before",)
+        _eventually_advertises(peer, alias, wire.url + "/idp-before")
+        moved.set()
+        saved: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "IdP moved"})
+        assert saved.status_code == 202, saved.text
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-after",)
+        _eventually_advertises(peer, alias, wire.url + "/idp-after")
 
 
 def test_metadata_fetched_before_a_save_cannot_repopulate_the_cache_after_it(gateway: Gateway) -> None:
