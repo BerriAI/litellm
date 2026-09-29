@@ -11,6 +11,7 @@ import asyncio
 import copy
 import inspect
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -186,6 +187,13 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
     return _redact_standard_logging_object(payload)
 
 
+_REDACTED_ERROR_FIELDS: Final = ("error_message", "traceback")
+
+
+def _is_non_empty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
 def redact_error_information(
     error_information: StandardLoggingPayloadErrorInformation,
 ) -> StandardLoggingPayloadErrorInformation:
@@ -194,12 +202,17 @@ def redact_error_information(
     quote the prompt (``error_message``, ``traceback``) replaced by ``REDACTED_BY_LITELLM``
     when they are non-empty strings. Every other field is carried over unchanged.
     """
-    redacted: Final = dict(error_information)
-    for field in ("error_message", "traceback"):
-        value: Final = redacted.get(field)
-        if isinstance(value, str) and value:
-            redacted[field] = REDACTED_BY_LITELLM
-    return cast(StandardLoggingPayloadErrorInformation, redacted)
+    redacted_fields: Final = MappingProxyType(
+        {
+            field: REDACTED_BY_LITELLM
+            for field in _REDACTED_ERROR_FIELDS
+            if _is_non_empty_str(error_information.get(field))
+        }
+    )
+    return cast(  # cast-ok: same TypedDict shape as the input, two fields narrowed to the sentinel
+        StandardLoggingPayloadErrorInformation,
+        {**error_information, **redacted_fields},  # mutable-ok: callers pop/update keys on the fresh payload dict
+    )
 
 
 def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
@@ -209,17 +222,30 @@ def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
     ``litellm_metadata`` is included only when present so
     ``get_metadata_variable_name_from_kwargs`` resolves ``metadata`` for chat routes.
     """
-    litellm_params: Final[dict[str, object]] = {"metadata": request_data.get("metadata")}
-    if "litellm_metadata" in request_data:
-        litellm_params["litellm_metadata"] = request_data.get("litellm_metadata")
-    return should_redact_message_logging(
+    litellm_params: Final = MappingProxyType(
         {
+            key: request_data.get(key)
+            for key in ("metadata", "litellm_metadata")
+            if key == "metadata" or key in request_data
+        }
+    )
+    return should_redact_message_logging(
+        {  # mutable-ok: the model_call_details shape the decision helper reads
             "litellm_params": litellm_params,
-            "standard_callback_dynamic_params": {
+            "standard_callback_dynamic_params": {  # mutable-ok: dynamic-params slot the helper reads
                 "turn_off_message_logging": request_data.get("turn_off_message_logging")
             },
         }
     )
+
+
+def maybe_redact_error_information(
+    error_information: StandardLoggingPayloadErrorInformation,
+    request_data: Mapping[str, object],
+) -> StandardLoggingPayloadErrorInformation:
+    if should_redact_failed_request(request_data):
+        return redact_error_information(error_information)
+    return error_information
 
 
 def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, object]:
@@ -252,7 +278,9 @@ def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, 
     error_information: Final = standard_logging_object.get("error_information")
     if isinstance(error_information, Mapping):
         standard_logging_object["error_information"] = redact_error_information(
-            cast(StandardLoggingPayloadErrorInformation, dict(error_information))
+            cast(  # cast-ok: same TypedDict shape as the input mapping
+                StandardLoggingPayloadErrorInformation, error_information
+            )
         )
     return standard_logging_object
 

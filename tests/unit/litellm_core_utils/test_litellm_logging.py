@@ -9030,6 +9030,7 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 
+
 class _CapturingFailureLogger(CustomLogger):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

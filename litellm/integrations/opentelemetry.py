@@ -2244,7 +2244,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 if redact:
                     span.record_exception(
                         exception,
-                        attributes={
+                        attributes={  # mutable-ok: record_exception accepts a dict of event attributes
                             "exception.message": REDACTED_BY_LITELLM,
                             "exception.stacktrace": REDACTED_BY_LITELLM,
                         },
@@ -3601,13 +3601,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             should_redact_message_logging,
         )
 
-        redact: Final = should_redact_message_logging({})
+        redact: Final = should_redact_message_logging({})  # mutable-ok: read-only probe for the global flag
         error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=exception)
         error_information["error_code"] = str(status_code)
         self._record_exception_on_span(
             span=span,
-            kwargs={
-                "standard_logging_object": {
+            kwargs={  # mutable-ok: _record_exception_on_span reads this kwargs dict
+                "standard_logging_object": {  # mutable-ok: standard_logging_object shape the recorder expects
                     "error_information": redact_error_information(error_information) if redact else error_information
                 }
             },

@@ -1041,6 +1041,7 @@ def test_perform_redaction_drops_the_served_output_texts_from_the_callback_kwarg
     perform_redaction(details, None)
     assert SERVED_OUTPUT_TEXTS_KEY not in details
 
+
 def _error_information(**overrides):
     info = {
         "error_code": "400",

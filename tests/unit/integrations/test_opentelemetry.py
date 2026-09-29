@@ -6763,6 +6763,7 @@ class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
             self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 1
         )
 
+
 SECRET_PROMPT = "secret-prompt-marker"
 
 

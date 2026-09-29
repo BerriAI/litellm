@@ -94,7 +94,7 @@ class MlflowLogger(CustomLogger):
                     span.add_event(
                         SpanEvent(
                             name="exception",
-                            attributes={
+                            attributes={  # mutable-ok: mlflow SpanEvent expects a plain dict of attributes
                                 "exception.type": type(exception).__name__,
                                 "exception.message": REDACTED_BY_LITELLM,
                                 "exception.stacktrace": REDACTED_BY_LITELLM,

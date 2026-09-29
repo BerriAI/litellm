@@ -97,6 +97,7 @@ if TYPE_CHECKING:
 
 LITELLM_TRACER_NAME: Final = "litellm"
 _published_v2_provider: ApiTracerProvider | None = None
+_GLOBAL_REDACTION_PROBE: Final[dict[str, object]] = {}  # mutable-ok: read-only global-redaction probe
 
 
 def _span_error_from_exception(
@@ -753,7 +754,9 @@ class OpenTelemetryV2(CustomLogger):
                 if is_recordable_span(span):
                     stamp_error(
                         span,
-                        _span_error_from_exception(exc, redact_content=should_redact_message_logging({})),
+                        _span_error_from_exception(
+                            exc, redact_content=should_redact_message_logging(_GLOBAL_REDACTION_PROBE)
+                        ),
                         record_event=False,
                         set_status=False,
                     )
@@ -798,7 +801,9 @@ class OpenTelemetryV2(CustomLogger):
         stamp_error(
             span,
             _span_error_from_exception(
-                exception, status_code=status_code, redact_content=should_redact_message_logging({})
+                exception,
+                status_code=status_code,
+                redact_content=should_redact_message_logging(_GLOBAL_REDACTION_PROBE),
             ),
             record_event=not already_stamped,
         )

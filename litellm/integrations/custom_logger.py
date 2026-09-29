@@ -67,6 +67,22 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 )
 
 
+def _redacted_failure_error_fields(standard_logging_object: Mapping[str, object]) -> dict[str, object]:
+    from litellm.litellm_core_utils.redact_messages import redact_error_information
+
+    fields: Final[dict[str, object]] = {}  # mutable-ok: merged into the standard_logging_object copy below
+    if standard_logging_object.get("error_str"):
+        fields["error_str"] = REDACTED_BY_LITELLM
+    error_information: Final = standard_logging_object.get("error_information")
+    if isinstance(error_information, Mapping):
+        fields["error_information"] = redact_error_information(
+            cast(  # cast-ok: same TypedDict shape as the input mapping
+                StandardLoggingPayloadErrorInformation, error_information
+            )
+        )
+    return fields
+
+
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
@@ -905,7 +921,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This method handles two features:
         1. turn_off_message_logging: When True, redacts messages and responses (unless the callback
-           redacts them itself, see `redacts_messages_itself`)
+           redacts them itself, see `redacts_messages_itself`), and redacts `error_str`,
+           `error_information`'s message/traceback and `traceback_exception` independent of
+           `redacts_messages_itself`
         2. standard_logging_payload_excluded_fields: Removes specified fields entirely
 
         Return a modified copy of the provided logging payload.
@@ -966,15 +984,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     standard_logging_object_copy["response"] = model_response_dict
 
         if turn_off_message_logging:
-            if standard_logging_object_copy.get("error_str"):
-                standard_logging_object_copy["error_str"] = REDACTED_BY_LITELLM
-            error_information: Final = standard_logging_object_copy.get("error_information")
-            if isinstance(error_information, Mapping):
-                from litellm.litellm_core_utils.redact_messages import redact_error_information
-
-                standard_logging_object_copy["error_information"] = redact_error_information(
-                    cast(StandardLoggingPayloadErrorInformation, dict(error_information))
-                )
+            standard_logging_object_copy.update(_redacted_failure_error_fields(standard_logging_object_copy))
 
         params: Final = model_call_details.get("litellm_params")
         request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None

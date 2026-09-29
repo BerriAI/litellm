@@ -3239,6 +3239,7 @@ def test_provisional_close_then_payload_close_does_not_duplicate():
     llm_spans = [s for s in exporter.get_finished_spans() if s.name.startswith("chat")]
     assert len(llm_spans) == 1
 
+
 def test_async_post_call_failure_hook_redacts_error_text_when_gated():
     """With message redaction on, the proxy-level failure span must not carry the
     prompt through error.message / the exception event, while error.type and the
