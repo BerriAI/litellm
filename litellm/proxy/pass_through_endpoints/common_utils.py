@@ -36,6 +36,9 @@ def _encrypt_header_value(name: str, value: JsonValue, new_encryption_key: str |
     try:
         return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value, new_encryption_key=new_encryption_key)
     except Exception:  # noqa: BLE001  # no salt or master key configured: store as before rather than fail the write
+        verbose_proxy_logger.warning(
+            "Pass-through header %s is stored unencrypted: set LITELLM_SALT_KEY or a master key to encrypt it", name
+        )
         return value
 
 
@@ -48,8 +51,16 @@ def _decrypted(name: str, value: str) -> str | None:
     )
 
 
+def _is_marked(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        and value != CALLBACK_VAR_ENCRYPTED_PREFIX
+    )
+
+
 def _decrypt_header_value(name: str, value: object) -> object:
-    if not isinstance(value, str) or not value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+    if not isinstance(value, str) or not _is_marked(value):
         return value
     decrypted: Final = _decrypted(name, value)
     if decrypted is None:
@@ -67,9 +78,7 @@ def undecryptable_pass_through_header_names(headers: object) -> frozenset[str]:
     return frozenset(
         str(name)
         for name, value in headers.items()
-        if isinstance(value, str)
-        and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
-        and _decrypted(str(name), value) is None
+        if isinstance(value, str) and _is_marked(value) and _decrypted(str(name), value) is None
     )
 
 

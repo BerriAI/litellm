@@ -225,3 +225,8 @@ def test_undecryptable_pass_through_header_names(salt_key):
     assert undecryptable_pass_through_header_names(
         {"x-ok": stored["headers"]["x-a"], "x-bad": _ENC + "garbage", "x-plain": "p"}
     ) == {"x-bad"}
+
+
+def test_decrypt_pass_through_headers_keeps_a_bare_marker_literal(salt_key):
+    assert decrypt_pass_through_headers({"x-tag": _ENC}) == {"x-tag": _ENC}
+    assert undecryptable_pass_through_header_names({"x-tag": _ENC}) == frozenset()

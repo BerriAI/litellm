@@ -201,6 +201,11 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     return headers
 
 
+_LANGFUSE_KEY_HEADERS: Final = frozenset({"LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"})
+# set_env_variables_in_header serves the Langfuse key pair as one Authorization header.
+_SERVED_NAME_OF_STORED_HEADER: Final = {name: "Authorization" for name in _LANGFUSE_KEY_HEADERS}
+
+
 def _served_custom_headers(
     endpoint_id: str, target: str | None, path_without_stored_id: str | None
 ) -> Mapping[str, object] | None:
@@ -248,10 +253,13 @@ async def _resolve_stored_headers(
         endpoint_id,
         sorted(undecryptable),
     )
-    if not undecryptable <= registered.keys():
-        return dict(registered)
-    resolved: Final = await set_env_variables_in_header(custom_headers=stored_headers)
-    return {**(resolved or {}), **{name: registered[name] for name in undecryptable}}
+    replaced: Final = {name for name in undecryptable if _SERVED_NAME_OF_STORED_HEADER.get(name, name) in registered}
+    dropped: Final = replaced | (_LANGFUSE_KEY_HEADERS if replaced & _LANGFUSE_KEY_HEADERS else frozenset())
+    resolved: Final = await set_env_variables_in_header(
+        custom_headers={name: value for name, value in stored_headers.items() if name not in dropped}
+    )
+    kept: Final = {_SERVED_NAME_OF_STORED_HEADER.get(name, name) for name in replaced}
+    return {**(resolved or {}), **{name: registered[name] for name in kept}}
 
 
 async def chat_completion_pass_through_endpoint(

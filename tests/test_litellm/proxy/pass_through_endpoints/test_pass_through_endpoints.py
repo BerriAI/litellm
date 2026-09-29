@@ -7875,7 +7875,12 @@ async def test_register_pass_through_endpoint_keeps_its_own_headers_when_another
         [solo, newcomer] = encrypt_pass_through_endpoints(
             [
                 {"path": "/shared-solo-pt", "target": "http://d", "headers": {"Authorization": "Bearer sk-d"}},
-                {"id": "ep-shared-e", "path": "/shared-solo-pt", "target": "http://d", "headers": {"x-e": "e"}},
+                {
+                    "id": "ep-shared-e",
+                    "path": "/shared-solo-pt",
+                    "target": "http://d",
+                    "headers": {"Authorization": "Bearer sk-e"},
+                },
             ]
         )
         await _register_pass_through_endpoint(endpoint=solo, app=app, premium_user=False, visited_endpoints=set())
@@ -7891,7 +7896,12 @@ async def test_register_pass_through_endpoint_keeps_its_own_headers_when_another
             visited_endpoints=reloaded_e,
         )
         [route_e] = reloaded_e
-        assert "Authorization" not in _registered_pass_through_routes[route_e]["passthrough_params"]["custom_headers"]
+        assert _registered_pass_through_routes[route_e]["passthrough_params"]["custom_headers"][
+            "Authorization"
+        ] not in (
+            "Bearer sk-d",
+            "Bearer sk-e",
+        )
 
         [moved] = encrypt_pass_through_endpoints(
             [{"path": "/shared-pt", "target": "http://moved", "headers": {"Authorization": "Bearer sk-moved"}}]
@@ -8020,4 +8030,74 @@ async def test_update_pass_through_endpoint_keeps_serving_headers_when_stored_he
         assert served["custom_headers"] == {"Authorization": "Bearer sk-update", "x-org": "acme"}
     finally:
         for key in [k for k in _registered_pass_through_routes if k.startswith("ep-update-rotate")]:
+            _registered_pass_through_routes.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_register_pass_through_endpoint_keeps_serving_langfuse_keys_and_applies_other_header_edits(
+    monkeypatch,
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        encrypt_pass_through_endpoints,
+        reencrypt_general_settings_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _register_pass_through_endpoint,
+        _registered_pass_through_routes,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-current-key")
+    app = FastAPI()
+    [stored] = encrypt_pass_through_endpoints(
+        [
+            {
+                "id": "ep-langfuse-rotate",
+                "path": "/langfuse-rotate-pt",
+                "target": "http://langfuse",
+                "headers": {"LANGFUSE_PUBLIC_KEY": "pk-lf", "LANGFUSE_SECRET_KEY": "sk-lf", "x-org": "old"},
+            }
+        ]
+    )
+    rotated = reencrypt_general_settings_pass_through({"pass_through_endpoints": [stored]}, "sk-next-key")
+    assert rotated is not None
+    [rotated_endpoint] = rotated["pass_through_endpoints"]
+    try:
+        await _register_pass_through_endpoint(
+            endpoint=dict(stored), app=app, premium_user=False, visited_endpoints=set()
+        )
+        [served_before] = [
+            route["passthrough_params"]["custom_headers"]
+            for route in _registered_pass_through_routes.values()
+            if route["endpoint_id"] == "ep-langfuse-rotate"
+        ]
+        reloaded: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint={**rotated_endpoint, "headers": {**rotated_endpoint["headers"], "x-org": "new"}},
+            app=app,
+            premium_user=False,
+            visited_endpoints=reloaded,
+        )
+
+        [route_key] = reloaded
+        assert _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"] == {
+            "Authorization": served_before["Authorization"],
+            "x-org": "new",
+        }
+
+        half_edited: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint={**rotated_endpoint, "headers": {**rotated_endpoint["headers"], "LANGFUSE_PUBLIC_KEY": "pk-new"}},
+            app=app,
+            premium_user=False,
+            visited_endpoints=half_edited,
+        )
+        [half_edited_key] = half_edited
+        assert _registered_pass_through_routes[half_edited_key]["passthrough_params"]["custom_headers"] == {
+            "Authorization": served_before["Authorization"],
+            "x-org": "new",
+        }
+    finally:
+        for key in [k for k in _registered_pass_through_routes if k.startswith("ep-langfuse-rotate")]:
             _registered_pass_through_routes.pop(key, None)

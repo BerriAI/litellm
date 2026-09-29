@@ -5219,6 +5219,39 @@ async def delete_key_aliases(
     )
 
 
+_PASS_THROUGH_REENCRYPT_ATTEMPTS: Final = 3
+_SWAP_PASS_THROUGH_ENDPOINTS_SQL: Final = (
+    'UPDATE "LiteLLM_Config" '
+    "SET param_value = jsonb_set(param_value::jsonb, '{pass_through_endpoints}', $1::jsonb) "
+    "WHERE param_name = 'general_settings' AND param_value::jsonb -> 'pass_through_endpoints' = $2::jsonb"
+)
+
+
+async def _reencrypt_pass_through_endpoint_headers(prisma_client: PrismaClient, new_master_key: str) -> None:
+    """Re-encrypt pass-through header values in general_settings under new_master_key.
+
+    Only the pass_through_endpoints key is written, and only if it still equals the list that
+    was read, so a concurrent settings edit is kept; a changed list is re-read and retried.
+    """
+    for _ in range(_PASS_THROUGH_REENCRYPT_ATTEMPTS):
+        rows: Sequence[ConfigParam] = await _config_table(prisma_client).find_many()
+        stored = next((row.param_value for row in rows if row.param_name == "general_settings"), None)
+        reencrypted = reencrypt_general_settings_pass_through(stored, new_master_key)
+        if not isinstance(stored, dict) or reencrypted is None:
+            return
+        swapped = await prisma_client.db.execute_raw(
+            _SWAP_PASS_THROUGH_ENDPOINTS_SQL,
+            json.dumps(reencrypted["pass_through_endpoints"]),
+            json.dumps(stored["pass_through_endpoints"]),
+        )
+        if swapped:
+            await invalidate_config_param("general_settings")
+            return
+    verbose_proxy_logger.warning(
+        "Pass-through endpoint headers were not re-encrypted: general_settings kept changing during the rotation"
+    )
+
+
 async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -5304,17 +5337,8 @@ async def _rotate_master_key(
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
 
-        for c in config:
-            if (
-                c.param_name == "general_settings"
-                and os.getenv(SALT_KEY_ENV_VAR) is None
-                and (reencrypted := reencrypt_general_settings_pass_through(c.param_value, new_master_key)) is not None
-            ):
-                await _config_table(prisma_client).update(
-                    where={"param_name": "general_settings"},
-                    data={"param_value": prisma.Json(reencrypted)},
-                )
-                await invalidate_config_param("general_settings")
+        if os.getenv(SALT_KEY_ENV_VAR) is None:
+            await _reencrypt_pass_through_endpoint_headers(prisma_client, new_master_key)
 
     # 4. process MCP server table
     try:
