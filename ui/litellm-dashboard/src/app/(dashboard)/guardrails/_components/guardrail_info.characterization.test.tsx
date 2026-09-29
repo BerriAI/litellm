@@ -204,6 +204,23 @@ describe("GuardrailInfoView update payload characterization", () => {
     expect(lastPayload()).toEqual({ litellm_params: { logging_only_scope: null } });
   });
 
+  it("clears a stored directional scope for a provider that does not support it", async () => {
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      ...uiSettings,
+      providers_without_directional_logging_only_scope: ["bedrock"],
+    });
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
+      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_scope: "output" }),
+    );
+    const user = userEvent.setup({ delay: null });
+    renderView();
+    await openEditor(user);
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({ litellm_params: { logging_only_scope: null } });
+  });
+
   it("parses the guardrail information textarea into an object", async () => {
     const user = userEvent.setup({ delay: null });
     renderView();
