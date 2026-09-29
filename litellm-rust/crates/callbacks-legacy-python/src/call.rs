@@ -3,15 +3,12 @@
 //! lifetime. No other callback host has that obligation, which is why nothing outside
 //! this crate holds them.
 
-use litellm_host::{machine::Machine, route::Route};
-use litellm_host_python::{RouteHost, lookup, run_call};
+use litellm_host_python::lookup;
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyTuple},
 };
-
-use crate::{LegacyLogging, LegacySurface};
 
 pub struct PublicCall {
     args: Py<PyTuple>,
@@ -34,12 +31,17 @@ impl PublicCall {
         })
     }
 
+    pub fn arguments(&self, py: Python<'_>) -> Py<PyDict> {
+        self.kwargs.clone_ref(py)
+    }
+
     pub(crate) fn args(&self) -> &Py<PyTuple> {
         &self.args
     }
 
     /// The keyword view the legacy path currently reads: the caller's copy until
-    /// `function_setup`, then each rewrite (setup, deployment hook, prepare) in turn.
+    /// `function_setup`, then each rewrite (setup, deployment hook, the driver's preflight)
+    /// in turn.
     pub(crate) fn kwargs(&self) -> &Py<PyDict> {
         &self.kwargs
     }
@@ -63,31 +65,6 @@ impl PublicCall {
     }
 }
 
-/// Runs one native call under the legacy `Logging` contract: the route host projects from
-/// the keyword view the contract prepares, and the contract observes the call.
-pub fn run_legacy_call<H, M>(
-    py: Python<'_>,
-    surface: LegacySurface,
-    call: PublicCall,
-    machine: M,
-    route: H,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>>
-where
-    H: RouteHost + 'static,
-    M: Machine<Route = H::Route, Complete = <H::Route as Route>::Response> + 'static,
-{
-    let arguments = call.kwargs.clone_ref(py);
-    run_call(
-        py,
-        machine,
-        route,
-        Box::new(LegacyLogging::new(py, surface, call, asynchronous)),
-        arguments,
-        asynchronous,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,7 +83,7 @@ mod tests {
         (call, locals)
     }
 
-    #[test]
+    #[rstest::rstest]
     fn capture_copies_the_keyword_dict_without_copying_its_values() {
         Python::initialize();
         Python::attach(|py| {

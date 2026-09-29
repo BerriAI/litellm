@@ -631,9 +631,9 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
         )
         preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
-            self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
+            self.stream = sys.stderr
         else:
-            self.stream = preferred  # rebind-ok: StreamHandler.emit writes self.stream under the handler lock
+            self.stream = preferred
         super().emit(record)
 
 

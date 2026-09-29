@@ -69,6 +69,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
@@ -118,6 +119,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
+from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.complexity_router.context_compaction import (
     arm_compaction,
@@ -226,6 +228,9 @@ from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
 )
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+    EncryptedContentAffinityCheck,
+)
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
@@ -255,6 +260,7 @@ from litellm.router_utils.routing_groups import (
     validate_routing_strategy,
 )
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolParam,
@@ -427,6 +433,7 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
+_CallbackT = TypeVar("_CallbackT")
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
@@ -437,6 +444,7 @@ _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = M
     {
         "prompt_caching": PromptCachingDeploymentCheck,
         "enforce_model_rate_limits": ModelRateLimitingCheck,
+        "encrypted_content_affinity": EncryptedContentAffinityCheck,
     }
 )
 
@@ -510,31 +518,20 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
-# until real content commits the primary stream; a hostile or slow-starting
-# upstream that never emits content or an error could otherwise grow that
-# buffer without bound, so hitting this cap forces an early commit instead.
+# until real content commits the primary stream, and only while a fallback
+# can still take over; a hostile or slow-starting upstream that never emits
+# content or an error could otherwise grow that buffer without bound, so
+# hitting this cap forces an early commit instead.
 MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS: Final = 200
 
 
-def _anthropic_stream_should_drop_pre_content_ping(chunk: object, has_generated_content: bool) -> bool:
-    """A `ping` keepalive seen before any real content is dropped outright - it recurs indefinitely on a
-    slow-starting connection and carries nothing worth buffering toward a possible fallback."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool) -> bool:
+    """A `ping` keepalive reaches the client live whenever the stream has not committed: it carries no
+    lifecycle, so it cannot create overlapping lifecycles on the wire, and it keeps the connection alive
+    while lifecycle frames sit buffered for a possible fallback during a long thinking pass."""
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
 
-    if has_generated_content:
-        return False
-    return is_anthropic_ping_chunk(chunk)
-
-
-def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
-    """A `ping` that no lifecycle frame precedes reaches the client live: a fallback's own message_start can still
-    follow it without overlapping lifecycles, and AgenticAnthropicStreamingIterator's hold-back keepalive is exactly
-    such a ping."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
-
-    if has_generated_content or buffered_chunk_count:
-        return False
-    return is_anthropic_ping_chunk(chunk)
+    return not has_generated_content and is_anthropic_ping_chunk(chunk)
 
 
 def _is_retriable_anthropic_status(status_code: int) -> bool:
@@ -544,7 +541,7 @@ def _is_retriable_anthropic_status(status_code: int) -> bool:
 def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
     """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
     failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
         is_server_fulfilled_tool_leak_error,
     )
 
@@ -599,13 +596,24 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
     pre-content buffer cap was hit) rather than keep buffering lifecycle
     frames toward a possible fallback.
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         is_anthropic_content_delta_chunk,
     )
 
     if has_generated_content:
         return False
     return is_anthropic_content_delta_chunk(chunk) or buffered_chunk_count >= MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
+
+
+MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
+
+
+def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
+    from litellm.responses.streaming_iterator import PRE_OUTPUT_LIFECYCLE_EVENT_TYPES
+
+    if held_event_count >= MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS:
+        return False
+    return getattr(item, "type", None) in PRE_OUTPUT_LIFECYCLE_EVENT_TYPES
 
 
 class FallbackAwareAnthropicMessagesStream:
@@ -675,7 +683,7 @@ class RoutingArgs(enum.Enum):
 # entries their deployments own. Weak so a router nothing references any more, such
 # as the per-request one built from a caller-supplied user_config, drops out on its
 # own rather than leaving entries behind that nothing can withdraw.
-_live_routers: Final["weakref.WeakSet[Router]"] = weakref.WeakSet()  # mutable-ok: identity set of live routers
+_live_routers: Final["weakref.WeakSet[Router]"] = weakref.WeakSet()
 
 
 def _replay_live_router_model_cost() -> None:
@@ -791,15 +799,7 @@ class Router:
         allowed_fails_policy: AllowedFailsPolicy | None = None,  # set custom allowed fails policy
         cooldown_time: float | None = None,  # (seconds) time to cooldown a deployment after failure
         disable_cooldowns: bool | None = None,
-        routing_strategy: Literal[
-            "simple-shuffle",
-            "least-busy",
-            "usage-based-routing",
-            "latency-based-routing",
-            "cost-based-routing",
-            "usage-based-routing-v2",
-            "lar1",
-        ] = "simple-shuffle",
+        routing_strategy: RoutingStrategyName = "simple-shuffle",
         optional_pre_call_checks: OptionalPreCallChecks | None = None,
         routing_strategy_args: dict = {},  # just for latency-based
         routing_groups: list[RoutingGroup | dict] | None = None,
@@ -1377,6 +1377,9 @@ class Router:
         `_init_routing_groups`) so repeated `update_settings` calls don't
         accumulate dead selectors that keep receiving callback events.
         """
+        for selector in selectors:
+            if isinstance(selector, BaseRoutingStrategy):
+                selector.retire()
         selector_ids: Final = {id(s) for s in selectors if s is not None}
         if not selector_ids:
             return
@@ -2203,13 +2206,9 @@ class Router:
                 )
 
     def _add_encrypted_content_affinity_check(self, enable_global_affinity: bool) -> None:
-        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-            EncryptedContentAffinityCheck,
-        )
-
         def _move_before_deployment_affinity(
-            callback_list: list[Any],
-            callback_to_move: EncryptedContentAffinityCheck,
+            callback_list: list[_CallbackT],
+            callback_to_move: _CallbackT,
         ) -> None:
             if callback_to_move not in callback_list:
                 return
@@ -2936,7 +2935,7 @@ class Router:
                     self._update_kwargs_before_fallbacks(model=model_group, kwargs=initial_kwargs)
                     fallback_response = await self.async_function_with_fallbacks_common_utils(
                         e=e,
-                        disable_fallbacks=False,
+                        disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                         fallbacks=fallbacks,
                         context_window_fallbacks=context_window_fallbacks,
                         content_policy_fallbacks=content_policy_fallbacks,
@@ -2954,10 +2953,10 @@ class Router:
                         fallback_headers_are_settled = False
                         async for fallback_item in fallback_response:
                             if not fallback_headers_are_settled:
-                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
+                                fallback_headers_are_settled = True
                                 # a fallback that failed over again only repoints itself once it yields
-                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
-                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                                    wrapper_ref, fallback_response
                                 )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
@@ -3335,99 +3334,139 @@ class Router:
                 await self._async_generator.aclose()
 
         async def stream_with_fallbacks():
-            fallback_response = None
+            held_lifecycle_events: tuple[object, ...] = ()  # rebind-ok: flushed at first output, dropped on fallback
             try:
                 async for item in source_iterator:
+                    if _responses_stream_holds_event(item, len(held_lifecycle_events)):
+                        held_lifecycle_events = (*held_lifecycle_events, item)
+                        continue
+                    for held_event in held_lifecycle_events:
+                        yield held_event
+                    held_lifecycle_events = ()
                     yield item
+                for held_event in held_lifecycle_events:
+                    yield held_event
             except MidStreamFallbackError as e:
-                partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
-                try:
-                    model_group: Final = cast(str, initial_kwargs.get("model"))
-                    fallbacks: Final[list | None] = initial_kwargs.get("fallbacks", self.fallbacks)
-                    context_window_fallbacks: Final[list | None] = initial_kwargs.get(
-                        "context_window_fallbacks", self.context_window_fallbacks
+                async with contextlib.aclosing(
+                    self._aresponses_fallback_attempt(
+                        e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
                     )
-                    content_policy_fallbacks: Final[list | None] = initial_kwargs.get(
-                        "content_policy_fallbacks", self.content_policy_fallbacks
-                    )
-                    initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_responses_attempt
-                    if e.is_pre_first_chunk or not e.generated_content:
-                        # No content generated before the error — retry with the
-                        # original input. Adding a continuation prompt would
-                        # waste tokens and confuse the model.
-                        pass
-                    else:
-                        initial_kwargs["input"] = Router._build_responses_continuation_input(
-                            initial_kwargs.get("input"),
-                            e.generated_content,
-                        )
-                    # The Responses-API path stores observability metadata
-                    # under "litellm_metadata" (not the default "metadata") —
-                    # see _ageneric_api_call_with_fallbacks. Mirroring that
-                    # here ensures model_group, model_group_alias, and trace
-                    # ids land in the same key litellm.aresponses reads from.
-                    self._update_kwargs_before_fallbacks(
-                        model=model_group,
-                        kwargs=initial_kwargs,
-                        metadata_variable_name="litellm_metadata",
-                    )
-                    # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
-                    # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
-                    fallback_trigger: Final[Exception] = (
-                        e.original_exception
-                        if isinstance(e.original_exception, litellm.ContentPolicyViolationError)
-                        else e
-                    )
-                    fallback_response = await self.async_function_with_fallbacks_common_utils(
-                        e=fallback_trigger,
-                        disable_fallbacks=False,
-                        fallbacks=fallbacks,
-                        context_window_fallbacks=context_window_fallbacks,
-                        content_policy_fallbacks=content_policy_fallbacks,
-                        model_group=model_group,
-                        args=(),
-                        kwargs=initial_kwargs,
-                        include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
-                    )
-
-                    prepared_fallback_hidden_params = wrapper.adopt_fallback_headers(fallback_response)
-                    if hasattr(fallback_response, "__aiter__"):
-                        async for fallback_item in fallback_response:
-                            Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
-                            if partial_usage is not None:
-                                Router._combine_responses_fallback_usage(fallback_item, partial_usage)
-                            yield fallback_item
-                    else:
-                        yield fallback_response
-                except Exception as fallback_error:
-                    verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
-                    if (
-                        isinstance(fallback_error, MidStreamFallbackError)
-                        and fallback_error.original_exception is not None
-                    ):
-                        raise fallback_error.original_exception from fallback_error
-                    raise fallback_error
+                ) as fallback_stream:
+                    async for fallback_item in fallback_stream:
+                        yield fallback_item
+            except Exception:
+                for held_event in held_lifecycle_events:
+                    yield held_event
+                raise
             finally:
                 with anyio.CancelScope(shield=True):
                     if hasattr(source_iterator, "aclose"):
                         try:
                             await source_iterator.aclose()
-                        except BaseException as exc:
+                        except Exception as exc:
                             verbose_router_logger.debug(
                                 "stream_with_fallbacks(aresponses): error closing source: %s",
-                                exc,
-                            )
-                    if fallback_response is not None and hasattr(fallback_response, "aclose"):
-                        try:
-                            await fallback_response.aclose()
-                        except BaseException as exc:
-                            verbose_router_logger.debug(
-                                "stream_with_fallbacks(aresponses): error closing fallback: %s",
                                 exc,
                             )
 
         wrapper: Final = FallbackResponsesStreamWrapper(stream_with_fallbacks())
         return wrapper
+
+    async def _aresponses_fallback_attempt(
+        self,
+        e: "MidStreamFallbackError",
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        adopt_headers: Callable[[object], tuple[dict[str, object], dict[str, object]]],  # mutable-ok: hidden params
+        held_lifecycle_events: tuple[object, ...],
+    ) -> AsyncGenerator[object, None]:
+        """
+        Re-enters the Router's fallback chain for a mid-stream Responses API error and yields
+        whatever the fallback attempt produces. The lifecycle events the primary stream held
+        back reach the client only when no fallback lands, so the client sees exactly one
+        response announced, the one whose id completes. Split out of
+        _aresponses_streaming_iterator to keep each function's cyclomatic complexity within
+        the repo's C901 budget.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+
+        partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
+        fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
+        fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
+        try:
+            model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: model group
+            fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the common_utils list|None param
+                "fallbacks", self.fallbacks
+            )
+            context_window_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "context_window_fallbacks", self.context_window_fallbacks
+            )
+            content_policy_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "content_policy_fallbacks", self.content_policy_fallbacks
+            )
+            initial_kwargs["original_function"] = (  # rebind-ok: the fallback chain re-enters on the same kwargs
+                self._ageneric_api_call_with_fallbacks_responses_attempt
+            )
+            if e.generated_content and not e.is_pre_first_chunk:
+                initial_kwargs["input"] = Router._build_responses_continuation_input(  # rebind-ok: fallback hop input
+                    initial_kwargs.get("input"),
+                    e.generated_content,
+                )
+            # The Responses-API path stores observability metadata
+            # under "litellm_metadata" (not the default "metadata") —
+            # see _ageneric_api_call_with_fallbacks. Mirroring that
+            # here ensures model_group, model_group_alias, and trace
+            # ids land in the same key litellm.aresponses reads from.
+            self._update_kwargs_before_fallbacks(
+                model=model_group,
+                kwargs=initial_kwargs,
+                metadata_variable_name="litellm_metadata",
+            )
+            # The content-policy dispatch branch matches on the trigger's own type, so a refusal's
+            # MidStreamFallbackError envelope is unwrapped here or the wrong fallback list is consulted.
+            fallback_trigger: Final[Exception] = (
+                e.original_exception if isinstance(e.original_exception, litellm.ContentPolicyViolationError) else e
+            )
+            fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
+                e=fallback_trigger,
+                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
+                fallbacks=fallbacks,
+                context_window_fallbacks=context_window_fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
+                model_group=model_group,
+                args=(),
+                kwargs=initial_kwargs,
+                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            )
+            prepared_fallback_hidden_params: Final = adopt_headers(fallback_response)
+            if hasattr(fallback_response, "__aiter__"):
+                async for fallback_item in fallback_response:
+                    Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
+                    if partial_usage is not None:
+                        Router._combine_responses_fallback_usage(fallback_item, partial_usage)
+                    fallback_yielded = True
+                    yield fallback_item
+            else:
+                fallback_yielded = True  # rebind-ok: see the pre-init above
+                yield fallback_response
+        except Exception as fallback_error:
+            verbose_router_logger.error("Responses streaming fallback also failed: %s", fallback_error)
+            if not fallback_yielded:
+                for held_event in held_lifecycle_events:
+                    yield held_event
+            if isinstance(fallback_error, MidStreamFallbackError) and fallback_error.original_exception is not None:
+                raise fallback_error.original_exception from fallback_error
+            raise
+        finally:
+            if fallback_response is not None and hasattr(fallback_response, "aclose"):
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await fallback_response.aclose()
+                    except Exception as exc:
+                        verbose_router_logger.debug(
+                            "stream_with_fallbacks(aresponses): error closing fallback: %s",
+                            exc,
+                        )
 
     def _completion_streaming_iterator(
         self,
@@ -3471,8 +3510,9 @@ class Router:
                 for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
-                if not e.is_pre_first_chunk and (
-                    e.generated_content or _stream_chunks_have_generated_content(model_response.chunks)
+                if fallbacks_disabled_for_request(initial_kwargs) or (
+                    not e.is_pre_first_chunk
+                    and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
                 ):
                     if e.original_exception is not None:
                         raise e.original_exception from e
@@ -3513,10 +3553,10 @@ class Router:
                         fallback_headers_are_settled = False
                         for fallback_item in fallback_response:
                             if not fallback_headers_are_settled:
-                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
+                                fallback_headers_are_settled = True
                                 # a fallback that failed over again only repoints itself once it yields
-                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
-                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                                    wrapper_ref, fallback_response
                                 )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
@@ -4231,7 +4271,7 @@ class Router:
         models: Final = [m.strip() for m in model.split(",")]
 
         async def _async_completion_no_exceptions(
-            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: Any
+            model_name: str, messages: list[dict[str, str]], stream: bool, **kwargs: object
         ) -> ModelResponse | CustomStreamWrapper | Exception:
             """
             Wrapper around self.acompletion that catches exceptions and returns them as a result
@@ -5305,7 +5345,7 @@ class Router:
                 response=response,
                 kwargs=kwargs,
             ):
-                from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+                from litellm.llms.anthropic.pass_through.messages.utils import (
                     safeguard_refusal_error,
                 )
 
@@ -5406,21 +5446,26 @@ class Router:
 
         Lifecycle/bookkeeping frames (message_start, content_block_start,
         ping, ...) do not by themselves disqualify a fallback attempt -
-        Anthropic routinely sends message_start before an overload error -
-        but they are BUFFERED rather than forwarded immediately, since
-        forwarding one and then appending a fallback attempt's own
-        message_start would produce two overlapping message lifecycles on
-        one SSE stream. Buffered frames are flushed, in order, the moment
-        real content arrives (the primary attempt has committed by then
-        anyway) or once the stream ends without ever producing content or
-        an error.
+        Anthropic routinely sends message_start before an overload error.
+        When a fallback can still take over they are BUFFERED rather than
+        forwarded immediately, since forwarding one and then appending a
+        fallback attempt's own message_start would produce two overlapping
+        message lifecycles on one SSE stream; a `ping` carries no lifecycle,
+        so it is forwarded live even while lifecycle frames sit buffered,
+        keeping the connection alive during a long thinking pass. Buffered
+        frames are flushed, in order, the moment real content arrives (the
+        primary attempt has committed by then anyway) or once the stream
+        ends without ever producing content or an error. When no fallback
+        can take over the request is already committed, so every frame,
+        including pings and provider error frames, is forwarded live and
+        verbatim instead.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
-        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+        from litellm.llms.anthropic.pass_through.messages.utils import (
             safeguard_refusal_error,
         )
 
@@ -5430,52 +5475,51 @@ class Router:
             from litellm.exceptions import MidStreamFallbackError
 
             # Lifecycle/bookkeeping frames (message_start, content_block_start,
-            # ping, ...) are held back rather than forwarded immediately:
-            # Anthropic routinely sends message_start before an overload
-            # error, and once a byte reaches the client a fallback attempt
-            # can only append its OWN message_start, producing two
-            # overlapping message lifecycles on one SSE stream. Buffered
-            # frames are flushed the moment real content (content_block_delta)
+            # ...) are held back rather than forwarded immediately, but only
+            # while a fallback can still take over: Anthropic routinely sends
+            # message_start before an overload error, and once a byte reaches
+            # the client a fallback attempt can only append its OWN
+            # message_start, producing two overlapping message lifecycles on
+            # one SSE stream. A `ping` keepalive carries no lifecycle, so it
+            # is forwarded live even behind buffered frames, keeping the
+            # connection alive through a long thinking pass. Buffered frames
+            # are flushed the moment real content (content_block_delta)
             # arrives - at that point the primary attempt has committed and a
             # clean retry is no longer possible anyway - or once the primary
-            # stream ends without ever producing content. A `ping` keepalive
-            # that nothing precedes is forwarded live (it is how a hold-back
-            # turn keeps its connection alive); one behind buffered frames is
-            # dropped outright rather than buffered, since it can recur
-            # indefinitely on a slow-starting connection and carries nothing
-            # worth preserving; hitting MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
-            # forces the same early commit as real content arriving, so a
-            # hostile or pathological upstream can't grow the buffer forever.
-            has_generated_content = False  # rebind-ok: set once real content is seen, or the buffer cap is hit
-            buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+            # stream ends without ever producing content. Hitting
+            # MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS forces the same early
+            # commit as real content arriving, so a hostile or pathological
+            # upstream can't grow the buffer forever. With no fallback able
+            # to take over there is nothing to buffer for, so every frame,
+            # including pings and provider error frames, is forwarded live.
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            has_generated_content = not self._anthropic_messages_stream_can_fall_back(  # rebind-ok: set once real content is seen, the buffer cap is hit, or no fallback can take over
+                model, initial_kwargs
+            )
+            buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             try:
                 async for chunk in source_iterator:
-                    if _anthropic_stream_forwards_ping_live(
-                        chunk, has_generated_content, len(buffered_lifecycle_chunks)
-                    ):
+                    if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                         yield chunk
                         continue
-                    if _anthropic_stream_should_drop_pre_content_ping(chunk, has_generated_content):
-                        continue
                     if _anthropic_stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
-                        has_generated_content = True  # rebind-ok: real content seen, or the buffer cap was hit
+                        has_generated_content = True
                     # A transport can split one SSE data line across byte chunks, so pre-content
                     # detection parses the accumulated buffer plus the current chunk, never the
                     # chunk alone; the buffer is already capped, which bounds this window too.
-                    parse_window = (  # rebind-ok: freshly computed each iteration, never carried over
+                    parse_window = (
                         b"".join(c for c in (*buffered_lifecycle_chunks, chunk) if isinstance(c, (bytes, bytearray)))  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes at runtime
                         if not has_generated_content and isinstance(chunk, (bytes, bytearray))  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes at runtime
                         else chunk
                     )
                     error_event = parse_anthropic_error_event(parse_window)
-                    retriable_pending_error = (  # rebind-ok: freshly computed each iteration, never carried over
+                    retriable_pending_error = (
                         not has_generated_content
                         and error_event is not None
                         and _is_retriable_anthropic_status(error_event[2])
                         and not _anthropic_stream_error_is_gateway_verdict(chunk)
                     )
-                    refusal_stop_details = (  # rebind-ok: freshly computed each iteration, never carried over
+                    refusal_stop_details = (
                         parse_anthropic_refusal_stop_details(parse_window)
                         if not has_generated_content and error_event is None
                         else None
@@ -5493,7 +5537,7 @@ class Router:
                         buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
                         continue
                     if retriable_pending_error:
-                        assert error_event is not None  # guard-ok: retriable_pending_error implies this
+                        assert error_event is not None
                         _error_type, message, status_code = error_event
                         raise MidStreamFallbackError(
                             message=message,
@@ -5577,7 +5621,7 @@ class Router:
         budget.
         """
         from litellm.exceptions import MidStreamFallbackError
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
             anthropic_messages_response_as_sse_events,
         )
@@ -5607,7 +5651,7 @@ class Router:
             )
             fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
                 e=fallback_trigger,
-                disable_fallbacks=False,
+                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
                 fallbacks=fallbacks,
                 context_window_fallbacks=context_window_fallbacks,
                 content_policy_fallbacks=content_policy_fallbacks,
@@ -5980,6 +6024,7 @@ class Router:
 
                 replace_model_in_jsonl_bool: Final = should_replace_model_in_jsonl(
                     purpose=purpose,
+                    passthrough=kwargs.get("passthrough") is True,
                 )
                 if replace_model_in_jsonl_bool:
                     file = replace_model_in_jsonl(
@@ -6736,7 +6781,7 @@ class Router:
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: str | None = None,
-            client: Any | None = None,
+            client: AsyncOpenAI | None = None,
             **kwargs,
         ):
             if call_type == "assistants":
@@ -7197,7 +7242,7 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        if disable_fallbacks is True or original_model_group is None:
+        if disable_fallbacks is True or original_model_group is None or is_guardrail_intervention(e):
             raise e
 
         input_kwargs: Final = {
@@ -7611,6 +7656,8 @@ class Router:
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
+            if is_guardrail_intervention(e):
+                raise
             current_attempt = None
             original_exception = e
             deployment_num_retries: Final = getattr(e, "num_retries", None)
@@ -7882,48 +7929,15 @@ class Router:
         """
         return run_async_function(self.async_function_with_fallbacks, *args, **kwargs)
 
-    def _get_fallback_model_group_from_fallbacks(
-        self,
-        fallbacks: list[dict[str, list[str]]],
-        model_group: str | None = None,
-    ) -> list[str] | None:
-        """
-        Returns the list of fallback models to use for a given model group
-
-        If no fallback model group is found, returns None
-
-        Example:
-            fallbacks = [{"gpt-3.5-turbo": ["gpt-4"]}, {"gpt-4o": ["gpt-3.5-turbo"]}]
-            model_group = "gpt-3.5-turbo"
-            returns: ["gpt-4"]
-        """
-        if model_group is None:
-            return None
-
-        fallback_model_group: list[str] | None = None
-        for item in fallbacks:  # [{"gpt-3.5-turbo": ["gpt-4"]}]
-            if list(item.keys())[0] == model_group:
-                fallback_model_group = item[model_group]
-                break
-        return fallback_model_group
-
     def _get_fallback_model_group_for_lookup_groups(
         self,
-        fallbacks: list[dict[str, list[str]]],  # mutable-ok: mirrors the sibling resolver's contract
+        fallbacks: list[dict[str, list[str]]],  # mutable-ok: mirrors the shared resolver's contract
         lookup_groups: tuple[str, ...],
-    ) -> list[str] | None:  # mutable-ok: mirrors the sibling resolver's contract
-        """First lookup group whose exact-key chain resolves (tier first, then requested group)."""
-        return next(
-            (
-                resolved
-                for resolved in (
-                    self._get_fallback_model_group_from_fallbacks(fallbacks=fallbacks, model_group=group)
-                    for group in lookup_groups
-                )
-                if resolved is not None
-            ),
-            None,
+    ) -> list[str] | None:  # mutable-ok: mirrors the shared resolver's contract
+        fallback_model_group, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=fallbacks, lookup_groups=lookup_groups
         )
+        return fallback_model_group
 
     def _get_first_default_fallback(self) -> str | None:
         """
@@ -8426,6 +8440,56 @@ class Router:
         )
         return has_unattempted_fallback_target(resolved, kwargs)
 
+    def _anthropic_messages_order_levels(self, model_group: str, kwargs: Mapping[str, Any]) -> tuple[int, ...]:
+        """
+        The distinct deployment order levels the fallback dispatcher would see for this request,
+        computed the same way: the tier a pre-routing hook selected wins over the requested group.
+        """
+        request_team_id: Final[str | None] = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
+        order_model_group: Final = get_pre_routing_selection(kwargs) or model_group
+        all_deployments: Final = self.get_model_list(model_name=order_model_group, team_id=request_team_id) or ()
+        return tuple(
+            sorted(
+                {
+                    litellm.utils._get_deployment_order(d)
+                    for d in all_deployments
+                    if litellm.utils._get_deployment_order(d) is not None
+                }
+            )
+        )
+
+    def _anthropic_messages_stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+        """
+        Whether async_function_with_fallbacks_common_utils could still route a
+        MidStreamFallbackError somewhere for this request (order levels, weighted
+        failover, content-policy or generic fallbacks), which is the only case where
+        holding lifecycle frames back from the client buys a clean retry. Errs toward
+        True whenever a dispatcher path might reach a fallback.
+        """
+        if fallbacks_disabled_for_request(kwargs):
+            return False
+        if self.enable_weighted_failover:
+            return True
+        order_levels: Final = self._anthropic_messages_order_levels(model_group, kwargs)
+        if len(order_levels) > 1:
+            current_target: Final = kwargs.get("_target_order")
+            skip_up_to: Final = current_target if current_target is not None else order_levels[0]
+            if any(o > skip_up_to for o in order_levels):
+                return True
+        content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
+        if content_policy_fallbacks is not None and self._has_content_policy_fallback(model_group, kwargs):
+            return True
+        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
+        if not fallbacks:
+            return False
+        if _check_non_standard_fallback_format(fallbacks=fallbacks):
+            return True
+        resolved, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=fallbacks,
+            lookup_groups=fallback_lookup_groups(kwargs, model_group),
+        )
+        return has_unattempted_fallback_target(resolved, kwargs)
+
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """
         Determines if a content policy error should be raised.
@@ -8441,7 +8505,7 @@ class Router:
         return self._has_content_policy_fallback(model, kwargs)
 
     def _should_raise_anthropic_refusal_error(
-        self, model: str, original_generic_function: Callable, response: object, kwargs: Mapping[str, Any]
+        self, model: str, original_generic_function: Callable, response: object, kwargs: Mapping[str, object]
     ) -> bool:
         """
         The /v1/messages twin of _should_raise_content_policy_error: an Anthropic safeguard
@@ -8449,7 +8513,7 @@ class Router:
         when a content-policy fallback is configured; a plain refusal without stop_details, or
         any response with nothing configured, is returned to the client unchanged.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+        from litellm.llms.anthropic.pass_through.messages.utils import (
             get_safeguard_refusal_stop_details,
         )
 
@@ -10318,7 +10382,7 @@ class Router:
         )
 
     @staticmethod
-    def _widest_configured_limit(model_infos: Sequence[Mapping[str, Any]], field: str) -> int | None:
+    def _widest_configured_limit(model_infos: Sequence[Mapping[str, object]], field: str) -> int | None:
         """The largest usable value of ``field`` across a group's configured model_info blocks."""
         limits: Final = tuple(
             limit
@@ -10951,10 +11015,8 @@ class Router:
             model_group_info.supports_fast_mode = model_group_info.supports_fast_mode and (
                 AnthropicModelInfo.supports_fast_mode(litellm_model, llm_provider)
             )
-            deployment_reasoning_efforts = (
-                resolve_supported_reasoning_efforts(  # rebind-ok: recalculated per deployment
-                    model_info, deployment_is_mapped=deployment_is_mapped
-                )
+            deployment_reasoning_efforts = resolve_supported_reasoning_efforts(
+                model_info, deployment_is_mapped=deployment_is_mapped
             )
             if deployment_reasoning_efforts is None:
                 reasoning_efforts_unknown = True
@@ -12118,7 +12180,7 @@ class Router:
                                 )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
-                        routing_args_updated = True
+                        routing_args_updated = value != self.routing_strategy_args
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
@@ -12191,7 +12253,7 @@ class Router:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+        from litellm.llms.anthropic.pass_through.messages.utils import (
             anthropic_system_to_openai_message,
         )
 
@@ -13411,7 +13473,7 @@ class Router:
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None,
+        messages: list[dict[str, object]] | None,
     ) -> RoutingContext:
         """
         Build a RoutingContext for `model`, run it through `self.routing_plugins`

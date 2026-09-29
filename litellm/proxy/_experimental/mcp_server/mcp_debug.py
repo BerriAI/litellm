@@ -174,9 +174,7 @@ class MCPAuthDiagnostics:
             {
                 "x-mcp-debug-auth-resolution": AuthResolution.multiple.value,
                 "x-mcp-debug-auth-resolutions": json.dumps(
-                    {
-                        server_id: source.value for server_id, source in self._outcomes[:32]
-                    },  # mutable-ok: JSON encoder requires a concrete dict
+                    {server_id: source.value for server_id, source in self._outcomes[:32]},
                     separators=(",", ":"),
                     ensure_ascii=True,
                 ),
@@ -597,9 +595,7 @@ async def capture_upstream_error_response(response: httpx.Response | httpx2.Resp
         )
     except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError, httpx2.HTTPError, httpx2.StreamError):
         response._content = b""  # pyright: ignore[reportPrivateUsage]  # rebind-ok: httpx auth retries must survive diagnostic read failures
-        response.extensions[_CAPTURE_EXTENSION] = (
-            "(unavailable: error body read failed)"  # rebind-ok: httpx response hooks communicate through extensions
-        )
+        response.extensions[_CAPTURE_EXTENSION] = "(unavailable: error body read failed)"
         return
     response.extensions[_CAPTURE_EXTENSION] = preview  # rebind-ok: httpx response hooks communicate through extensions
 

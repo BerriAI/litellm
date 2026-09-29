@@ -7,6 +7,7 @@ import litellm
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
+from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -69,7 +70,9 @@ def make_sync_call(
         completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        completion_stream = decoder.iter_bytes(
+            response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+        )
 
     # LOGGING
     logging_obj.post_call(
@@ -278,7 +281,7 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
-        stream_chunk_size: Final = litellm_params.get("stream_chunk_size")
+        stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode: Final = optional_params.get("json_mode", False)
