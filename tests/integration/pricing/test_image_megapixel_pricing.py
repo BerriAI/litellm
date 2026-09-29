@@ -132,11 +132,11 @@ def _spend_row(request_id: str) -> dict[str, JsonValue]:
 def _bill(gateway: Gateway, body: dict[str, JsonValue], **pricing: JsonValue) -> tuple[float, float, bytes]:
     with wire_server(_images_reply) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
-            model=str(pricing.pop("model", _MODEL)),
+            model=str(pricing.get("model", _MODEL)),
             api_base=wire.url,
             api_key="synthetic-azure-key",
             api_version="preview",
-            **pricing,
+            **{field: value for field, value in pricing.items() if field != "model"},
         )
         response: Final = gateway.request("POST", "/v1/images/generations", {"model": model, **body})
         assert response.status_code == 200, response.text
