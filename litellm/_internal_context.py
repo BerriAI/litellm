@@ -6,6 +6,8 @@ be settable from user input. Context variables are scoped to the current
 asyncio task and cannot be injected via HTTP request bodies.
 """
 
+import asyncio
+import weakref
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -23,6 +25,10 @@ _billing_time: Final[ContextVar[datetime | None]] = ContextVar("billing_time", d
 
 _post_response: Final[ContextVar[bool]] = ContextVar("post_response", default=False)
 
+_provider_calls_in_flight: Final[ContextVar[frozenset[tuple[weakref.ref[asyncio.Task[object]], int]]]] = ContextVar(
+    "provider_calls_in_flight", default=frozenset()
+)
+
 
 @contextmanager
 def post_response_phase() -> Generator[None]:
@@ -36,6 +42,20 @@ def post_response_phase() -> Generator[None]:
 
 def in_post_response_phase() -> bool:
     return _post_response.get()
+
+
+@contextmanager
+def provider_call_scope(logging_obj: object) -> Generator[bool]:
+    """Track nested provider calls sharing a logging object in the current task."""
+    task: Final = asyncio.current_task()
+    assert task is not None
+    key: Final = (weakref.ref(task), id(logging_obj))
+    in_flight: Final = _provider_calls_in_flight.get()
+    token: Final = _provider_calls_in_flight.set(in_flight.union((key,)))
+    try:
+        yield key in in_flight
+    finally:
+        _provider_calls_in_flight.reset(token)
 
 
 @contextmanager
