@@ -2012,4 +2012,5 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             GuardrailEventHooks.logging_only,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
         ]
