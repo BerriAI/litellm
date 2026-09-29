@@ -1,9 +1,12 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 from pydantic import BaseModel, Field
 
-CHAT_COMPLETION_AGENTIC_SURFACE: Final = "chat_completions"
-RESPONSES_AGENTIC_SURFACE: Final = "responses"
+from litellm.types.litellm_params import AgenticSurface
+
+CHAT_COMPLETION_AGENTIC_SURFACE: Final[AgenticSurface] = "chat_completions"
+RESPONSES_AGENTIC_SURFACE: Final[AgenticSurface] = "responses"
 CODE_INTERPRETER_INTERCEPTION_PREFIX: Final = "_code_interpreter_interception"
 HEADROOM_INTERCEPTION_PREFIX: Final = "_headroom_interception"
 HEADROOM_CONVERTED_STREAM_KEY: Final = f"{HEADROOM_INTERCEPTION_PREFIX}_converted_stream"
@@ -27,6 +30,13 @@ def is_interception_internal_key(
     prefixes: frozenset[str] = INTERCEPTION_INTERNAL_PREFIXES,
 ) -> bool:
     return any(key.startswith(prefix) for prefix in prefixes)
+
+
+CONVERTED_STREAM_KEYS: Final = frozenset(f"{prefix}_converted_stream" for prefix in INTERCEPTION_INTERNAL_PREFIXES)
+
+
+def converted_stream_requested(params: Mapping[str, object]) -> bool:
+    return any(bool(params.get(key)) for key in CONVERTED_STREAM_KEYS)
 
 
 class AgenticLoopSafetyError(ValueError):

@@ -292,22 +292,28 @@ class TestOpenAIChatCompletion(BaseLLMChatTest):
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
+    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
+        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    )
     litellm.set_verbose = True
     response = litellm.completion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         max_retries=0,
+        api_key="fake-key",
     )
 
     mock_get_openai_client.assert_called_once()
     assert mock_get_openai_client.call_args.kwargs["max_retries"] == 0
+    assert response.choices[0].message.content == "Hello"
 
 
 @patch("litellm.main.openai_chat_completions._get_openai_client")
 def test_openai_image_generation_forwards_organization(mock_get_openai_client):
     """Ensure organization flows to OpenAI client for image generation."""
 
-    class _DummyImages:
+    class _DummyRawImages:
         def generate(self, **kwargs):  # type: ignore
             class _Resp:
                 def model_dump(self_inner):  # minimal OpenAI ImagesResponse shape
@@ -321,7 +327,16 @@ def test_openai_image_generation_forwards_organization(mock_get_openai_client):
                         },
                     }
 
-            return _Resp()
+            class _RawResp:
+                headers = {}
+
+                def parse(self_inner):
+                    return _Resp()
+
+            return _RawResp()
+
+    class _DummyImages:
+        with_raw_response = _DummyRawImages()
 
     class _DummyClient:
         def __init__(self):

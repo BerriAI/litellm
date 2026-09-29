@@ -17,6 +17,7 @@ logic.
 
 import json
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -28,21 +29,68 @@ from litellm.types.llms.openai import (
 
 _MAX_ARGUMENTS_LEN: Final = 1_000_000
 
+TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE: Final = MappingProxyType({"function_call": "fc", "custom_tool_call": "ctc"})
+
+
+def openai_shaped_tool_call_item_id(item_type: str, tool_id: str) -> str:
+    prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type)
+    if prefix is None or not tool_id or tool_id.startswith(prefix):
+        return tool_id
+    return f"{prefix}_{tool_id}"
+
+
+class _ToolNameFields(BaseModel):
+    type: str = ""
+    name: str = ""
+    tools: tuple[object, ...] = ()
+
+
+def _tool_name_fields_of(tool: object) -> _ToolNameFields | None:
+    try:
+        return _ToolNameFields.model_validate(tool)
+    except ValidationError:
+        return None
+
+
+def _custom_tool_name_of(tool: object) -> str | None:
+    parsed: Final = _tool_name_fields_of(tool)
+    if parsed is None or parsed.type != "custom" or not parsed.name:
+        return None
+    return parsed.name
+
+
+def _nested_tools_of(tool: object) -> tuple[object, ...]:
+    parsed: Final = _tool_name_fields_of(tool)
+    if parsed is None or parsed.type != "namespace":
+        return ()
+    return parsed.tools
+
 
 def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
-    """Extract names of tools originally defined as ``type: "custom"``."""
-    if not tools:
-        return set()
-    names: Final[set[str]] = set()
-    for tool in tools:
-        if isinstance(tool, dict) and tool.get("type") == "custom" and "name" in tool:
-            names.add(tool["name"])
-    return names
+    """Extract names of ``type: "custom"`` tools, at the top level or one level inside a ``namespace`` tool."""
+    top_level: Final = tuple(tools or ())
+    nested: Final = tuple(nested_tool for tool in top_level for nested_tool in _nested_tools_of(tool))
+    return {name for tool in (*top_level, *nested) if (name := _custom_tool_name_of(tool)) is not None}
 
 
 def is_custom_tool_call(tool_name: str, custom_tool_names: set[str]) -> bool:
     """Check if a tool call name corresponds to a custom tool."""
     return tool_name in custom_tool_names
+
+
+def serialize_tool_call_arguments(raw_arguments: object, default: str = "") -> str:
+    """Render tool call arguments as the JSON string tool-call schemas require.
+
+    Arguments normally arrive already JSON-encoded, but clients and providers
+    also send the decoded object. ``str()`` on a dict yields a Python repr with
+    single quotes, which every downstream JSON parser rejects with errors like
+    "Expecting ',' delimiter".
+    """
+    if isinstance(raw_arguments, str):
+        return raw_arguments or default
+    if raw_arguments is None:
+        return default
+    return json.dumps(raw_arguments, default=str)
 
 
 def unwrap_custom_tool_arguments(arguments: str) -> str:
@@ -88,7 +136,7 @@ def build_tool_call_item_kwargs(
     item_type: Final = "custom_tool_call" if custom else "function_call"
     kwargs: Final[dict[str, str]] = {
         "type": item_type,
-        "id": call_id,
+        "id": openai_shaped_tool_call_item_id(item_type, call_id),
         "call_id": call_id,
         "name": name,
         "status": status,
@@ -118,7 +166,7 @@ def validated_allowed_callers(value: object) -> list[str] | None:
         raise ValueError("allowed_callers must be a list of strings") from exc
 
 
-def _grammar_suffix(fmt: object) -> str:
+def custom_tool_grammar_suffix(fmt: object) -> str:
     try:
         parsed: Final = _CustomToolFormat.model_validate(fmt)
     except ValidationError:
@@ -142,7 +190,9 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
     raw_name: Final = tool.get("name")
     name: Final = raw_name if isinstance(raw_name, str) else ""
     raw_description: Final = tool.get("description")
-    description = (raw_description if isinstance(raw_description, str) else "") + _grammar_suffix(tool.get("format"))
+    description: Final = (raw_description if isinstance(raw_description, str) else "") + custom_tool_grammar_suffix(
+        tool.get("format")
+    )
     allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
     function_chunk: Final = ChatCompletionToolParamFunctionChunk(
         name=name,

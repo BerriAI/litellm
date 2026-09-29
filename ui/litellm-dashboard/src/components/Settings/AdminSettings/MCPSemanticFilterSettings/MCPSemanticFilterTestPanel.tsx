@@ -11,8 +11,8 @@ interface MCPSemanticFilterTestPanelProps {
   accessToken: string | null;
   testQuery: string;
   setTestQuery: (value: string) => void;
-  testModel: string;
-  setTestModel: (value: string) => void;
+  testModel: string | null;
+  setTestModel: (value: string | null) => void;
   isTesting: boolean;
   onTest: () => void;
   filterEnabled: boolean;

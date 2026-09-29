@@ -9,8 +9,10 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
+    count_relayed_prompt_tokens,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
@@ -1830,8 +1832,10 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
     def setup_method(self):
         self.start_time = datetime.now()
         self.end_time = datetime.now()
+
+    def _expected_spend(self) -> float:
         rates = litellm.model_cost[self.MODEL_MAP_KEY]
-        self.expected_spend = (
+        return (
             self.INPUT_TOKENS * rates["input_cost_per_token"]
             + self.OUTPUT_TOKENS * rates["output_cost_per_token"]
         )
@@ -1912,7 +1916,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
         logging_obj.model_call_details["custom_llm_provider"] = "openai"
         return logging_obj
 
-    def test_streamed_responses_passthrough_spend_log_is_priced(self):
+    def test_streamed_responses_passthrough_spend_log_is_priced(self, local_model_cost_map):
         """The spend row books the same tokens, spend and `resp_` id as the buffered call."""
         result = OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
             litellm_logging_obj=self._logging_obj(),
@@ -1940,7 +1944,7 @@ class TestOpenAIPassthroughResponsesStreamingSpendLog:
         assert spend_log_row["prompt_tokens"] == self.INPUT_TOKENS
         assert spend_log_row["completion_tokens"] == self.OUTPUT_TOKENS
         assert spend_log_row["total_tokens"] == self.INPUT_TOKENS + self.OUTPUT_TOKENS
-        assert spend_log_row["spend"] == self.expected_spend
+        assert spend_log_row["spend"] == pytest.approx(self._expected_spend())
         assert spend_log_row["request_id"] == self.RESPONSE_ID
         assert spend_log_row["model"] == "gpt-4o-mini"
 
@@ -1965,7 +1969,6 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
     def setup_method(self):
         self.start_time = datetime.now()
         self.end_time = datetime.now()
-        self.expected_spend = self.PROMPT_TOKENS * litellm.model_cost[self.MODEL]["input_cost_per_token"]
         self.response_body = {
             "object": "list",
             "data": [{"object": "embedding", "index": 0, "embedding": [0.0, 1.0]}],
@@ -1973,6 +1976,9 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
             "usage": {"prompt_tokens": self.PROMPT_TOKENS, "total_tokens": self.PROMPT_TOKENS},
         }
         self.request_body = {"model": self.MODEL, "input": "hello"}
+
+    def _expected_spend(self) -> float:
+        return self.PROMPT_TOKENS * litellm.model_cost[self.MODEL]["input_cost_per_token"]
 
     def _create_mock_httpx_response(self) -> httpx.Response:
         mock_response = MagicMock(spec=httpx.Response)
@@ -1999,7 +2005,7 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
         )
         return logging_obj
 
-    def test_embeddings_passthrough_spend_log_is_priced(self):
+    def test_embeddings_passthrough_spend_log_is_priced(self, local_model_cost_map):
         """The dispatched call books prompt tokens and cost onto the spend row."""
         dispatched = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
             httpx_response=self._create_mock_httpx_response(),
@@ -2018,7 +2024,7 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
         )
 
         assert dispatched["standard_logging_response_object"] is not None
-        assert dispatched["kwargs"]["response_cost"] == self.expected_spend
+        assert dispatched["kwargs"]["response_cost"] == pytest.approx(self._expected_spend())
 
         spend_log_row = get_logging_payload(
             kwargs=dispatched["kwargs"],
@@ -2029,7 +2035,7 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
 
         assert spend_log_row["prompt_tokens"] == self.PROMPT_TOKENS
         assert spend_log_row["total_tokens"] == self.PROMPT_TOKENS
-        assert spend_log_row["spend"] == self.expected_spend
+        assert spend_log_row["spend"] == pytest.approx(self._expected_spend())
         assert spend_log_row["model"] == self.MODEL
         assert spend_log_row["custom_llm_provider"] == "openai"
         assert spend_log_row["request_id"] == self.CALL_ID
@@ -2037,3 +2043,56 @@ class TestOpenAIPassthroughEmbeddingsSpendLog:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+ONE_PIXEL_PNG_DATA_URL = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
+UNREACHABLE_IMAGE_URL = "http://127.0.0.1:9/doc.png"
+TEXT_ONLY_MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "Describe this"}]}]
+
+
+def _image_messages(url: str, detail: str) -> list[dict]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this"},
+                {"type": "image_url", "image_url": {"url": url, "detail": detail}},
+            ],
+        }
+    ]
+
+
+def test_count_relayed_prompt_tokens_counts_a_data_url_image_exactly():
+    messages = _image_messages(ONE_PIXEL_PNG_DATA_URL, "high")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == litellm.token_counter(
+        model="gpt-4.1-mini", messages=messages
+    )
+
+
+def test_count_relayed_prompt_tokens_keeps_a_low_detail_remote_image_at_the_base_count():
+    messages = _image_messages(UNREACHABLE_IMAGE_URL, "low")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == litellm.token_counter(
+        model="gpt-4.1-mini", messages=messages
+    )
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) < high_detail_image_token_upper_bound()
+
+
+def test_count_relayed_prompt_tokens_charges_only_the_remote_high_detail_image_at_the_upper_bound():
+    messages = _image_messages(UNREACHABLE_IMAGE_URL, "high")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
+        litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
+    )
+
+
+@pytest.mark.parametrize("scheme", ["HTTPS://", "Http://"])
+def test_count_relayed_prompt_tokens_charges_an_uppercase_scheme_remote_high_detail_image_at_the_upper_bound(scheme):
+    messages = _image_messages(scheme + UNREACHABLE_IMAGE_URL.split("://", 1)[1], "high")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
+        litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
+    )

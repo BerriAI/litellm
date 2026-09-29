@@ -13,14 +13,13 @@ import os
 import uuid
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Final, TypedDict, assert_never
+from typing import Annotated, Final, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from typing_extensions import ReadOnly, Required
+from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -33,6 +32,12 @@ from litellm.proxy.a2a.agent_card import (
     merge_agent_card,
     normalize_protocol_version,
 )
+from litellm.proxy.agent_endpoints.agent_registry import (
+    AgentIdWhere,
+    parse_agent_kill_switch,
+    parse_agent_litellm_params,
+    redact_sensitive_agent_litellm_params,
+)
 from litellm.proxy.agent_endpoints.agent_search import (
     DEFAULT_AGENT_SEARCH_TOP_K,
     AgentSearchEmbeddingFailed,
@@ -42,6 +47,15 @@ from litellm.proxy.agent_endpoints.agent_search import (
     search_agents,
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
+from litellm.proxy.agent_endpoints.kill_switch import (
+    KillSwitchAuditLogWriter,
+    KillSwitchHttpClient,
+    build_kill_switch_audit_log,
+    default_kill_switch_audit_log_writer,
+    default_kill_switch_http_client,
+    fire_kill_switch,
+    redact_kill_switch,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -50,6 +64,8 @@ from litellm.types.agents import (
     AgentCard,
     AgentConfig,
     AgentKeySummary,
+    AgentKillSwitchConfig,
+    AgentKillSwitchResult,
     AgentMakePublicResponse,
     AgentResponse,
     MakeAgentsPublicRequest,
@@ -139,25 +155,40 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
         agent.keys = matched_keys or None
 
 
+def _redact_agent_litellm_params_dict(
+    litellm_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+    """Type-narrowing wrapper: a dict in always yields a dict back from
+    ``redact_sensitive_agent_litellm_params``, which the function's general
+    (possible-JSON-string, possibly-None) signature can't express."""
+    return dict(  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+        parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params))
+    )
+
+
 def _redact_sensitive_agent_fields(
     agents: Sequence[AgentResponse],
+    *,
+    is_admin: bool,
 ) -> list[AgentResponse]:
     """
-    Return copies of the given agents with sensitive configuration fields
-    redacted.  The original objects are not modified.
+    Return copies of the given agents with credential-bearing litellm_params
+    values and kill-switch auth secrets replaced by a fixed marker (never
+    returned to ANY caller, admin included) and, for non-admin callers,
+    virtual-key, header and kill-switch fields stripped entirely. The original
+    objects are not modified.
     """
     redacted: Final[list[AgentResponse]] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
-        copy.static_headers = None
-        copy.extra_headers = None
-        copy.keys = None
+        if not is_admin:
+            copy.static_headers = None
+            copy.extra_headers = None
+            copy.keys = None
+            copy.kill_switch = None
         if copy.litellm_params:
-            copy.litellm_params = _get_masked_values(
-                copy.litellm_params,
-                unmasked_length=4,
-                number_of_asterisks=4,
-            )
+            copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
+        copy.kill_switch = redact_kill_switch(copy.kill_switch)
         redacted.append(copy)
     return redacted
 
@@ -234,7 +265,7 @@ def _agent_search_error(status_code: int, error: str, message: str) -> HTTPExcep
 async def _rank_agents_by_query(
     query: str, agents: Sequence[AgentResponse], top_k: int, user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[AgentResponse, ...]:
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     outcome: Final = await search_agents(
         query=query,
@@ -244,6 +275,7 @@ async def _rank_agents_by_query(
         embedding_model=litellm.agent_search_embedding_model,
         index=global_agent_search_index,
         user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
     )
     match outcome:
         case AgentSearchHits(hits):
@@ -345,13 +377,13 @@ async def get_agents(
                 global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
             )
 
-        # Redact sensitive fields for non-admin users
+        # litellm_params secrets are always redacted; keys/headers stay
+        # admin-only.
         is_admin: Final = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            returned_agents = _redact_sensitive_agent_fields(returned_agents)
+        returned_agents = _redact_sensitive_agent_fields(returned_agents, is_admin=is_admin)
 
         if health_check:
             agents_with_url: Final = [agent for agent in returned_agents if (agent.agent_card_params or {}).get("url")]
@@ -505,7 +537,9 @@ async def create_agent(
                 "Failed to register agent '%s' (ID: %s) in memory: %s", agent_name, agent_id, reg_error
             )
 
-        return result
+        # The caller is a proxy admin (enforced above); litellm_params
+        # secrets are still never echoed back in the response.
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
 
     except HTTPException:
         raise
@@ -578,13 +612,13 @@ async def get_agent_by_id(
 
         await _attach_keys_to_agents([agent], prisma_client)
 
-        # Redact sensitive fields for non-admin users
+        # litellm_params secrets are always redacted; keys/headers stay
+        # admin-only.
         is_admin = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            agent = _redact_sensitive_agent_fields([agent])[0]
+        agent = _redact_sensitive_agent_fields((agent,), is_admin=is_admin)[0]
 
         return agent
     except HTTPException:
@@ -688,7 +722,7 @@ async def update_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -791,7 +825,7 @@ async def patch_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -852,6 +886,74 @@ async def delete_agent(
     except Exception as e:
         verbose_proxy_logger.exception("Error deleting agent: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/v1/agents/{agent_id}/kill_switch",
+    tags=["[beta] A2A Agents"],  # mutable-ok: fastapi types tags as list[str | Enum]
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=AgentKillSwitchResult,
+)
+async def trigger_agent_kill_switch(
+    agent_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    http_client: Annotated[KillSwitchHttpClient, Depends(default_kill_switch_http_client)],
+    audit_log_writer: Annotated[KillSwitchAuditLogWriter, Depends(default_kill_switch_audit_log_writer)],
+):
+    """
+    Fire the agent's configured kill switch webhook. Proxy admin only.
+
+    LiteLLM only makes the configured HTTP call and reports what came back; it
+    does not change the agent's state in LiteLLM. Returns 200 when the webhook
+    answered 2xx, 502 with the same result body otherwise. Every attempt is
+    written to the audit log as a `kill_switch_fired` row against the agent.
+
+    Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000/kill_switch" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+    """
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    await check_feature_access_for_user(user_api_key_dict, "agents")
+    _check_agent_management_permission(user_api_key_dict)
+
+    resolved: Final = await _resolve_agent_kill_switch(agent_id)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+    resolved_agent_id, config = resolved
+    if config is None:
+        raise HTTPException(status_code=400, detail=f"Agent with ID {agent_id} has no kill_switch configured")
+
+    result: Final = await fire_kill_switch(agent_id=resolved_agent_id, config=config, http_client=http_client)
+    await audit_log_writer(
+        build_kill_switch_audit_log(
+            result=result,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+    )
+    if not result.succeeded:
+        raise HTTPException(status_code=502, detail=result.model_dump())
+    return result
+
+
+async def _resolve_agent_kill_switch(agent_id: str) -> tuple[str, AgentKillSwitchConfig | None] | None:
+    """The DB row wins over this replica's in-memory registry so a trigger never fires a webhook another
+    replica has since changed; config.yaml agents have no row and fall back to the registry."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is not None:
+        where: Final[AgentIdWhere] = {"agent_id": agent_id}
+        row: Final = await agents_table(prisma_client).find_unique(where=where)
+        if row is not None:
+            return row.agent_id, parse_agent_kill_switch(row.kill_switch)
+
+    agent: Final = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
+    if agent is None:
+        return None
+    return agent.agent_id, agent.kill_switch
 
 
 @router.post(
@@ -922,35 +1024,32 @@ async def make_agent_public(
             if agent is None:
                 raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
-        if litellm.public_agent_groups is None:
-            litellm.public_agent_groups = []
-        # handle duplicates
-        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups):
+        config: Final = await proxy_config.get_config()
+
+        current_public_agent_groups: Final = list(litellm.public_agent_groups or [])
+        if not AGENT_REGISTRY.ids_for_agent(agent.agent_id).isdisjoint(current_public_agent_groups):
             raise HTTPException(
                 status_code=400,
                 detail=f"Agent with name {agent.agent_name} already in public agent groups",
             )
-        litellm.public_agent_groups.append(agent.agent_id)
+        updated_public_agent_groups: Final = [*current_public_agent_groups, agent.agent_id]
 
-        # Load existing config
-        config: Final = await proxy_config.get_config()
-
-        # Update config with new settings
         if "litellm_settings" not in config or config["litellm_settings"] is None:
             config["litellm_settings"] = {}
 
-        config["litellm_settings"]["public_agent_groups"] = litellm.public_agent_groups
+        config["litellm_settings"]["public_agent_groups"] = updated_public_agent_groups
 
-        # Save the updated config
         await proxy_config.save_config(new_config=config)
 
+        litellm.public_agent_groups = updated_public_agent_groups
+
         verbose_proxy_logger.debug(
-            "Updated public agent groups to: %s by user: %s", litellm.public_agent_groups, user_api_key_dict.user_id
+            "Updated public agent groups to: %s by user: %s", updated_public_agent_groups, user_api_key_dict.user_id
         )
 
         return {
             "message": "Successfully updated public agent groups",
-            "public_agent_groups": litellm.public_agent_groups,
+            "public_agent_groups": updated_public_agent_groups,
             "updated_by": user_api_key_dict.user_id,
         }
     except HTTPException:

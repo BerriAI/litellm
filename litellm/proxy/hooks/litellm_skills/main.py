@@ -29,6 +29,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -65,6 +66,24 @@ class _ChatMessage(Protocol):
 
     @property
     def tool_calls(self) -> Sequence[_ChatToolCall] | None: ...
+
+
+class _ChatChoice(Protocol):
+    @property
+    def message(self) -> _ChatMessage: ...
+
+    @property
+    def finish_reason(self) -> str | None: ...
+
+
+class _ChatCompletion(Protocol):
+    @property
+    def choices(self) -> Sequence[_ChatChoice]: ...
+
+
+def _first_choice(response: _ChatCompletion) -> _ChatChoice:
+    """The first choice of an OpenAI shaped completion response."""
+    return response.choices[0]
 
 
 class SkillsInjectionHook(CustomLogger):
@@ -475,7 +494,6 @@ class SkillsInjectionHook(CustomLogger):
 
         Returns the final response with generated files inline.
         """
-        import litellm
         from litellm.llms.litellm_proxy.skills.code_execution import (
             LiteLLMInternalTools,
         )
@@ -705,7 +723,6 @@ print('No executable skill module found')
 
         Returns the final response with generated files inline.
         """
-        import litellm
         from litellm.llms.litellm_proxy.skills.code_execution import (
             LiteLLMInternalTools,
         )
@@ -738,8 +755,9 @@ print('No executable skill module found')
 
         for iteration in range(self.max_iterations):
             # OpenAI format response has choices[0].message
-            assistant_message: _ChatMessage = current_response.choices[0].message
-            stop_reason: str | None = current_response.choices[0].finish_reason
+            choice: _ChatChoice = _first_choice(current_response)
+            assistant_message: _ChatMessage = choice.message
+            stop_reason: str | None = choice.finish_reason
 
             # Build assistant message for conversation history
             assistant_msg_dict: dict[str, object] = {
@@ -894,11 +912,3 @@ print('No executable skill module found')
         verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to response", len(generated_files))
 
         return response
-
-
-# Global instance for registration
-skills_injection_hook: Final = SkillsInjectionHook()
-
-import litellm
-
-litellm.logging_callback_manager.add_litellm_callback(skills_injection_hook)

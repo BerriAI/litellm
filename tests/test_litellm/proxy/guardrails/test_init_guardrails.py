@@ -1,12 +1,14 @@
 import json
+from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
-from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.guardrails import Mode, SupportedGuardrailIntegrations
 
 
 def test_initialize_presidio_guardrail():
@@ -69,6 +71,52 @@ def test_initialize_bedrock_forwards_chunk_budget_chars():
     ]
     assert initialized, "bedrock guardrail was not registered as a callback"
     assert initialized[-1].chunk_budget_chars == 60_000
+
+
+def test_initialize_bedrock_forwards_contextual_grounding_from_messages():
+    """`contextual_grounding_from_messages: true` in config.yaml must make the post-call
+    payload carry the plain system prompt and user turn as grounding_source and query."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    test_guardrail = {
+        "guardrail_name": "test_bedrock_grounding_from_messages",
+        "litellm_params": {
+            "guardrail": SupportedGuardrailIntegrations.BEDROCK.value,
+            "mode": "post_call",
+            "guardrailIdentifier": "test-guardrail",
+            "guardrailVersion": "DRAFT",
+            "contextual_grounding_from_messages": True,
+        },
+    }
+    messages = [
+        {"role": "system", "content": "Returns are accepted for 30 days."},
+        {"role": "user", "content": "How long is the return window?"},
+    ]
+    response = ModelResponse(
+        choices=[Choices(index=0, message=Message(role="assistant", content="30 days."), finish_reason="stop")]
+    )
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [
+            {"text": {"text": "Returns are accepted for 30 days.", "qualifiers": ["grounding_source"]}},
+            {"text": {"text": "How long is the return window?", "qualifiers": ["query"]}},
+            {"text": {"text": "30 days.", "qualifiers": ["guard_content"]}},
+        ],
+    }
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
+
+    initialized = [
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, BedrockGuardrail) and callback.guardrail_name == "test_bedrock_grounding_from_messages"
+    ]
+    assert initialized, "bedrock guardrail was not registered as a callback"
+    actual_request = initialized[-1].convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    assert json.loads(json.dumps(actual_request)) == expected_request
 
 
 def test_initialize_guardrail_preserves_guardrail_info():
@@ -156,6 +204,66 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode, filter_scope, expect_output_scanned",
+    [
+        ("pre_mcp_call", None, False),
+        (["pre_mcp_call", "post_mcp_call"], None, False),
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": ["pre_mcp_call", "post_mcp_call"]}, None, False),
+        ({"tags": {"team:mcp": ["pre_mcp_call"]}, "default": "pre_call"}, None, True),
+        ({"tags": {}}, None, False),
+        ("pre_mcp_call", "both", True),
+        ("pre_mcp_call", "output", True),
+        ("pre_call", None, True),
+    ],
+)
+async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(
+    mode, filter_scope, expect_output_scanned, monkeypatch
+):
+    """Regression: an MCP-only Presidio guardrail used to also scan the LLM
+    response on post_call, so a blocked MCP tool call that the model repeated in
+    its answer turned the whole request into an HTTP 400 instead of a 200."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.guardrails import GuardrailEventHooks
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    llm_answer = "Call me at 415-555-2671"
+    litellm_params = {
+        "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+        "mode": mode,
+        "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+        "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+        "mock_redacted_text": {"text": "Call me at <PHONE_NUMBER>", "items": []},
+        "default_on": True,
+    }
+    if filter_scope is not None:
+        litellm_params["presidio_filter_scope"] = filter_scope
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
+        guardrail={"guardrail_name": "test_presidio_mcp_scope", "litellm_params": litellm_params}
+    )
+    guardrail_id = result["guardrail_id"]
+    callbacks = [
+        guardrail_handler.guardrail_id_to_custom_guardrail[guardrail_id],
+        *guardrail_handler.guardrail_id_to_sibling_callbacks[guardrail_id],
+    ]
+
+    request_data = {"metadata": {}}
+    response = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=llm_answer), index=0, finish_reason="stop")]
+    )
+    for callback in callbacks:
+        if callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call):
+            await callback.async_post_call_success_hook(
+                data=request_data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+    assert (response.choices[0].message.content != llm_answer) is expect_output_scanned
+
+
 @pytest.mark.parametrize(
     "config_value, expected",
     [(True, True), (False, False), (None, False)],
@@ -232,6 +340,27 @@ def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     assert "healthy_presidio" in guardrail_names
 
 
+def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_compile():
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "custom-code-without-apply-guardrail",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.CUSTOM_CODE.value,
+                "mode": "pre_call",
+                "custom_code": "x = 1\n",
+            },
+        },
+    ]
+
+    with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
+        init_guardrails_v2(all_guardrails=all_guardrails)
+
+
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():
     """
     Maintainer finding on BerriAI/litellm#34940: on_flagged='inject_system_message'
@@ -306,3 +435,62 @@ def test_init_guardrails_v2_skips_guardrail_with_malformed_advisory_template():
     }
     assert "broken_lakera_template" not in guardrail_names
     assert "healthy_presidio" in guardrail_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,tags,restore,scope,tokens,expected,expected_calls",
+    [
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": "pre_call"}, ["team:mcp"], False, None, {}, "raw", 0),
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": "pre_call"}, ["other"], False, None, {}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": "pre_call"}, [], False, None, {}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}}, [], False, None, {}, "raw", 0),
+        ("pre_mcp_call", [], True, None, {}, "raw", 1),
+        ("pre_mcp_call", [], True, None, {"restored": "twice", "raw": "restored"}, "restored", 1),
+        ("pre_mcp_call", [], False, "output", {"raw": "restored"}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}}, ["team:mcp"], False, "output", {}, "masked", 1),
+        ({"tags": {"team:mcp": "pre_mcp_call"}}, [], False, "output", {}, "raw", 0),
+    ],
+)
+async def test_presidio_initialized_output_dispatch(
+    mode: str | list[str] | Mode,
+    tags: list[str],
+    restore: bool,
+    scope: Literal["input", "output", "both"] | None,
+    tokens: dict[str, str],
+    expected: str,
+    expected_calls: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typing import Final
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+    from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode=mode,
+        default_on=True,
+        output_parse_pii=restore,
+        presidio_filter_scope=scope,
+        presidio_analyzer_api_base="https://example.invalid/analyze",
+        presidio_anonymizer_api_base="https://example.invalid/anonymize",
+        mock_redacted_text={"text": "masked", "items": []},
+    )
+    callbacks: Final = initialize_presidio(params, {"guardrail_name": "output_dispatch"})
+    data: Final = {"metadata": {"tags": tags, "pii_tokens": tokens}}
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="raw"), index=0)])
+    selected: Final = tuple(
+        callback for callback in callbacks if callback.should_run_guardrail(data, GuardrailEventHooks.post_call)
+    )
+    for callback in selected:
+        data["guardrail_to_apply"] = callback
+        await UnifiedLLMGuardrails().async_post_call_success_hook(
+            data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+        )
+    assert response.choices[0].message.content == expected
+    assert len(selected) == expected_calls

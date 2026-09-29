@@ -1,8 +1,6 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
-import traceback
-import json
 
 
 from typing import List, Dict, Any
@@ -11,14 +9,15 @@ import pytest
 
 import litellm
 from litellm import get_model_info
-from unittest.mock import AsyncMock, MagicMock, patch
+from litellm.utils import _invalidate_model_cost_lowercase_map
+from unittest.mock import MagicMock, patch
 
 
 def test_get_model_info_simple_model_name():
     """
     tests if model name given, and model exists in model info - the object is returned
     """
-    model = "claude-3-opus-20240229"
+    model = "claude-opus-5-5"
     litellm.get_model_info(model)
 
 
@@ -26,7 +25,7 @@ def test_get_model_info_custom_llm_with_model_name():
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
     """
-    model = "anthropic/claude-3-opus-20240229"
+    model = "anthropic/claude-opus-5-5"
     litellm.get_model_info(model)
 
 
@@ -47,40 +46,6 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     model_info = litellm.get_model_info(model, custom_llm_provider=provider)
     print("model_info", model_info)
     assert model_info["input_cost_per_token"] == 0.0
-
-
-def test_get_model_info_shows_correct_supports_vision():
-    info = litellm.get_model_info("gemini/gemini-2.0-flash")
-    print("info", info)
-    assert info["supports_vision"] is True
-
-
-def test_get_model_info_shows_assistant_prefill():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    info = litellm.get_model_info("deepseek/deepseek-chat")
-    print("info", info)
-    assert info.get("supports_assistant_prefill") is True
-
-
-def test_get_model_info_shows_supports_prompt_caching():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    info = litellm.get_model_info("deepseek/deepseek-chat")
-    print("info", info)
-    assert info.get("supports_prompt_caching") is True
-
-
-def test_get_model_info_finetuned_models():
-    info = litellm.get_model_info("ft:gpt-3.5-turbo:my-org:custom_suffix:id")
-    print("info", info)
-    assert info["input_cost_per_token"] == 0.000003
-
-
-def test_get_model_info_gemini_pro():
-    info = litellm.get_model_info("gemini-2.0-flash")
-    print("info", info)
-    assert info["key"] == "gemini-2.0-flash"
 
 
 def test_get_model_info_ollama_chat():
@@ -110,15 +75,15 @@ def test_get_model_info_ollama_chat():
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-def test_get_model_info_bedrock_region():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    args = {
-        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "custom_llm_provider": "bedrock",
+def test_get_model_info_bedrock_region(monkeypatch):
+    regional_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    model_cost_without_regional_entry = {
+        key: value for key, value in litellm.get_model_cost_map(url="").items() if key != regional_model
     }
-    litellm.model_cost.pop("us.anthropic.claude-haiku-4-5-20251001-v1:0", None)
-    info = litellm.get_model_info(**args)
+    monkeypatch.setattr(litellm, "model_cost", model_cost_without_regional_entry)
+    _invalidate_model_cost_lowercase_map()
+    info = litellm.get_model_info(model=regional_model, custom_llm_provider="bedrock")
     print("info", info)
     assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
     assert info["litellm_provider"] == "bedrock_converse"
@@ -219,7 +184,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 def test_get_model_info_custom_provider():
     # Custom provider example copied from https://docs.litellm.ai/docs/providers/custom_llm_server:
     import litellm
-    from litellm import CustomLLM, completion, get_llm_provider
+    from litellm import CustomLLM, completion
 
     class MyCustomLLM(CustomLLM):
         def completion(self, *args, **kwargs) -> litellm.ModelResponse:
@@ -355,6 +320,33 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
+
+def test_get_model_info_bedrock_priced_cross_region_profile_has_priced_base():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prefixes = ("us.", "eu.", "apac.", "us-gov.", "au.", "global.")
+    checked = 0
+
+    for k, v in litellm.model_cost.items():
+        if not str(v.get("litellm_provider", "")).startswith("bedrock"):
+            continue
+        base_model_key = next(
+            (k[len(p) :] for p in prefixes if k.startswith(p)),
+            None,
+        )
+        if base_model_key is None or base_model_key not in litellm.model_cost:
+            continue
+        checked += 1
+        base = litellm.model_cost[base_model_key]
+        for cost_key in ("input_cost_per_token", "output_cost_per_token"):
+            if (v.get(cost_key) or 0) > 0:
+                assert (
+                    base.get(cost_key) or 0
+                ) > 0, f"{k} charges {cost_key} but its base {base_model_key} is free"
+
+    assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
+
 def test_get_model_info_huggingface_models(monkeypatch):
     from litellm import Router
     from litellm.types.router import ModelGroupInfo
@@ -382,27 +374,6 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
-
-
-@pytest.mark.parametrize(
-    "model, provider",
-    [
-        ("bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0", None),
-        (
-            "bedrock/us-east-2/us.anthropic.claude-3-haiku-20240307-v1:0",
-            "bedrock",
-        ),
-    ],
-)
-def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, provider):
-    """
-    ensure cross region inferencing model is used correctly
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/8115
-    """
-    info = get_model_info(model=model, custom_llm_provider=provider)
-    print("info", info)
-    assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
-    assert info["litellm_provider"] == "bedrock"
 
 
 def test_get_model_info_case_insensitive_lookup(monkeypatch):

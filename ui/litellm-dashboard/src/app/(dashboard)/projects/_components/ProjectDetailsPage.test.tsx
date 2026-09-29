@@ -242,13 +242,11 @@ describe("ProjectDetail", () => {
     it("should show team information when team data is available", () => {
       mockUseTeam.mockReturnValue({
         data: {
-          team_info: {
-            team_id: "team-1",
-            team_alias: "Engineering",
-            models: ["gpt-4"],
-            spend: 50,
-            members_with_roles: [],
-          },
+          team_id: "team-1",
+          team_alias: "Engineering",
+          models: ["gpt-4"],
+          spend: 50,
+          members_with_roles: [],
         },
         isLoading: false,
       });

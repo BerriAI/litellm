@@ -1,5 +1,5 @@
 from collections.abc import Coroutine, Iterable
-from typing import Any, Final, Literal, TypedDict
+from typing import Final, Literal, TypedDict
 
 import httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
@@ -715,7 +715,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
         event_handler: AssistantEventHandler | None,
         litellm_params: dict | None = None,
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data: Final[dict[str, Any]] = {
+        stream_fn: Final = client.beta.threads.runs.stream
+        base_data: Final[_RunThreadStreamData] = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "additional_instructions": additional_instructions,
@@ -725,8 +726,8 @@ class AzureAssistantsAPI(BaseAzureLLM):
             "tools": tools,
         }
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)
+            return stream_fn(**base_data, event_handler=event_handler)
+        return stream_fn(**base_data)
 
     def run_thread_stream(
         self,

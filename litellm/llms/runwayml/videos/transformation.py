@@ -160,14 +160,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             **self._prompt_image_param(video_create_optional_params),
             **self._ratio_param(video_create_optional_params),
             **self._duration_param(video_create_optional_params),
-            # Pass through other parameters that aren't OpenAI-specific
             **{key: value for key, value in video_create_optional_params.items() if key not in supported_openai_params},
         }
 
     @staticmethod
     def _prompt_image_param(video_create_optional_params: VideoCreateOptionalRequestParams) -> Mapping[str, object]:
         # Handle input_reference parameter - map to promptImage
-        # RunwayML supports URLs and data URIs directly
         if "input_reference" in video_create_optional_params:
             return {"promptImage": video_create_optional_params["input_reference"]}
         return {}
@@ -618,6 +616,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
         """
         Transform the RunwayML video status retrieve response.

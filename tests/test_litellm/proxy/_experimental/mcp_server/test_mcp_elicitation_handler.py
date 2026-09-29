@@ -30,7 +30,7 @@ def _form_params(message: str = "fill the form") -> ElicitRequestFormParams:
     return ElicitRequestFormParams(
         mode="form",
         message=message,
-        requestedSchema={"type": "object", "properties": {}},
+        requested_schema={"type": "object", "properties": {}},
     )
 
 
@@ -39,7 +39,7 @@ def _url_params(message: str = "please authorize") -> ElicitRequestURLParams:
         mode="url",
         message=message,
         url="https://example.com/oauth",
-        elicitationId="elc-1",
+        elicitation_id="elc-1",
     )
 
 
@@ -118,7 +118,7 @@ class TestRelayElicitationToDownstream:
         session.elicit_form.assert_awaited_once()
         _, kwargs = session.elicit_form.call_args
         assert kwargs["message"] == "collect name"
-        assert kwargs["requestedSchema"] == params.requestedSchema
+        assert kwargs["requested_schema"] == params.requested_schema
 
     async def test_should_relay_url_mode(self):
         accepted = ElicitResult(action="accept")
@@ -142,7 +142,7 @@ class TestRelayElicitationToDownstream:
 
         # A bare params object that is neither Form nor URL params triggers
         # the generic fallback path.
-        params = SimpleNamespace(mode="form", message="hi", requestedSchema={})
+        params = SimpleNamespace(mode="form", message="hi", requested_schema={})
         result = await _relay_elicitation_to_downstream(
             params=params,
             downstream_session=session,

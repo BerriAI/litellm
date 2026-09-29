@@ -1446,9 +1446,17 @@ def test_convert_to_anthropic_tool_invoke_sanitizes_invalid_ids():
 
 def test_convert_to_anthropic_tool_invoke_server_tool():
     """
-    Test that server_tool_use (srvtoolu_) is reconstructed as server_tool_use.
+    Test that a server tool call (srvtoolu_) with no stored result is replayed
+    as a regular tool_use block.
 
-    Fixes: https://github.com/BerriAI/litellm/issues/17737
+    A server_tool_use block is only valid when paired with its result block, so
+    an unpaired one must degrade to tool_use for Anthropic to accept the replay.
+    A paired call still becomes server_tool_use, covered by
+    test_convert_to_anthropic_tool_invoke_with_web_search_results.
+
+    Context: https://github.com/BerriAI/litellm/issues/17737 (original
+    server_tool_use reconstruction) and LIT-6622 / PR #39144 (unpaired calls
+    degrade instead of 400ing at Anthropic).
     """
     tool_calls = [
         {
@@ -1464,7 +1472,7 @@ def test_convert_to_anthropic_tool_invoke_server_tool():
     result = convert_to_anthropic_tool_invoke(tool_calls)
 
     assert len(result) == 1
-    assert result[0]["type"] == "server_tool_use"  # NOT tool_use
+    assert result[0]["type"] == "tool_use"
     assert result[0]["id"] == "srvtoolu_01ABC123"
     assert result[0]["name"] == "web_search"
     assert result[0]["input"] == {"query": "elephant weight"}
