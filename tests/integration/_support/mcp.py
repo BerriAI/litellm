@@ -58,16 +58,7 @@ class McpPeer:
 
     def registration(self) -> dict[str, object]:
         if self.transport == "stdio":
-            return {
-                "transport": "stdio",
-                "command": self.command,
-                "args": list(self.args),
-                **(
-                    {"env": {"COVERAGE_PROCESS_CONFIG": os.environ["COVERAGE_PROCESS_CONFIG"]}}
-                    if os.environ.get("COVERAGE_PROCESS_CONFIG")
-                    else {}
-                ),
-            }
+            return {"transport": "stdio", "command": self.command, "args": list(self.args)}
         if self.spec_path is not None:
             return {"transport": "http", "url": self.url, "spec_path": str(self.spec_path)}
         return {"transport": self.transport, "url": self.url}
@@ -228,12 +219,24 @@ def mcp_peer(transport: Literal["http", "sse"] = "http", *, rich: bool = False) 
 @contextmanager
 def stdio_peer(directory: Path, *, rich: bool = False) -> Iterator[McpPeer]:
     record: Final = directory / f"stdio-{os.getpid()}-{time.monotonic_ns()}.jsonl"
+    coverage_file: Final = os.environ.get("COVERAGE_FILE")
+    coverage_args: Final = (
+        (
+            "-m",
+            "coverage",
+            "run",
+            f"--rcfile={STDIO_PEER.parent.parent / 'conformance_coverage.toml'}",
+            f"--data-file={Path(coverage_file).resolve()}",
+        )
+        if coverage_file and os.environ.get("COVERAGE_PROCESS_CONFIG")
+        else ()
+    )
     yield McpPeer(
         "",
         queue.Queue(),
         "stdio",
         sys.executable,
-        (str(STDIO_PEER), str(record), "rich" if rich else "plain"),
+        (*coverage_args, str(STDIO_PEER), str(record), "rich" if rich else "plain"),
         record,
     )
 
