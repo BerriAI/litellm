@@ -211,7 +211,7 @@ const menuGroups: MenuGroup[] = [
         roles: all_admin_roles,
         label: (
           <span className="flex items-center gap-2">
-            Model Leaderboard <Badge variant="secondary">New</Badge>
+            Model Leaderboard <BetaBadge />
           </span>
         ),
       },
