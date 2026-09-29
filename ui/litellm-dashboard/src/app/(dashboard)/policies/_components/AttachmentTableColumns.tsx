@@ -168,6 +168,34 @@ export const getAttachmentTableColumns = ({
     cell: ({ row }) => <ChipList values={row.original.tags ?? []} />,
   },
   {
+    id: "priority",
+    accessorFn: (row) => row.priority ?? Number.POSITIVE_INFINITY,
+    meta: { title: "Priority" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Priority" />,
+    size: 100,
+    enableSorting: true,
+    cell: ({ row }) =>
+      row.original.priority == null ? (
+        <span className="text-muted-foreground">-</span>
+      ) : (
+        <span className="font-mono text-xs">{row.original.priority}</span>
+      ),
+  },
+  {
+    id: "default",
+    accessorFn: (row) => (row.default ? 1 : 0),
+    meta: { title: "Default" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Default" />,
+    size: 100,
+    enableSorting: true,
+    cell: ({ row }) =>
+      row.original.default ? (
+        <StatusBadge tone="info" label="Default" tooltip="Applied only when no non-default attachment matches" />
+      ) : (
+        <span className="text-muted-foreground">-</span>
+      ),
+  },
+  {
     id: "created_at",
     accessorFn: (row) => row.created_at ?? "",
     meta: { title: "Created At" },

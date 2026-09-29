@@ -59,6 +59,8 @@ def resolve_fireworks_api_key(api_key: str | None) -> str | None:
 
 
 AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX: Final = "FW-"
+FIREROUTER: Final = "firerouter"
+ROUTER_SHORT_NAMES: Final = frozenset({FIREROUTER, "auto", "auto-instant"})
 
 
 def resolve_fireworks_resource_name(model: str) -> str:
@@ -67,7 +69,7 @@ def resolve_fireworks_resource_name(model: str) -> str:
         return stripped
     if stripped.startswith(("routers/", "models/")):
         return f"accounts/fireworks/{stripped}"
-    if stripped.endswith("-fast"):
+    if stripped.endswith("-fast") or stripped in ROUTER_SHORT_NAMES or stripped.startswith(f"{FIREROUTER}/"):
         return f"accounts/fireworks/routers/{stripped}"
     return f"accounts/fireworks/models/{stripped}"
 

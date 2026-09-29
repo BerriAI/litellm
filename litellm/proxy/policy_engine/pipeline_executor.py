@@ -8,7 +8,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 import copy
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import BaseModel
 
@@ -50,21 +50,16 @@ except ImportError:
 
 
 class UndeliverableStreamRewrite(Exception):
-    def __init__(self, guardrail_name: str) -> None:
-        super().__init__(
-            f"Guardrail '{guardrail_name}' rewrote the streamed response in a way this endpoint's "
-            "streaming pipeline cannot deliver"
-        )
+    def __init__(self, guardrail_name: str, reason: str) -> None:
+        super().__init__(guardrail_name, reason)
         self.guardrail_name: Final = guardrail_name
+        self.reason: Final = reason
 
-
-class UnappliableRequestRewrite(Exception):
-    def __init__(self, guardrail_name: str) -> None:
-        super().__init__(
-            f"Guardrail '{guardrail_name}' rewrote the request in a way this endpoint cannot apply, "
-            "so the request was rejected rather than sent unrewritten"
+    def __str__(self) -> str:
+        return (
+            f"Guardrail '{self.guardrail_name}' rewrote the streamed response but the rewrite cannot be written "
+            f"back to the stream: {self.reason}"
         )
-        self.guardrail_name: Final = guardrail_name
 
 
 def _tool_call_shape(tool_call: object) -> tuple[object, object]:
@@ -91,15 +86,29 @@ def _rewrote(sent: tuple[object, ...] | None, returned: tuple[object, ...] | Non
     return sent is not None and returned is not None and returned != sent
 
 
-def _changed_count(sent: tuple[object, ...] | None, returned: tuple[object, ...] | None) -> bool:
-    return sent is not None and returned is not None and len(returned) != len(sent)
+def _count_change(sent: tuple[object, ...] | None, returned: tuple[object, ...] | None) -> tuple[int, int] | None:
+    if sent is None or returned is None or len(returned) == len(sent):
+        return None
+    return (len(sent), len(returned))
+
+
+def _tool_call_mismatch_reason(
+    sent: tuple[tuple[object, object], ...] | None, returned: tuple[tuple[object, object], ...] | None
+) -> str | None:
+    if sent == returned:
+        return None
+    sent_count: Final = len(sent or ())
+    returned_count: Final = len(returned or ())
+    if sent_count == returned_count:
+        return "the legacy hook changed a tool call's name or arguments, which this path cannot write back"
+    return f"the legacy hook returned {returned_count} tool calls for a stream that carried {sent_count}"
 
 
 _GuardrailMethodT = TypeVar("_GuardrailMethodT", bound=Callable[..., object])
 
 
 def _logged_by_inner_guardrail(method: _GuardrailMethodT) -> _GuardrailMethodT:
-    vars(method)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the method the class body just defined
+    vars(method)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True
     return method
 
 
@@ -119,7 +128,7 @@ class _StreamRewriteObserver(CustomGuardrail):
         self.inner: Final = inner
         self.rewrote_texts = False
         self.rewrote_tool_calls = False
-        self.changed_tool_call_count = False
+        self.tool_call_count_change: tuple[int, int] | None = None
 
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
@@ -140,10 +149,21 @@ class _StreamRewriteObserver(CustomGuardrail):
         returned_tool_shapes: Final = _tool_call_shapes(outputs.get("tool_calls"))
         self.rewrote_texts = self.rewrote_texts or _rewrote(sent_texts, _text_snapshot(outputs.get("texts")))
         self.rewrote_tool_calls = self.rewrote_tool_calls or _rewrote(sent_tool_shapes, returned_tool_shapes)
-        self.changed_tool_call_count = self.changed_tool_call_count or _changed_count(
+        self.tool_call_count_change = self.tool_call_count_change or _count_change(
             sent_tool_shapes, returned_tool_shapes
         )
         return outputs
+
+    def discard_reason(self, deliver_rewrites: bool) -> str | None:
+        if self.tool_call_count_change is not None:
+            sent, returned = self.tool_call_count_change
+            return (
+                f"the guardrail returned {returned} tool calls for a stream that carried {sent}, and a rewrite "
+                "that drops or adds a tool call cannot be written back"
+            )
+        if not deliver_rewrites and (self.rewrote_texts or self.rewrote_tool_calls):
+            return "this endpoint's streaming pipeline does not write ended-stream rewrites back yet"
+        return None
 
 
 class _ScannedTextRecorder(CustomGuardrail):
@@ -209,13 +229,24 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         if rewrite is None:
             return inputs
         rescanned: Final = await self._rescan(rewrite, logging_obj)
+        guardrail_name: Final = self.guardrail_name or "unknown"
         if rescanned is None:
-            raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
+            raise UndeliverableStreamRewrite(
+                guardrail_name, "the legacy hook's response could not be rescanned by this endpoint's translation"
+            )
         rewritten: Final = rescanned.get("texts")
-        if len(_scanned_texts(rewritten)) != len(_scanned_texts(inputs.get("texts"))):
-            raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
-        if _tool_call_shapes(rescanned.get("tool_calls")) != _tool_call_shapes(inputs.get("tool_calls")):
-            raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
+        returned_text_count: Final = len(_scanned_texts(rewritten))
+        sent_text_count: Final = len(_scanned_texts(inputs.get("texts")))
+        if returned_text_count != sent_text_count:
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the legacy hook returned {returned_text_count} texts for a stream that carried {sent_text_count}",
+            )
+        tool_call_mismatch: Final = _tool_call_mismatch_reason(
+            _tool_call_shapes(inputs.get("tool_calls")), _tool_call_shapes(rescanned.get("tool_calls"))
+        )
+        if tool_call_mismatch is not None:
+            raise UndeliverableStreamRewrite(guardrail_name, tool_call_mismatch)
         if not rewritten:
             return inputs
         rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
@@ -247,9 +278,7 @@ def _prepare_hook_input(
     guardrail loops do this."""
     if "metadata" not in data:
         data["metadata"] = {}  # mutable-ok: request metadata bucket, hooks mutate it
-    data["metadata"]["guardrails"] = [
-        step.guardrail
-    ]  # mutable-ok: guardrails list is part of the request-payload shape
+    data["metadata"]["guardrails"] = [step.guardrail]
 
     scans_raw_request: Final = callback.scan_raw_request
     hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
@@ -262,14 +291,16 @@ def _prepare_hook_input(
 
 def _release_original_chunks(
     guardrail_name: str,
+    reason: str,
     streaming_chunks: list[object],  # mutable-ok: shared buffered-stream chunks, restored in place
     originals: Sequence[object],
 ) -> None:
     streaming_chunks[:] = originals  # rebind-ok: the caller's buffer is the stream the client receives
     verbose_proxy_logger.warning(
-        "Pipeline: guardrail '%s' rewrote the streamed response in a way this endpoint's streaming "
-        "pipeline cannot deliver yet; the rewrite was discarded and the original stream released",
+        "Pipeline: guardrail '%s' rewrote the streamed response but the rewrite could not be written back to "
+        "the stream: %s. The whole rewrite, text rewrites included, was discarded and the original stream released",
         guardrail_name,
+        reason,
     )
 
 
@@ -281,11 +312,11 @@ class PipelineExecutor:
         steps: list[PipelineStep],
         mode: str,
         data: dict,
-        user_api_key_dict: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         policy_name: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
-        streaming_chunks: list[Any] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
+        streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> PipelineExecutionResult:
         """
@@ -423,7 +454,7 @@ class PipelineExecutor:
         observer: Final = _StreamRewriteObserver(scanner)
         deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_rewrites
         originals: Final = copy.deepcopy(streaming_chunks)
-        hook_input.pop("response", None)  # rebind-ok: an earlier step's stored response goes so this step's is stored
+        hook_input.pop("response", None)
         try:
             if deliver_rewrites:
                 await endpoint_translation.process_output_streaming_response(
@@ -442,13 +473,12 @@ class PipelineExecutor:
                     user_api_key_dict=user_api_key_dict,
                     request_data=hook_input,
                 )
-        except UndeliverableStreamRewrite:
-            _release_original_chunks(step.guardrail, streaming_chunks, originals)
+        except UndeliverableStreamRewrite as undeliverable:
+            _release_original_chunks(step.guardrail, undeliverable.reason, streaming_chunks, originals)
             return
-        if observer.changed_tool_call_count or (
-            not deliver_rewrites and (observer.rewrote_texts or observer.rewrote_tool_calls)
-        ):
-            _release_original_chunks(step.guardrail, streaming_chunks, originals)
+        discard_reason: Final = observer.discard_reason(deliver_rewrites)
+        if discard_reason is not None:
+            _release_original_chunks(step.guardrail, discard_reason, streaming_chunks, originals)
             return
         if not callback.records_own_guardrail_information:
             add_guardrail_to_applied_guardrails_header(request_data=hook_input, guardrail_name=step.guardrail)
@@ -458,10 +488,10 @@ class PipelineExecutor:
         step: PipelineStep,
         mode: str,
         data: dict,
-        user_api_key_dict: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
-        streaming_chunks: list[Any] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
+        streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> tuple[
         Literal["pass", "fail", "error"],
@@ -550,7 +580,7 @@ class PipelineExecutor:
                     {"response": response},
                     None,
                     None,
-                )  # mutable-ok: modified-data contract is a plain dict
+                )
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except Exception as e:
@@ -690,7 +720,7 @@ def _extract_error_message(e: Exception) -> str:
     if isinstance(e, ModifyResponseException):
         return str(e)
     if HTTPException is not None and isinstance(e, HTTPException):
-        detail: Final = getattr(e, "detail", None)
+        detail: Final[object] = getattr(e, "detail", None)
         if detail:
             return str(detail)
     return str(e)

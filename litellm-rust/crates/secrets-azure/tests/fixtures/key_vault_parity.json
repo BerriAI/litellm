@@ -1,0 +1,8 @@
+{
+  "cases": [
+    {"name": "plain_value", "secret_name": "OPENAI-API-KEY", "response": {"status": 200, "body": {"value": "sk-parity-1", "id": "https://example.vault.azure.net/secrets/OPENAI-API-KEY/abc"}}, "expected": {"value": "sk-parity-1"}},
+    {"name": "json_value_is_kept_as_string", "secret_name": "JSON-SECRET", "response": {"status": 200, "body": {"value": "{\"api_key\": \"nested\"}", "id": "https://example.vault.azure.net/secrets/JSON-SECRET/abc"}}, "expected": {"value": "{\"api_key\": \"nested\"}"}},
+    {"name": "missing_secret", "secret_name": "MISSING", "response": {"status": 404, "body": {"error": {"code": "SecretNotFound", "message": "not found"}}}, "expected": {"missing": true}},
+    {"name": "forbidden", "secret_name": "FORBIDDEN", "response": {"status": 403, "body": {"error": {"code": "Forbidden", "message": "denied"}}}, "expected": {"error": true}}
+  ]
+}

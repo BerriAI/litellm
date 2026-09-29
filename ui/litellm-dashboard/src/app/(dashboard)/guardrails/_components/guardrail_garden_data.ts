@@ -475,6 +475,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     providerKey: "Alice",
   },
   {
+    id: "agent_365",
+    name: "Microsoft Agent 365",
+    description:
+      "Microsoft Agent 365 tool-call governance: Defender threat evaluation and observability for MCP tool calls, acting on behalf of the signed-in user",
+    category: "partner",
+    logo: guardrailLogoMap["Microsoft Agent 365"],
+    tags: ["Agentic", "MCP", "Tool Misuse", "Observability"],
+    providerKey: "Agent365",
+  },
+  {
     id: "conduct",
     name: "Conduct Guard",
     description:
