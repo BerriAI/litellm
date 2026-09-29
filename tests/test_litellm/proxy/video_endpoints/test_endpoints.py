@@ -33,8 +33,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
+import respx
 
 
+import litellm
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
 from litellm.proxy._types import UserAPIKeyAuth
@@ -121,6 +123,8 @@ def harness():
         side_effect=lambda model_id: RESOLVED_MODELS.get(model_id)
     )
     router.resolve_model_name_from_model_id = resolve_model
+    router.has_model_id.return_value = False
+    router.get_deployment.return_value = None
 
     read_body = AsyncMock(return_value={})
     batch_to_bytesio = AsyncMock(return_value=[b"filebytes"])
@@ -811,3 +815,92 @@ async def test_extension__reencodes_id_with_model_id(harness):
     decoded_video_id = decode_video_id_with_provider(resp.id)
     assert decoded_video_id["model_id"] == VIDEO_MODEL_ID
     assert decoded_video_id["video_id"] == "video_raw"
+
+
+# =========================================================================== #
+#   Follow-up calls against a real Router                                     #
+# =========================================================================== #
+
+
+def _video_router() -> Router:
+    # weight 0 keeps the group from ever picking deployment-b, so only a pin reaches it
+    return Router(
+        model_list=[
+            {
+                "model_name": "sora-2",
+                "litellm_params": {
+                    "model": "openai/sora-2",
+                    "api_key": "sk-mock-a",
+                    "api_base": "http://a.localhost/v1",
+                    "weight": 1,
+                },
+                "model_info": {"id": "deployment-a"},
+            },
+            {
+                "model_name": "sora-2",
+                "litellm_params": {
+                    "model": "openai/sora-2",
+                    "api_key": "sk-mock-b",
+                    "api_base": "http://b.localhost/v1",
+                    "weight": 0,
+                },
+                "model_info": {"id": "deployment-b"},
+            },
+        ]
+    )
+
+
+def _video_id(model_id: str) -> str:
+    return encode_video_id_with_provider("video_orig", "openai", model_id)
+
+
+FOLLOW_UP_CALLS = {
+    "status": lambda h, model_id: call_status(h, _video_id(model_id)),
+    "content": lambda h, model_id: call_content(h, _video_id(model_id)),
+    "remix": lambda h, model_id: call_remix(h, _video_id(model_id), body={"prompt": "x"}),
+    "edit": lambda h, model_id: call_edit(h, body={"prompt": "x", "video": {"id": _video_id(model_id)}}),
+    "extension": lambda h, model_id: call_extension(h, body={"prompt": "x", "video": {"id": _video_id(model_id)}}),
+    "get_character": lambda h, model_id: call_get_character(
+        h, encode_character_id_with_provider("char_orig", "openai", model_id)
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", sorted(FOLLOW_UP_CALLS))
+@pytest.mark.parametrize(
+    ("model_id", "expected_model"),
+    [
+        ("deployment-b", "deployment-b"),
+        # ids created before the fix name the group, so they still load-balance
+        ("sora-2", "sora-2"),
+        ("", None),
+        # a deleted deployment takes the direct provider call, as it did before the fix
+        ("deployment-gone", None),
+    ],
+)
+async def test_follow_up__model_comes_from_the_id(harness, endpoint, model_id, expected_model):
+    harness.base_process.return_value = b"video-bytes"
+
+    with patch.object(proxy_server, "llm_router", _video_router()):
+        await FOLLOW_UP_CALLS[endpoint](harness, model_id)
+
+    assert harness.processor_data().get("model") == expected_model
+
+
+@pytest.mark.asyncio
+async def test_status__real_router_reaches_the_creating_deployment(harness, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    llm_router = _video_router()
+
+    with patch.object(proxy_server, "llm_router", llm_router):
+        await call_status(harness, _video_id("deployment-b"))
+    with respx.mock(assert_all_called=True) as respx_mock:
+        deployment_b = respx_mock.get("http://b.localhost/v1/videos/video_orig").respond(
+            json={"id": "video_orig", "object": "video", "status": "completed", "created_at": 0}
+        )
+        status = await llm_router.avideo_status(**harness.processor_data())
+
+    assert deployment_b.call_count == 1
+    assert status.status == "completed"

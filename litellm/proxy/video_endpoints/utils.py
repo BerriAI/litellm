@@ -3,6 +3,7 @@ from typing import Any, Final
 
 import orjson
 
+from litellm.router import Router
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_character_id_with_provider,
@@ -71,6 +72,12 @@ def deployment_id_for_encoding(response: object, data: Mapping[str, Any]) -> str
     litellm_metadata: Final = data.get("litellm_metadata") or {}
     model_info: Final = litellm_metadata.get("model_info") or {}
     return _hidden_param(response, "model_id") or model_info.get("id") or data.get("model")
+
+
+def routing_model_for_id(llm_router: Router, model_id: str) -> str | None:
+    if llm_router.has_model_id(model_id):
+        return model_id
+    return llm_router.resolve_model_name_from_model_id(model_id)
 
 
 def encode_video_id_in_response(response: object, fallback_model: str | None) -> object:
