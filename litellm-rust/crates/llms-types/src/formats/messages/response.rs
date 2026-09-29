@@ -1,8 +1,7 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicMessagesResponse {
+#[macro_rules_attribute::apply(wire_type)]
+pub struct MessagesResponse {
     pub id: String,
     #[serde(rename = "type")]
     pub message_type: String,
@@ -31,8 +30,8 @@ mod tests {
         stop_sequence: Option<&str>,
         usage: Option<Value>,
         container: Option<Value>,
-    ) -> AnthropicMessagesResponse {
-        AnthropicMessagesResponse {
+    ) -> MessagesResponse {
+        MessagesResponse {
             id: "msg_1".to_string(),
             message_type: "message".to_string(),
             role: "assistant".to_string(),

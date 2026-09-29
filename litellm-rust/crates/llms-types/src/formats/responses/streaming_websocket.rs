@@ -2,6 +2,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 #[derive(Clone, Debug, PartialEq, Eq, strum::AsRefStr)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(with = "String"))]
 pub enum ResponsesWsEventType {
     #[strum(serialize = "response.create")]
     ResponseCreate,
@@ -52,7 +54,7 @@ impl<'de> Deserialize<'de> for ResponsesWsEventType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ResponsesWsEvent {
     #[serde(rename = "type")]
     pub event_type: ResponsesWsEventType,
@@ -78,7 +80,8 @@ impl ResponsesWsEvent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Eq)]
 pub struct ResponsesErrorFrame {
     #[serde(rename = "type")]
     pub frame_type: &'static str,
@@ -97,7 +100,8 @@ impl ResponsesErrorFrame {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Eq)]
 pub struct ResponsesErrorBody {
     #[serde(rename = "type")]
     pub error_type: &'static str,

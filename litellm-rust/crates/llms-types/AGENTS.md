@@ -1,14 +1,22 @@
 The same ownership rule applies to Messages, Responses, Chat Completions, OCR, and other API formats. This crate owns their shared API data contracts. Adapter contracts and shared transformation machinery belong in `llms/src/base_llm/<format>/`, provider policy in `llms/src/<provider>/<format>/`, and call orchestration in `core/src/<format>/`. A provider originating a format, or several providers using a type, does not change these responsibilities. Existing model locations outside this crate are not exceptions to this rule for new shared API contracts
 
-- `litellm-types` owns shared API data contracts and their serialization
+- `litellm-llms-types` owns shared API data contracts and their serialization
   - A type belongs here when it describes a request, response, event, or value that consumers must agree on independently of how a call executes
   - Being public, serializable, or used by several crates is not sufficient
   - These are intended boundaries, not a claim that every existing item follows them
 
-- Organize public contracts by API format: `messages`, `chat_completions`, and `responses`
-  - Use names such as `litellm_types::messages::MessagesRequest`, without an Anthropic prefix solely because Anthropic designed Messages
-  - Existing `llms::openai`, `llms::anthropic_messages`, and chat types under `utils` are legacy locations, not patterns for new modules
+- Organize public API contracts under `formats`: `messages`, `chat_completions`, `responses`, `ocr`, `audio_transcription`, and `batches`
+  - Use names such as `litellm_llms_types::formats::messages::MessagesRequest`, without an Anthropic prefix solely because Anthropic designed Messages
   - Keep one canonical definition and import path when moving a contract, updating consumers together instead of adding duplicate models or compatibility re-exports
+
+- Keep shared provider-specific wire types and extensions under `providers`
+  - Provider types may reuse format types; format types must not depend on provider types
+  - A field belonging to an API format stays under `formats` even when provider support varies. Including it in a type does not promise provider support
+  - Add a typed provider extension when a consumer needs to interpret or construct it. Keep adapter-only projections in `llms` until a shared public data contract is needed
+  - Keep one authoritative representation of each field, preserving unknown fields without duplicating typed values in an extension map
+  - Provider capability checks, defaults, authentication, header selection, and transformations remain in `llms`
+
+- Keep format-independent data helpers such as `headers`, `recognized`, and `serde_compat` at the crate root
 
 - Shared request/response bodies, message and content-block enums, usage records, tool-call chunks, stream-event payloads, and protocol error bodies belong here
   - This includes LiteLLM's normalized response contracts and extensions, not just exact upstream schemas
@@ -31,6 +39,7 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Provider config traits, `MessagesTransformContext`, `MessagesModelCapabilities`, `ThinkingBudgets`, `StreamShape`, and transformer state belong in `llms`
   - Catalog records and pricing belong in `model-catalog`, which may reuse wire enums such as `ReasoningEffort`
   - Host hooks, Python objects, credentials, clients, timeouts, and routing decisions do not become API payload types merely because they cross a crate boundary
+  - Legacy logging operation selection belongs in `callbacks-legacy-python`, not this crate
 
 - Stream-event data belongs here, but live streams, decoders, framing, buffering, and stream lifecycle decisions do not
   - Keep SSE and AWS framing in `framer`, provider decoding and conversion in `llms`, and call orchestration in `core`

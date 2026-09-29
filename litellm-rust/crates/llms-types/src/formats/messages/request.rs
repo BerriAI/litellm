@@ -1,26 +1,25 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::IntoStaticStr;
 
-use crate::{llms::openai::ReasoningEffort, recognized::Recognized};
+use crate::formats::chat_completions::ReasoningEffort;
+use crate::recognized::Recognized;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
 pub enum SystemPrompt {
     Text(String),
     Blocks(Vec<ContentBlock>),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
     Blocks(Vec<ContentBlock>),
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString,
-)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Eq, strum::Display, strum::EnumString)]
 #[serde(from = "String", into = "String")]
 #[strum(serialize_all = "snake_case")]
 pub enum ContentBlockType {
@@ -49,7 +48,8 @@ impl From<ContentBlockType> for String {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct ContentBlock {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub block_type: Option<ContentBlockType>,
@@ -93,7 +93,8 @@ impl ContentBlock {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct CacheControl {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub cache_type: Option<String>,
@@ -105,15 +106,16 @@ pub struct CacheControl {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicMessage {
+#[macro_rules_attribute::apply(wire_type)]
+pub struct Message {
     pub role: String,
     pub content: MessageContent,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, Hash, IntoStaticStr, Eq)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum EffortLevel {
@@ -142,7 +144,8 @@ impl From<EffortLevel> for ReasoningEffort {
     }
 }
 
-#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, IntoStaticStr, Eq)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum Speed {
@@ -158,9 +161,9 @@ impl Speed {
 
 /// The tools whose presence changes how the request is sent. Every other tool, custom or
 /// server, deserializes as `Recognized::Unrecognized` and passes through verbatim.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type")]
-pub enum AnthropicTool {
+pub enum MessagesTool {
     #[serde(rename = "advisor_20260301")]
     Advisor {
         #[serde(flatten)]
@@ -178,7 +181,7 @@ pub enum AnthropicTool {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type")]
 pub enum ContextEdit {
     #[serde(rename = "compact_20260112")]
@@ -198,7 +201,8 @@ pub enum ContextEdit {
     },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct ContextManagement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edits: Option<Vec<Recognized<ContextEdit>>>,
@@ -206,7 +210,8 @@ pub struct ContextManagement {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct OutputConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<Recognized<EffortLevel>>,
@@ -222,7 +227,8 @@ impl OutputConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingDisplay {
     Summarized,
@@ -230,7 +236,8 @@ pub enum ThinkingDisplay {
     Updates,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct EnabledThinking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_tokens: Option<Recognized<u64>>,
@@ -240,7 +247,8 @@ pub struct EnabledThinking {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct AdaptiveThinking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<Recognized<ThinkingDisplay>>,
@@ -248,13 +256,14 @@ pub struct AdaptiveThinking {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct DisabledThinking {
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ThinkingConfig {
     Enabled(EnabledThinking),
@@ -278,16 +287,17 @@ impl ThinkingConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicMessagesRequest {
+#[macro_rules_attribute::apply(wire_type)]
+pub struct MessagesRequest {
     pub model: String,
-    pub messages: Vec<AnthropicMessage>,
+    pub messages: Vec<Message>,
     #[serde(flatten)]
-    pub params: AnthropicMessagesOptionalParams,
+    pub params: MessagesOptionalParams,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicMessagesOptionalParams {
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
+pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,7 +315,7 @@ pub struct AnthropicMessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_k: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Recognized<AnthropicTool>>>,
+    pub tools: Option<Vec<Recognized<MessagesTool>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -334,7 +344,7 @@ pub struct AnthropicMessagesOptionalParams {
     pub extra: Map<String, Value>,
 }
 
-impl AnthropicMessage {
+impl Message {
     pub fn blocks(&self) -> &[ContentBlock] {
         match &self.content {
             MessageContent::Blocks(blocks) => blocks,
@@ -357,7 +367,7 @@ mod tests {
 
     use super::*;
 
-    fn round_trip<T: serde::de::DeserializeOwned + Serialize>(value: &Value) -> Value {
+    fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(value: &Value) -> Value {
         let parsed: T = serde_json::from_value(value.clone()).unwrap();
         serde_json::to_value(parsed).unwrap()
     }
@@ -396,7 +406,7 @@ mod tests {
             "stream": true,
             "safeguards": [{"type": "dangerous_tool_use"}]
         });
-        let request: AnthropicMessagesRequest = serde_json::from_value(body.clone()).unwrap();
+        let request: MessagesRequest = serde_json::from_value(body.clone()).unwrap();
 
         assert_eq!(
             (
@@ -432,7 +442,7 @@ mod tests {
         #[case] message: Value,
         #[case] expected: Vec<ContentBlock>,
     ) {
-        let message: AnthropicMessage = serde_json::from_value(message).unwrap();
+        let message: Message = serde_json::from_value(message).unwrap();
         assert_eq!(message.blocks(), expected.as_slice());
     }
 
@@ -440,7 +450,7 @@ mod tests {
     #[case::replaces_string_content(json!({"role": "assistant", "content": "old", "name": "kept"}))]
     #[case::replaces_block_content(json!({"role": "assistant", "content": [{"type": "text", "text": "old"}], "name": "kept"}))]
     fn with_blocks_replaces_content_and_keeps_the_rest(#[case] message: Value) {
-        let message: AnthropicMessage = serde_json::from_value(message).unwrap();
+        let message: Message = serde_json::from_value(message).unwrap();
         assert_eq!(
             serde_json::to_value(message.with_blocks(vec![ContentBlock::text("new")])).unwrap(),
             json!({"role": "assistant", "content": [{"type": "text", "text": "new"}], "name": "kept"})
@@ -506,7 +516,7 @@ mod tests {
         "context_management": [{"type": "compaction", "compact_threshold": 5}]
     }))]
     fn request_round_trips_unchanged(#[case] request: Value) {
-        assert_eq!(round_trip::<AnthropicMessagesRequest>(&request), request);
+        assert_eq!(round_trip::<MessagesRequest>(&request), request);
     }
 
     #[rstest]
@@ -555,15 +565,15 @@ mod tests {
     #[rstest]
     #[case::advisor(
         json!({"type": "advisor_20260301", "name": "advisor"}),
-        Recognized::Known(AnthropicTool::Advisor { extra: Map::from_iter([("name".to_string(), json!("advisor"))]) })
+        Recognized::Known(MessagesTool::Advisor { extra: Map::from_iter([("name".to_string(), json!("advisor"))]) })
     )]
     #[case::regex_tool_search(
         json!({"type": "tool_search_tool_regex_20251119"}),
-        Recognized::Known(AnthropicTool::ToolSearchRegex { extra: Map::new() })
+        Recognized::Known(MessagesTool::ToolSearchRegex { extra: Map::new() })
     )]
     #[case::bm25_tool_search(
         json!({"type": "tool_search_tool_bm25_20251119"}),
-        Recognized::Known(AnthropicTool::ToolSearchBm25 { extra: Map::new() })
+        Recognized::Known(MessagesTool::ToolSearchBm25 { extra: Map::new() })
     )]
     #[case::custom_tool_without_a_type(
         json!({"name": "advisor", "input_schema": {}}),
@@ -576,10 +586,10 @@ mod tests {
     #[case::not_an_object(json!("advisor_20260301"), Recognized::Unrecognized(json!("advisor_20260301")))]
     fn tools_are_recognized_by_their_exact_type(
         #[case] tool: Value,
-        #[case] expected: Recognized<AnthropicTool>,
+        #[case] expected: Recognized<MessagesTool>,
     ) {
         assert_eq!(
-            serde_json::from_value::<Recognized<AnthropicTool>>(tool).unwrap(),
+            serde_json::from_value::<Recognized<MessagesTool>>(tool).unwrap(),
             expected
         );
     }
