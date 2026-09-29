@@ -10,7 +10,9 @@ rejected without an admin opt-in, so D5 runs on its own proxy with
 Positive control: the owning sink double must receive the request's marker under an auth
 header built from the canary (Langfuse ``Basic pk:sk``, Datadog ``DD-API-KEY``), or the test
 fails before sweeping. Sensitivity control: the marker must be seen in the stored request body,
-the Logs drawer route and the owning sink. Then no sweep may find the canary anywhere else.
+the Logs drawer route and the owning sink. Then no sweep may find the canary anywhere else,
+including every request the provider double received (swept as the ``provider`` sink, with no
+header allowance; the provider's own key is slot B1, which these tests do not search for).
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from pydantic import JsonValue
 
 LANGFUSE: Final = "langfuse"
 DATADOG: Final = "datadog"
+PROVIDER: Final = "provider"
 BOTH: Final = "success_and_failure"
 
 
@@ -61,6 +64,7 @@ class CallbackRig:
             **{name: sink.requests() for name, sink in self.rig.sinks.items()},
             LANGFUSE: self.langfuse.requests(),
             DATADOG: self.datadog.requests(),
+            PROVIDER: self.rig.provider.requests(),
         }
 
     def datadog_port(self) -> str:
@@ -195,6 +199,7 @@ def run_scenario(
         },
     )
     assert_marker_seen(report, {"S2": f"GET /spend/logs?request_id={quote(request_id, safe='')} as admin -> 200"})
+    assert_marker_seen(report, {"S4": f"{PROVIDER}["})
     assert_no_hits(report.credential_hits(), f"slot {secret.slot}, {endpoint}, {outcome}")
 
 
