@@ -752,7 +752,11 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             raise StopIteration
         except Exception as e:
             verbose_logger.error("Anthropic Adapter - %s\n%s", e, traceback.format_exc())
-            raise StopIteration
+            # Propagate, as ``__anext__`` does: ``anthropic_sse_wrapper`` turns
+            # this into a terminal Anthropic ``error`` event. Converting it to
+            # StopIteration here ended the SSE stream as though the response had
+            # completed, so the client saw a truncated answer and no error.
+            raise
 
     async def __anext__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
@@ -991,14 +995,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         This wrapper ensures dict chunks are SSE formatted with both event and data lines.
         """
-        for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+        try:
+            for chunk in self:
+                if isinstance(chunk, dict):
+                    event_type: str = str(chunk.get("type", "message"))
+                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                    yield payload.encode()
+                else:
+                    # For non-dict chunks, forward the original value unchanged
+                    yield chunk
+        except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
+            verbose_logger.exception("Anthropic Adapter - mid-stream error, emitting Anthropic error event: %s", e)
+            yield _mid_stream_error_sse_event(e)
 
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """
