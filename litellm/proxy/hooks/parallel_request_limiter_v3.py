@@ -33,6 +33,7 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import BatchResult, RegisteredScript, active_request_redis_batch
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
@@ -473,6 +474,19 @@ PARALLEL_REQUEST_SLOT_TTL_SECONDS: Final = 3600
 CacheCounterValue: TypeAlias = int | float | str | bytes
 
 CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
+
+
+def _as_counter_values(reply: object) -> list[CacheCounterValue]:
+    """A Lua reply read back off the pipeline is the same array the script returns when called directly."""
+    if not isinstance(reply, (list, tuple)):
+        raise TypeError(f"rate limiter script reply is not a list: {type(reply).__name__}")
+    values: Final[list[CacheCounterValue]] = []  # mutable-ok: each element is narrowed before it is kept
+    for value in reply:  # pyright: ignore[reportUnknownVariableType]  # raw Redis reply
+        if not isinstance(value, (int, float, str, bytes)):
+            raise TypeError(f"rate limiter script reply holds {type(value).__name__}")  # pyright: ignore[reportUnknownArgumentType]  # raw Redis reply
+        values.append(value)
+    return values
+
 
 ReservationWindowIdentity: TypeAlias = tuple[str, str, Literal["redis", "local"]]
 
@@ -1323,6 +1337,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         crc: Final = binascii.crc_hqx(key.encode("utf-8"), 0)
         return crc % REDIS_CLUSTER_SLOTS
 
+    def _pipeline_scripts(
+        self,
+        source: str,
+        run: RegisteredScript,
+        calls: Sequence[tuple[Sequence[str], Sequence[int]]],
+    ) -> tuple[BatchResult[object] | None, ...]:
+        """Declare one Lua call per group on the request's Redis batch, so all groups share one round trip
+        with whatever else the request declared (the routing read). Returns ``None`` per call when no batch
+        is open, and the caller runs the script directly as before."""
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        batch: Final = None if redis_cache is None else active_request_redis_batch(redis_cache)
+        if batch is None:
+            return (None,) * len(calls)
+        return tuple(batch.script(source, run, keys, args) for keys, args in calls)
+
     def _group_keys_by_hash_tag(self, keys: list[str]) -> dict[str, list[str]]:
         """
         Group keys by their Redis hash tag to ensure cluster compatibility.
@@ -1404,7 +1433,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=True)
 
-    def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: Exception) -> None:
+    def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: BaseException) -> None:
         if not self._fail_closed_resolver():
             return
         log_redis_failure(
@@ -1436,12 +1465,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         key_groups: Final = list(self._group_keys_by_hash_tag(keys_to_fetch).items())
         all_cache_values: Final[list[CacheCounterValue | None]] = []
+        args: Final = (now_int, self.window_size)
+        pipelined: Final = self._pipeline_scripts(
+            BATCH_RATE_LIMITER_SCRIPT,
+            self.batch_rate_limiter_script,
+            tuple((group_keys, args) for _tag, group_keys in key_groups),
+        )
 
-        for index, (hash_tag, group_keys) in enumerate(key_groups):
+        for index, ((hash_tag, group_keys), group_result) in enumerate(zip(key_groups, pipelined)):
             try:
-                group_cache_values: CacheCounterValues = await self.batch_rate_limiter_script(
-                    keys=group_keys,
-                    args=[now_int, self.window_size],  # Use integer timestamp
+                group_cache_values: CacheCounterValues = (
+                    await self.batch_rate_limiter_script(keys=group_keys, args=args)
+                    if group_result is None
+                    else _as_counter_values(await group_result)
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
@@ -1450,6 +1486,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     await self._refund_counter_increments(
                         self._counter_refunds_from_batch_values(applied_keys, all_cache_values)
                     )
+                    await self._refund_later_pipelined_groups(key_groups[index + 1 :], pipelined[index + 1 :])
                 self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
                 log_redis_failure(
                     verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
@@ -1463,6 +1500,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 all_cache_values.extend(group_cache_values)
 
         return all_cache_values
+
+    async def _refund_later_pipelined_groups(
+        self,
+        key_groups: Sequence[tuple[str, list[str]]],
+        pipelined: Sequence[BatchResult[object] | None],
+    ) -> None:
+        """Groups declared on the request batch ran in the same round trip as the one that failed, so their
+        increments landed even though the loop never read them."""
+        for (_tag, group_keys), group_result in zip(key_groups, pipelined):
+            if group_result is None:
+                continue
+            try:
+                group_values = _as_counter_values(await group_result)
+            except Exception:  # noqa: BLE001  # a group that failed in Redis incremented nothing to refund
+                continue
+            await self._refund_counter_increments(self._counter_refunds_from_batch_values(group_keys, group_values))
 
     async def should_rate_limit(
         self,
@@ -2061,7 +2114,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         raw: list[CacheCounterValue]
 
-        for _idx, (keys, args, meta) in enumerate(descriptor_groups):
+        pipelined: Final = self._pipeline_scripts(
+            CHECK_AND_INCREMENT_BY_N_SCRIPT,
+            self.check_and_increment_by_n_script,  # pyright: ignore[reportArgumentType]  # sole caller guards it is not None
+            tuple((keys, args) for keys, args, _meta in descriptor_groups),
+        )
+        batched: Final = tuple(result for result in pipelined if result is not None)
+        if len(batched) == len(descriptor_groups):
+            return await self._settle_pipelined_descriptor_groups(descriptor_groups, batched, parent_otel_span)
+
+        for keys, args, meta in descriptor_groups:
             try:
                 raw = await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
                     keys=keys,
@@ -2104,6 +2166,76 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             statuses=statuses,
             reservation_windows=frozenset(reservation_windows),
         )
+
+    async def _settle_pipelined_descriptor_groups(
+        self,
+        descriptor_groups: list[DescriptorAtomicGroup],
+        results: Sequence[BatchResult[object]],
+        parent_otel_span: Span | None,
+    ) -> RateLimitResponse:
+        """Every group's Lua call left in one pipeline, so each group has already checked and incremented on
+        its own before any result is read. A failed or over-limit group therefore refunds every group that
+        incremented, after it as well as before it, where the one-at-a-time loop only unwinds the groups it ran.
+        A Redis denial stands even when another group failed: the in-memory fallback only replaces a verdict
+        Redis never gave."""
+        replies: Final = await asyncio.gather(*results, return_exceptions=True)
+        responses: Final = tuple(
+            self._pipelined_group_response(reply, meta)
+            for reply, (_keys, _args, meta) in zip(replies, descriptor_groups)
+        )
+        applied: Final[list[tuple[CounterRefund, ...]]] = []  # mutable-ok: filled by the group loop
+        statuses: Final[list[RateLimitStatus]] = []  # mutable-ok: filled by the group loop
+        reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
+        for reply, response, (_keys, _args, meta) in zip(replies, responses, descriptor_groups):
+            if isinstance(response, BaseException) or response["overall_code"] != "OK":
+                continue
+            applied.append(self._counter_refunds_from_atomic_response(_as_counter_values(reply), meta))
+            statuses.extend(response["statuses"])
+            reservation_windows.update(response.get("reservation_windows", frozenset()))
+
+        over_limit: Final = next(
+            (r for r in responses if not isinstance(r, BaseException) and r["overall_code"] == "OVER_LIMIT"), None
+        )
+        if over_limit is not None:
+            await self._refund_applied_descriptor_groups(applied)
+            return over_limit
+        failure: Final = next((r for r in responses if isinstance(r, BaseException)), None)
+        if failure is not None:
+            await self._refund_applied_descriptor_groups(applied)
+            self._reject_if_rate_limit_unverifiable("check_and_increment_by_n_script", failure)
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.ERROR,
+                f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(failure).__name__}). Refunding "
+                f"{len(applied)} pipelined descriptors and falling back to in-memory enforcement, counters will "
+                f"diverge from Redis until window expires (window_size={self.window_size}s)",
+                failure,
+            )
+            flat_meta: Final = tuple(
+                itertools.chain.from_iterable(group_meta for _k, _a, group_meta in descriptor_groups)
+            )
+            async with self._check_and_increment_lock:
+                return await self._atomic_check_and_increment_in_memory(
+                    per_counter_meta=flat_meta,
+                    parent_otel_span=parent_otel_span,
+                )
+        if len(responses) == 1 and not isinstance(responses[0], BaseException):
+            return responses[0]
+        return RateLimitResponse(
+            overall_code="OK",
+            statuses=statuses,
+            reservation_windows=frozenset(reservation_windows),
+        )
+
+    def _pipelined_group_response(
+        self, reply: object, per_counter_meta: list[AtomicCounterMeta]
+    ) -> RateLimitResponse | BaseException:
+        if isinstance(reply, BaseException):
+            return reply
+        try:
+            return self._build_atomic_response(_as_counter_values(reply), per_counter_meta)
+        except Exception as e:  # noqa: BLE001  # a reply this group cannot read is that group's Lua failure
+            return e
 
     async def _refund_applied_descriptor_groups(
         self,
@@ -2233,7 +2365,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _atomic_check_and_increment_in_memory(
         self,
-        per_counter_meta: list[AtomicCounterMeta],
+        per_counter_meta: Sequence[AtomicCounterMeta],
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
         """In-memory all-or-nothing check-and-increment. Caller holds lock.
