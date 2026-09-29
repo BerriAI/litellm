@@ -3,7 +3,7 @@ from typing import Final
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from integration._support.client import Gateway
+from integration._support.client import Gateway, Scenario
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -68,7 +68,7 @@ def _candidate(*, with_signature: bool) -> dict[str, JsonValue]:
     }
 
 
-def _model(gateway: Gateway, scenario, wire_url: str) -> str:
+def _model(gateway: Gateway, scenario: Scenario, wire_url: str) -> str:
     return scenario.model(
         model=f"vertex_ai/{_BACKEND}",
         api_base=f"{wire_url}{_MODEL_PATH}",

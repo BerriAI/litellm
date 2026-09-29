@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 from integration._support.client import Gateway
@@ -10,7 +11,7 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _IDENTITY: Final = "chatcmpl-stream-usage"
 
 
-def _frame(delta: dict, finish: str | None = None) -> bytes:
+def _frame(delta: Mapping[str, JsonValue], finish: str | None = None) -> bytes:
     return (
         b"data: "
         + json.dumps(

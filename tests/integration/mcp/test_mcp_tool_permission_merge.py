@@ -44,5 +44,7 @@ def test_tool_permissions_merge_when_keys_resolve_to_same_server(gateway: Gatewa
         assert multiply.json()["content"][0]["text"] == "6"
         fail_name: Final = f"{shared_alias}-fail"
         denied: Final = call_tool(gateway, key, first_id, fail_name, {})
-        assert denied.json().get("isError") is not False or denied.status_code != 200, denied.text
+        assert denied.status_code == 403, denied.text
+        detail: Final = denied.json()["detail"]["error"]
+        assert "is not allowed for your key/team" in detail and "fail" in detail, detail
         assert len(tuple(item for item in first.drain() if item["body"].get("method") == "tools/call")) == 2
