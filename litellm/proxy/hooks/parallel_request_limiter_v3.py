@@ -134,7 +134,7 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
 
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return None
-    return team_ptu_ceiling(llm_router.get_model_list() or (), team_id, model_group)
+    return team_ptu_ceiling(llm_router.get_model_list() or (), llm_router.model_list, team_id, model_group)
 
 
 FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"
@@ -4935,14 +4935,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if reserved_ceiling is not None
             else self._ptu_team_ceiling_resolver(team_id, reconcile_model.group)
         )
-        scope: Final = (
-            PTU_TEAM_DESCRIPTOR_KEY,
-            f"{team_id}:{ceiling.model_group if ceiling is not None else reconcile_model.group}",
+        reserved_ptu_scopes: Final = tuple(scope for scope in reserved_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY)
+        targets: Final = reserved_ptu_scopes or (
+            ((PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{ceiling.model_group}"),) if ceiling is not None else ()
         )
-        if ceiling is None and scope not in reserved_scopes:
+        if not targets:
             return ()
         return self._build_reservation_aware_tpm_ops(
-            targets=(scope,),
+            targets=targets,
             reserved_scopes=reserved_scopes,
             actual_tokens=self._ptu_settlement_tokens(
                 ceiling, self._resolve_reconciled_usage(response_obj), total_tokens

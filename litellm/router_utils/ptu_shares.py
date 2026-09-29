@@ -57,20 +57,26 @@ def filter_ptu_shared_deployments(
 
 
 def team_ptu_ceiling(
-    deployments: Sequence[Mapping[str, object]], team_id: str, requested_model: str
+    listed_rows: Sequence[Mapping[str, object]],
+    deployments: Sequence[Mapping[str, object]],
+    team_id: str,
+    requested_model: str,
 ) -> PTUTeamCeiling | None:
     """The per-minute normalized-token ceiling ``team_id``'s shares on the group serving
     ``requested_model`` add up to, else None when the team holds no share on a deployment with
     a known sizing row.
 
-    A request naming one deployment by its id or provider model counts against that deployment's
-    group, so every name the router serves it under shares one ceiling.
+    ``listed_rows`` is every row the router lists a name under, alias and routing-group copies
+    included, and ``deployments`` is the router's own deployments. A name resolves to the
+    deployments behind it, so a group, a routing group, a deployment id, and a provider model
+    all count against the one ceiling of the group whose shared deployment the team can be
+    served from.
 
     Two shared deployments of different models in one group are weighted by the larger
     output and cached-input ratios, which over-counts those tokens on the cheaper one rather
     than under-counting them on the dearer one.
     """
-    model_group: Final = _model_group_of(deployments, requested_model)
+    model_group: Final = _model_group_of(listed_rows, deployments, team_id, requested_model)
     priced: Final = tuple(
         (shares[team_id], capacity)
         for deployment in model_group_deployments(deployments, model_group)
@@ -103,10 +109,14 @@ def model_group_deployments(deployments: Sequence[_DeploymentT], model_group: st
     )
 
 
-def _names_deployment(deployment: Mapping[str, object], name: str) -> bool:
+def _deployment_id(deployment: Mapping[str, object]) -> object:
     model_info: Final = deployment.get("model_info")
+    return model_info.get("id") if isinstance(model_info, Mapping) else None
+
+
+def _names_deployment(deployment: Mapping[str, object], name: str) -> bool:
     litellm_params: Final = deployment.get("litellm_params")
-    return (isinstance(model_info, Mapping) and model_info.get("id") == name) or (
+    return _deployment_id(deployment) == name or (
         isinstance(litellm_params, Mapping) and litellm_params.get("model") == name
     )
 
@@ -120,13 +130,29 @@ def _deployment_model_group(deployment: Mapping[str, object]) -> str | None:
     return model_name if isinstance(model_name, str) else None
 
 
-def _model_group_of(deployments: Sequence[Mapping[str, object]], requested_model: str) -> str:
-    """The group ``requested_model`` routes to: itself when it names a group, else the group of
-    the deployment it names by id or by provider model, the way the router falls back to them."""
-    if model_group_deployments(deployments, requested_model):
-        return requested_model
-    named: Final = tuple(deployment for deployment in deployments if _names_deployment(deployment, requested_model))
-    shared_first: Final = sorted(named, key=lambda deployment: _deployment_shares(deployment) is None)
+def _routed_deployments(
+    listed_rows: Sequence[Mapping[str, object]], deployments: Sequence[Mapping[str, object]], requested_model: str
+) -> tuple[Mapping[str, object], ...]:
+    """The router's own deployments behind ``requested_model``: those of the rows listed under it
+    when it names a group, else the one it names by id or by provider model, the way the router
+    falls back to them."""
+    listed_ids: Final = frozenset(_deployment_id(row) for row in model_group_deployments(listed_rows, requested_model))
+    if listed_ids:
+        return tuple(deployment for deployment in deployments if _deployment_id(deployment) in listed_ids)
+    return tuple(deployment for deployment in deployments if _names_deployment(deployment, requested_model))
+
+
+def _model_group_of(
+    listed_rows: Sequence[Mapping[str, object]],
+    deployments: Sequence[Mapping[str, object]],
+    team_id: str,
+    requested_model: str,
+) -> str:
+    """The group of the deployment behind ``requested_model`` this team can be served from, one
+    holding its share first."""
+    routed: Final = _routed_deployments(listed_rows, deployments, requested_model)
+    servable: Final = filter_ptu_shared_deployments(routed, team_id).deployments
+    shared_first: Final = sorted(servable, key=lambda deployment: _deployment_shares(deployment) is None)
     return next(
         (group for deployment in shared_first if (group := _deployment_model_group(deployment)) is not None),
         requested_model,

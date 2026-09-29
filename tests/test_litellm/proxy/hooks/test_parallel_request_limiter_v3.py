@@ -7658,7 +7658,8 @@ def _shared_ptu_router(model_group: str) -> Router:
                     "ptu_shares": {"t": 1},
                 },
             }
-        ]
+        ],
+        model_group_alias={f"{model_group}-alias": model_group},
     )
 
 
@@ -7768,7 +7769,8 @@ async def test_naming_the_shared_deployment_directly_draws_on_the_same_ceiling_a
     monkeypatch, deployment_name
 ):
     """The router also serves a deployment named by its id or its provider model, so a team that
-    spent its share by group name cannot keep going under the deployment's other names."""
+    spent its share by group name cannot keep going under the deployment's other names, even
+    though the router lists the deployment's alias copy ahead of it."""
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
     cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
@@ -7927,6 +7929,42 @@ async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone():
     )
 
     assert _ptu_increment(handler, ops) == 300 - stash.ptu_reserved_tokens
+
+
+@pytest.mark.asyncio
+async def test_success_settles_the_scope_the_reservation_was_taken_on():
+    """Settlement credits the scope admission reserved, not one rebuilt from the name the
+    request used, so a request naming the deployment by id cannot leave its reservation standing."""
+    ceiling: dict[str, PTUTeamCeiling | None] = {
+        "current": PTUTeamCeiling(
+            model_group="test-model", tpm_limit=2000, output_to_input_ratio=4.0, cached_input_ratio=0.0
+        )
+    }
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache),
+        ptu_team_ceiling_resolver=lambda _team, _group: ceiling["current"],
+    )
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key, cache=cache, data=_ptu_request("shared-ptu"), call_type="acompletion"
+    )
+    stash = get_request_stash()
+    assert stash is not None
+    assert ("model_per_team_ptu", "t:test-model") in stash.reserved_scopes
+
+    ceiling["current"] = None
+    stash.ptu_ceiling = None
+    kwargs = _ptu_success_kwargs()
+    kwargs["litellm_params"]["metadata"]["model_group"] = "shared-ptu"
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs,
+        response_obj=_ptu_response(Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)),
+        rate_limit_type="total",
+    )
+
+    assert _ptu_increment(handler, ops) == 150 - stash.ptu_reserved_tokens
 
 
 async def _reserve_a_ptu_minute(cache: DualCache, call_id: str) -> tuple[_PROXY_MaxParallelRequestsHandler, str]:
