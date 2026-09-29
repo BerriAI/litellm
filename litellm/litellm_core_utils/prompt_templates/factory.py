@@ -205,14 +205,6 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
     return system_content_str, msg_i
 
 
-def _decoded_json_value(raw: str | bytes | bytearray) -> object:
-    return json.loads(raw)
-
-
-def _parsed_tool_call_arguments(arguments: str | None, tool_name: str | None, context: str) -> object:
-    return parse_tool_call_arguments(arguments, tool_name=tool_name, context=context)
-
-
 def ollama_pt(
     model: str, messages: list
 ) -> (
@@ -262,7 +254,7 @@ def ollama_pt(
                 for call in tool_calls:
                     call_id: str = call["id"]
                     function_name: str = call["function"]["name"]
-                    arguments = _decoded_json_value(call["function"]["arguments"])
+                    arguments = json.loads(call["function"]["arguments"])
 
                     ollama_tool_calls.append(
                         {
@@ -950,7 +942,7 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
         tool_function = get_attribute_or_key(tool, "function")
         tool_name = get_attribute_or_key(tool_function, "name")
         tool_arguments = get_attribute_or_key(tool_function, "arguments")
-        parsed_args = _parsed_tool_call_arguments(
+        parsed_args = parse_tool_call_arguments(
             tool_arguments, tool_name=tool_name, context="Anthropic XML tool invoke"
         )
         if isinstance(parsed_args, dict):
@@ -1497,7 +1489,7 @@ def convert_to_gemini_tool_call_result(
     try:
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
-            parsed: Final = _decoded_json_value(content_str)
+            parsed: Final = json.loads(content_str)
             if isinstance(parsed, dict):
                 response_data = parsed  # Use the parsed JSON directly
             else:
@@ -2831,7 +2823,7 @@ def parse_xml_params(xml_content, json_schema: dict | None = None):
                     for value in _element:
                         try:
                             if value.text is not None:
-                                _value = _decoded_json_value(value.text)
+                                _value = json.loads(value.text)
                             else:
                                 continue
                         except json.JSONDecodeError:
@@ -2841,7 +2833,7 @@ def parse_xml_params(xml_content, json_schema: dict | None = None):
             # If property is not an array, append the value directly
             elif _element is not None and _element.text is not None:
                 try:
-                    _value = _decoded_json_value(_element.text)
+                    _value = json.loads(_element.text)
                 except json.JSONDecodeError:
                     _value = _element.text
                 params[prop] = _value
@@ -3679,7 +3671,7 @@ def _convert_to_bedrock_tool_call_invoke(
                     arguments_dict = {}
                 else:
                     try:
-                        arguments_dict = _decoded_json_value(arguments)
+                        arguments_dict = json.loads(arguments)
                         # Ensure arguments_dict is always a dict
                         # (Bedrock requires toolUse.input to be an object).
                         # Some providers return arguments: '""' which
@@ -5441,7 +5433,7 @@ def _parse_tool_call_arguments(raw: object, tool_name: str | None, context: str)
         return ({},)
     normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
     try:
-        parsed: Final = _parsed_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
+        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
         salvaged: Final = salvage_concatenated_tool_arguments(normalized_raw)
         if salvaged:
