@@ -110,6 +110,13 @@ func resourceLiteLLMModel() *schema.Resource {
 					"audio_transcription",
 					"audio_speech",
 					"rerank",
+					"responses",
+					"realtime",
+					"image_edit",
+					"ocr",
+					"search",
+					"video_generation",
+					"evaluation",
 				}, false),
 			},
 			"input_cost_per_million_tokens": {
