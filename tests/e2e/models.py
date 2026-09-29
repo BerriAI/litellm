@@ -1486,6 +1486,20 @@ class TeamDeleteBody(BaseModel):
     team_ids: list[str]
 
 
+class ProjectCreateBody(BaseModel):
+    team_id: str
+    project_alias: str
+    models: list[str]
+
+
+class ProjectIdentity(BaseModel):
+    project_id: str
+
+
+class ProjectDeleteBody(BaseModel):
+    project_ids: list[str]
+
+
 class TeamListEntry(BaseModel):
     team_id: str
 

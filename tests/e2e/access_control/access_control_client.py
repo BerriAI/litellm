@@ -16,6 +16,9 @@ from models import (
     LiteLLMParamsBody,
     ModelInfoBody,
     ModelNewBody,
+    ProjectCreateBody,
+    ProjectDeleteBody,
+    ProjectIdentity,
     TeamDeleteBody,
     TeamInfoParams,
     TeamInfoResponse,
@@ -26,7 +29,9 @@ from models import (
 
 MODEL_ACCESS_DENIED_MARKER = "key_model_access_denied"
 TEAM_MODEL_ACCESS_DENIED_MARKER = "team_model_access_denied"
+PROJECT_MODEL_ACCESS_DENIED_MARKER = "project_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
+ALL_TEAM_MODELS = "all-team-models"
 
 
 class ApiErrorDetail(BaseModel):
@@ -104,6 +109,27 @@ class AccessControlClient:
                 response_type=NoBody,
             )
         )
+
+    def create_project(self, team_id: str, project_alias: str, models: list[str]) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/project/new",
+                headers=self.proxy.transport.master,
+                json=ProjectCreateBody(team_id=team_id, project_alias=project_alias, models=models),
+                response_type=ProjectIdentity,
+            )
+        ).project_id
+
+    def delete_project(self, project_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            "/project/delete",
+            headers=self.proxy.transport.master,
+            json=ProjectDeleteBody(project_ids=[project_id]),
+            response_type=NoBody,
+        )
+
+    def project_key(self, team_id: str, project_id: str, models: list[str]) -> str:
+        return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, project_id=project_id, models=models))
 
     def delete_team(self, team_id: str) -> None:
         _ = self.proxy.transport.post(
