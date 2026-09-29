@@ -6974,6 +6974,39 @@ async def test_batch_increment_refunds_counters_already_applied_when_a_later_clu
     assert redis.increments == []
 
 
+@pytest.mark.parametrize("fail_closed", [True, False], ids=["fail_closed", "fail_open"])
+@pytest.mark.asyncio
+async def test_batch_increment_refunds_pipelined_groups_declared_after_the_one_that_failed(fail_closed):
+    from unittest.mock import patch
+
+    redis = _ScriptedRedis()
+    handler = _handler_with_redis(redis, fail_closed=fail_closed)
+    now = int(time.time())
+    groups = {"a": ["{a}:window", "{a}:requests"], "b": ["{b}:window", "{b}:requests"]}
+    loop = asyncio.get_running_loop()
+    failed_group = loop.create_future()
+    failed_group.set_exception(ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused."))
+    landed_group = loop.create_future()
+    landed_group.set_result([now, 1])
+
+    with (
+        patch.object(handler, "_group_keys_by_hash_tag", return_value=groups),
+        patch.object(handler, "_pipeline_scripts", return_value=[failed_group, landed_group]),
+    ):
+        if fail_closed:
+            with pytest.raises(HTTPException) as exc:
+                await handler._execute_redis_batch_rate_limiter_script(
+                    keys_to_fetch=[*groups["a"], *groups["b"]], now_int=now
+                )
+            assert exc.value.status_code == 503
+        else:
+            await handler._execute_redis_batch_rate_limiter_script(
+                keys_to_fetch=[*groups["a"], *groups["b"]], now_int=now
+            )
+
+    assert redis.guarded_increments == ([(groups["b"], [str(now), -1, 0])] if fail_closed else [])
+
+
 @pytest.mark.parametrize(
     "limits, request_data, counter_scope",
     [
