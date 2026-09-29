@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, cast
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
+from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    EMPTY_MAPPING,
+    REDACTED_BY_LITELLM,
+)
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -962,10 +966,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     standard_logging_object_copy["response"] = model_response_dict
 
         if turn_off_message_logging:
-            # Error text can quote the prompt; callbacks never scrub it themselves,
-            # so redact it regardless of `redacts_messages_itself`.
             if standard_logging_object_copy.get("error_str"):
-                standard_logging_object_copy["error_str"] = "redacted-by-litellm"
+                standard_logging_object_copy["error_str"] = REDACTED_BY_LITELLM
             error_information: Final = standard_logging_object_copy.get("error_information")
             if isinstance(error_information, Mapping):
                 from litellm.litellm_core_utils.redact_messages import redact_error_information
@@ -982,7 +984,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             else EMPTY_MAPPING
         )
         redacted_failure_fields: Final = (
-            MappingProxyType({"traceback_exception": "redacted-by-litellm"})
+            MappingProxyType({"traceback_exception": REDACTED_BY_LITELLM})
             if turn_off_message_logging and model_call_details.get("traceback_exception")
             else EMPTY_MAPPING
         )

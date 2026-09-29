@@ -3900,11 +3900,9 @@ class Logging(LiteLLMLoggingBaseClass):
             global_callbacks=litellm._async_failure_callback,
         )
 
-        result: object = None  # result sent to all loggers, init this to None incase it's not created
-
-        result = redact_message_input_output_from_logging(
-            model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
-            result=result,
+        result: Final = redact_message_input_output_from_logging(
+            model_call_details=self.model_call_details,
+            result=None,
         )
         self.has_run_logging(event_type="async_failure")
         for callback in callbacks:
