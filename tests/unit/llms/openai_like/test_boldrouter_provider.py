@@ -40,7 +40,6 @@ def test_boldrouter_provider_resolution(monkeypatch: pytest.MonkeyPatch):
         api_key=None,
     )
 
-    # BoldRouter model IDs are themselves provider-prefixed; only the litellm prefix is stripped.
     assert model == "anthropic/claude-sonnet-4.6"
     assert provider == "boldrouter"
     assert api_key == "sk-bold-test"
@@ -148,3 +147,151 @@ async def test_boldrouter_async_chat_request(monkeypatch: pytest.MonkeyPatch):
     assert route.call_count == 1
     assert body["model"] == "deepseek/deepseek-v4-flash"
     assert response.choices[0].message.content == "Hi"
+
+
+BOLDROUTER_MODELS: Final = tuple(sorted(name for name in litellm.model_cost if name.startswith("boldrouter/")))
+BOLDROUTER_ROUTERS: Final = ("boldrouter/bold/auto", "boldrouter/bold/fast", "boldrouter/bold/frontier")
+
+
+def test_boldrouter_backup_registry_mirrors_cost_map():
+    package_root = Path(litellm.__file__).parent
+    cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+    entries = {name: entry for name, entry in cost_map.items() if name.startswith("boldrouter/")}
+
+    assert tuple(sorted(entries)) == BOLDROUTER_MODELS
+    assert set(BOLDROUTER_ROUTERS) <= set(entries)
+    assert entries == {name: backup[name] for name in entries}
+
+
+@pytest.mark.parametrize("model", [m for m in BOLDROUTER_MODELS if m not in BOLDROUTER_ROUTERS])
+def test_boldrouter_model_cost(model: str):
+    from litellm.cost_calculator import cost_per_token
+
+    prompt_cost, completion_cost = cost_per_token(
+        model=model,
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+        custom_llm_provider="boldrouter",
+    )
+    model_info = litellm.get_model_info(model)
+
+    assert model_info["litellm_provider"] == "boldrouter"
+    assert model_info["mode"] == "chat"
+    assert model_info["input_cost_per_token"] > 0
+    assert prompt_cost == pytest.approx(model_info["input_cost_per_token"] * 1_000_000)
+    assert completion_cost == pytest.approx(model_info["output_cost_per_token"] * 1_000_000)
+
+
+@pytest.mark.parametrize("model", BOLDROUTER_ROUTERS)
+def test_boldrouter_routers_support_tools_and_vision(model: str):
+    assert litellm.supports_function_calling(model) is True
+    assert litellm.supports_vision(model) is True
+
+
+def test_boldrouter_chat_request_sends_tools(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
+    tool_call_response: Final = _chat_completion("")
+    tool_call_response["choices"][0]["message"] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Zurich"}'},
+            }
+        ],
+    }
+    tool_call_response["choices"][0]["finish_reason"] = "tool_calls"
+    with respx.mock() as upstream:
+        route: Final = upstream.post(BOLDROUTER_CHAT_URL).respond(200, json=tool_call_response)
+        response: Final = litellm.completion(
+            model="boldrouter/bold/auto",
+            messages=[{"role": "user", "content": "Weather in Zurich?"}],
+            api_key="sk-bold-test",
+            tools=[tool],
+            tool_choice="auto",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["tools"] == [tool]
+    assert body["tool_choice"] == "auto"
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
+
+
+def test_boldrouter_streaming_reports_usage(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    chunks: Final = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hel"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"content": "lo"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 12,
+                "total_tokens": 17,
+                "completion_tokens_details": {"reasoning_tokens": 10},
+            },
+        },
+    ]
+    sse: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-boldrouter",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "bold/fast",
+                    **c,
+                }
+            )
+            + "\n\n"
+            for c in chunks
+        )
+        + "data: [DONE]\n\n"
+    )
+    with respx.mock() as upstream:
+        route: Final = upstream.post(BOLDROUTER_CHAT_URL).respond(
+            200, content=sse.encode(), headers={"content-type": "text/event-stream"}
+        )
+        stream: Final = litellm.completion(
+            model="boldrouter/bold/fast",
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="sk-bold-test",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        text = ""
+        usage = None
+        for chunk in stream:
+            if chunk.choices:
+                text += chunk.choices[0].delta.content or ""
+            usage = getattr(chunk, "usage", None) or usage
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["stream"] is True
+    assert text == "Hello"
+    assert usage is not None
+    assert usage.completion_tokens == 12
+    assert usage.completion_tokens_details.reasoning_tokens == 10
+
+
+def test_boldrouter_transcription_is_rejected_before_any_request():
+    with respx.mock() as upstream:
+        with pytest.raises(Exception, match="Unmapped provider"):
+            litellm.transcription(
+                model="boldrouter/whisper-1",
+                file=("audio.wav", b"RIFF0000WAVE", "audio/wav"),
+                api_key="sk-bold-test",
+            )
+        assert upstream.calls.call_count == 0
