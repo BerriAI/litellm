@@ -74,9 +74,9 @@ struct ReductoResult {
 #[serde_with::serde_as]
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ReductoUsage {
-    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::LaxI64>")]
+    #[serde_as(deserialize_as = "Option<litellm_python_compat::serde_compat::LaxI64>")]
     pub num_pages: Option<i64>,
-    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::FiniteF64>")]
+    #[serde_as(deserialize_as = "Option<litellm_python_compat::serde_compat::FiniteF64>")]
     pub credits: Option<f64>,
 }
 

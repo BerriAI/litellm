@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::serde_compat::{FiniteF64, LaxI64};
+use litellm_python_compat::serde_compat::{FiniteF64, LaxI64};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]

@@ -4017,6 +4017,7 @@ dependencies = [
 name = "litellm-llms-types"
 version = "0.1.0"
 dependencies = [
+ "litellm-python-compat",
  "rstest",
  "schemars 1.2.2",
  "serde",
@@ -4070,6 +4071,7 @@ dependencies = [
  "litellm-http",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-python-compat",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
@@ -4107,6 +4109,7 @@ dependencies = [
  "serde",
  "serde-pickle",
  "serde_json",
+ "serde_with",
  "thiserror 2.0.19",
 ]
 

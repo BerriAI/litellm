@@ -6,7 +6,11 @@ license.workspace = true
 repository.workspace = true
 description = "Python data formats (repr, literal_eval, json.dumps, pickle) reproduced for interop with persisted LiteLLM state"
 
+[features]
+serde-compat = ["dep:serde_with"]
+
 [dependencies]
+serde_with = { workspace = true, optional = true }
 num-bigint = "0.4"
 num-traits = "0.2"
 serde.workspace = true

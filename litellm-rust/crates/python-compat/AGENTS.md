@@ -1,6 +1,9 @@
 - Pure Python *data formats* in Rust, for state Python LiteLLM writes and Rust must read or write byte-compatibly
   - No PyO3, no live objects: truthiness, `__str__`, descriptors of real Python objects belong to `python-bridge`'s coercion layer
   - Format *choices* stay with callers: the `{timestamp, response}` envelope, diskcache modes, and the cache-key recipe live in the cache crates and only call into this crate
+- Numeric deserialization compatibility also belongs here, behind the opt-in `serde-compat` feature
+  - Callers choose which fields use the adapters; this crate owns the reusable coercion rules
+  - Existing adapter tests preserve the supported behavior; changes to Pydantic compatibility need fixtures generated with Pydantic, separately from CPython format fixtures
 - Intended users
   - `cache-response` codec: reading `str(dict)` values Python's sync Redis path writes (`literal_eval`)
   - `cache-disk`: diskcache's pickled values (`pickle`), falsy-is-miss (`truthy`)

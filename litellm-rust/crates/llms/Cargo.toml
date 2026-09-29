@@ -19,7 +19,7 @@ litellm-host.workspace = true
 litellm-framing.workspace = true
 litellm-http.workspace = true
 litellm-secrets.workspace = true
-litellm-python-compat.workspace = true
+litellm-python-compat = { workspace = true, features = ["serde-compat"] }
 base64.workspace = true
 bytes.workspace = true
 data-url = "0.3.2"

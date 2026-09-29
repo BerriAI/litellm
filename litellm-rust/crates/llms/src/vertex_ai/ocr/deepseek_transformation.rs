@@ -88,7 +88,7 @@ enum DeepSeekContent {
 #[derive(Deserialize)]
 struct DeepSeekPage {
     #[serde(default)]
-    #[serde_as(deserialize_as = "litellm_llms_types::serde_compat::LaxI64")]
+    #[serde_as(deserialize_as = "litellm_python_compat::serde_compat::LaxI64")]
     index: i64,
     #[serde(default)]
     markdown: String,

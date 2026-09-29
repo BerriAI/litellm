@@ -16,7 +16,9 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Keep one authoritative representation of each field, preserving unknown fields without duplicating typed values in an extension map
   - Provider capability checks, defaults, authentication, header selection, and transformations remain in `llms`
 
-- Keep format-independent data helpers such as `headers`, `recognized`, and `serde_compat` at the crate root
+- Python-compatible numeric coercion adapters live in `python-compat` behind its `serde-compat` feature; field annotations here select where to apply them
+
+- Keep format-independent data helpers such as `headers` and `recognized` at the crate root
 
 - Shared request/response bodies, message and content-block enums, usage records, tool-call chunks, stream-event payloads, and protocol error bodies belong here
   - This includes LiteLLM's normalized response contracts and extensions, not just exact upstream schemas

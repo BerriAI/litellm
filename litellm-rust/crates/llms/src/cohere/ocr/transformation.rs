@@ -2,7 +2,7 @@ use litellm_core_utils::{
     call_arguments::{CallArguments, parse_options},
     url_utils::ApiUrl,
 };
-use litellm_llms_types::serde_compat::LaxI64;
+use litellm_python_compat::serde_compat::LaxI64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;

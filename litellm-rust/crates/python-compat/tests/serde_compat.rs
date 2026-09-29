@@ -1,4 +1,6 @@
-use litellm_llms_types::serde_compat::{FiniteF64, LaxI64};
+#![cfg(feature = "serde-compat")]
+
+use litellm_python_compat::serde_compat::{FiniteF64, LaxI64};
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
