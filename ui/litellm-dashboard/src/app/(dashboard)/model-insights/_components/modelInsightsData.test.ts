@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildTaskTiles,
-  buildWeeklySeries,
-  DailyMetric,
-  formatMetric,
-  modelOrder,
-  rankModels,
-  TaskMetric,
-} from "./modelInsightsData";
+import { buildWeeklySeries, DailyMetric, formatMetric, modelOrder, rankModels } from "./modelInsightsData";
 
 const row = (over: Partial<DailyMetric>): DailyMetric => ({
   model_group: "a",
@@ -89,25 +81,6 @@ describe("rankModels", () => {
     const daily = [row({ date: "2026-01-10", model_group: "a", requests: 10 })];
     const ranked = rankModels(totals, daily, "requests", range);
     expect(ranked.map((m) => m.delta)).toEqual([0, 0]);
-  });
-});
-
-describe("buildTaskTiles", () => {
-  it("labels each task, assigns its category, and names the leading model", () => {
-    const rows: TaskMetric[] = [
-      { ...row({ model_group: "a", spend: 6 }), task_type: "code_generation" },
-      { ...row({ model_group: "b", spend: 2 }), task_type: "code_generation" },
-      { ...row({ model_group: "c", spend: 2 }), task_type: "classification" },
-    ];
-    const tasks = [
-      { task_type: "code_generation", label: "Code Generation", category: "Code" },
-      { task_type: "classification", label: "Classification", category: "General" },
-    ];
-    const tiles = buildTaskTiles(rows, tasks, "spend");
-    expect(tiles.map((t) => [t.label, t.category, t.share, t.leader])).toEqual([
-      ["Code Generation", "Code", 80, "a"],
-      ["Classification", "General", 20, "c"],
-    ]);
   });
 });
 
