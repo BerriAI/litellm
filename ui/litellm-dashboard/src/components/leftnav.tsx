@@ -216,6 +216,17 @@ const menuGroups: MenuGroup[] = [
         ),
       },
       {
+        key: "roi-calculator",
+        page: "roi-calculator",
+        icon: <BarChart3 {...ICON} />,
+        roles: all_admin_roles,
+        label: (
+          <span className="flex items-center gap-2">
+            ROI Calculator <BetaBadge />
+          </span>
+        ),
+      },
+      {
         key: "cost-optimization",
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
