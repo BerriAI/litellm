@@ -10087,6 +10087,23 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
+            },
             "mask_request_content": {
               "anyOf": [
                 {
@@ -12324,6 +12341,23 @@
               ],
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
+            },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
             },
             "mask": {
               "anyOf": [

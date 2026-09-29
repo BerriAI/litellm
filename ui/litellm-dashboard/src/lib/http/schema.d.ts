@@ -25438,6 +25438,11 @@ export interface components {
              */
             location?: string | null;
             /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output" | "both") | null;
+            /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
              */
@@ -34431,6 +34436,11 @@ export interface components {
              * @description Google Cloud location/region (e.g., us-central1)
              */
             location?: string | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output" | "both") | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API
