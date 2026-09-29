@@ -83,4 +83,22 @@ describe("ModelInsightsView", () => {
     expect(await screen.findByText("Could not load model insights")).toBeInTheDocument();
     expect(screen.getByText("Only proxy admins can view deployment-wide model insights")).toBeInTheDocument();
   });
+
+  it("keeps the previous ranking, dimmed, until the new metric's data arrives", async () => {
+    render(<ModelInsightsView accessToken="token" />);
+    await screen.findByText("fast-chat");
+    let resolve: (value: typeof response) => void = () => {};
+    vi.mocked(apiClient.get).mockReturnValue(new Promise((done) => (resolve = done)));
+
+    await userEvent.click(screen.getByRole("tab", { name: "spend" }));
+
+    expect(
+      screen.getByText("Share of tokens, with the change between the first and second half of the period"),
+    ).toBeInTheDocument();
+
+    resolve(response);
+    expect(
+      await screen.findByText("Share of spend, with the change between the first and second half of the period"),
+    ).toBeInTheDocument();
+  });
 });
