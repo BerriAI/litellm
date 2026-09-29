@@ -654,6 +654,8 @@ class GraySwanGuardrail(CustomGuardrail):
             skip_system=effective_skip_system_message_for_guardrail(self),
             skip_tool=effective_skip_tool_message_for_guardrail(self),
         )
+        if not indices:
+            return (), None
         raw_tools: Final = request_data.get("tools")
         tools: Final = (
             tuple(raw_tools) if not scan_only_tool_results and isinstance(raw_tools, list) and raw_tools else None

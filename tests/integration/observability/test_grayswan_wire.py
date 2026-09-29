@@ -119,15 +119,19 @@ def _chat_provider(message: dict[str, JsonValue]):
 
 
 def _monitor_bodies(vendor: Wire, expected: int = 1) -> tuple[dict[str, JsonValue], ...]:
-    collected: list[dict[str, JsonValue]] = []  # mutable-ok: accumulator across polling attempts
+    collected: tuple[dict[str, JsonValue], ...] = ()
 
     def drain_new() -> tuple[dict[str, JsonValue], ...]:
-        collected.extend(
-            _JSON_OBJECT.validate_json(request.body)
-            for request in vendor.drain()
-            if request.target == "/cygnal/monitor"
+        nonlocal collected
+        collected = (  # rebind-ok: eventually polls this closure, so drained bodies must persist across calls
+            *collected,
+            *(
+                _JSON_OBJECT.validate_json(request.body)
+                for request in vendor.drain()
+                if request.target == "/cygnal/monitor"
+            ),
         )
-        return tuple(collected)
+        return collected
 
     return eventually(drain_new, lambda bodies: len(bodies) >= expected, seconds=30)
 

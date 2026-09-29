@@ -772,6 +772,24 @@ async def test_post_call_prefers_request_route_over_logging_call_type() -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_call_surface_without_messages_sends_response_only() -> None:
+    guardrail = _post_call_guardrail()
+    client = _CapturingClient()
+    guardrail.async_handler = client
+
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["response text"]},
+        request_data={**_REQUEST_DATA, "litellm_logging_obj": _LoggingObj("aembedding")},
+        input_type="response",
+        logging_obj=_LoggingObj("aembedding"),
+    )
+
+    payload = client.calls[0]["json"]
+    assert list(payload["messages"]) == [{"role": "assistant", "content": "response text"}]
+    assert "tools" not in payload
+
+
+@pytest.mark.asyncio
 async def test_post_call_unresolvable_call_type_sends_response_only() -> None:
     guardrail = _post_call_guardrail()
     client = _CapturingClient()
