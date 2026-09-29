@@ -1207,7 +1207,7 @@ def test_get_logging_payload_placeholders_the_metadata_copied_into_the_stored_re
     stored_request_body: Final = json.loads(payload["proxy_server_request"])
     assert stored_request_body["metadata"]["model_group"] == expected_stored_model_group
     assert stored_request_body["metadata"]["error_information"]["error_message"] == expected_stored_error_message
-    assert stored_request_body["metadata"]["user_api_key"] == "sk-test"
+    assert stored_request_body["metadata"]["user_api_key"] == REDACTED_BY_LITELM_STRING
     assert ("medical records" in payload["proxy_server_request"]) == bool(deployment_info)
 
 
@@ -2743,12 +2743,7 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
         "gigachat_access_token": "canary-gigachat-token",
         "oci_key": "canary-oci-key",
     }
-    identity_metadata: Final = {
-        "user_api_key": "hashed-key",
-        "user_api_key_alias": "team-a-key",
-        "user_api_key_team_id": "team-a",
-        "user_api_key_user_id": "user-a",
-    }
+    metadata: Final = {"user_api_key": "custom-auth-raw-key", "requester_ip_address": "10.0.0.1"}
     tool_parameters: Final = {"type": "object", "properties": {"client_secret": {"type": "string"}}}
     litellm_params: Final = {
         "proxy_server_request": {
@@ -2764,7 +2759,7 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
                     {"type": "mcp", "server_url": "https://mcp.example.com", "headers": {"Authorization": "canary-mcp"}},
                 ],
                 "fallbacks": [{"model": "azure-b", **credentials}],
-                "metadata": identity_metadata,
+                "metadata": metadata,
                 **credentials,
             }
         }
@@ -2780,9 +2775,9 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
     assert parsed["extra_headers"] == {"Authorization": REDACTED_BY_LITELM_STRING}
     assert parsed["tools"][0]["function"]["parameters"] == tool_parameters
     assert parsed["tools"][1]["server_url"] == "https://mcp.example.com"
-    assert parsed["metadata"] == identity_metadata
+    assert parsed["metadata"] == {"user_api_key": REDACTED_BY_LITELM_STRING, "requester_ip_address": "10.0.0.1"}
     assert parsed["max_tokens"] == 10
-    assert parsed["prompt_cache_key"] == "user-123-cache"
+    assert parsed["prompt_cache_key"] == REDACTED_BY_LITELM_STRING
     assert parsed["messages"] == [{"role": "user", "content": "hello"}]
 
 
