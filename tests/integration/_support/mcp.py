@@ -222,8 +222,10 @@ def stdio_peer(directory: Path, *, rich: bool = False) -> Iterator[McpPeer]:
     coverage_file: Final = os.environ.get("COVERAGE_FILE")
     coverage_args: Final = (
         (
-            "-m",
-            "coverage",
+            "-c",
+            "import mcp.server.mcpserver, runpy, sys; "
+            "sys.argv = ['coverage', *sys.argv[1:]]; "
+            "runpy.run_module('coverage', run_name='__main__')",
             "run",
             f"--rcfile={STDIO_PEER.parent.parent / 'conformance_coverage.toml'}",
             f"--data-file={Path(coverage_file).resolve()}",
