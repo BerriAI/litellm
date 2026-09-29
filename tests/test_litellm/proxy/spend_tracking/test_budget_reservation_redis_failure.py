@@ -9,8 +9,10 @@ gives up, but ``increment_spend_counters`` still treats the counter as
 lands in the enforced counter, so budgets stop gating until the next cold
 reseed pulls a lagging value from the DB.
 
-The fix makes the reconcile path fall back to the direct increment when it
-fails, so the actual cost is always written to the shared counter.
+The reconcile adjustment and the direct increment now leave in one pipeline, so
+a failure either writes the actual cost or drops the counter (and surfaces the
+error) for the next read to reseed from the DB; it never leaves the reserved
+estimate in place as if it were reconciled.
 """
 
 import pytest
@@ -84,13 +86,14 @@ async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failu
         ],
     }
 
-    await proxy_server.increment_spend_counters(
-        token=hashed_token,
-        team_id=None,
-        user_id=None,
-        response_cost=response_cost,
-        budget_reservation=budget_reservation,
-    )
+    with pytest.raises(Exception, match="Redis timeout"):
+        await proxy_server.increment_spend_counters(
+            token=hashed_token,
+            team_id=None,
+            user_id=None,
+            response_cost=response_cost,
+            budget_reservation=budget_reservation,
+        )
 
-    enforced_spend = await flaky_redis.async_get_cache(key=counter_key)
-    assert enforced_spend == response_cost
+    assert await flaky_redis.async_get_cache(key=counter_key) is None
+    assert proxy_server.spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is None

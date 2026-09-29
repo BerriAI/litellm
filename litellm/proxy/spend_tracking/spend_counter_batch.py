@@ -144,25 +144,43 @@ def release_spend_counter_batch() -> None:
         batch.close()
 
 
-def _iter_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> Iterator[str]:
-    if token.token is not None:
-        yield f"spend:key:{token.token}"
-    if token.team_id is not None:
-        yield f"spend:team:{token.team_id}"
-        if token.user_id is not None:
-            yield f"spend:team_member:{token.user_id}:{token.team_id}"
-    if token.user_id is not None:
-        yield f"spend:user:{token.user_id}"
-    if end_user_id is not None:
+def _iter_entity_counter_keys(
+    token: object,
+    team_id: object,
+    user_id: object,
+    org_id: object,
+    project_id: object,
+    end_user_id: object,
+) -> Iterator[str]:
+    """Only string ids name a counter; anything else (None, or an unresolved placeholder in synthetic
+    logging payloads) simply has no counter to bind."""
+    if isinstance(token, str):
+        yield f"spend:key:{token}"
+    if isinstance(team_id, str):
+        yield f"spend:team:{team_id}"
+        if isinstance(user_id, str):
+            yield f"spend:team_member:{user_id}:{team_id}"
+    if isinstance(user_id, str):
+        yield f"spend:user:{user_id}"
+    if isinstance(end_user_id, str):
         yield f"spend:end_user:{end_user_id}"
-    if token.org_id is not None:
-        yield f"spend:org:{token.org_id}"
-    if token.project_id is not None:
-        yield project_spend_counter_key(token.project_id)
+    if isinstance(org_id, str):
+        yield f"spend:org:{org_id}"
+    if isinstance(project_id, str):
+        yield project_spend_counter_key(project_id)
 
 
 def admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> frozenset[str]:
-    return frozenset(_iter_admission_counter_keys(token, end_user_id))
+    return frozenset(
+        _iter_entity_counter_keys(
+            token=token.token,
+            team_id=token.team_id,
+            user_id=token.user_id,
+            org_id=token.org_id,
+            project_id=token.project_id,
+            end_user_id=end_user_id,
+        )
+    )
 
 
 def post_call_counter_keys(
@@ -176,9 +194,15 @@ def post_call_counter_keys(
     project_id: str | None = None,
 ) -> frozenset[str]:
     """Every counter ``increment_spend_counters`` warm-checks, except budget windows which bind on read."""
-    entity_keys: Final = admission_counter_keys(
-        UserAPIKeyAuth(token=token, team_id=team_id, user_id=user_id, org_id=org_id, project_id=project_id),
-        end_user_id,
+    entity_keys: Final = frozenset(
+        _iter_entity_counter_keys(
+            token=token,
+            team_id=team_id,
+            user_id=user_id,
+            org_id=org_id,
+            project_id=project_id,
+            end_user_id=end_user_id,
+        )
     )
     tag_keys: Final = frozenset(f"spend:tag:{tag}" for tag in tags or () if tag and isinstance(tag, str))
     group_keys: Final = frozenset(

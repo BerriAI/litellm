@@ -726,6 +726,7 @@ async def test_update_database_and_spend_counters_reconciles_reservation_before_
         budget_reservation=budget_reservation,
         actual_cost=0.2,
         finalize=False,
+        apply_consistent=False,
     )
     increment_spend_counters.assert_awaited_once()
     assert increment_spend_counters.await_args.kwargs["budget_reservation"] is budget_reservation
@@ -771,6 +772,7 @@ async def test_update_database_and_spend_counters_releases_reservation_when_db_u
             budget_reservation=budget_reservation,
             actual_cost=0.2,
             finalize=False,
+            apply_consistent=False,
         )
         mock_release_budget_reservation.assert_awaited_once_with(
             budget_reservation=budget_reservation,

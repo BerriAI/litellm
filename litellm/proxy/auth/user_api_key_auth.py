@@ -3006,40 +3006,39 @@ async def _run_centralized_common_checks(
             skip_budget_checks=skip_budget_checks,
             project_object=project_object,
         )
+        if not skip_budget_checks:
+            await _check_team_model_budget(
+                valid_token=user_api_key_auth_obj,
+                model_max_budget_limiter=model_max_budget_limiter,
+                models=_get_model_names_for_budget_checks(
+                    model=_get_model_from_request_context(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                        llm_router=llm_router,
+                        team_id=user_api_key_auth_obj.team_id,
+                    )
+                ),
+            )
+
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request=request,
+            request_data=request_data,
+            route=route,
+            llm_router=llm_router,
+            team_object=team_object,
+            user_object=user_object,
+            end_user_id=end_user_id,
+            end_user_object=end_user_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            skip_budget_checks=skip_budget_checks,
+            general_settings=general_settings,
+        )
     finally:
         release_spend_counter_batch()
-
-    if not skip_budget_checks:
-        await _check_team_model_budget(
-            valid_token=user_api_key_auth_obj,
-            model_max_budget_limiter=model_max_budget_limiter,
-            models=_get_model_names_for_budget_checks(
-                model=_get_model_from_request_context(
-                    request_data=request_data,
-                    route=route,
-                    request=request,
-                    llm_router=llm_router,
-                    team_id=user_api_key_auth_obj.team_id,
-                )
-            ),
-        )
-
-    await _reserve_budget_after_common_checks(
-        user_api_key_auth_obj=user_api_key_auth_obj,
-        request=request,
-        request_data=request_data,
-        route=route,
-        llm_router=llm_router,
-        team_object=team_object,
-        user_object=user_object,
-        end_user_id=end_user_id,
-        end_user_object=end_user_object,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        skip_budget_checks=skip_budget_checks,
-        general_settings=general_settings,
-    )
 
 
 async def _noop_none() -> None:
