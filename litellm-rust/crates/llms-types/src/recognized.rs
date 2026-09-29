@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -6,6 +6,14 @@ use serde_json::Value;
 pub enum Recognized<T> {
     Known(T),
     Unrecognized(Value),
+}
+
+pub fn deserialize_present<'de, T, D>(deserializer: D) -> Result<Option<Recognized<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Recognized::deserialize(deserializer).map(Some)
 }
 
 impl<T> Recognized<T> {
