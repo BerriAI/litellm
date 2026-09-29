@@ -237,6 +237,29 @@ class TestAgentRequestHandler:
                 frozenset()
             )
 
+    async def test_managed_agent_acting_for_a_user_is_capped_at_the_invoking_teams_agents(self):
+        """The managed path must honour the invoking team's ceiling the same way the unmanaged path does:
+        the agent's own policy grants alpha and beta, but the human who invoked it reaches only beta."""
+        from litellm.types.agents import AgentResponse
+
+        managed: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="actor")
+        managed.managed_agent_policy = AgentResponse(
+            agent_id="actor",
+            agent_name="Actor",
+            agent_card_params={},
+            object_permission={"object_permission_id": "own", "agents": ["agent-alpha", "agent-beta"]},
+        )
+        managed.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+
+        with patch.object(  # test-quality-ok: the team resolver reads proxy_server globals with no injection seam
+            AgentRequestHandler,
+            "_get_allowed_agents_for_team",
+            self._team_grants({"callers": RestrictedAgentAccess(frozenset({"agent-beta"}))}),
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(managed) == RestrictedAgentAccess(
+                frozenset({"agent-beta"})
+            )
+
     async def test_agent_key_acting_for_an_ungranted_caller_keeps_its_own_agents(self):
         agent_key: Final = self._key_granting(["agent-alpha"], agent_id="caller-agent")
         agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")

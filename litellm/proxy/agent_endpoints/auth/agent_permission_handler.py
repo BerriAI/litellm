@@ -650,7 +650,9 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
     from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
 
     ceilings: Final = await resolve_managed_agent_ceilings(agent)
-    capped: Final = frozenset(target for target in own if all(target in ceiling.agent_ids for ceiling in ceilings))
+    grouped: Final = frozenset(target for target in own if all(target in ceiling.agent_ids for ceiling in ceilings))
+    caller: Final = await AgentRequestHandler._agent_caller_access(auth)
+    capped: Final = grouped if isinstance(caller, UnrestrictedAgentAccess) else grouped & caller.agent_ids
     context: Final = auth.managed_agent_context
     if context is None or context.mode == "autonomous":
         return RestrictedAgentAccess(capped)
