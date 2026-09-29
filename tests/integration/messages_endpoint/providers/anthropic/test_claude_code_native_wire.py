@@ -19,8 +19,11 @@ def test_claude_code_streaming_request_reaches_anthropic_intact_and_streams_back
         assert request.target == "/v1/messages", request.target
         assert request.headers["x-api-key"] == cc.ANTHROPIC_API_KEY
         assert request.headers["anthropic-version"] == "2023-06-01"
-        upstream_beta: Final = frozenset(request.headers.get("anthropic-beta", "").split(","))
-        assert cli_beta <= upstream_beta, request.headers.get("anthropic-beta")
+        assert frozenset(request.headers.get("anthropic-beta", "").split(",")) == cli_beta, request.headers.get(
+            "anthropic-beta"
+        )
+        assert "authorization" not in request.headers, dict(request.headers)
+        assert all(gateway.key not in value for value in request.headers.values()), dict(request.headers)
         body: Final = cc.JSON_OBJECT.validate_json(request.body)
         expected: Final = {**request_body, "model": _MODEL}
         assert body == expected, {

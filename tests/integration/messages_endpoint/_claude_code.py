@@ -52,55 +52,6 @@ def tools() -> tuple[dict[str, JsonValue], ...]:
     _MAX: Final = 9007199254740991
     return (
         {
-            "name": "Bash",
-            "description": "Executes a given bash command and returns its output.",
-            "input_schema": schema(
-                {
-                    "command": field("The command to execute", type="string"),
-                    "timeout": field("Optional timeout in milliseconds (max 600000)", type="number"),
-                    "description": field(
-                        "Clear, concise description of what this command does in active voice.", type="string"
-                    ),
-                    "run_in_background": field("Set to true to run this command in the background.", type="boolean"),
-                    "dangerouslyDisableSandbox": field(
-                        "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
-                        type="boolean",
-                    ),
-                },
-                ("command",),
-            ),
-        },
-        {
-            "name": "Read",
-            "description": "Reads a file from the local filesystem.",
-            "input_schema": schema(
-                {
-                    "file_path": field("The absolute path to the file to read", type="string"),
-                    "offset": field("The line number to start reading from.", type="integer", minimum=0, maximum=_MAX),
-                    "limit": field("The number of lines to read.", type="integer", exclusiveMinimum=0, maximum=_MAX),
-                    "pages": field('Page range for PDF files (e.g., "1-5", "3", "10-20").', type="string"),
-                },
-                ("file_path",),
-            ),
-        },
-        {
-            "name": "Edit",
-            "description": "Performs exact string replacements in files.",
-            "input_schema": schema(
-                {
-                    "file_path": field("The absolute path to the file to modify", type="string"),
-                    "old_string": field("The text to replace", type="string"),
-                    "new_string": field(
-                        "The text to replace it with (must be different from old_string)", type="string"
-                    ),
-                    "replace_all": field(
-                        "Replace all occurrences of old_string (default false)", default=False, type="boolean"
-                    ),
-                },
-                ("file_path", "old_string", "new_string"),
-            ),
-        },
-        {
             "name": "Agent",
             "description": "Launch a new agent to handle complex, multi-step tasks.",
             "input_schema": schema(
@@ -120,6 +71,429 @@ def tools() -> tuple[dict[str, JsonValue], ...]:
                     "isolation": field("Isolation mode.", type="string", enum=["worktree", "remote"]),
                 },
                 ("description", "prompt"),
+            ),
+        },
+        {
+            "name": "Bash",
+            "description": "Executes a given bash command and returns its output.",
+            "input_schema": schema(
+                {
+                    "command": field("The command to execute", type="string"),
+                    "timeout": field("Optional timeout in milliseconds (max 600000)", type="number"),
+                    "description": field(
+                        "Clear, concise description of what this command does in active voice.",
+                        type="string",
+                    ),
+                    "run_in_background": field("Set to true to run this command in the background.", type="boolean"),
+                    "dangerouslyDisableSandbox": field(
+                        "Set this to true to dangerously override sandbox mode and run commands without sandboxing.",
+                        type="boolean",
+                    ),
+                },
+                ("command",),
+            ),
+        },
+        {
+            "name": "CronCreate",
+            "description": "Schedule a prompt to be enqueued at a future time.",
+            "input_schema": schema(
+                {
+                    "cron": field(
+                        'Standard 5-field cron expression in local time: "M H DoM Mon DoW" (e.g.',
+                        type="string",
+                    ),
+                    "prompt": field("The prompt to enqueue at each fire time.", type="string"),
+                    "recurring": field(
+                        "true (default) = fire on every cron match until deleted or auto-expired after 7 days.",
+                        type="boolean",
+                    ),
+                    "durable": field(
+                        "true = persist to .claude/scheduled_tasks.json and survive restarts.",
+                        type="boolean",
+                    ),
+                },
+                ("cron", "prompt"),
+            ),
+        },
+        {
+            "name": "CronDelete",
+            "description": "Cancel a cron job previously scheduled with CronCreate.",
+            "input_schema": schema(
+                {
+                    "id": field("Job ID returned by CronCreate.", type="string"),
+                },
+                ("id",),
+            ),
+        },
+        {
+            "name": "CronList",
+            "description": "List all cron jobs scheduled via CronCreate, both durable (.claude/scheduled_tasks.json) and session-only.",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "Edit",
+            "description": "Performs exact string replacements in files.",
+            "input_schema": schema(
+                {
+                    "file_path": field("The absolute path to the file to modify", type="string"),
+                    "old_string": field("The text to replace", type="string"),
+                    "new_string": field("The text to replace it with (must be different from old_string)", type="string"),
+                    "replace_all": field(
+                        "Replace all occurrences of old_string (default false)",
+                        default=False,
+                        type="boolean",
+                    ),
+                },
+                ("file_path", "old_string", "new_string"),
+            ),
+        },
+        {
+            "name": "EnterWorktree",
+            "description": "Use this tool ONLY when explicitly instructed to work in a worktree — either by the user directly, or by project instruc",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "name": field("Optional name for a new worktree.", type="string"),
+                    "path": field(
+                        "Path to an existing worktree to switch into instead of creating a new one.",
+                        type="string",
+                    ),
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "ExitWorktree",
+            "description": "Exit a worktree session created by EnterWorktree and return the session to the original working directory.",
+            "input_schema": schema(
+                {
+                    "action": field(
+                        '"keep" leaves the worktree and branch on disk; "remove" deletes both.',
+                        type="string",
+                        enum=["keep", "remove"],
+                    ),
+                    "discard_changes": field(
+                        'Required true when action is "remove" and the worktree has uncommitted files or unmerged commits.',
+                        type="boolean",
+                    ),
+                },
+                ("action",),
+            ),
+        },
+        {
+            "name": "ListAgents",
+            "description": "Lists agents you can SendMessage to — in-process subagents you spawned, the teammates on your team, other local Claude s",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "channel": field("Not available in this build; leave unset.", type="string", maxLength=256),
+                    "q": field("Not available in this build; leave unset.", type="string", maxLength=256),
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "NotebookEdit",
+            "description": "Replaces, inserts, or deletes a single cell in a Jupyter notebook (.ipynb file).",
+            "input_schema": schema(
+                {
+                    "notebook_path": field(
+                        "The absolute path to the Jupyter notebook file to edit (must be absolute, not relative)",
+                        type="string",
+                    ),
+                    "cell_id": field("The ID of the cell to edit.", type="string"),
+                    "new_source": field("The new source for the cell", type="string"),
+                    "cell_type": field(
+                        "The type of the cell (code or markdown).",
+                        type="string",
+                        enum=["code", "markdown"],
+                    ),
+                    "edit_mode": field(
+                        "The type of edit to make (replace, insert, delete).",
+                        type="string",
+                        enum=["replace", "insert", "delete"],
+                    ),
+                },
+                ("notebook_path", "new_source"),
+            ),
+        },
+        {
+            "name": "Read",
+            "description": "Reads a file from the local filesystem.",
+            "input_schema": schema(
+                {
+                    "file_path": field("The absolute path to the file to read", type="string"),
+                    "offset": field("The line number to start reading from.", type="integer", minimum=0, maximum=_MAX),
+                    "limit": field(
+                        "The number of lines to read.",
+                        type="integer",
+                        exclusiveMinimum=0,
+                        maximum=_MAX,
+                    ),
+                    "pages": field('Page range for PDF files (e.g., "1-5", "3", "10-20").', type="string"),
+                },
+                ("file_path",),
+            ),
+        },
+        {
+            "name": "ReportFindings",
+            "description": "Report code-review findings as a typed list so the host UI can render them.",
+            "input_schema": schema(
+                {
+                    "level": field(
+                        "Effort level the review ran at",
+                        type="string",
+                        enum=["low", "medium", "high", "xhigh", "max"],
+                    ),
+                    "findings": field(
+                        "Verified findings, most-severe first; empty if none survived",
+                        maxItems=32,
+                        type="array",
+                        items={
+                            "type": "object",
+                            "properties": {
+                                "file": field("Repo-relative path of the file the finding is in", type="string"),
+                                "line": field(
+                                    "1-indexed line the finding anchors to",
+                                    type="integer",
+                                    minimum=-_MAX,
+                                    maximum=_MAX,
+                                ),
+                                "summary": field("One-sentence statement of the defect", type="string"),
+                                "short_summary": field(
+                                    "Compressed label for compact UI (≤60 chars): the claim alone, no rationale or consequence clause",
+                                    type="string",
+                                    maxLength=60,
+                                ),
+                                "failure_scenario": field("Concrete inputs/state → wrong output/crash", type="string"),
+                                "category": field(
+                                    "Short kebab-case slug of the finding type, e.g.",
+                                    type="string",
+                                    maxLength=40,
+                                ),
+                                "verdict": field(
+                                    "Set when a verify pass ran; absent on inline-only reviews",
+                                    type="string",
+                                    enum=["CONFIRMED", "PLAUSIBLE"],
+                                ),
+                                "outcome": field(
+                                    "Set ONLY when re-reporting after applying fixes: what happened to this finding",
+                                    type="string",
+                                    enum=["fixed", "skipped", "no_change_needed"],
+                                ),
+                            },
+                            "required": ["file", "summary", "failure_scenario"],
+                            "additionalProperties": False,
+                        },
+                    ),
+                },
+                ("findings",),
+            ),
+        },
+        {
+            "name": "ScheduleWakeup",
+            "description": "Schedule when to resume work in /loop dynamic mode — the user invoked /loop without an interval, asking you to self-pace",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "delaySeconds": field("Seconds from now to wake up.", type="number"),
+                    "reason": field("One short sentence explaining the chosen delay.", type="string"),
+                    "prompt": field("The /loop input to fire on wake-up.", type="string"),
+                    "stop": field(
+                        "Set to true to end the dynamic loop immediately instead of scheduling another wakeup.",
+                        type="boolean",
+                    ),
+                    "noop": field(
+                        "true = nothing changed (you checked and there is nothing to report).",
+                        type="boolean",
+                    ),
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "SendMessage",
+            "description": "# SendMessage\n\nSend a message to another agent.",
+            "input_schema": schema(
+                {
+                    "to": field(
+                        'Recipient: a name from ListAgents (append its " [ref]" only when a listing or an error shows one), a teammate name, "mai',
+                        type="string",
+                        allOf=[{"pattern": "^[^\\n\\r]*$"}, {"pattern": "^[\\s\\S]{0,300}$"}],
+                    ),
+                    "summary": field(
+                        "A 5-10 word label for your own transcript row (not transmitted — the recipient previews the first line of `message`).",
+                        type="string",
+                        maxLength=200,
+                    ),
+                    "message": field("Plain text message content.", default="", type="string"),
+                    "notify_when_idle": field(
+                        "Ask a session ON THIS MACHINE to send you ONE notice when it next goes idle (finishes its turn with nothing queued) or e",
+                        type="boolean",
+                    ),
+                },
+                ("to", "message"),
+            ),
+        },
+        {
+            "name": "Skill",
+            "description": "Invoke a skill.",
+            "input_schema": schema(
+                {
+                    "skill": field("The name of a skill from the available-skills list.", type="string"),
+                    "args": field("Optional arguments for the skill", type="string"),
+                },
+                ("skill",),
+            ),
+        },
+        {
+            "name": "TaskCreate",
+            "description": "Use this tool to create a structured task list for your current coding session.",
+            "input_schema": schema(
+                {
+                    "subject": field("A brief title for the task", type="string"),
+                    "description": field("What needs to be done", type="string"),
+                    "activeForm": field(
+                        'Present continuous form shown in spinner when in_progress (e.g., "Running tests")',
+                        type="string",
+                    ),
+                    "metadata": field(
+                        "Arbitrary metadata to attach to the task",
+                        type="object",
+                        propertyNames={"type": "string"},
+                        additionalProperties={},
+                    ),
+                },
+                ("subject", "description"),
+            ),
+        },
+        {
+            "name": "TaskGet",
+            "description": "Use this tool to retrieve a task by its ID from the task list.",
+            "input_schema": schema(
+                {
+                    "taskId": field("The ID of the task to retrieve", type="string"),
+                },
+                ("taskId",),
+            ),
+        },
+        {
+            "name": "TaskList",
+            "description": "Use this tool to list all tasks in the task list.",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "TaskStop",
+            "description": "- Stops a running background task by its ID\n- Takes a task_id parameter identifying the task to stop\n- To stop an agent-",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "task_id": field("The ID of the background task to stop.", type="string"),
+                    "shell_id": field("Deprecated: use task_id instead", type="string"),
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "TaskUpdate",
+            "description": "Use this tool to update a task in the task list.",
+            "input_schema": schema(
+                {
+                    "taskId": field("The ID of the task to update", type="string"),
+                    "subject": field("New subject for the task", type="string"),
+                    "description": field("New description for the task", type="string"),
+                    "activeForm": field(
+                        'Present continuous form shown in spinner when in_progress (e.g., "Running tests")',
+                        type="string",
+                    ),
+                    "status": field(
+                        "New status for the task",
+                        anyOf=[
+                            {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                            {"type": "string", "const": "deleted"},
+                        ],
+                    ),
+                    "addBlocks": field("Task IDs that this task blocks", type="array", items={"type": "string"}),
+                    "addBlockedBy": field("Task IDs that block this task", type="array", items={"type": "string"}),
+                    "owner": field("New owner for the task", type="string"),
+                    "metadata": field(
+                        "Metadata keys to merge into the task.",
+                        type="object",
+                        propertyNames={"type": "string"},
+                        additionalProperties={},
+                    ),
+                },
+                ("taskId",),
+            ),
+        },
+        {
+            "name": "WebFetch",
+            "description": "IMPORTANT: WebFetch WILL FAIL for authenticated or private URLs.",
+            "input_schema": schema(
+                {
+                    "url": field("The URL to fetch content from", type="string", format="uri"),
+                    "prompt": field("The prompt to run on the fetched content", type="string"),
+                },
+                ("url", "prompt"),
+            ),
+        },
+        {
+            "name": "WebSearch",
+            "description": "- Allows Claude to search the web and use the results to inform responses\n- Provides up-to-date information for current ",
+            "input_schema": schema(
+                {
+                    "query": field("The search query to use", type="string", minLength=2),
+                    "allowed_domains": field("Only include search results from these domains", type="array", items={"type": "string"}),
+                    "blocked_domains": field("Never include search results from these domains", type="array", items={"type": "string"}),
+                },
+                ("query",),
+            ),
+        },
+        {
+            "name": "Workflow",
+            "description": "Execute a workflow script that orchestrates multiple subagents deterministically.",
+            "input_schema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "script": field("Self-contained workflow script.", type="string", maxLength=524288),
+                    "name": field("Name of a predefined workflow (built-in or from .claude/workflows/).", type="string"),
+                    "description": field("Ignored — set the workflow description in the script's `meta` block.", type="string"),
+                    "title": field("Ignored — set the workflow title in the script's `meta` block.", type="string"),
+                    "args": field("Optional input value exposed to the script as the global `args`, verbatim."),
+                    "scriptPath": field("Path to a workflow script file on disk.", type="string"),
+                    "resumeFromRunId": field(
+                        "Run ID of a prior Workflow invocation to resume from.",
+                        type="string",
+                        pattern="^wf_[a-z0-9-]{6,}$",
+                    ),
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "Write",
+            "description": "Writes a file to the local filesystem.",
+            "input_schema": schema(
+                {
+                    "file_path": field("The absolute path to the file to write (must be absolute, not relative)", type="string"),
+                    "content": field("The content to write to the file", type="string"),
+                },
+                ("file_path", "content"),
             ),
         },
     )
