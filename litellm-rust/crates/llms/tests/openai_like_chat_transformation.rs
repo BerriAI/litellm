@@ -376,3 +376,55 @@ fn request_builder_preserves_typed_content_and_opaque_extensions() {
         json!({"model": "test-model", "messages": conversation, "provider_option": {"nested": null}})
     );
 }
+
+#[rstest]
+#[case::cache_read_and_write(json!({"cached_tokens": 11, "cache_write_tokens": 7, "text_tokens": 3}), 11, 7, 3)]
+#[case::legacy_cache_creation(json!({"cached_tokens": 11, "cache_creation_tokens": 5}), 11, 5, 0)]
+#[case::legacy_precedence(json!({"cache_creation_tokens": 0, "cache_write_tokens": 7}), 0, 0, 0)]
+#[case::independent_malformed_counts(json!({"cached_tokens": "11", "cache_write_tokens": 7, "text_tokens": -1}), 0, 7, 0)]
+#[case::nulls(json!({"cached_tokens": null, "cache_write_tokens": null, "text_tokens": null}), 0, 0, 0)]
+#[case::unknown_extension(json!({"cached_tokens": 11, "future_field": {"tokens": 99}}), 11, 0, 0)]
+#[case::empty(json!({}), 0, 0, 0)]
+#[case::non_object(json!([11]), 0, 0, 0)]
+fn cache_usage_normalizes_typed_counts(
+    #[case] details: Value,
+    #[case] read: u64,
+    #[case] write: u64,
+    #[case] text: u64,
+) {
+    let response = transform_response(json!({
+        "choices": [{"message": {"content": "hello"}}],
+        "usage": {
+            "prompt_tokens": 23,
+            "completion_tokens": null,
+            "total_tokens": 23,
+            "prompt_tokens_details": details
+        }
+    }))
+    .unwrap();
+    assert_eq!(response.usage.prompt_tokens, 23);
+    assert_eq!(response.usage.completion_tokens, 0);
+    assert_eq!(response.usage.total_tokens, 23);
+    assert_eq!(response.usage.prompt_tokens_details.cached_tokens, read);
+    assert_eq!(
+        response.usage.prompt_tokens_details.cache_creation_tokens,
+        write
+    );
+    assert_eq!(response.usage.prompt_tokens_details.text_tokens, text);
+}
+
+#[rstest]
+#[case::negative(json!(-1))]
+#[case::string(json!("3"))]
+#[case::fractional(json!(1.5))]
+#[case::object(json!({"count": 3}))]
+fn malformed_usage_count_does_not_discard_valid_siblings(#[case] count: Value) {
+    let response = transform_response(json!({
+        "choices": [{"message": {"content": "hello"}}],
+        "usage": {"prompt_tokens": count, "completion_tokens": 5, "total_tokens": 8}
+    }))
+    .unwrap();
+    assert_eq!(response.usage.prompt_tokens, 0);
+    assert_eq!(response.usage.completion_tokens, 5);
+    assert_eq!(response.usage.total_tokens, 8);
+}

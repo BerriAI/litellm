@@ -8,4 +8,4 @@ pub use request::{
     MessagesOptionalParams, MessagesRequest, MessagesTool, OutputConfig, Speed, SystemPrompt,
     ThinkingConfig, ThinkingDisplay,
 };
-pub use response::MessagesResponse;
+pub use response::{MessagesResponse, MessagesUsage};

@@ -1,15 +1,11 @@
-//! `litellm/llms/openai_like/chat/transformation.py`: the chat config every
-//! OpenAI-compatible endpoint shares. The body is already OpenAI-shaped, so
-//! parameters pass through verbatim; the port keeps Python's two deviations,
-//! the `max_completion_tokens` -> `max_tokens` rename and the usage
-//! `*_tokens` null-to-zero sanitize.
-
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::core_helpers::unix_now;
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsRequest,
     ChatCompletionsResponse, ChatCompletionsUsage, ChatMessage, PromptTokensDetails,
 };
+use litellm_llms_types::recognized::Recognized;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -57,6 +53,26 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 
 /// Call configuration the caller may pass that never enters the request body.
 const CONFIG_PARAMS: &[&str] = &["custom_endpoint", "extra_headers", "max_retries"];
+
+#[derive(Default, Deserialize)]
+struct UsageProjection {
+    prompt_tokens: Option<Recognized<u64>>,
+    completion_tokens: Option<Recognized<u64>>,
+    total_tokens: Option<Recognized<u64>>,
+    prompt_tokens_details: Option<Recognized<PromptTokensProjection>>,
+}
+
+#[derive(Default, Deserialize)]
+struct PromptTokensProjection {
+    cached_tokens: Option<Recognized<u64>>,
+    cache_creation_tokens: Option<Recognized<u64>>,
+    cache_write_tokens: Option<Recognized<u64>>,
+    text_tokens: Option<Recognized<u64>>,
+}
+
+fn token_count(value: Option<&Recognized<u64>>) -> u64 {
+    value.and_then(Recognized::known).copied().unwrap_or(0)
+}
 
 pub struct OpenAILikeChatConfig;
 
@@ -117,9 +133,8 @@ impl BaseConfig for OpenAILikeChatConfig {
         model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let mut body = response.body;
-        sanitize_usage(&mut body);
-        let body = body
+        let body = response
+            .body
             .as_object()
             .ok_or_else(|| Error::InvalidResponse("chat response is not an object".into()))?;
 
@@ -132,14 +147,24 @@ impl BaseConfig for OpenAILikeChatConfig {
             .map(|(position, choice)| normalize_choice(position, choice))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let usage = body.get("usage").and_then(Value::as_object);
-        let field = |name: &str| {
-            usage
-                .and_then(|usage| usage.get(name))
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-        };
-        let details = usage.and_then(|usage| usage.get("prompt_tokens_details"));
+        let usage = body
+            .get("usage")
+            .map(Recognized::<UsageProjection>::deserialize)
+            .transpose()
+            .map_err(|error| {
+                Error::InvalidResponse(crate::ErrorDetail::invalid("Chat usage", error))
+            })?;
+        let empty_usage = UsageProjection::default();
+        let usage = usage
+            .as_ref()
+            .and_then(Recognized::known)
+            .unwrap_or(&empty_usage);
+        let empty_details = PromptTokensProjection::default();
+        let details = usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(Recognized::known)
+            .unwrap_or(&empty_details);
 
         Ok(ChatCompletionsResponse {
             created: body
@@ -153,22 +178,18 @@ impl BaseConfig for OpenAILikeChatConfig {
                 .to_string(),
             choices,
             usage: ChatCompletionsUsage {
-                prompt_tokens: field("prompt_tokens"),
-                completion_tokens: field("completion_tokens"),
-                total_tokens: field("total_tokens"),
+                prompt_tokens: token_count(usage.prompt_tokens.as_ref()),
+                completion_tokens: token_count(usage.completion_tokens.as_ref()),
+                total_tokens: token_count(usage.total_tokens.as_ref()),
                 prompt_tokens_details: PromptTokensDetails {
-                    cached_tokens: details
-                        .and_then(|d| d.get("cached_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    cache_creation_tokens: details
-                        .and_then(|d| d.get("cache_creation_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
-                    text_tokens: details
-                        .and_then(|d| d.get("text_tokens"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0),
+                    cached_tokens: token_count(details.cached_tokens.as_ref()),
+                    cache_creation_tokens: token_count(
+                        details
+                            .cache_creation_tokens
+                            .as_ref()
+                            .or(details.cache_write_tokens.as_ref()),
+                    ),
+                    text_tokens: token_count(details.text_tokens.as_ref()),
                 },
             },
         })
@@ -208,19 +229,6 @@ impl BaseConfig for OpenAILikeChatConfig {
 
     fn config_params(&self) -> &'static [&'static str] {
         CONFIG_PARAMS
-    }
-}
-
-/// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
-/// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
-/// every top-level usage key ending in `_tokens`.
-fn sanitize_usage(body: &mut Value) {
-    if let Some(usage) = body.get_mut("usage").and_then(Value::as_object_mut) {
-        for (key, value) in usage.iter_mut() {
-            if key.ends_with("_tokens") && value.is_null() {
-                *value = json!(0);
-            }
-        }
     }
 }
 
