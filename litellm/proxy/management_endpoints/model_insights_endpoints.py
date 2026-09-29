@@ -1,11 +1,11 @@
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, TypeAdapter
 
-from litellm.constants import MODEL_INSIGHTS_TOP_MODELS
+from litellm.constants import MODEL_INSIGHTS_MAX_RANGE_DAYS, MODEL_INSIGHTS_TOP_MODELS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.table_repositories import DailyModelUsageRepository
@@ -103,7 +103,7 @@ def _task_metric(row: _GroupedTask) -> ModelInsightTaskMetric:
 )
 async def get_model_insights(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    start_date: Annotated[str | None, Query(description="YYYY-MM-DD, defaults to 20 days ago")] = None,
+    start_date: Annotated[str | None, Query(description="YYYY-MM-DD, defaults to 365 days ago")] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD, defaults to today")] = None,
 ) -> ModelInsightsResponse:
     from litellm.proxy.proxy_server import prisma_client
@@ -113,10 +113,12 @@ async def get_model_insights(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
-    end_day: Final = _parse_date(end_date, date.today())
-    start_day: Final = _parse_date(start_date, end_day - timedelta(days=19))
-    if start_day > end_day or (end_day - start_day).days > 89:
-        raise HTTPException(status_code=400, detail="Date range must be between 1 and 90 days")
+    end_day: Final = _parse_date(end_date, datetime.now(timezone.utc).date())
+    start_day: Final = _parse_date(start_date, end_day - timedelta(days=MODEL_INSIGHTS_MAX_RANGE_DAYS - 1))
+    if start_day > end_day or (end_day - start_day).days >= MODEL_INSIGHTS_MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=400, detail=f"Date range must be between 1 and {MODEL_INSIGHTS_MAX_RANGE_DAYS} days"
+        )
 
     date_window: Final[Mapping[str, object]] = {"date": {"gte": start_day.isoformat(), "lte": end_day.isoformat()}}
     table: Final = DailyModelUsageRepository(prisma_client).table
