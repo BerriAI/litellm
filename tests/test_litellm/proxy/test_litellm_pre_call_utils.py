@@ -870,6 +870,31 @@ def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> No
     assert proxy_request == {"body": {"messages": [{"role": "user", "content": "new request"}]}}
 
 
+def test_body_snapshot_excludes_team_callback_credentials() -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.types.litellm_params import TRUSTED_CALLBACK_VARS_FIELD
+
+    callback_vars: Final = {
+        "langfuse_public_key": "pk-lf-team",
+        "langfuse_secret_key": "sk-lf-team-secret",
+        "langfuse_host": "https://cloud.langfuse.com",
+    }
+    proxy_request: Final = {"body": None}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "proxy_server_request": proxy_request,
+        "success_callback": ["langfuse"],
+        **callback_vars,
+        TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {
+        "body": {"messages": [{"role": "user", "content": "hi"}], "success_callback": ["langfuse"]}
+    }, proxy_request
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pre_call_ran", [False, True])
 async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(
@@ -8545,6 +8570,40 @@ def test_default_team_settings_bool_turn_off_message_logging_redacts():
     )
 
 
+def test_add_user_api_key_auth_to_request_metadata_attributes_a_cli_session_to_its_alias():
+    data = {"model": "gpt-5.4-nano", "messages": [{"role": "user", "content": "hi"}], "litellm_metadata": {}}
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        key_alias="cli-session-alice",
+        user_id="alice",
+        is_session_token=True,
+    )
+
+    metadata = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data, user_api_key_dict=session, _metadata_variable_name="litellm_metadata"
+    )["litellm_metadata"]
+
+    assert metadata["user_api_key"] == "cli-session-alice"
+    assert metadata["user_api_key_hash"] == "cli-session-alice"
+    assert metadata["user_api_key_alias"] == "cli-session-alice"
+    assert "Qm7xJ2kP9sLw4vT1nR8yAa" not in (metadata["user_api_key"], metadata["user_api_key_hash"])
+
+
+def test_add_user_api_key_auth_to_request_metadata_keeps_the_hashed_token_for_virtual_keys():
+    from litellm.proxy._types import hash_token
+
+    data = {"model": "gpt-5.4-nano", "messages": [], "litellm_metadata": {}}
+    hashed = hash_token("sk-virtual-key")
+    virtual_key = UserAPIKeyAuth(api_key=hashed, key_alias="cli-session-alice", user_id="alice")
+
+    metadata = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=data, user_api_key_dict=virtual_key, _metadata_variable_name="litellm_metadata"
+    )["litellm_metadata"]
+
+    assert metadata["user_api_key"] == hashed
+    assert metadata["user_api_key_hash"] == hashed
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/mcp-rest/tools/call", "/v1/responses", "/v1/chat/completions"])
 @pytest.mark.parametrize("custom_auth", ["x-mcp-auth", "x-private-mcp-token"])
@@ -8585,3 +8644,31 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     for name, value in secrets.items():
         assert updated["secret_fields"]["raw_headers"][name.lower()] == value
         assert request.headers[name] == value
+
+
+def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    under_signoz = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="signoz",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_signoz.callback_vars == {
+        "signoz_ingestion_key": "team-key",
+        "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443",
+    }
+
+    under_other = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "langfuse_host": "https://cloud.langfuse.com"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
