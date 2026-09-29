@@ -22,7 +22,7 @@ pub(super) async fn execute(
     auth: &AuthServices,
     request: ProviderChatCompletionsRequest,
     cache: Option<litellm_cache_response::ScopedCache>,
-    cache_options: Option<litellm_cache_response::CacheOptions>,
+    cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {

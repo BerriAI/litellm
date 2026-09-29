@@ -38,7 +38,7 @@ pub(crate) async fn create(
         extra_headers: None,
         timeout: deployment.timeout,
     };
-    let machine = route.machine(call, cache_options);
+    let machine = route.machine(call, cache_options.policy);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         let error = Error::from(error);
         Bytes::from(format!(

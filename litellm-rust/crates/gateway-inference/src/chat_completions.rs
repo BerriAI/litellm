@@ -69,7 +69,7 @@ async fn handle(
                 extra_headers: None,
                 timeout: deployment.timeout,
             },
-            cache_options,
+            cache_options.policy,
         ),
         (),
         headers.clone(),

@@ -68,11 +68,7 @@ impl Gateway {
                 auth.clone(),
                 secrets.clone(),
             ),
-            messages: MessagesRoute::builder()
-                .with_http(provider.clone())
-                .with_auth(auth.clone())
-                .with_secrets(secrets.clone())
-                .build(),
+            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
             responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
