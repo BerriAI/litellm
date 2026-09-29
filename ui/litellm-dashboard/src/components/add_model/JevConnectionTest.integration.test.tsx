@@ -73,6 +73,41 @@ const response = (cause: string) => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe("JEV network probes", () => {
+  it.each(["jev_classifier", "classifier_fallback"])("labels Nimble probe results for %s", async (cause) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(response(cause))));
+    vi.stubGlobal("fetch", fetchMock);
+    const nimbleRequest = buildSavedJevConnectionTestRequest(
+      {
+        ...config,
+        jev_classifier_config: {
+          provider: "bespoke_nimble",
+          model: "nimble-latest",
+          timeout_ms: 20000,
+          api_key: "masked-secret",
+          api_base: "https://nimble.example.com",
+        },
+      },
+      "nimble-router",
+    );
+    renderWithProviders(<AutoRouterConnectionTest accessToken="token" targets={[]} jevRequest={nimbleRequest} />);
+    expect(
+      await screen.findByText(
+        cause === "jev_classifier"
+          ? "Nimble classification succeeded"
+          : "Nimble was not reached successfully (routing cause: classifier_fallback)",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("status", { name: "Nimble connection" })).toHaveTextContent("Nimble Classifier");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      prompt: JEV_CONNECTION_TEST_PROMPT,
+      saved_model_id: "nimble-router",
+      complexity_router_config: {
+        ...config,
+        jev_classifier_config: { provider: "bespoke_nimble", model: "nimble-latest", timeout_ms: 20000 },
+      },
+    });
+  });
+
   it.each(["jev_classifier", "classifier_fallback", "default_model_fallback", "keyword_match"])(
     "probes the routing endpoint independently of tier models and checks the cause %s",
     async (cause) => {

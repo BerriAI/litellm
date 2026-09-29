@@ -274,7 +274,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await user.click(await screen.findByRole("button", { name: "Choose models for me" }));
-    await user.click(screen.getByRole("radio", { name: "Jev" }));
+    await user.click(screen.getByRole("radio", { name: "Decision Model" }));
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenLastCalledWith(
         "/auto_router/availability",
@@ -301,7 +301,7 @@ describe("AddAutoRouterTab", () => {
     expect(within(screen.getByRole("alert")).getByRole("link", { name: "Talk to our team" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Restore defaults" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
-    expect(screen.getByRole("radio", { name: "Jev" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Decision Model" })).toBeChecked();
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
@@ -317,7 +317,7 @@ describe("AddAutoRouterTab", () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await user.click(await screen.findByRole("button", { name: "Choose models for me" }));
-    await user.click(screen.getByRole("radio", { name: "Jev" }));
+    await user.click(screen.getByRole("radio", { name: "Decision Model" }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "checked-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     let complete: ((result: unknown) => void) | undefined;
@@ -357,17 +357,22 @@ describe("AddAutoRouterTab", () => {
     expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent("Complexity");
   });
 
-  it.each(["LLM", "Jev"])("keeps %s and the frequency when choosing models automatically", async (family) => {
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
-    renderWithProviders(<Harness />);
-    const automatic = await screen.findByRole("button", { name: "Choose models for me" });
-    await userEvent.click(screen.getByRole("radio", { name: family }));
-    await selectAutoRouterOption("How often to classify", "Every new user message");
-    await userEvent.click(automatic);
-    expect(screen.getByRole("radio", { name: family })).toBeChecked();
-    expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent("Every new user message");
-    expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute("aria-expanded", "false");
-  });
+  it.each(["LLM", "Decision Model"])(
+    "keeps %s and the frequency when choosing models automatically",
+    async (family) => {
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+      renderWithProviders(<Harness />);
+      const automatic = await screen.findByRole("button", { name: "Choose models for me" });
+      await userEvent.click(screen.getByRole("radio", { name: family }));
+      await selectAutoRouterOption("How often to classify", "Every new user message");
+      await userEvent.click(automatic);
+      expect(screen.getByRole("radio", { name: family })).toBeChecked();
+      expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent(
+        "Every new user message",
+      );
+      expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute("aria-expanded", "false");
+    },
+  );
 
   it.each(["Capability", "Fuse v2"])(
     "creates %s from its dedicated tab without complexity templates",

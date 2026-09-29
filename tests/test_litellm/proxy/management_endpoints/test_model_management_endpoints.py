@@ -7547,14 +7547,20 @@ class TestTeamMemberAutoRouterWrites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
-    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
-    async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
+    @pytest.mark.parametrize("provider", ["typesafe", "bespoke_nimble"])
+    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "clear-key", "reset", "heuristic"])
+    async def test_jev_dashboard_save_preserves_server_transport(
+        self, endpoint: str, provider: str, change: str
+    ) -> None:
         original: Final = self._row()
         transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
+        identity: Final = (
+            {"provider": "bespoke_nimble", "model": "nimble-latest"} if provider == "bespoke_nimble" else {}
+        )
         stored_config: Final = {
             "classifier_type": "jev",
             "tiers": {"SIMPLE": "allowed"},
-            "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+            "jev_classifier_config": {**identity, **transport, "instructions": "Old instructions", "timeout_ms": 6100},
         }
         row: Final = original.model_copy(
             update={
@@ -7570,6 +7576,7 @@ class TestTeamMemberAutoRouterWrites:
             "rotate": {"api_key": "synthetic-replacement-jev-key"},
             "move": {"api_base": "https://new-jev.example.com", "api_key": "synthetic-replacement-jev-key"},
             "move-without-key": {"api_base": "https://new-jev.example.com"},
+            "clear-key": {"api_key": None},
             "reset": {"api_key": None, "api_base": None},
             "heuristic": {},
         }[change]
@@ -7587,7 +7594,7 @@ class TestTeamMemberAutoRouterWrites:
             operation: Final = (
                 patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
             )
-            if change == "move-without-key":
+            if provider == "typesafe" and change in ("move-without-key", "clear-key"):
                 with pytest.raises(ProxyException, match="api_base requires"):
                     await operation
                 database.db.litellm_proxymodeltable.update.assert_not_awaited()
@@ -7595,10 +7602,13 @@ class TestTeamMemberAutoRouterWrites:
             await operation
         written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
         saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        carried_transport: Final = (
+            {"api_base": transport["api_base"]} if change == "move-without-key" else transport
+        )
         expected: Final = (
             config
             if change == "heuristic"
-            else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
+            else {**config, "jev_classifier_config": {**identity, **carried_transport, "timeout_ms": 8100, **overrides}}
         )
         assert saved == expected
         assert row.litellm_params["complexity_router_config"] == stored_config

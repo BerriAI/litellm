@@ -75,7 +75,7 @@ describe("buildComplexityRouterConfig", () => {
         classifier_type: "jev",
         jev_classifier_config: { model: "jev-latest", timeout_ms: 3000, ...patch },
       }),
-    ).toBe("Enter a JEV model, a positive whole-number timeout and a positive cooldown");
+    ).toBe("Enter a decision model, a positive whole-number timeout and a positive cooldown");
   });
 
   it.each([false, true])("serializes JEV with shared context and no LLM config, custom tiers: %s", (custom) => {
