@@ -276,9 +276,10 @@ class TestImageEditDefaultPathForwardsNonDefaultParams:
     image_config is honored on OpenRouter image generation but was silently dropped on
     image edits: the default edit path never merged non_default_params (which still carries
     image_config) before calling the handler, unlike the bedrock/stability/black_forest_labs
-    branches. The merge is now unconditional on the default handler path, so every provider
-    that reaches it (openrouter, openai, azure, vertex_ai, ...) forwards those params instead
-    of dropping them. OpenRouter's transform forwards extra top-level params, so once
+    branches. The default handler path now merges them for every provider that reaches it
+    (openrouter, vertex_ai, ...) unless the multipart OpenAI-compatible branch already merged
+    them (flattened, with extra_body taking precedence), so they are forwarded instead of
+    dropped. OpenRouter's transform forwards extra top-level params, so once
     image_config survives the merge it reaches the provider.
     """
 
@@ -326,11 +327,12 @@ class TestImageEditDefaultPathForwardsNonDefaultParams:
         assert forwarded.get("image_config") == image_config
 
     def test_default_path_forwards_image_config_for_non_openrouter_provider(self):
-        # The same silent-drop affected every fallthrough provider, not just openrouter.
+        # The same silent-drop affected every non-multipart fallthrough provider, not just
+        # openrouter. (Multipart OpenAI-compatible providers merge them in their own branch.)
         image_config = {"aspect_ratio": "1:1", "image_size": "1K"}
         forwarded = self._run_image_edit_and_capture(
-            provider="openai",
-            model="gpt-image-1",
+            provider="vertex_ai",
+            model="imagen-3.0-capability-001",
             image_config=image_config,
         )
         assert forwarded.get("image_config") == image_config
