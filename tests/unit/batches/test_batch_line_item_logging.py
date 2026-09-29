@@ -21,8 +21,13 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import litellm
-from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache, log_batch_line_items
+from litellm.batches.batch_line_item_logging import (
+    _release_line_item_claim,
+    batch_line_item_claim_cache,
+    log_batch_line_items,
+)
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import LiteLLMBatch, Usage
@@ -963,4 +968,148 @@ async def test_line_items_claim_kept_after_partial_emission(recorder):
     assert first == 1
     assert second == 0
     assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 0
+
+
+class _FakeRedisCache(RedisCache):
+    """Dict-backed RedisCache stand-in honoring SET NX so the tokenized
+    line-item claim can be exercised without a Redis process."""
+
+    def __init__(self) -> None:
+        self._store: dict[str, object] = {}  # mutable-ok: a dict-backed fake needs a mutable store
+        self.fail_next_set = False
+        self.swap_owner_on_get: str | None = None
+
+    async def async_set_cache(self, key, value, nx=False, **_kwargs):
+        if self.fail_next_set:
+            self.fail_next_set = False
+            raise ConnectionError("redis down")
+        if nx and key in self._store:
+            return None
+        self._store[key] = value
+        return True
+
+    async def async_get_cache(self, key, **_kwargs):
+        if self.swap_owner_on_get is not None and key in self._store:
+            self._store[key] = self.swap_owner_on_get
+        return self._store.get(key)
+
+    async def async_delete_cache(self, key):
+        self._store.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_line_items_emit_once_per_batch_id_over_redis(recorder):
+    claim_cache: Final = DualCache(redis_cache=_FakeRedisCache())
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    parent: Final = _parent_logging()
+    batch: Final = _batch()
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 2
+    assert second == 0
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_line_items_skip_when_redis_claim_backend_is_down(recorder):
+    fake: Final = _FakeRedisCache()
+    fake.fail_next_set = True
+    claim_cache: Final = DualCache(redis_cache=fake)
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    parent: Final = _parent_logging()
+    batch: Final = _batch()
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 0
+    assert second == 2
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_release_line_item_claim_only_deletes_owned_claims():
+    fake: Final = _FakeRedisCache()
+    claim_cache: Final = DualCache(redis_cache=fake)
+    key: Final = "batch_line_items_emitted:batch_1"
+    fake._store[key] = "someone-else"  # test-quality-ok: seeding the fake's store is the arrangement, like writing Redis directly
+
+    await _release_line_item_claim(claim_cache, key, "my-token")
+    assert fake._store.get(key) == "someone-else"
+
+    await _release_line_item_claim(claim_cache, key, "someone-else")
+    assert key not in fake._store
+
+
+@pytest.mark.asyncio
+async def test_line_items_failed_fanout_does_not_delete_another_workers_claim(recorder):
+    fake: Final = _FakeRedisCache()
+    fake.swap_owner_on_get = "other-worker"
+    claim_cache: Final = DualCache(redis_cache=fake)
+    key: Final = "batch_line_items_emitted:batch_1"
+    batch: Final = _batch()
+    parent: Final = _parent_logging()
+    with patch("litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 0
+    assert second == 0
+    assert fake._store.get(key) == "other-worker"
+    assert len(recorder.success_events) == 0
     assert len(recorder.failure_events) == 0

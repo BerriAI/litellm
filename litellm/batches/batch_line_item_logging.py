@@ -5,6 +5,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast, get_args
 
+from typing_extensions import assert_never
+
 from litellm._logging import verbose_logger
 from litellm.batches.batch_utils import (
     _batch_response_was_successful,  # pyright: ignore[reportPrivateUsage]  # batch-internal helper shared with the aggregate cost path by design
@@ -67,6 +69,40 @@ _EMPTY_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 _LINE_ITEM_CLAIM_TTL_SECONDS: Final = 30 * 24 * 60 * 60
 
 batch_line_item_claim_cache: Final = DualCache()
+
+_ClaimResult: TypeAlias = Literal["claimed", "already_claimed", "unavailable"]
+
+
+async def _claim_line_items(claim_cache: DualCache, claim_key: str, token: str) -> _ClaimResult:
+    redis_cache: Final = claim_cache.redis_cache
+    if redis_cache is None:
+        count: Final = await claim_cache.async_increment_cache(claim_key, 1, ttl=_LINE_ITEM_CLAIM_TTL_SECONDS)  # pyright: ignore[reportUnknownMemberType]  # DualCache.increment is untyped upstream
+        if count is None or count == 1:
+            return "claimed"
+        return "already_claimed"
+    try:
+        ok: Final = await redis_cache.async_set_cache(claim_key, token, ttl=_LINE_ITEM_CLAIM_TTL_SECONDS, nx=True)  # pyright: ignore[reportUnknownMemberType]  # RedisCache.set is untyped upstream
+    except Exception:  # noqa: BLE001  # a redis outage must not emit duplicates; the next retrieve retries
+        return "unavailable"
+    if ok:
+        return "claimed"
+    return "already_claimed"
+
+
+async def _release_line_item_claim(claim_cache: DualCache, claim_key: str, token: str) -> None:
+    try:
+        redis_cache: Final = claim_cache.redis_cache
+        if redis_cache is None:
+            await claim_cache.async_delete_cache(claim_key)
+            return
+        owner: Final = await redis_cache.async_get_cache(claim_key)  # pyright: ignore[reportUnknownMemberType]  # RedisCache.get is untyped upstream
+        if owner == token:
+            await redis_cache.async_delete_cache(claim_key)
+    except Exception:  # noqa: BLE001  # the claim release must never raise; worst case the batch stays claimed
+        verbose_logger.debug(
+            "batch line item claim release failed for %s, claim persists until ttl",
+            claim_key,
+        )
 
 
 class _BatchLineFailure(Exception):
@@ -398,10 +434,22 @@ async def log_batch_line_items(
         )
         return 0
     claim_key: Final = f"batch_line_items_emitted:{batch.id}"
-    claim: Final = await claim_cache.async_increment_cache(claim_key, 1, ttl=_LINE_ITEM_CLAIM_TTL_SECONDS)
-    if claim is not None and claim > 1:
-        verbose_logger.debug("batch line items already emitted for batch_id=%s, skipping", batch.id)
-        return 0
+    token: Final = uuid.uuid4().hex
+    claim: Final = await _claim_line_items(claim_cache, claim_key, token)
+    match claim:
+        case "already_claimed":
+            verbose_logger.debug("batch line items already emitted for batch_id=%s, skipping", batch.id)
+            return 0
+        case "unavailable":
+            verbose_logger.warning(
+                "batch line item claim backend unavailable for batch_id=%s, line items will be retried on the next retrieve",
+                batch.id,
+            )
+            return 0
+        case "claimed":
+            pass
+        case _:
+            assert_never(claim)
     emitted = 0  # rebind-ok: loop accumulator for emitted line count
     try:
         internal_credentials: Final = parent._litellm_internal_model_credentials  # pyright: ignore[reportPrivateUsage]  # declared transport attribute on Logging
@@ -447,11 +495,5 @@ async def log_batch_line_items(
             batch.id,
         )
         if emitted == 0:
-            try:
-                await claim_cache.async_delete_cache(claim_key)
-            except Exception:  # noqa: BLE001  # the claim release must never raise; worst case the batch stays claimed
-                verbose_logger.debug(
-                    "batch line item claim release failed for batch_id=%s, claim persists until ttl",
-                    batch.id,
-                )
+            await _release_line_item_claim(claim_cache, claim_key, token)
     return emitted
