@@ -12,6 +12,8 @@ import copy
 import logging
 import os
 import re
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -725,6 +727,153 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
         assert bridge_model_info["mode"] == "responses"
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+_MODE_TEST_API_BASE: Final = "http://localhost:38543/v1"
+
+_CHAT_COMPLETION_REPLY: Final = {
+    "id": "chatcmpl-38543",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+_RESPONSES_REPLY: Final = {
+    "id": "resp_38543",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.6",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_38543",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+def _mode_test_deployment(
+    model_name: str, mode: str | None, custom_pricing: Mapping[str, float] = MappingProxyType({})
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-fake",
+            "api_base": _MODE_TEST_API_BASE,
+            **custom_pricing,
+        },
+        "model_info": {"id": f"{model_name}-id", **({"mode": mode} if mode is not None else {})},
+    }
+
+
+@pytest.mark.parametrize("sibling_mode", (None, "chat"))
+@pytest.mark.parametrize("responses_deployment_first", (True, False))
+def test_a_responses_deployment_does_not_move_its_siblings_onto_the_responses_api(
+    respx_mock, monkeypatch: pytest.MonkeyPatch, sibling_mode: str | None, responses_deployment_first: bool
+) -> None:
+    """
+    https://github.com/BerriAI/litellm/issues/38543 - deployments of one provider model share
+    a litellm.model_cost key, so a `mode: responses` deployment used to send every sibling
+    through the Responses API bridge, whichever order they were registered in
+    """
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    _invalidate_model_cost_lowercase_map()
+    chat_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_REPLY)
+    )
+    responses_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/responses").mock(
+        return_value=httpx.Response(200, json=_RESPONSES_REPLY)
+    )
+    sibling: Final = _mode_test_deployment("my-chat-model", sibling_mode)
+    responses_deployment: Final = _mode_test_deployment("my-responses-probe", "responses")
+    router: Final = Router(
+        model_list=[responses_deployment, sibling] if responses_deployment_first else [sibling, responses_deployment]
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    router.completion(model="my-chat-model", messages=messages)
+    assert (chat_route.call_count, responses_route.call_count) == (1, 0)
+
+    router.completion(model="my-responses-probe", messages=messages)
+    assert (chat_route.call_count, responses_route.call_count) == (1, 1)
+
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_a_priced_responses_deployment_does_not_move_its_siblings_after_serving_a_request(
+    respx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A deployment with custom pricing re-registers its model_info on every request it serves,
+    so the shared key has to stay out of its mode on that path too, not just at router setup
+    """
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    _invalidate_model_cost_lowercase_map()
+    chat_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_REPLY)
+    )
+    responses_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/responses").mock(
+        return_value=httpx.Response(200, json=_RESPONSES_REPLY)
+    )
+    router: Final = Router(
+        model_list=[
+            _mode_test_deployment("my-chat-model", None),
+            _mode_test_deployment(
+                "my-responses-probe",
+                "responses",
+                custom_pricing=MappingProxyType({"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}),
+            ),
+        ]
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    router.completion(model="my-responses-probe", messages=messages)
+    router.completion(model="my-chat-model", messages=messages)
+
+    assert (chat_route.call_count, responses_route.call_count) == (1, 1)
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_deployment_mode_still_fills_a_shared_key_with_no_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    For a provider model the catalog doesn't know, proxy model_info is how its mode gets
+    onboarded (see mantle_supports_responses), so a deployment's mode must still fill a
+    shared key that has none; only an existing mode is left alone
+    """
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    _invalidate_model_cost_lowercase_map()
+    backend_model: Final = "openai/unmapped-38543-model"
+    assert backend_model not in litellm.model_cost
+
+    Router(
+        model_list=[
+            {
+                "model_name": "unmapped-responses",
+                "litellm_params": {"model": backend_model, "api_key": "sk-fake"},
+                "model_info": {"id": "unmapped-responses-id", "mode": "responses"},
+            },
+            {
+                "model_name": "unmapped-chat",
+                "litellm_params": {"model": backend_model, "api_key": "sk-fake"},
+                "model_info": {"id": "unmapped-chat-id", "mode": "chat"},
+            },
+        ]
+    )
+
+    assert litellm.model_cost[backend_model]["mode"] == "responses"
+    assert litellm.model_cost["unmapped-chat-id"]["mode"] == "chat"
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():

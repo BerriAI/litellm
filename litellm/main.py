@@ -19,7 +19,7 @@ import random
 import sys
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from concurrent import futures
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
@@ -168,6 +168,7 @@ from litellm.utils import (
     get_secret,
     get_standard_openai_params,
     mock_completion_streaming_obj,
+    mode_register_model_would_merge_into,
     pre_process_non_default_params,
     read_config_args,
     should_run_mock_completion,
@@ -1084,6 +1085,7 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
+    deployment_mode: str | None = None,
 ) -> tuple[dict, str]:
     model_info: dict[str, object] = {}
 
@@ -1112,7 +1114,7 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-    if web_search_options is not None and custom_llm_provider == "xai":
+    if deployment_mode == "responses" or (web_search_options is not None and custom_llm_provider == "xai"):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
 
@@ -1263,17 +1265,30 @@ def _build_custom_pricing_entry(
     return entry
 
 
-def _get_router_deployment_id(kwargs: dict) -> str | None:
+def _router_deployment_model_infos(kwargs: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
     for metadata_key in ("litellm_metadata", "metadata"):
-        metadata = kwargs.get(metadata_key) or {}
+        metadata = kwargs.get(metadata_key)
         if not isinstance(metadata, dict):
             continue
-        deployment_model_info = metadata.get("model_info") or {}
-        if not isinstance(deployment_model_info, dict):
-            continue
+        deployment_model_info = metadata.get("model_info")
+        if isinstance(deployment_model_info, dict):
+            yield deployment_model_info
+
+
+def _get_router_deployment_id(kwargs: Mapping[str, object]) -> str | None:
+    for deployment_model_info in _router_deployment_model_infos(kwargs):
         deployment_id = deployment_model_info.get("id")
         if deployment_id is not None:
             return str(deployment_id)
+    return None
+
+
+def router_deployment_mode(kwargs: Mapping[str, object]) -> str | None:
+    """The ``model_info.mode`` of the deployment the router picked for this request, if any."""
+    for deployment_model_info in _router_deployment_model_infos(kwargs):
+        mode = deployment_model_info.get("mode")
+        if isinstance(mode, str):
+            return mode
     return None
 
 
@@ -1303,10 +1318,15 @@ def _register_custom_pricing_for_request(
     if deployment_id is None:
         litellm.register_model({shared_key: entry}, persist_across_reloads=False)
         return
+    shared_entry: Final = CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
     litellm.register_model(
         {
             deployment_id: entry,
-            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
+            shared_key: (
+                {k: v for k, v in shared_entry.items() if k != "mode"}
+                if mode_register_model_would_merge_into(shared_key, custom_llm_provider) is not None
+                else shared_entry
+            ),
         },
         persist_across_reloads=False,
         warning_display_name=shared_key,
@@ -5479,11 +5499,13 @@ def completion(
         )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
+        _deployment_mode: Final = router_deployment_mode(kwargs)
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
+            deployment_mode=_deployment_mode,
         )
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
@@ -5763,6 +5785,7 @@ def completion(
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                deployment_mode=_deployment_mode,
             )
 
         # Use base_model (the true underlying model) for Azure model-type

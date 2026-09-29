@@ -3841,15 +3841,23 @@ SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
 )
 
 
-def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
+def shared_backend_model_info(model_info: Mapping[str, Any], existing_mode: object = None) -> dict[str, Any]:
     """Return only the fields safe to register under a shared ``{provider}/{model}``
     key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
     per-deployment pricing overrides and deployment-scoped pricing blocks such as
     ``off_peak_pricing``. Per-deployment metadata (``id``, ``access_via_team_ids``,
     arbitrary custom keys) never belongs on the shared key; it stays under the
     deployment's unique model id.
+
+    ``mode`` only fills a shared key that has none yet (``existing_mode``). It is the API
+    surface one deployment picked, so it must not switch the surface its siblings use;
+    the routed deployment's own ``mode`` reaches the Responses bridge with the request.
     """
-    return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
+    return {
+        k: v
+        for k, v in model_info.items()
+        if k in SHARED_BACKEND_MODEL_INFO_FIELDS and (k != "mode" or existing_mode is None)
+    }
 
 
 ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens$")
