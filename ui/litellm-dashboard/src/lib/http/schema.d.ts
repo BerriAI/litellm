@@ -34349,6 +34349,11 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Gateway Name
+             * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
+             */
+            gateway_name?: string | null;
+            /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.
              */

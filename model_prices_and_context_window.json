@@ -78774,6 +78774,23 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "baseten/deepseek-ai/DeepSeek-V4.1-Flash-Fast": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "gpt-6.1-sol": {
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
@@ -78814,8 +78831,24 @@
         "output_cost_per_token_priority": 2e-05,
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
-        "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "source": "https://developers.openai.com/api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/batch",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
         "supports_computer_use": true,
         "supports_function_calling": true,
         "supports_max_reasoning_effort": true,
