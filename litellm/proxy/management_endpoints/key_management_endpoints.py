@@ -142,6 +142,7 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
+    SCIMSourceRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -2743,6 +2744,13 @@ async def _process_single_key_update(
             token=update_key_request.key,
             prisma_client=prisma_client,
         )
+
+    if (
+        "allowed_routes" in update_key_request.model_fields_set
+        and tuple(update_key_request.allowed_routes or ()) != ("/scim/*",)
+        and prisma_client is not None
+    ):
+        await _reject_source_bound_key_change(prisma_client, existing_key_row)
 
     _check_disable_global_guardrails_caller_permission(
         update_key_request.disable_global_guardrails,
@@ -5532,6 +5540,18 @@ async def _insert_deprecated_key(
         )
 
 
+async def _reject_source_bound_key_change(prisma_client: PrismaClient, key: LiteLLM_VerificationToken) -> None:
+    if tuple(key.allowed_routes or ()) != ("/scim/*",):
+        return
+    source: Final = await SCIMSourceRepository(prisma_client, use_writer=True).table.find_unique(
+        where={"key_hash": key.token}
+    )
+    if source is not None:
+        raise HTTPException(
+            409, "A provisioning source token cannot be regenerated or have its SCIM restriction removed"
+        )
+
+
 async def _execute_virtual_key_regeneration(
     *,
     prisma_client: PrismaClient,
@@ -5548,6 +5568,8 @@ async def _execute_virtual_key_regeneration(
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import hash_token
+
+    await _reject_source_bound_key_change(prisma_client, key_in_db)
 
     # Mirror the /key/update ownership rebind guard. See helper docstring.
     _validate_caller_can_change_key_ownership(
