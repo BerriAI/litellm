@@ -2,6 +2,11 @@
 # LiteLLM Gateway quickstart: the gateway, Postgres, and the admin UI in one command.
 #   curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.sh | sh
 #
+# To read it before running it:
+#   curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.sh -o quickstart.sh
+#   less quickstart.sh
+#   sh quickstart.sh
+#
 # Asks at most two questions (where to keep the files, and whether to open the
 # admin UI), each with a default you accept by pressing Enter. It asks nothing
 # when there is no terminal, under CI or Claude Code, or when run with --yes.
@@ -275,9 +280,12 @@ EOF
   fi
 
   # Compose prefers values already set in the shell over .env, so drop any
-  # inherited ones: .env stays the only source for keys, the bind address,
-  # and the project name.
-  unset LITELLM_MASTER_KEY LITELLM_SALT_KEY POSTGRES_PASSWORD COMPOSE_PROJECT_NAME LITELLM_BIND
+  # inherited ones: .env stays the only source for keys and the project name.
+  unset LITELLM_MASTER_KEY LITELLM_SALT_KEY POSTGRES_PASSWORD COMPOSE_PROJECT_NAME
+  # The bind address follows .env when .env sets it (every install this script
+  # creates does). For an older .env without it, a value exported in the shell
+  # is kept, so an intentional LITELLM_BIND=127.0.0.1: is not dropped.
+  if grep -q '^LITELLM_BIND=' .env; then unset LITELLM_BIND; fi
 
   echo "Starting LiteLLM and Postgres (the first run downloads the images)..."
   docker compose -f docker-compose.quickstart.yml up -d
