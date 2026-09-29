@@ -236,3 +236,17 @@ def test_explicit_key_decrypt_supports_the_empty_master_key():
     written_with_empty_key = encrypt_value(value="stored-secret", signing_key="")
 
     assert decrypt_if_encrypted_with(base64.urlsafe_b64encode(written_with_empty_key).decode(), "") == "stored-secret"
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_aad_bound_value_decrypts_only_with_the_same_aad(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+    bound = encrypt_value_helper("stored-secret", aad=b"purpose-a")
+    unbound = encrypt_value_helper("stored-secret")
+
+    assert decrypt_value_helper(bound, key="t", exception_type="debug", aad=b"purpose-a") == "stored-secret"
+    assert decrypt_value_helper(bound, key="t", exception_type="debug", aad=b"purpose-b") is None
+    assert decrypt_value_helper(bound, key="t", exception_type="debug") is None
+    assert decrypt_value_helper(unbound, key="t", exception_type="debug") == "stored-secret"
+    assert decrypt_value_helper(unbound, key="t", exception_type="debug", aad=b"purpose-a") is None

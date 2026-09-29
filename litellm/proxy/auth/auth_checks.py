@@ -3587,6 +3587,9 @@ async def get_org_object_by_alias(
         )
 
 
+LITELLM_SESSION_TOKEN_AAD: Final = b"litellm-session-token"
+
+
 class ExperimentalUIJWTToken:
     @staticmethod
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
@@ -3619,7 +3622,7 @@ class ExperimentalUIJWTToken:
             user_role=LitellmUserRoles(user_info.user_role),
         )
 
-        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
 
     @staticmethod
     def get_cli_jwt_auth_token(
@@ -3688,7 +3691,7 @@ class ExperimentalUIJWTToken:
             is_session_token=True,
         )
 
-        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
 
     @staticmethod
     def get_key_object_from_ui_hash_key(
@@ -3701,7 +3704,9 @@ class ExperimentalUIJWTToken:
             decrypt_value_helper,
         )
 
-        decrypted_token: Final = decrypt_value_helper(hashed_token, key="ui_hash_key", exception_type="debug")
+        decrypted_token: Final = decrypt_value_helper(
+            hashed_token, key="ui_hash_key", exception_type="debug", aad=LITELLM_SESSION_TOKEN_AAD
+        )
         if decrypted_token is None:
             return None
         try:
