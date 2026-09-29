@@ -65,6 +65,7 @@ class TestStripClientPricingOverrides:
         for field in (
             "input_cost_per_token",
             "output_cost_per_token",
+            "cost_per_second",
             "input_cost_per_second",
             "cache_creation_input_token_cost",
         ):

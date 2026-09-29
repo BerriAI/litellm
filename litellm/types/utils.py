@@ -329,6 +329,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_video_per_second: float | None  # only for vertex ai models
     input_cost_per_audio_token_batches: ReadOnly[float | None]
     input_cost_per_image_token_batches: ReadOnly[float | None]
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
@@ -2784,6 +2785,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     acompletion: bool | None
     preset_cache_key: str | None
     no_log: bool | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_token: float | None
     output_cost_per_token: float | None
@@ -3709,6 +3711,7 @@ class MirroredPricingParams(BaseModel):
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
     ## CUSTOM PRICING ##
+    cost_per_second: float | None = None
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None

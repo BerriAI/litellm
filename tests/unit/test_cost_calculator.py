@@ -3037,9 +3037,9 @@ def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing()
 @pytest.mark.parametrize("custom_llm_provider", ["together_ai", "openai", "anthropic", "bedrock", "azure"])
 def test_cost_per_token_per_second_pricing(monkeypatch, custom_llm_provider: str):
     """
-    Models priced by duration (input/output_cost_per_second) with no per-token rates
+    Models priced by input/output duration rates with no per-token rates
     must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token,
-    whether or not the provider has its own cost calculator.
+    using only the input rate even when both are set, whether or not the provider has its own calculator.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -3064,11 +3064,40 @@ def test_cost_per_token_per_second_pricing(monkeypatch, custom_llm_provider: str
         response_time_ms=1500.0,
     )
 
-    assert prompt_cost == pytest.approx(0.02 * 1.5)
-    assert completion_cost_value == pytest.approx(0.04 * 1.5)
+    assert (prompt_cost, completion_cost_value) == pytest.approx((0.02 * 1.5, 0.0))
 
 
-def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(monkeypatch):
+def test_azure_chat_uses_token_rates_when_output_cost_per_second_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "test-azure-chat-token-and-output-second-pricing"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "output_cost_per_second": 0.4,
+                "litellm_provider": "azure",
+                "mode": "chat",
+            }
+        }
+    )
+
+    cost: Final = cost_per_token(
+        model=model,
+        custom_llm_provider="azure",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert cost == pytest.approx((10 * 1e-6, 20 * 2e-6))
+
+
+def test_cost_per_token_ignores_cost_per_second_when_token_pricing_is_set(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -3078,8 +3107,7 @@ def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(m
             model: {
                 "input_cost_per_token": 1e-6,
                 "output_cost_per_token": 2e-6,
-                "input_cost_per_second": 0.02,
-                "output_cost_per_second": 0.04,
+                "cost_per_second": 0.02,
                 "litellm_provider": "openai",
                 "mode": "chat",
             }
@@ -3096,6 +3124,39 @@ def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(m
 
     assert prompt_cost == pytest.approx(10 * 1e-6)
     assert completion_cost_value == pytest.approx(20 * 2e-6)
+
+
+@pytest.mark.parametrize(
+    ("pricing_fields", "expected_rate"),
+    [
+        ({"cost_per_second": 0.02}, 0.02),
+        ({"output_cost_per_second": 0.04}, 0.04),
+        (
+            {"cost_per_second": 0.05, "input_cost_per_second": 0.02, "output_cost_per_second": 0.04},
+            0.05,
+        ),
+        ({"input_cost_per_second": 0.02}, 0.02),
+    ],
+)
+def test_cost_per_token_resolves_per_second_rate_precedence(
+    monkeypatch, pricing_fields: dict[str, float], expected_rate: float
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "test-chat-per-second-rate-precedence"
+    entry: Final = {**pricing_fields, "litellm_provider": "together_ai", "mode": "chat"}
+    litellm.register_model(
+        model_cost={model: entry}
+    )
+
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider="together_ai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    ) == pytest.approx((expected_rate * 1.5, 0.0))
 
 
 def _logging_obj_with_call_window(duration_ms: float) -> Logging:
@@ -3160,7 +3221,7 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
         litellm_logging_obj=_logging_obj_with_call_window(logged_duration_ms),
     )
 
-    assert cost == pytest.approx((0.02 + 0.04) * expected_seconds)
+    assert cost == pytest.approx(0.02 * expected_seconds)
 
 
 @pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])

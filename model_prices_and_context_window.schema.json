@@ -249,6 +249,10 @@
         "comment": {
           "type": "string"
         },
+        "cost_per_second": {
+          "type": "number",
+          "minimum": 0
+        },
         "default_reasoning_effort": {
           "type": "string",
           "description": "Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.",
