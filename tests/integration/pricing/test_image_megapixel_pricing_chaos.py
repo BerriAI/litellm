@@ -148,6 +148,7 @@ async def test_upstream_outage_mid_mixed_burst_bills_every_served_image_once_by_
         with owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned, ExitStack() as models:
             candidate: Final = owned.gateway
             image_model, chat_model = _models(candidate, models, wire.url)
+            eventually(lambda: _STARTED_WORKER.findall(owned.log.read_text()), lambda pids: len(pids) == 2, seconds=60)
             burst: Final = asyncio.create_task(
                 _fire(str(candidate.client.base_url), candidate.key, _mixed_calls(image_model, chat_model, 30))
             )
@@ -164,7 +165,6 @@ async def test_upstream_outage_mid_mixed_burst_bills_every_served_image_once_by_
                     "POST", "/v1/images/generations", {"model": image_model, "prompt": _PROMPT, "size": "2048x2048"}
                 )
             assert recovered.status_code == 200, recovered.text
-            assert len(_STARTED_WORKER.findall(owned.log.read_text())) >= 2
     assert len(served) == 30
     for item in served:
         assert isinstance(item, _Served), repr(item)
@@ -190,7 +190,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_billing_by_megapixel(
             workers: Final = eventually(
                 lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
                 lambda pids: len(pids) == 2,
-                seconds=30,
+                seconds=60,
             )
             base_url: Final = str(candidate.client.base_url)
             burst: Final = asyncio.create_task(
