@@ -109,7 +109,7 @@ const TaskTileContent = ({ x, y, width, height, category, label, leader }: TileP
 };
 
 export default function ModelInsightsView({ accessToken }: { accessToken: string | null }) {
-  const [data, setData] = React.useState<ModelInsightsResponse | null>(null);
+  const [loaded, setLoaded] = React.useState<{ metric: Metric; response: ModelInsightsResponse } | null>(null);
   const [metric, setMetric] = React.useState<Metric>("tokens");
   const [scale, setScale] = React.useState<Scale>("linear");
   const [taskMetric, setTaskMetric] = React.useState<Metric>("spend");
@@ -123,7 +123,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
       .then((response) => {
         if (cancelled) return;
         setError(null);
-        setData(response);
+        setLoaded({ metric, response });
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(extractErrorMessage(err));
@@ -133,15 +133,18 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     };
   }, [accessToken, metric]);
 
+  const data = loaded?.response ?? null;
+  const shown = loaded?.metric ?? metric;
+  const isStale = loaded !== null && loaded.metric !== metric;
   const range = React.useMemo(() => ({ start: data?.start_date ?? "", end: data?.end_date ?? "" }), [data]);
-  const models = React.useMemo(() => (data ? modelOrder(data.daily, metric) : []), [data, metric]);
+  const models = React.useMemo(() => (data ? modelOrder(data.daily, shown) : []), [data, shown]);
   const series = React.useMemo(
-    () => (data ? buildWeeklySeries(data.daily, models, metric, range) : []),
-    [data, models, metric, range],
+    () => (data ? buildWeeklySeries(data.daily, models, shown, range) : []),
+    [data, models, shown, range],
   );
   const ranking = React.useMemo(
-    () => (data ? rankModels(data.top_models, data.daily, metric, range) : []),
-    [data, metric, range],
+    () => (data ? rankModels(data.top_models, data.daily, shown, range) : []),
+    [data, shown, range],
   );
   const tiles = React.useMemo(
     () => (data ? buildTaskTiles(data.by_task, data.tasks, taskMetric) : []),
@@ -188,11 +191,11 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
         subtitle={`See which models your gateway used from ${data.start_date} through ${data.end_date}`}
       />
 
-      <Card>
+      <Card aria-busy={isStale} className={isStale ? "opacity-60 transition-opacity" : "transition-opacity"}>
         <CardHeader className="flex-row items-start justify-between space-y-0">
           <div>
             <CardTitle>Top models</CardTitle>
-            <CardDescription>Weekly {METRIC_LABELS[metric]} across your gateway</CardDescription>
+            <CardDescription>Weekly {METRIC_LABELS[shown]} across your gateway</CardDescription>
           </div>
           <div className="flex items-center gap-3">
             <Tabs value={metric} onValueChange={(value) => setMetric(value as Metric)}>
@@ -226,7 +229,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
                 allowDataOverflow
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(value) => formatMetric(Number(value), metric)}
+                tickFormatter={(value) => formatMetric(Number(value), shown)}
               />
               <ChartTooltip content={<ChartTooltipContent />} />
               {models.map((model, index) => (
@@ -243,11 +246,11 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
         </CardContent>
       </Card>
 
-      <Card>
+      <Card aria-busy={isStale} className={isStale ? "opacity-60 transition-opacity" : "transition-opacity"}>
         <CardHeader>
           <CardTitle>Leaderboard</CardTitle>
           <CardDescription>
-            Share of {METRIC_LABELS[metric]}, with the change between the first and second half of the period
+            Share of {METRIC_LABELS[shown]}, with the change between the first and second half of the period
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-x-12 md:grid-cols-2">
