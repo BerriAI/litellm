@@ -38,13 +38,35 @@ const response = {
   end_date: "2026-09-28",
   top_models: [metrics],
   daily: [{ ...metrics, date: "2026-09-28" }],
-  by_task: [{ ...metrics, task_type: "code_generation" }],
-  tasks: [{ task_type: "code_generation", label: "Code Generation", category: "Code" }],
 };
+
+const taskResponse = {
+  start_date: "2025-09-29",
+  end_date: "2026-09-28",
+  tasks: [
+    {
+      task_type: "code_generation",
+      label: "Code Generation",
+      category: "Code",
+      value: 2.5,
+      share: 100,
+      leader: "fast-chat",
+      provider: "openai",
+    },
+  ],
+};
+
+const mockApi = (tasks: unknown = taskResponse) =>
+  vi
+    .mocked(apiClient.get)
+    .mockImplementation((path: string) =>
+      path === "/model-insights/tasks" ? (tasks as Promise<unknown>) : Promise.resolve(response),
+    );
 
 describe("ModelInsightsView", () => {
   beforeEach(() => {
-    vi.mocked(apiClient.get).mockResolvedValue(response);
+    vi.mocked(apiClient.get).mockReset();
+    mockApi(Promise.resolve(taskResponse));
   });
 
   it("shows the ranking with share and the task legend from the API response", async () => {
@@ -52,7 +74,7 @@ describe("ModelInsightsView", () => {
 
     expect(await screen.findByText("fast-chat")).toBeInTheDocument();
     expect(screen.getByText("by openai")).toBeInTheDocument();
-    expect(screen.getByText("Code")).toBeInTheDocument();
+    expect(await screen.findByText("Code")).toBeInTheDocument();
     expect(screen.getAllByText("100.0%")).toHaveLength(2);
     expect(screen.getByRole("tab", { name: "tokens" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "log" })).toBeInTheDocument();
@@ -69,11 +91,29 @@ describe("ModelInsightsView", () => {
     await userEvent.click(screen.getByRole("tab", { name: "requests" }));
 
     await waitFor(() =>
-      expect(apiClient.get).toHaveBeenLastCalledWith("/model-insights", {
+      expect(apiClient.get).toHaveBeenCalledWith("/model-insights", {
         accessToken: "token",
         query: { metric: "requests" },
       }),
     );
+  });
+
+  it("does not refetch the task breakdown when the chart metric changes", async () => {
+    render(<ModelInsightsView accessToken="token" />);
+    await screen.findByText("Code");
+    const taskCalls = () =>
+      vi.mocked(apiClient.get).mock.calls.filter(([path]) => path === "/model-insights/tasks").length;
+    const before = taskCalls();
+
+    await userEvent.click(screen.getByRole("tab", { name: "requests" }));
+    await waitFor(() =>
+      expect(apiClient.get).toHaveBeenCalledWith("/model-insights", {
+        accessToken: "token",
+        query: { metric: "requests" },
+      }),
+    );
+
+    expect(taskCalls()).toBe(before);
   });
 
   it("shows the API error instead of loading forever", async () => {
@@ -88,7 +128,11 @@ describe("ModelInsightsView", () => {
     render(<ModelInsightsView accessToken="token" />);
     await screen.findByText("fast-chat");
     let resolve: (value: typeof response) => void = () => {};
-    vi.mocked(apiClient.get).mockReturnValue(new Promise((done) => (resolve = done)));
+    vi.mocked(apiClient.get).mockImplementation((path: string) =>
+      path === "/model-insights/tasks"
+        ? Promise.resolve(taskResponse)
+        : new Promise((done) => (resolve = done as typeof resolve)),
+    );
 
     await userEvent.click(screen.getByRole("tab", { name: "spend" }));
 
