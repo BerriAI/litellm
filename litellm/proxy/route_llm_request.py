@@ -438,7 +438,7 @@ _PER_REQUEST_ROUTER_SETTINGS: Final = [
 ]
 
 
-def _apply_router_settings_override(data: dict, override_settings: Any) -> None:
+def _apply_router_settings_override(data: dict, override_settings: object) -> None:
     """Merge key/team router settings into ``data`` (request values win)."""
     if not isinstance(override_settings, dict):
         return
