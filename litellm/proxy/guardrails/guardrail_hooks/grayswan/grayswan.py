@@ -615,10 +615,20 @@ class GraySwanGuardrail(CustomGuardrail):
         Returns the scoped context messages plus the request's tool definitions,
         or ``((), None)`` when the request surface cannot be resolved.
         """
+        from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
         from litellm.llms import load_guardrail_translation_mappings
 
-        call_type: Final = (logging_obj.call_type if logging_obj is not None else None) or getattr(
-            request_data.get("litellm_logging_obj"), "call_type", None
+        litellm_metadata: Final = request_data.get("litellm_metadata")
+        request_route: Final = (
+            litellm_metadata.get("user_api_key_request_route") if isinstance(litellm_metadata, Mapping) else None
+        )
+        route_call_types: Final = (
+            get_call_types_for_route(request_route) if isinstance(request_route, str) else None
+        )
+        call_type: Final = (
+            (route_call_types[0].value if route_call_types else None)
+            or (logging_obj.call_type if logging_obj is not None else None)
+            or getattr(request_data.get("litellm_logging_obj"), "call_type", None)
         )
         if not isinstance(call_type, str):
             return (), None
