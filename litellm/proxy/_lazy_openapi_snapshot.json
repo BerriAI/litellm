@@ -40661,7 +40661,7 @@
           "title": "ModelInsightMetric",
           "type": "object"
         },
-        "ModelInsightTask": {
+        "ModelInsightTaskSummary": {
           "properties": {
             "category": {
               "title": "Category",
@@ -40671,86 +40671,67 @@
               "title": "Label",
               "type": "string"
             },
-            "task_type": {
-              "title": "Task Type",
+            "leader": {
+              "title": "Leader",
               "type": "string"
-            }
-          },
-          "required": [
-            "task_type",
-            "label",
-            "category"
-          ],
-          "title": "ModelInsightTask",
-          "type": "object"
-        },
-        "ModelInsightTaskMetric": {
-          "properties": {
-            "completion_tokens": {
-              "title": "Completion Tokens",
-              "type": "integer"
-            },
-            "failed_requests": {
-              "title": "Failed Requests",
-              "type": "integer"
-            },
-            "model": {
-              "title": "Model",
-              "type": "string"
-            },
-            "model_group": {
-              "title": "Model Group",
-              "type": "string"
-            },
-            "prompt_tokens": {
-              "title": "Prompt Tokens",
-              "type": "integer"
             },
             "provider": {
               "title": "Provider",
               "type": "string"
             },
-            "requests": {
-              "title": "Requests",
-              "type": "integer"
-            },
-            "spend": {
-              "title": "Spend",
+            "share": {
+              "title": "Share",
               "type": "number"
-            },
-            "successful_requests": {
-              "title": "Successful Requests",
-              "type": "integer"
             },
             "task_type": {
               "title": "Task Type",
               "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
             }
           },
           "required": [
-            "model_group",
-            "model",
-            "provider",
-            "spend",
-            "prompt_tokens",
-            "completion_tokens",
-            "requests",
-            "successful_requests",
-            "failed_requests",
-            "task_type"
+            "task_type",
+            "label",
+            "category",
+            "value",
+            "share",
+            "leader",
+            "provider"
           ],
-          "title": "ModelInsightTaskMetric",
+          "title": "ModelInsightTaskSummary",
+          "type": "object"
+        },
+        "ModelInsightTasksResponse": {
+          "properties": {
+            "end_date": {
+              "title": "End Date",
+              "type": "string"
+            },
+            "start_date": {
+              "title": "Start Date",
+              "type": "string"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightTaskSummary"
+              },
+              "title": "Tasks",
+              "type": "array"
+            }
+          },
+          "required": [
+            "start_date",
+            "end_date",
+            "tasks"
+          ],
+          "title": "ModelInsightTasksResponse",
           "type": "object"
         },
         "ModelInsightsResponse": {
           "properties": {
-            "by_task": {
-              "items": {
-                "$ref": "#/components/schemas/ModelInsightTaskMetric"
-              },
-              "title": "By Task",
-              "type": "array"
-            },
             "daily": {
               "items": {
                 "$ref": "#/components/schemas/ModelInsightDailyMetric"
@@ -40766,13 +40747,6 @@
               "title": "Start Date",
               "type": "string"
             },
-            "tasks": {
-              "items": {
-                "$ref": "#/components/schemas/ModelInsightTask"
-              },
-              "title": "Tasks",
-              "type": "array"
-            },
             "top_models": {
               "items": {
                 "$ref": "#/components/schemas/ModelInsightMetric"
@@ -40785,9 +40759,7 @@
             "start_date",
             "end_date",
             "daily",
-            "top_models",
-            "by_task",
-            "tasks"
+            "top_models"
           ],
           "title": "ModelInsightsResponse",
           "type": "object"
@@ -40921,6 +40893,97 @@
             }
           ],
           "summary": "Get Model Insights",
+          "tags": [
+            "model_insights"
+          ]
+        }
+      },
+      "/model-insights/tasks": {
+        "get": {
+          "operationId": "get_model_insight_tasks_model_insights_tasks_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD, defaults to 365 days ago",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to 365 days ago",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD, defaults to today",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to today",
+                "title": "End Date"
+              }
+            },
+            {
+              "description": "Metric task shares are computed from",
+              "in": "query",
+              "name": "metric",
+              "required": false,
+              "schema": {
+                "default": "spend",
+                "description": "Metric task shares are computed from",
+                "enum": [
+                  "requests",
+                  "spend",
+                  "tokens"
+                ],
+                "title": "Metric",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelInsightTasksResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Model Insight Tasks",
           "tags": [
             "model_insights"
           ]
