@@ -30,7 +30,7 @@ from litellm.proxy.db.db_spend_update_writer import (
     debitable_model_access_groups,
     get_llm_router,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, metadata_variable_name_for_route
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
     SpendEventBuildError,
@@ -86,8 +86,15 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 
 
-def _proxy_stamped_used_client_oauth_token(request_data: Mapping[str, object]) -> bool | None:
-    proxy_metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+def _proxy_stamped_used_client_oauth_token(
+    request_data: Mapping[str, object], request_route: str | None
+) -> bool | None:
+    proxy_bucket: Final = (
+        get_metadata_variable_name_from_kwargs(request_data)
+        if request_route is None
+        else metadata_variable_name_for_route(request_route)
+    )
+    proxy_metadata: Final = request_data.get(proxy_bucket)
     stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None
     return stamped if isinstance(stamped, bool) else None
 
@@ -198,7 +205,7 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata, original_exception=original_exception
         )
 
-        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_data)
+        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_data, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)

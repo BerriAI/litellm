@@ -7,7 +7,7 @@ from collections import OrderedDict
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from fastapi import HTTPException, Request
 from pydantic import TypeAdapter
@@ -649,11 +649,14 @@ def _get_metadata_variable_name(request: Request) -> str:
     # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
-    path: Final = get_request_route(request)
-    if "thread" in path or "assistant" in path:
+    return metadata_variable_name_for_route(get_request_route(request))
+
+
+def metadata_variable_name_for_route(route: str) -> Literal["metadata", "litellm_metadata"]:
+    if "thread" in route or "assistant" in route:
         return "litellm_metadata"
 
-    if any(route in path for route in LITELLM_METADATA_ROUTES):
+    if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
         return "litellm_metadata"
 
     return "metadata"

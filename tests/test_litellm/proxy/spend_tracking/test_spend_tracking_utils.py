@@ -3305,6 +3305,31 @@ def test_get_logging_payload_records_used_client_oauth_token_for_the_selected_pr
     assert _get_spend_logs_metadata(None)["used_client_oauth_token"] is None
 
 
+@pytest.mark.parametrize(
+    "litellm_params, expected",
+    [
+        (
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_api_key_hash": "guardrail"}},
+            True,
+        ),
+        (
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}},
+            False,
+        ),
+    ],
+)
+def test_get_logging_payload_reads_used_client_oauth_token_from_the_bucket_the_proxy_stamped(
+    litellm_params: dict, expected: bool
+):
+    payload = get_logging_payload(
+        kwargs={"model": "claude-sonnet-5", "custom_llm_provider": "anthropic", "litellm_params": litellm_params},
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
     assert _redact_logged_api_key("bearer ") is None

@@ -33,6 +33,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
+    proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
@@ -720,7 +721,7 @@ def get_logging_payload(
             router_correlation_id=litellm_call_id,
         ),
         used_client_oauth_token=resolve_used_client_oauth_token(
-            metadata.get("used_client_oauth_token") if metadata is not None else None, custom_llm_provider
+            proxy_stamped_used_client_oauth_token(litellm_params.get("metadata"), litellm_params), custom_llm_provider
         ),
         azure_spillover=azure_spillover(
             response_headers=kwargs.get("response_headers")
