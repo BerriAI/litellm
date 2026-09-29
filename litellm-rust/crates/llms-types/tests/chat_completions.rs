@@ -1,6 +1,6 @@
 use litellm_llms_types::{
     formats::chat_completions::{
-        ChatCompletionsRequest, ChatContentPart, ChatMessageContent, ChatVideoUrl,
+        ChatCompletionsRequest, ChatContentPart, ChatMessageContent, ChatVideoUrl, ReasoningEffort,
     },
     recognized::Recognized,
 };
@@ -65,4 +65,33 @@ fn content_parts_recognize_supported_shapes_and_preserve_every_value(
     let part: Recognized<ChatContentPart> = serde_json::from_value(wire.clone()).unwrap();
     assert_eq!(part.known().is_some(), known);
     assert_eq!(serde_json::to_value(part).unwrap(), wire);
+}
+
+#[rstest]
+fn reasoning_effort_names_match_the_wire_and_parse_back(
+    #[values(
+        ReasoningEffort::None,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::Xhigh,
+        ReasoningEffort::Max
+    )]
+    effort: ReasoningEffort,
+) {
+    assert_eq!(
+        serde_json::to_value(effort).unwrap(),
+        Value::String(effort.as_str().to_string())
+    );
+    assert_eq!(ReasoningEffort::parse(effort.as_str()), Some(effort));
+    assert!(ReasoningEffort::ALL.contains(&effort));
+}
+
+#[rstest]
+#[case::unknown("ultra")]
+#[case::uppercase("HIGH")]
+#[case::empty("")]
+fn reasoning_effort_parse_rejects(#[case] value: &str) {
+    assert_eq!(ReasoningEffort::parse(value), None);
 }
