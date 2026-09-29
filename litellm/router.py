@@ -10252,11 +10252,6 @@ class Router:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
-        # Skip the /v1/models discovery call when the deployment already
-        # declares its token limits: discovery can only confirm values that
-        # are already configured, so the request is pure cost. On scale-to-zero
-        # backends (e.g. RunPod Serverless vLLM) each such call cold-starts a
-        # GPU worker and bills real money with no chat traffic (issue #42657).
         if self._deployment_token_limits_configured(raw_deployment.get("model_info")):
             return
         api_key: Final = params.api_key or dynamic_api_key
