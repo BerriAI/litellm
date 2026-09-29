@@ -1,10 +1,8 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_auth::{InputSource, SecretValue};
-use litellm_llms::base_llm::ocr::{
-    error::Error,
-    transformation::{OcrDocument, decode_request_value},
-};
+use litellm_llms::base_llm::ocr::{error::Error, transformation::decode_request_value};
+use litellm_llms_types::ocr::OcrDocument;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 

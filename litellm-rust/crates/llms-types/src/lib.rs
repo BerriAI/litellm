@@ -1,0 +1,10 @@
+pub mod audio_transcription;
+pub mod batches;
+pub mod chat_completions;
+pub mod headers;
+pub mod messages;
+pub mod ocr;
+pub mod providers;
+pub mod recognized;
+pub mod responses;
+pub mod serde_compat;

@@ -157,7 +157,7 @@ pub(super) fn project_request(
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::ocr::transformation::OcrDocument;
+    use litellm_llms_types::ocr::OcrDocument;
     use pyo3::exceptions::PyValueError;
 
     use super::*;

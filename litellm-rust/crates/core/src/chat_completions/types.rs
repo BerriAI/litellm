@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use litellm_auth::SecretValue;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
-use litellm_types::llms::openai::ChatMessage;
+use litellm_llms_types::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
 /// A `/chat/completions` call as it crosses into the core.

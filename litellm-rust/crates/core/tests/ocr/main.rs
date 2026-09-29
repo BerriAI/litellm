@@ -9,11 +9,8 @@ use litellm_host::{
     interceptors::{RequestContext, WireRequest},
     lifecycle::CallEvent,
 };
-use litellm_llms::base_llm::ocr::{
-    error::Error,
-    settings::OcrSettings,
-    transformation::{LiteLLMOcrResponse, OcrDocument},
-};
+use litellm_llms::base_llm::ocr::{error::Error, settings::OcrSettings};
+use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument};
 use serde_json::{Map, Value, json};
 use std::sync::Mutex;
 use wiremock::{MockServer, ResponseTemplate};

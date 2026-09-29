@@ -1,6 +1,5 @@
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
-use litellm_auth_azure::SECRET_NAMES as AZURE_AUTH_SECRET_NAMES;
+use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde_json::Value;
 
@@ -9,13 +8,11 @@ use crate::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
         handler::OcrClient,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrRequestContext,
-            OcrResponseFormat, PreparedOcrRequest,
-        },
+        transformation::{BaseOcrConfig, OcrConnection, OcrRequestContext, PreparedOcrRequest},
     },
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
+use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 pub const AZURE_AI_OCR_PATH: [&str; 4] = ["providers", "mistral", "azure", "ocr"];
 

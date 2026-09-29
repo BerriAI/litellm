@@ -2,12 +2,10 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
-use litellm_types::{
-    llms::anthropic_messages::{
-        anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
-    },
-    utils::ProviderSpecificHeaders,
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms_types::{
+    headers::ProviderSpecificHeaders,
+    messages::{MessagesRequest, MessagesResponse},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -15,7 +13,7 @@ use serde_json::{Map, Value};
 use super::Error;
 
 pub struct MessagesCall {
-    pub body: AnthropicMessagesRequest,
+    pub body: MessagesRequest,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
@@ -25,7 +23,7 @@ pub struct MessagesCall {
     pub shaping: MessagesShaping,
 }
 
-pub fn messages_body(body: Map<String, Value>) -> Result<AnthropicMessagesRequest, Error> {
+pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
 }
 
@@ -33,13 +31,13 @@ pub(super) fn invalid_request(err: serde_json::Error) -> Error {
     Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
 }
 
-pub type MessagesResponse =
-    CallOutput<Box<AnthropicMessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
+pub type MessagesCallResponse =
+    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
     #[serde(default)]
-    pub capabilities: AnthropicModelCapabilities,
+    pub capabilities: MessagesModelCapabilities,
     #[serde(default)]
     pub drop_params: bool,
     #[serde(default)]
@@ -76,9 +74,9 @@ mod tests {
     #[case::partial_capabilities(
         json!({"capabilities": {"supports_reasoning": true}}),
         MessagesShaping {
-            capabilities: AnthropicModelCapabilities {
+            capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
-                ..AnthropicModelCapabilities::default()
+                ..MessagesModelCapabilities::default()
             },
             ..MessagesShaping::default()
         },
@@ -100,7 +98,7 @@ mod tests {
             "additional_drop_params": ["metadata.user_id", "thinking"]
         }),
         MessagesShaping {
-            capabilities: AnthropicModelCapabilities {
+            capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,

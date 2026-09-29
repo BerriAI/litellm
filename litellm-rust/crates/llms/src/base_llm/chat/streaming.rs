@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use futures_util::{StreamExt, stream::BoxStream};
-use litellm_types::utils::ChatCompletionChunk;
+use litellm_llms_types::chat_completions::ChatCompletionChunk;
 
 use crate::{
     Error,

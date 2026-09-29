@@ -1,5 +1,4 @@
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
+use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -11,15 +10,16 @@ use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
         streaming::{ByteStream, StreamDecoder, encode_anthropic_sse},
-        transformation::BaseAnthropicMessagesConfig,
+        transformation::BaseMessagesConfig,
     },
 };
+use litellm_llms_types::messages::MessagesResponse;
 use litellm_tracing::ByteChunk;
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::Value;
 
 use super::{
-    Error, MessagesResponse, common_utils::truncate_error_body, prepare::ProviderMessagesRequest,
+    Error, MessagesCallResponse, common_utils::truncate_error_body,
+    prepare::ProviderMessagesRequest,
 };
 use crate::{constants::MESSAGES_TIMEOUT_SECS, outbound::outbound_request};
 
@@ -31,7 +31,7 @@ pub(super) async fn execute(
     cache_options: Option<litellm_cache_response::CacheOptions>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
-) -> Result<MessagesResponse, Error> {
+) -> Result<MessagesCallResponse, Error> {
     let ProviderMessagesRequest {
         provider,
         url,
@@ -110,7 +110,7 @@ pub(super) async fn execute(
                 .await
                 .map_err(Error::post_call)?;
             decode_response(config, &body.model, &text)
-                .map(|message| MessagesResponse::Complete(Box::new(message)))
+                .map(|message| MessagesCallResponse::Complete(Box::new(message)))
         },
     )
     .await
@@ -158,10 +158,10 @@ async fn provider_error(response: reqwest::Response) -> Error {
 }
 
 fn decode_response(
-    config: &dyn BaseAnthropicMessagesConfig,
+    config: &dyn BaseMessagesConfig,
     model: &str,
     text: &str,
-) -> Result<AnthropicMessagesResponse, Error> {
+) -> Result<MessagesResponse, Error> {
     let response = serde_json::from_str(text).map_err(|err| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
             "messages response JSON",
@@ -177,7 +177,7 @@ fn streaming_response(
     response: reqwest::Response,
     decoder: Option<StreamDecoder>,
     provider: &'static str,
-) -> MessagesResponse {
+) -> MessagesCallResponse {
     let headers = response
         .headers()
         .iter()
@@ -194,7 +194,7 @@ fn streaming_response(
         .boxed(),
         Some(decode) => decoded_chunks(response, decode, provider),
     };
-    MessagesResponse::Stream {
+    MessagesCallResponse::Stream {
         head: super::route::MessagesStreamHead { headers },
         chunks,
     }
@@ -268,7 +268,7 @@ mod tests {
             .send()
             .await
             .unwrap();
-        let MessagesResponse::Stream { mut chunks, .. } =
+        let MessagesCallResponse::Stream { mut chunks, .. } =
             streaming_response(response, Some(anthropic_sse_event_stream), "test")
         else {
             panic!("a streaming response returns chunks");

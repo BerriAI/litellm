@@ -1,6 +1,5 @@
-use litellm_types::{
-    llms::openai::{ChatMessage, ChatMessageContent},
-    utils::ChatCompletionsResponse,
+use litellm_llms_types::chat_completions::{
+    ChatCompletionsResponse, ChatMessage, ChatMessageContent,
 };
 use serde_json::{Map, Value};
 

@@ -1,8 +1,8 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_http::request::{has_bearer_auth, has_header};
-use litellm_types::llms::anthropic_messages::anthropic_request::{
-    AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest, CacheControl,
-    ContentBlock, MessageContent, SystemPrompt,
+use litellm_llms_types::messages::{
+    CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
+    SystemPrompt,
 };
 
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
         messages::{
             context::MessagesTransformContext,
             normalization::fold_system_role_messages,
-            transformation::{BaseAnthropicMessagesConfig, MESSAGES_PATH_SUFFIX},
+            transformation::{BaseMessagesConfig, MESSAGES_PATH_SUFFIX},
         },
     },
 };
@@ -34,12 +34,12 @@ pub struct AzureAnthropicMessagesConfig;
 pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
     AzureAnthropicMessagesConfig;
 
-impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
+impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     fn shape_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         reasoning_auto_summary: bool,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, reasoning_auto_summary)
     }
 
@@ -54,18 +54,18 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
 
     fn transform_anthropic_messages_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         let request = fold_system_role_messages(request);
         transform_messages_request(
-            AnthropicMessagesRequest {
+            MessagesRequest {
                 messages: request
                     .messages
                     .into_iter()
                     .map(strip_scope_from_message)
                     .collect(),
-                params: AnthropicMessagesOptionalParams {
+                params: MessagesOptionalParams {
                     system: request.params.system.map(strip_scope_from_system),
                     ..request.params
                 },
@@ -105,7 +105,7 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
+    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
     }
 }
@@ -148,8 +148,8 @@ fn strip_scope_from_system(system: SystemPrompt) -> SystemPrompt {
     }
 }
 
-fn strip_scope_from_message(message: AnthropicMessage) -> AnthropicMessage {
-    AnthropicMessage {
+fn strip_scope_from_message(message: Message) -> Message {
+    Message {
         content: match message.content {
             MessageContent::Blocks(blocks) => {
                 MessageContent::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
@@ -162,7 +162,7 @@ fn strip_scope_from_message(message: AnthropicMessage) -> AnthropicMessage {
 
 #[cfg(test)]
 mod tests {
-    use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+    use litellm_llms_types::messages::MessagesResponse;
     use rstest::rstest;
     use serde_json::json;
 
@@ -171,11 +171,11 @@ mod tests {
     use super::*;
     use crate::base_llm::messages::context::MessagesModelCapabilities;
 
-    fn request_from(value: serde_json::Value) -> AnthropicMessagesRequest {
+    fn request_from(value: serde_json::Value) -> MessagesRequest {
         serde_json::from_value(value).expect("valid request")
     }
 
-    fn to_value(request: AnthropicMessagesRequest) -> serde_json::Value {
+    fn to_value(request: MessagesRequest) -> serde_json::Value {
         serde_json::to_value(request).expect("serializable request")
     }
 
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn transform_request_rejects_non_object_body() {
-        let err = serde_json::from_value::<AnthropicMessagesRequest>(json!("bad"))
+        let err = serde_json::from_value::<MessagesRequest>(json!("bad"))
             .expect_err("non-object body should error");
         assert!(err.is_data());
     }
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn transform_response_passes_through() {
-        let response: AnthropicMessagesResponse = serde_json::from_value(json!({
+        let response: MessagesResponse = serde_json::from_value(json!({
             "id": "msg_1",
             "type": "message",
             "role": "assistant",

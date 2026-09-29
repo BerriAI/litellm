@@ -6,9 +6,8 @@
 
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::core_helpers::unix_now;
-use litellm_types::{
-    llms::openai::ChatMessage,
-    utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
+use litellm_llms_types::chat_completions::{
+    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
 };
 use serde_json::{Map, Value, json};
 
@@ -156,11 +155,11 @@ impl BaseConfig for OpenAILikeChatConfig {
                 .unwrap_or(model)
                 .to_string(),
             choices,
-            usage: litellm_types::utils::ChatCompletionsUsage {
+            usage: litellm_llms_types::chat_completions::ChatCompletionsUsage {
                 prompt_tokens: field("prompt_tokens"),
                 completion_tokens: field("completion_tokens"),
                 total_tokens: field("total_tokens"),
-                prompt_tokens_details: litellm_types::utils::PromptTokensDetails {
+                prompt_tokens_details: litellm_llms_types::chat_completions::PromptTokensDetails {
                     cached_tokens: details
                         .and_then(|d| d.get("cached_tokens"))
                         .and_then(Value::as_u64)

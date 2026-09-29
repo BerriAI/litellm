@@ -17,10 +17,11 @@ use crate::base_llm::ocr::{
     error::Error,
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
-        PreparedOcrRequest, decode_request_value, decode_response,
+        BaseOcrConfig, DecodedOcrResponse, OcrResponseContext, PreparedOcrRequest,
+        decode_request_value, decode_response,
     },
 };
+use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument};
 use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the

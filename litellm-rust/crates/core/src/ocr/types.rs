@@ -5,10 +5,9 @@ use litellm_auth::{InputSource, SecretValue, TokenProviderHandle};
 use litellm_core_utils::call_arguments::CallArguments;
 use litellm_llms::base_llm::ocr::{
     error::Error,
-    transformation::{
-        OcrCredentialInputs, OcrDocument, OcrResponseFormat, OcrTransportConfig, response_format,
-    },
+    transformation::{OcrCredentialInputs, OcrTransportConfig, response_format},
 };
+use litellm_llms_types::ocr::{OcrDocument, OcrResponseFormat};
 use serde_json::{Map, Value};
 
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
@@ -222,7 +221,7 @@ mod tests {
     use super::*;
 
     fn document() -> OcrDocument {
-        OcrDocument::try_from(
+        serde_json::from_value(
             json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
         )
         .unwrap()

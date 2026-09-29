@@ -14,10 +14,12 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient, build_http_request, guardrail_document},
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-        OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, OcrRequestContext, PreparedOcrRequest,
         decode_and_normalize_response,
     },
+};
+use litellm_llms_types::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
 };
 
 const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
@@ -72,9 +74,9 @@ struct ReductoResult {
 #[serde_with::serde_as]
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ReductoUsage {
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::LaxI64>")]
+    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::LaxI64>")]
     pub num_pages: Option<i64>,
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::FiniteF64>")]
+    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::FiniteF64>")]
     pub credits: Option<f64>,
 }
 

@@ -1,7 +1,9 @@
 use std::convert::Infallible;
 
-use crate::anthropic::messages::handler::shape_anthropic_messages_request;
-use crate::base_llm::messages::context::MessagesTransformContext;
+use crate::{
+    anthropic::messages::handler::shape_anthropic_messages_request,
+    base_llm::messages::context::MessagesTransformContext,
+};
 use futures_util::StreamExt;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
@@ -12,8 +14,10 @@ use litellm_auth_aws::{
     },
     resolve_bedrock_region,
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
-use litellm_types::messages::streaming::{MessagesStreamEvent, MessagesStreamUsage};
+use litellm_llms_types::messages::{
+    MessagesRequest,
+    streaming::{MessagesStreamEvent, MessagesStreamUsage},
+};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -23,7 +27,7 @@ use crate::{
         base_model_iterator::{StreamError, StreamTransformer, transform_stream},
         messages::{
             streaming::{ByteStream, EventStream, StreamDecoder},
-            transformation::{BaseAnthropicMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
         },
     },
     bedrock::chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
@@ -84,12 +88,12 @@ fn invoke_url(
     format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
 }
 
-impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
     fn shape_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         reasoning_auto_summary: bool,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, reasoning_auto_summary)
     }
 
@@ -113,9 +117,9 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
 
     fn transform_anthropic_messages_request(
         &self,
-        _request: AnthropicMessagesRequest,
+        _request: MessagesRequest,
         _context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         Err(Error::Unsupported(
             "Bedrock invoke messages request shaping",
         ))
