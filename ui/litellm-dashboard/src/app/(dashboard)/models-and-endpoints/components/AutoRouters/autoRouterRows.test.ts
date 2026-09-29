@@ -85,7 +85,7 @@ describe("autoRouterRows", () => {
 
   it.each([
     ["llm", "LLM Classifier"],
-    ["jev", "Decision Model"],
+    ["jev", "JEV Classifier"],
   ])("labels a router using the %s classifier", (classifierType, label) => {
     const row = toAutoRouterRow(
       {

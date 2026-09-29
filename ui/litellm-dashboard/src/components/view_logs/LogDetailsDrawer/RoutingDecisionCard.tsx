@@ -143,7 +143,7 @@ function describeCause(decision: RoutingDecision): string {
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
     case "jev_classifier":
-      return classifierModel?.startsWith("bespoke_nimble/") ? "Nimble classifier" : "JEV classifier";
+      return "JEV classifier";
     case "literal_keyword_match":
     case "keyword":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";

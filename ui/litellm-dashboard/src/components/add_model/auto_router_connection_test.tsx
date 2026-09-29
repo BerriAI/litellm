@@ -10,7 +10,6 @@ import {
 import { AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { jevClassifierConfigSchema } from "./jev_classifier_config";
 
 interface AutoRouterConnectionTestProps {
   accessToken: string;
@@ -32,9 +31,6 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   jevRequest,
   onTestComplete,
 }) => {
-  const provider = jevClassifierConfigSchema.safeParse(jevRequest?.complexity_router_config.jev_classifier_config).data
-    ?.provider;
-  const classifierLabel = provider === "bespoke_nimble" ? "Nimble" : "Jev";
   const [results, setResults] = React.useState<TargetResult[]>(() => targets.map(() => ({ status: "pending" })));
   const [jevResult, setJevResult] = React.useState<TargetResult>({ status: "pending" });
 
@@ -54,7 +50,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
           ? { status: "success" }
           : {
               status: "error",
-              error: `${classifierLabel} was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
+              error: `Jev was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
             },
       );
     };
@@ -95,11 +91,11 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
         classifier probe includes its reasoning effort override.
       </p>
       {jevRequest && (
-        <div role="status" aria-label={`${classifierLabel} connection`} className="rounded-lg border p-3 text-sm">
-          <strong>{classifierLabel} Classifier</strong>
+        <div role="status" aria-label="Jev connection" className="rounded-lg border p-3 text-sm">
+          <strong>Jev Classifier</strong>
           <p>
-            {jevResult.status === "pending" && `Testing ${classifierLabel} classification`}
-            {jevResult.status === "success" && `${classifierLabel} classification succeeded`}
+            {jevResult.status === "pending" && "Testing Jev classification"}
+            {jevResult.status === "success" && "Jev classification succeeded"}
             {jevResult.status === "error" && jevResult.error}
           </p>
         </div>

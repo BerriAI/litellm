@@ -48,35 +48,6 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
-  it("preserves Nimble through dashboard validation and saves without exposing transport credentials", () => {
-    const stored = {
-      classifier_type: "jev" as const,
-      tiers: FORM_VALUE.tiers,
-      jev_classifier_config: {
-        provider: "bespoke_nimble" as const,
-        model: "nimble-latest",
-        timeout_ms: 6100,
-        api_key: "masked-key",
-        api_base: "https://nimble.example.com",
-      },
-    };
-    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
-    expect(hydrated.jev_classifier_config).toEqual({
-      provider: "bespoke_nimble",
-      model: "nimble-latest",
-      timeout_ms: 6100,
-    });
-    const edited = {
-      ...hydrated,
-      jev_classifier_config: { ...hydrated.jev_classifier_config!, timeout_ms: 900 },
-    };
-    expect(buildUpdatedComplexityRouterConfig(stored, edited).jev_classifier_config).toEqual({
-      provider: "bespoke_nimble",
-      model: "nimble-latest",
-      timeout_ms: 900,
-    });
-  });
-
   it.each([false, true])("omits masked JEV credentials from dashboard saves, edited: %s", (edited) => {
     const stored = {
       classifier_type: "jev" as const,

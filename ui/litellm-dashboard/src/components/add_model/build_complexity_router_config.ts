@@ -8,7 +8,7 @@ import type { ModelGroup } from "../llm_calls/fetch_models";
 import { KeywordTierRule } from "./KeywordTierRules";
 import {
   type JevClassifierConfig,
-  jevClassifierFormConfigSchema,
+  jevClassifierConfigSchema,
   normalizeJevClassifierConfig,
 } from "./jev_classifier_config";
 import {
@@ -437,8 +437,8 @@ export const getClassifierModelError = (
   >,
 ): string | null => {
   if (effectiveClassifierType(config) === "jev") {
-    const parsed = jevClassifierFormConfigSchema.safeParse(config.jev_classifier_config ?? {});
-    return parsed.success ? null : "Enter a decision model, a positive whole-number timeout and a positive cooldown";
+    const parsed = jevClassifierConfigSchema.safeParse(config.jev_classifier_config ?? {});
+    return parsed.success ? null : "Enter a JEV model, a positive whole-number timeout and a positive cooldown";
   }
   if (!usesLlmClassifier(effectiveClassifierType(config)) || config.classifier_llm_config?.model) return null;
   return config.custom_tier_set
