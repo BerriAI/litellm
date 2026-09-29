@@ -10,6 +10,9 @@
 #   LITELLM_DIR      folder to install into (skips the folder question)
 #   LITELLM_PORT     port for the gateway (default 4000, or the next free one)
 #
+# New installs listen on this machine only (127.0.0.1). To reach the gateway
+# from other machines, remove LITELLM_BIND from .env and put it behind TLS.
+#
 # Keys and the database password are random (openssl rand), written only to
 # .env with permissions 600, and never printed. Needs Docker with Compose v2.
 # Everything runs inside main(), so a partial download runs nothing.
@@ -144,11 +147,19 @@ pick_folder() {
       "$here_dir   this folder"
     if [ "$CHOICE" = 2 ]; then DIR="$here_dir"; else DIR="$home_dir"; fi
   fi
+  created=0
+  [ -d "$DIR" ] || created=1
   mkdir -p "$DIR"
   cd "$DIR"
   DIR="$(pwd)"
-  # Keeps the folder out of git if it sits inside a repository.
-  [ -f .gitignore ] || printf '*\n' >.gitignore
+  if [ "$created" = 1 ]; then
+    # A folder this script made holds only its own files, so keep all of it out of git.
+    printf '*\n' >.gitignore
+  elif command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
+    ! git check-ignore -q .env 2>/dev/null; then
+    # Never write ignore rules into a folder that already existed, such as a repository root.
+    echo "Note: $DIR/.env will hold your keys and is not ignored by git. Add .env to your .gitignore."
+  fi
 }
 
 pick_port() {
@@ -158,6 +169,9 @@ pick_port() {
     PORT="$LITELLM_PORT"
   elif [ -n "$saved" ]; then
     PORT="$saved"
+  elif [ -f .env ]; then
+    # An existing install without a saved port runs on the compose default.
+    PORT=4000
   else
     PORT=4000
     while ! port_free "$PORT"; do
@@ -170,6 +184,27 @@ pick_port() {
     [ "$PORT" = 4000 ] || echo "Port 4000 is in use, so LiteLLM will use $PORT."
   fi
   export LITELLM_PORT="$PORT"
+}
+
+# Docker names containers and the database volume after the project, so an
+# install outside the home folder gets its own name and never shares a
+# database with another litellm-gateway folder.
+check_new_install() {
+  project=litellm-gateway
+  [ "$DIR" = "$HOME/litellm-gateway" ] || project="litellm-gateway-$(printf '%s' "$DIR" | cksum | cut -d ' ' -f 1)"
+  # Postgres keeps the password it was created with, so a new password over an
+  # old database volume would lock the gateway out. Stop and explain instead.
+  if docker volume inspect "${project}_postgres_data" >/dev/null 2>&1; then
+    cat >&2 <<EOF
+Found a database from an earlier install (Docker volume ${project}_postgres_data)
+but no $DIR/.env with its password.
+
+  Restore that .env file and run this again to keep your models and keys, or
+  delete the old database and start fresh (this removes its models and keys):
+    docker volume rm ${project}_postgres_data
+EOF
+    exit 1
+  fi
 }
 
 open_browser() {
@@ -213,18 +248,14 @@ EOF
 
   echo "LiteLLM quickstart"
   pick_folder
+  [ -f .env ] || check_new_install
   curl -fsSL -o docker-compose.quickstart.yml "$COMPOSE_URL"
   pick_port
 
   if [ -f .env ]; then
     echo "Reusing $DIR/.env, so existing keys and data keep working."
   else
-    # Docker names containers and the database volume after the project, so
-    # an install outside the home folder gets its own name and never shares a
-    # database with another litellm-gateway folder.
-    project=litellm-gateway
-    [ "$DIR" = "$HOME/litellm-gateway" ] || project="litellm-gateway-$(printf '%s' "$DIR" | cksum | cut -d ' ' -f 1)"
-    (umask 077 && printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nCOMPOSE_PROJECT_NAME=%s\n' \
+    (umask 077 && printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\nPOSTGRES_PASSWORD=%s\nLITELLM_PORT=%s\nLITELLM_BIND=127.0.0.1:\nCOMPOSE_PROJECT_NAME=%s\n' \
       "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" "$(openssl rand -hex 24)" "$PORT" "$project" >.env)
     echo "Generated $DIR/.env with your master key, salt key, and database password. Keep this file."
   fi

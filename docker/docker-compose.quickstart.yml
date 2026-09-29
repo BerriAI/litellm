@@ -13,7 +13,9 @@ services:
   litellm:
     image: docker.litellm.ai/berriai/litellm:main-stable
     ports:
-      - "${LITELLM_PORT:-4000}:4000"
+      # LITELLM_BIND is empty by default, so this stays "4000:4000". The quickstart
+      # script sets it to "127.0.0.1:" so new installs listen on this machine only.
+      - "${LITELLM_BIND:-}${LITELLM_PORT:-4000}:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in .env - see the header of this file}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set it in .env - see the header of this file}
