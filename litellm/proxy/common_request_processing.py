@@ -3967,7 +3967,11 @@ class ProxyBaseLLMRequestProcessing:
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
-            if not delivered_chunk and not _withheld_provider_output(response):
+            if (
+                not delivered_chunk
+                and not _withheld_provider_output(response)
+                and user_api_key_dict.agent_invocation_cost is None
+            ):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
                 )
