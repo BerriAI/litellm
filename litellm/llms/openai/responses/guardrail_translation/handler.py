@@ -645,9 +645,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrailed: Final = guardrailed_inputs.get("structured_messages")
         if guardrailed is None or guardrailed is scoped_structured_messages:
             return None
-        covers_full_request: Final = (
-            len(scoped_indices) == len(structured_messages)
-            or guardrail_to_apply.structured_messages_cover_full_request()
+        covers_full_request: Final = len(scoped_indices) == len(structured_messages) or (
+            guardrail_to_apply.structured_messages_cover_full_request() and len(guardrailed) == len(structured_messages)
         )
         merged: Final = (
             guardrailed

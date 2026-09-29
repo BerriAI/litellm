@@ -357,7 +357,9 @@ class TestOpenAIResponsesHandlerInputProcessing:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
-    async def test_empty_texts_answer_is_rejected_instead_of_forwarding_the_raw_request(self, data_input):
+    async def test_empty_texts_answer_is_rejected_instead_of_forwarding_the_raw_request(
+        self, data_input: str | list[dict[str, str]]
+    ) -> None:
         from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
         handler = OpenAIResponsesHandler()
@@ -374,7 +376,9 @@ class TestOpenAIResponsesHandlerInputProcessing:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
-    async def test_answer_without_texts_key_leaves_instructions_and_input_untouched(self, data_input):
+    async def test_answer_without_texts_key_leaves_instructions_and_input_untouched(
+        self, data_input: str | list[dict[str, str]]
+    ) -> None:
         handler = OpenAIResponsesHandler()
         guardrail = TextsReplacingGuardrail(guardrail_name="silent", texts=None)
         data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
@@ -398,7 +402,7 @@ class TestSkipSystemMessageScopesInstructions:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
-    async def test_instructions_are_neither_scanned_nor_rewritten(self, data_input):
+    async def test_instructions_are_neither_scanned_nor_rewritten(self, data_input: str | list[dict[str, str]]) -> None:
         handler = OpenAIResponsesHandler()
         guardrail = _skipping_system(RecordingMaskingGuardrail(guardrail_name="test"))
         data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
@@ -469,6 +473,50 @@ class TestSkipSystemMessageScopesInstructions:
             ("system", ["House rules"]),
             ("user", [COMPRESSED_MARKER]),
             ("assistant", ["Understood."]),
+            ("user", ["What is the codename?"]),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_full_coverage_claim_over_only_the_scoped_rows_still_keeps_the_skipped_system_prompt(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [
+                {"role": "system", "content": "House rules"},
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, _skipping_system(ScopedRowsFullCoverageGuardrail()))
+
+        assert result["instructions"] == "Answer from the memo only."
+        assert [(item["role"], _texts(item)) for item in result["input"]] == [
+            ("system", ["House rules"]),
+            ("user", [COMPRESSED_MARKER]),
+            ("user", ["What is the codename?"]),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_full_coverage_claim_over_the_whole_request_is_installed_without_a_second_merge(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [
+                {"role": "system", "content": "House rules"},
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, _skipping_system(RebuildingFullCoverageGuardrail()))
+
+        assert result["instructions"] == "Answer from the memo only."
+        assert [(item["role"], _texts(item)) for item in result["input"]] == [
+            ("system", ["House rules"]),
+            ("user", [COMPRESSED_MARKER]),
             ("user", ["What is the codename?"]),
         ]
 
@@ -2377,6 +2425,36 @@ class StructuredRewriteGuardrail(CustomGuardrail):
         rewritten = [
             {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
         ]
+        return {**inputs, "structured_messages": rewritten}
+
+
+class ScopedRowsFullCoverageGuardrail(StructuredRewriteGuardrail):
+    """Claims its structured_messages span the whole request but, like CrowdStrike AIDR on a
+    Responses body (no `messages` to rebuild from), only ever returns the scoped rows it was given."""
+
+    def structured_messages_cover_full_request(self) -> bool:
+        return True
+
+
+class RebuildingFullCoverageGuardrail(CustomGuardrail):
+    """Claims full coverage and honours it: rebuilds every conversation row from the raw request,
+    compressing the first user turn, the way CrowdStrike AIDR does on a chat body."""
+
+    def structured_messages_cover_full_request(self) -> bool:
+        return True
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        raw_input = request_data["input"]
+        assert isinstance(raw_input, list)
+        full: list[dict[str, object]] = [{"role": "system", "content": request_data["instructions"]}, *raw_input]
+        first_user = next(i for i, m in enumerate(full) if m.get("role") == "user")
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(full)]
         return {**inputs, "structured_messages": rewritten}
 
 

@@ -28,6 +28,8 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
+    role_out_of_guardrail_scope,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -106,9 +108,14 @@ class _ResponsesInputItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     type: str | None = None
+    role: str | None = None
     content: str | tuple[_ResponsesContentPart, ...] | None = None
 
-    def text_count(self) -> int:
+    def text_count(self, *, skip_system: bool) -> int:
+        if role_out_of_guardrail_scope(
+            (self.role or "").lower(), skip_system_message=skip_system, skip_tool_message=False
+        ):
+            return 0
         if isinstance(self.content, str):
             return 1
         if self.content is None:
@@ -1661,18 +1668,20 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
         return forward if len(forward) == len(texts) and forward == backward else None
 
-    @classmethod
+    @staticmethod
     def _reasoning_item_text_indices(
-        cls,
         texts: Sequence[str],
         request_data: Mapping[str, object],
+        *,
+        skip_system: bool,
     ) -> frozenset[int] | None:
         """Return the ``texts`` indices flattened from Responses ``reasoning`` input items.
 
         The Responses translation handler gives those model-authored items the default
         ``user`` role, so the latest-turn selection must not mistake one for a human turn.
         Empty for requests without a Responses ``input`` item list; None when the raw items
-        (after the leading ``instructions`` text) do not account for every entry of ``texts``.
+        (after the leading ``instructions`` text, both minus whatever ``skip_system`` drops)
+        do not account for every entry of ``texts``.
         """
         try:
             raw_input: Final = _RESPONSES_INPUT.validate_python(request_data.get("input"))
@@ -1680,8 +1689,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             return None
         if not isinstance(raw_input, tuple):
             return frozenset()
-        offset: Final = 0 if scannable_instructions(request_data) is None else 1
-        counts: Final = tuple(item.text_count() for item in raw_input)
+        offset: Final = 0 if scannable_instructions(request_data, skip_system=skip_system) is None else 1
+        counts: Final = tuple(item.text_count(skip_system=skip_system) for item in raw_input)
         if offset + sum(counts) != len(texts):
             return None
         starts: Final = itertools.accumulate(counts, initial=offset)
@@ -1692,9 +1701,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             for text_idx in range(start, start + count)
         )
 
-    @classmethod
     def _get_latest_user_text_indices(
-        cls,
+        self,
         texts: Sequence[str],
         messages: Sequence[AllMessageValues],
         request_data: Mapping[str, object],
@@ -1708,10 +1716,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         user/developer message exists, or the latest one carries text that never reached
         ``texts`` (safety fallback to the role-filter scan).
         """
-        sources: Final = cls._text_source_message_indices(texts, messages)
+        sources: Final = self._text_source_message_indices(texts, messages)
         if sources is None:
             return None
-        reasoning: Final = cls._reasoning_item_text_indices(texts, request_data)
+        reasoning: Final = self._reasoning_item_text_indices(
+            texts, request_data, skip_system=effective_skip_system_message_for_guardrail(self)
+        )
         if reasoning is None:
             return None
         reasoning_messages: Final = frozenset(sources[text_idx] for text_idx in reasoning)
@@ -1725,7 +1735,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         )
         if latest_human is None:
             return None
-        if latest_human not in sources and cls._message_texts(messages[latest_human]):
+        if latest_human not in sources and self._message_texts(messages[latest_human]):
             return None
         return frozenset(text_idx for text_idx, source in enumerate(sources) if source == latest_human)
 
