@@ -53,22 +53,38 @@ async def test_negotiation_records_preserve_the_peer_call_contract(monkeypatch: 
 
 
 @pytest.mark.parametrize("covered", (False, True))
-def test_stdio_registration_forwards_only_explicit_coverage(
+def test_stdio_coverage_preserves_default_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, covered: bool
 ) -> None:
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
-    from integration._support.mcp import stdio_peer
+    from integration._support.mcp import STDIO_PEER, stdio_peer
 
     monkeypatch.delenv("COVERAGE_PROCESS_CONFIG", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-peer")
+    coverage_file: Final = tmp_path / "coverage"
+    monkeypatch.setenv("COVERAGE_FILE", str(coverage_file))
     if covered:
         monkeypatch.setenv("COVERAGE_PROCESS_CONFIG", "coverage-config")
     with stdio_peer(tmp_path) as peer:
         assert peer.registration() == {
             "transport": "stdio",
             "command": peer.command,
-            "args": list(peer.args),
-            **({"env": {"COVERAGE_PROCESS_CONFIG": "coverage-config"}} if covered else {}),
+            "args": [
+                *(
+                    [
+                        "-m",
+                        "coverage",
+                        "run",
+                        f"--rcfile={STDIO_PEER.parent.parent / 'conformance_coverage.toml'}",
+                        f"--data-file={coverage_file}",
+                    ]
+                    if covered
+                    else []
+                ),
+                str(STDIO_PEER),
+                str(peer.record),
+                "plain",
+            ],
         }
 
 
