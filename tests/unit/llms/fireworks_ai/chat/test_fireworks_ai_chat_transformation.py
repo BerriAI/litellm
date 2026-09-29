@@ -1806,6 +1806,30 @@ def test_listed_router_short_name_resolves_to_its_catalog_row_and_accepts_tool_c
     assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
 
 
+@pytest.mark.parametrize(
+    "router",
+    [
+        "firerouter/opus",
+        "firerouter/auto",
+        "firerouter/auto-instant",
+        "firerouter/kimi-k3/glm-5p3",
+        "fireworks_ai/firerouter/opus",
+        "accounts/fireworks/routers/firerouter/opus",
+    ],
+)
+def test_custom_firerouter_id_accepts_the_same_tool_choice_and_reasoning_params_as_firerouter(router: str) -> None:
+    params: Final = FireworksAIConfig().get_supported_openai_params(router)
+
+    assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
+
+
+@pytest.mark.parametrize("model", ["firerouter-v2", "models/firerouter-opus", "routers/firerouter-opus"])
+def test_names_that_only_start_with_firerouter_do_not_inherit_the_firerouter_row(model: str) -> None:
+    params: Final = FireworksAIConfig().get_supported_openai_params(model)
+
+    assert "tool_choice" not in params, params
+
+
 class _RecordingChatHandler:
     def __init__(self, reply: dict[str, object]) -> None:
         self.reply: Final = reply
