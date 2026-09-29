@@ -77,8 +77,9 @@ def test_a_single_team_deployment_and_a_malformed_share_map_are_not_filtered_her
 
 
 def test_a_share_converts_to_the_models_input_tpm_per_ptu():
-    ceiling: Final = team_ptu_ceiling([_shared()], "team-a")
+    ceiling: Final = team_ptu_ceiling([_shared()], "team-a", "gpt-4.1-ptu")
     assert ceiling == PTUTeamCeiling(
+        model_group="gpt-4.1-ptu",
         tpm_limit=30 * _GPT41.input_tpm_per_ptu,
         output_to_input_ratio=_GPT41.output_to_input_ratio,
         cached_input_ratio=_GPT41.cached_input_ratio,
@@ -87,7 +88,7 @@ def test_a_share_converts_to_the_models_input_tpm_per_ptu():
 
 def test_shares_across_deployments_add_up_and_the_larger_output_ratio_wins():
     gpt4o: Final = _shared(model="azure/gpt-4o", shares={"team-a": 10}, deployment_id="shared-4o")
-    ceiling: Final = team_ptu_ceiling([_shared(), gpt4o, _OPEN], "team-a")
+    ceiling: Final = team_ptu_ceiling([_shared(), gpt4o, _OPEN], "team-a", "gpt-4.1-ptu")
     assert ceiling is not None
     assert ceiling.tpm_limit == 30 * _GPT41.input_tpm_per_ptu + 10 * _GPT4O.input_tpm_per_ptu
     assert ceiling.output_to_input_ratio == max(_GPT41.output_to_input_ratio, _GPT4O.output_to_input_ratio)
@@ -97,7 +98,7 @@ def test_the_larger_cached_input_ratio_wins_across_deployments():
     """A team sharing two models is weighted by the one that charges more for cache reads,
     whichever order the deployments come in."""
     gpt6sol: Final = _shared(model="azure/gpt-6-sol", shares={"team-a": 10}, deployment_id="shared-6")
-    ceiling: Final = team_ptu_ceiling([_shared(), gpt6sol], "team-a")
+    ceiling: Final = team_ptu_ceiling([_shared(), gpt6sol], "team-a", "gpt-4.1-ptu")
     assert ceiling is not None
     assert _GPT41.cached_input_ratio < _GPT6SOL.cached_input_ratio
     assert ceiling.cached_input_ratio == _GPT6SOL.cached_input_ratio
@@ -120,9 +121,45 @@ def test_a_group_is_served_by_name_or_by_a_team_scoped_deployments_public_name()
 
 
 def test_no_share_or_no_sizing_row_sets_no_ceiling():
-    assert team_ptu_ceiling([_shared()], "team-c") is None
-    assert team_ptu_ceiling([_shared(model="azure/unknown-deployment")], "team-a") is None
-    assert team_ptu_ceiling([_single_team(), _OPEN], "team-a") is None
+    assert team_ptu_ceiling([_shared()], "team-c", "gpt-4.1-ptu") is None
+    assert team_ptu_ceiling([_shared(model="azure/unknown-deployment")], "team-a", "gpt-4.1-ptu") is None
+    assert team_ptu_ceiling([_single_team(), _OPEN], "team-a", "gpt-4.1-ptu") is None
+
+
+def test_naming_a_shared_deployment_by_id_or_provider_model_draws_on_its_groups_ceiling():
+    """The router serves a deployment id or a provider model string when no group has that
+    name, so those names share the group's ceiling instead of bypassing it."""
+    payg: Final = {"model_name": "gpt-4.1-payg", "litellm_params": {"model": "azure/gpt-4.1"}, "model_info": {"id": "payg"}}
+    deployments: Final = [payg, _shared(), _OPEN]
+    by_group: Final = team_ptu_ceiling(deployments, "team-a", "gpt-4.1-ptu")
+    assert by_group is not None
+    assert by_group.model_group == "gpt-4.1-ptu"
+    assert team_ptu_ceiling(deployments, "team-a", "shared") == by_group
+    assert team_ptu_ceiling(deployments, "team-a", "azure/gpt-4.1") == by_group
+    assert team_ptu_ceiling(deployments, "team-a", "payg") is None
+    assert team_ptu_ceiling(deployments, "team-a", "missing") is None
+
+
+def test_a_group_name_wins_over_a_deployment_id_it_collides_with():
+    """The router routes a name that is both a group and a deployment id to the group."""
+    colliding: Final = {
+        "model_name": "shared",
+        "litellm_params": {"model": "azure/gpt-4o"},
+        "model_info": {"id": "colliding"},
+    }
+    assert team_ptu_ceiling([_shared(), colliding], "team-a", "shared") is None
+
+
+def test_a_team_scoped_deployment_named_by_id_draws_on_its_public_groups_ceiling():
+    team_scoped: Final = {
+        "model_name": "gpt-4.1-ptu-3f9c1b",
+        "litellm_params": {"model": "azure/gpt-4.1"},
+        "model_info": {**_shared()["model_info"], "id": "team-scoped", "team_public_model_name": "gpt-4.1-ptu"},
+    }
+    ceiling: Final = team_ptu_ceiling([team_scoped], "team-a", "team-scoped")
+    assert ceiling is not None
+    assert ceiling.model_group == "gpt-4.1-ptu"
+    assert ceiling == team_ptu_ceiling([team_scoped], "team-a", "gpt-4.1-ptu")
 
 
 def test_a_groups_capacity_comes_from_its_first_reserved_deployment_with_a_row():

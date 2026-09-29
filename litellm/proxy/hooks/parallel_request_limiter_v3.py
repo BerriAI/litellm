@@ -69,7 +69,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
-from litellm.router_utils.ptu_shares import PTUTeamCeiling, model_group_deployments, team_ptu_ceiling
+from litellm.router_utils.ptu_shares import PTUTeamCeiling, team_ptu_ceiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
@@ -134,7 +134,7 @@ def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -
 
     if llm_router is None or not is_ptu_cost_attribution_enabled():
         return None
-    return team_ptu_ceiling(model_group_deployments(llm_router.get_model_list() or (), model_group), team_id)
+    return team_ptu_ceiling(llm_router.get_model_list() or (), team_id, model_group)
 
 
 FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"
@@ -3301,7 +3301,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors.append(
             RateLimitDescriptor(
                 key=PTU_TEAM_DESCRIPTOR_KEY,
-                value=f"{user_api_key_dict.team_id}:{model.group}",
+                value=f"{user_api_key_dict.team_id}:{ceiling.model_group}",
                 rate_limit=RateLimitDescriptorRateLimitObject(
                     requests_per_unit=None, tokens_per_unit=ceiling.tpm_limit, window_size=self.window_size
                 ),
@@ -4930,11 +4930,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
         if reconcile_model is None or not isinstance(team_id, str) or not team_id:
             return ()
-        scope: Final = (PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{reconcile_model.group}")
         ceiling: Final = (
             reserved_ceiling
             if reserved_ceiling is not None
             else self._ptu_team_ceiling_resolver(team_id, reconcile_model.group)
+        )
+        scope: Final = (
+            PTU_TEAM_DESCRIPTOR_KEY,
+            f"{team_id}:{ceiling.model_group if ceiling is not None else reconcile_model.group}",
         )
         if ceiling is None and scope not in reserved_scopes:
             return ()

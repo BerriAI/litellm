@@ -18,6 +18,7 @@ _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 @dataclass(frozen=True, slots=True)
 class PTUTeamCeiling:
+    model_group: str
     tpm_limit: int
     output_to_input_ratio: float
     cached_input_ratio: float
@@ -55,17 +56,24 @@ def filter_ptu_shared_deployments(
     return PTUShareFilterResult(deployments=kept, withheld=len(kept) < len(checks))
 
 
-def team_ptu_ceiling(deployments: Sequence[Mapping[str, object]], team_id: str) -> PTUTeamCeiling | None:
-    """The per-minute normalized-token ceiling ``team_id``'s shares across ``deployments`` add
-    up to, else None when the team holds no share on a deployment with a known sizing row.
+def team_ptu_ceiling(
+    deployments: Sequence[Mapping[str, object]], team_id: str, requested_model: str
+) -> PTUTeamCeiling | None:
+    """The per-minute normalized-token ceiling ``team_id``'s shares on the group serving
+    ``requested_model`` add up to, else None when the team holds no share on a deployment with
+    a known sizing row.
+
+    A request naming one deployment by its id or provider model counts against that deployment's
+    group, so every name the router serves it under shares one ceiling.
 
     Two shared deployments of different models in one group are weighted by the larger
     output and cached-input ratios, which over-counts those tokens on the cheaper one rather
     than under-counting them on the dearer one.
     """
+    model_group: Final = _model_group_of(deployments, requested_model)
     priced: Final = tuple(
         (shares[team_id], capacity)
-        for deployment in deployments
+        for deployment in model_group_deployments(deployments, model_group)
         if (shares := _deployment_shares(deployment)) is not None
         and team_id in shares
         and (capacity := deployment_ptu_capacity(deployment)) is not None
@@ -73,6 +81,7 @@ def team_ptu_ceiling(deployments: Sequence[Mapping[str, object]], team_id: str) 
     if not priced:
         return None
     return PTUTeamCeiling(
+        model_group=model_group,
         tpm_limit=sum(capacity.input_tpm_for(share) for share, capacity in priced),
         output_to_input_ratio=max(capacity.output_to_input_ratio for _, capacity in priced),
         cached_input_ratio=max(capacity.cached_input_ratio for _, capacity in priced),
@@ -91,6 +100,36 @@ def model_group_deployments(deployments: Sequence[_DeploymentT], model_group: st
             isinstance(model_info := deployment.get("model_info"), Mapping)
             and model_info.get("team_public_model_name") == model_group
         )
+    )
+
+
+def _names_deployment(deployment: Mapping[str, object], name: str) -> bool:
+    model_info: Final = deployment.get("model_info")
+    litellm_params: Final = deployment.get("litellm_params")
+    return (isinstance(model_info, Mapping) and model_info.get("id") == name) or (
+        isinstance(litellm_params, Mapping) and litellm_params.get("model") == name
+    )
+
+
+def _deployment_model_group(deployment: Mapping[str, object]) -> str | None:
+    model_info: Final = deployment.get("model_info")
+    public_name: Final = model_info.get("team_public_model_name") if isinstance(model_info, Mapping) else None
+    if isinstance(public_name, str):
+        return public_name
+    model_name: Final = deployment.get("model_name")
+    return model_name if isinstance(model_name, str) else None
+
+
+def _model_group_of(deployments: Sequence[Mapping[str, object]], requested_model: str) -> str:
+    """The group ``requested_model`` routes to: itself when it names a group, else the group of
+    the deployment it names by id or by provider model, the way the router falls back to them."""
+    if model_group_deployments(deployments, requested_model):
+        return requested_model
+    named: Final = tuple(deployment for deployment in deployments if _names_deployment(deployment, requested_model))
+    shared_first: Final = sorted(named, key=lambda deployment: _deployment_shares(deployment) is None)
+    return next(
+        (group for deployment in shared_first if (group := _deployment_model_group(deployment)) is not None),
+        requested_model,
     )
 
 

@@ -7576,7 +7576,9 @@ def _ptu_ceiling_for(team_id: str, model_group: str, tpm_limit: int, ratio: floa
         calls.append((requested_team, requested_group))
         if (requested_team, requested_group) != (team_id, model_group):
             return None
-        return PTUTeamCeiling(tpm_limit=tpm_limit, output_to_input_ratio=ratio, cached_input_ratio=cached_ratio)
+        return PTUTeamCeiling(
+            model_group=model_group, tpm_limit=tpm_limit, output_to_input_ratio=ratio, cached_input_ratio=cached_ratio
+        )
 
     return resolve, calls
 
@@ -7761,6 +7763,37 @@ async def test_the_proxy_router_turns_a_teams_share_into_its_ceiling_when_attrib
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deployment_name", ["shared-ptu", "azure/gpt-4.1"])
+async def test_naming_the_shared_deployment_directly_draws_on_the_same_ceiling_as_its_group(
+    monkeypatch, deployment_name
+):
+    """The router also serves a deployment named by its id or its provider model, so a team that
+    spent its share by group name cannot keep going under the deployment's other names."""
+    monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, "true")
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key = UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t")
+
+    with patch("litellm.proxy.proxy_server.llm_router", _shared_ptu_router("test-model")):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=_two_thirds_of_a_ptu_minute(), call_type="acompletion"
+        )
+        with pytest.raises(HTTPException) as exc:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=key,
+                cache=cache,
+                data={**_two_thirds_of_a_ptu_minute(), "model": deployment_name},
+                call_type="acompletion",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_team_ptu" in str(exc.value.detail)
+    ptu_keys = [cache_key for cache_key in cache.in_memory_cache.cache_dict if "model_per_team_ptu" in cache_key]
+    assert handler.create_rate_limit_keys("model_per_team_ptu", "t:test-model", "tokens") in ptu_keys
+    assert all(cache_key.startswith("{model_per_team_ptu:t:test-model}") for cache_key in ptu_keys)
+
+
+@pytest.mark.asyncio
 async def test_the_proxy_router_sets_no_ceiling_while_attribution_is_off(monkeypatch):
     monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
     cache = DualCache()
@@ -7869,7 +7902,9 @@ async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone():
     """The share can be removed between admission and completion; the reserved tokens still
     come off the counter instead of standing in the window."""
     ceiling: dict[str, PTUTeamCeiling | None] = {
-        "current": PTUTeamCeiling(tpm_limit=2000, output_to_input_ratio=4.0, cached_input_ratio=0.0)
+        "current": PTUTeamCeiling(
+            model_group="test-model", tpm_limit=2000, output_to_input_ratio=4.0, cached_input_ratio=0.0
+        )
     }
     cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
