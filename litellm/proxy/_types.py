@@ -37,6 +37,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAdvertisedVersions,
     MCPAllowedClient,
     MCPAuth,
     MCPAuthType,
@@ -309,8 +310,6 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
-    TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
-    TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -678,7 +677,6 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
-        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -705,7 +703,6 @@ class LiteLLMRoutes(enum.Enum):
             "/user/list",
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
-            "/user/daily/activity/aggregated/search",
             # team
             "/team/new",
             "/team/update",
@@ -723,8 +720,6 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
-            "/team/daily/activity/export",
-            "/team/daily/activity/aggregated/search",
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
@@ -896,8 +891,6 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
-        "/team/daily/activity/export",
-        "/team/daily/activity/aggregated/search",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
@@ -913,7 +906,6 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
-        "/user/daily/activity/aggregated/search",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
@@ -997,8 +989,6 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
-            "/team/daily/activity/export",
-            "/team/daily/activity/aggregated/search",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",
@@ -2663,6 +2653,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    fail_closed_rate_limit_enforcement: bool | None = Field(
+        None,
+        description=(
+            "reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of "
+            "enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times "
+            "the limit across N pods)"
+        ),
+    )
     control_plane_url: str | None = Field(
         None,
         description=(
@@ -2974,6 +2972,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Set this well above health_check_interval because /health and the UI read the latest row per model."
         ),
     )
+    maximum_daily_tag_spend_retention_period: str | None = Field(
+        None,
+        description=(
+            "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
+            "than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never "
+            "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
+        ),
+    )
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
@@ -2997,6 +3003,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_internal_ip_ranges: list[str] | None = Field(
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
+    )
+    mcp_advertised_versions: MCPAdvertisedVersions | None = Field(
+        None,
+        description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
+        "Modern protocol serving and Apps/Tasks remain disabled.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
@@ -4010,6 +4021,24 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         litellm_callback_params=[  # mutable-ok: the registry field is typed list
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
+        ],
+    )
+
+    signoz: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="signoz",
+        ui_callback_name="SigNoz",
+        litellm_callback_params=("SIGNOZ_INGESTION_ENDPOINT", "SIGNOZ_INGESTION_KEY"),
+    )
+
+    zerobus: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="zerobus",
+        ui_callback_name="Databricks Zerobus",
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+            "ZEROBUS_WORKSPACE_URL",
+            "ZEROBUS_SERVER_ENDPOINT",
+            "ZEROBUS_CLIENT_ID",
+            "ZEROBUS_CLIENT_SECRET",
+            "ZEROBUS_TABLE_NAME",
         ],
     )
 
@@ -5349,11 +5378,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=False,
         description=(
             "When True, users whose JWT contains no team claims are authenticated "
-            "using their database team memberships instead of receiving HTTP 403. "
-            "Usage is attributed to the user's first resolvable DB team, or to the "
-            "team specified via the x-litellm-team-id request header (validated "
-            "against DB membership). Requires user_id_upsert=True so that user "
-            "records exist before the fallback runs."
+            "using their database team memberships instead of receiving HTTP 403, "
+            "with usage attributed to the user's first resolvable DB team. Whether or "
+            "not the JWT carries team claims, the x-litellm-team-id request header may "
+            "select any team the user is a member of in the database (validated against "
+            "DB membership); without the header the JWT team stays the default. Requires "
+            "user_id_upsert=True so that user records exist before the fallback runs."
         ),
     )
     issuers: list[JWTIssuerConfig] | None = Field(

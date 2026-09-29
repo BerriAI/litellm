@@ -1,5 +1,7 @@
 import * as networking from "@/components/networking";
 import userEvent from "@testing-library/user-event";
+import { act } from "@testing-library/react";
+import type { MCPServerData } from "./MCPHubTableColumns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
@@ -18,6 +20,7 @@ vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "http://localhost:4000"),
   getAgentsList: vi.fn(),
   fetchMCPServers: vi.fn(),
+  makeMCPPublicCall: vi.fn(),
   getUiSettings: vi.fn(),
   getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
 }));
@@ -202,13 +205,13 @@ describe("ModelHubTable", () => {
   });
 
   describe("hub tabs", () => {
-    const renderHub = async (agents: object[] = []) => {
+    const renderHub = async (agents: object[] = [], mcpServers: Promise<MCPServerData[]> = Promise.resolve([])) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({
         data: [{ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" }],
       });
       vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
       vi.mocked(networking.getAgentsList).mockResolvedValue({ agents });
-      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.fetchMCPServers).mockReturnValue(mcpServers);
       vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
       mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
 
@@ -218,6 +221,29 @@ describe("ModelHubTable", () => {
       );
       return { user, search: await screen.findByPlaceholderText("Search model names...") };
     };
+
+    it("requires a fresh MCP publication list before and after saving", async () => {
+      const servers = Promise.withResolvers<MCPServerData[]>();
+      const { user } = await renderHub([], servers.promise);
+      await user.click(screen.getByRole("tab", { name: "MCP Hub" }));
+
+      const manageVisibility = screen.getByRole("button", { name: "Manage MCP Hub Visibility" });
+      expect(manageVisibility).toBeDisabled();
+      await act(async () => servers.resolve([]));
+      expect(manageVisibility).toBeEnabled();
+
+      const refresh = Promise.withResolvers<MCPServerData[]>();
+      vi.mocked(networking.makeMCPPublicCall).mockResolvedValueOnce({});
+      vi.mocked(networking.fetchMCPServers).mockReturnValueOnce(refresh.promise);
+      await user.click(manageVisibility);
+      await user.click(screen.getByRole("button", { name: "Next" }));
+      await user.click(screen.getByRole("button", { name: "Save Publication List" }));
+
+      expect(networking.makeMCPPublicCall).toHaveBeenCalledWith("test-token", []);
+      expect(manageVisibility).toBeDisabled();
+      await act(async () => refresh.reject(new Error("Unable to reload the publication list")));
+      expect(manageVisibility).toBeDisabled();
+    });
 
     it("keeps the model filter typed on the Model Hub tab after visiting another hub", async () => {
       const { user, search } = await renderHub();

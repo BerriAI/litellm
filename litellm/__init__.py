@@ -50,6 +50,7 @@ from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
 from litellm.types.integrations.pointfive import PointFiveInitParams
+from litellm.types.integrations.zerobus import ZerobusInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -157,6 +158,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "deepeval",
     "s3_v2",
     "pointfive",
+    "zerobus",
     "aws_sqs",
     "vector_store_pre_call_hook",
     "dotprompt",
@@ -170,6 +172,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "levo",
     "compression_interception",
     "newrelic",
+    "signoz",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -207,6 +210,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 )
 log_raw_request_response: bool = False
 log_client_error_tracebacks: bool = False
+log_auth_failure_key_identity: bool = False
 request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
@@ -442,6 +446,7 @@ datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]]
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 newrelic_params: Optional[Union[NewRelicInitParams, Dict]] = None
 pointfive_params: Optional[Union[PointFiveInitParams, Mapping[str, object]]] = None
+zerobus_params: Optional[Union[ZerobusInitParams, Mapping[str, object]]] = None
 aws_sqs_callback_params: Optional[Dict] = None
 generic_logger_headers: Optional[Dict] = None
 default_key_generate_params: Optional[Dict] = None
@@ -1688,7 +1693,7 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.experimental_pass_through.messages.transformation import (
+    from .llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
