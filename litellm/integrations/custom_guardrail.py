@@ -21,6 +21,7 @@ from litellm.types.guardrails import (
     DynamicGuardrailParams,
     GuardrailEventHooks,
     LitellmParams,
+    LoggingOnlyScope,
     Mode,
 )
 from litellm.types.llms.openai import AllMessageValues
@@ -175,6 +176,7 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+    logging_only_scope: LoggingOnlyScope | None
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
@@ -246,6 +248,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        self.logging_only_scope = None
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -803,6 +806,13 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
+    def supports_logging_only_scope(self) -> bool:
+        return (
+            self.uses_apply_guardrail_interface()
+            and not self.use_native_lifecycle_hooks
+            and type(self).async_logging_hook is CustomGuardrail.async_logging_hook
+        )
+
     def _deployment_hook_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
@@ -999,12 +1009,19 @@ class CustomGuardrail(CustomLogger):
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "metadata": scratch_metadata,
         }
-        await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-        if response is None:
+        if self.logging_only_scope != "output":
+            try:
+                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+            except Exception as e:
+                verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+        if response is None or self.logging_only_scope == "input":
             return
-        await output_translation.process_output_response(
-            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
-        )
+        try:
+            await output_translation.process_output_response(
+                response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
+            )
+        except Exception as e:
+            verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.

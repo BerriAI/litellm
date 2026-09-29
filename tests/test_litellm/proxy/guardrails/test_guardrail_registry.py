@@ -1,15 +1,18 @@
 from collections.abc import Iterable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
-    get_guardrail_initializer_from_hooks,
     GuardrailRegistry,
     InMemoryGuardrailHandler,
+    get_guardrail_initializer_from_hooks,
 )
-from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams, LoggingOnlyScope, Mode
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 def test_get_guardrail_initializer_from_hooks():
@@ -930,6 +933,117 @@ class TestScanOnlyToolResultsInitRefusal:
                     "scan_only_tool_results": True,
                 },
             )
+
+
+class _LoggingOnlyScopeSupportedGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: str,
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+class _LoggingOnlyScopeUnsupportedGuardrail(_LoggingOnlyScopeSupportedGuardrail):
+    async def async_logging_hook(
+        self,
+        kwargs: dict[str, object],
+        result: object,
+        call_type: str,
+    ) -> tuple[dict[str, object], object]:
+        return kwargs, result
+
+
+class TestLoggingOnlyScopeValidation:
+    def _initialize(
+        self,
+        mode: str | list[str] | Mode,
+        scope: LoggingOnlyScope | None,
+        callback_type: type[CustomGuardrail] = _LoggingOnlyScopeSupportedGuardrail,
+    ) -> CustomGuardrail:
+        from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+        guardrail_type: Final = "logging_only_scope_test"
+
+        def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+            return callback_type(
+                guardrail_name=guardrail["guardrail_name"],
+                event_hook=litellm_params.mode,
+            )
+
+        registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+        lists: Final = _all_callback_lists()
+        snapshots: Final = [list(callback_list) for callback_list in lists]
+        try:
+            handler: Final = InMemoryGuardrailHandler()
+            result: Final = handler.initialize_guardrail(
+                guardrail={
+                    "guardrail_name": "logging-only-scope-guardrail",
+                    "litellm_params": {
+                        "guardrail": guardrail_type,
+                        "mode": mode,
+                        "logging_only_scope": scope,
+                    },
+                }
+            )
+            assert result is not None
+            callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+            assert callback is not None
+            return callback
+        finally:
+            for callback_list, snapshot in zip(lists, snapshots):
+                callback_list[:] = snapshot
+            registry_module.guardrail_initializer_registry.pop(guardrail_type, None)
+
+    def test_scope_requires_logging_only_mode(self) -> None:
+        with pytest.raises(ValueError, match="logging_only_scope is set") as exc_info:
+            self._initialize(mode="pre_call", scope="input")
+
+        assert str(exc_info.value) == (
+            "Guardrail logging-only-scope-guardrail: logging_only_scope is set, but mode does not include "
+            "logging_only, so it would never apply. Add logging_only to mode or remove logging_only_scope."
+        )
+
+    @pytest.mark.parametrize(
+        "mode",
+        (
+            "logging_only",
+            ["pre_call", "logging_only"],
+            Mode(tags={"audit": "logging_only"}, default="pre_call"),
+        ),
+    )
+    def test_scope_accepts_logging_only_in_supported_mode_forms(self, mode: str | list[str] | Mode) -> None:
+        callback: Final = self._initialize(mode=mode, scope="input")
+
+        assert callback.logging_only_scope == "input"
+
+    def test_directional_scope_rejected_when_guardrail_owns_logging_hook(self) -> None:
+        with pytest.raises(ValueError, match="logging_only_scope='input' is not supported") as exc_info:
+            self._initialize(
+                mode="logging_only",
+                scope="input",
+                callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+            )
+
+        assert str(exc_info.value) == (
+            "Guardrail logging-only-scope-guardrail: logging_only_scope='input' is not supported by this "
+            "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
+        )
+
+    def test_both_scope_accepted_when_guardrail_owns_logging_hook(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="both",
+            callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+        )
+
+        assert callback.logging_only_scope == "both"
+
+    def test_invalid_scope_fails_litellm_params_validation(self) -> None:
+        with pytest.raises(ValidationError):
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_scope="request")
 
 
 @pytest.mark.asyncio

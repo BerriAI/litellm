@@ -895,6 +895,8 @@ class ContentFilterConfigModel(BaseModel):
 
 MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
 
+LoggingOnlyScope = Literal["input", "output", "both"]
+
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
@@ -1133,6 +1135,14 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "YAML order of guardrails can never change whether this one blocks. Use only for "
             "block-only guardrails: any data this guardrail returns is discarded, same contract as "
             "run_in_parallel, since an earlier guardrail's masking must not be undone by this one."
+        ),
+    )
+
+    logging_only_scope: LoggingOnlyScope | None = Field(
+        default=None,
+        description=(
+            "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' "
+            "(default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking."
         ),
     )
 

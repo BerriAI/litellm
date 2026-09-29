@@ -4,6 +4,7 @@ import signal
 import socket
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
@@ -1297,3 +1298,96 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
             for response in responses:
                 assert response.status_code == 200, response.text
                 assert response.headers["content-type"].startswith("text/event-stream"), response.text
+
+
+@pytest.mark.parametrize(
+    ("logging_only_scope", "scanned_directions"),
+    (("input", ("request",)), ("output", ("response",)), ("both", ("request", "response"))),
+)
+def test_logging_only_scope_observes_only_the_configured_direction_without_blocking(
+    gateway: Gateway, tmp_path: Path, logging_only_scope: str, scanned_directions: tuple[str, ...]
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    prompt: Final = "synthetic observed prompt " + identity
+    reply: Final = "synthetic observed reply " + identity
+    texts_by_direction: Final = {"request": [prompt], "response": [reply]}
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api"
+        return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic observed denial"}).encode())
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions"
+        assert json.loads(request.body)["messages"] == [{"role": "user", "content": prompt}]
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": identity,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "logging_only",
+                    "logging_only_scope": logging_only_scope,
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-guardrail-key",
+                },
+            }
+        ]
+        path: Final = tmp_path / "logging-only-scope.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1")
+            response: Final = candidate.request(
+                "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["choices"][0]["message"]["content"] == reply, response.text
+            assert len(upstream.drain()) == 1
+            rows: Final = eventually(
+                lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            scans: Final = tuple(json.loads(scan.body) for scan in policy.drain())
+            assert [(scan["input_type"], scan["texts"]) for scan in scans] == [
+                (direction, texts_by_direction[direction]) for direction in scanned_directions
+            ], scans
+            entries: Final = object_value(rows[0]["metadata"])["guardrail_information"]
+            assert isinstance(entries, list), rows[0]
+            assert [
+                (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"])
+                for entry in map(object_value, entries)
+            ] == [(identity, "logging_only", "guardrail_intervened")] * len(scanned_directions), entries
+            today: Final = datetime.now(timezone.utc).date().isoformat()
+            guardrail_id: Final = next(
+                object_value(row)["guardrail_id"]
+                for row in candidate.get("/v2/guardrails/list")["guardrails"]
+                if object_value(row)["guardrail_name"] == identity
+            )
+            detail: Final = eventually(
+                lambda: candidate.request(
+                    "GET",
+                    f"/guardrails/usage/detail/{guardrail_id}",
+                    params={"start_date": today, "end_date": today},
+                ).json(),
+                lambda body: body["requestsEvaluated"] >= len(scanned_directions),
+                seconds=30,
+                return_last_on_timeout=True,
+            )
+            assert detail["requestsEvaluated"] == len(scanned_directions), detail

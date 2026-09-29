@@ -12,7 +12,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.guardrails import GuardrailEventHooks, LoggingOnlyScope, Mode
 from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
@@ -546,13 +546,9 @@ class TestApplyGuardrailCheck:
         class ParentGuardrail(CustomGuardrail):
             """Parent that inherits apply_guardrail from CustomGuardrail"""
 
-            pass
-
         # Child class that only inherits apply_guardrail (doesn't override)
         class ChildGuardrailWithoutOverride(ParentGuardrail):
             """Child that only inherits apply_guardrail"""
-
-            pass
 
         # Child class that overrides apply_guardrail
         class ChildGuardrailWithOverride(ParentGuardrail):
@@ -2540,7 +2536,7 @@ class TestLoggingOnlyApplyGuardrail:
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
             ContentFilterGuardrail,
         )
-        from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+        from litellm.types.guardrails import BlockedWord, ContentFilterAction
 
         guardrail: Final = ContentFilterGuardrail(
             guardrail_name="content-review",
@@ -2577,6 +2573,32 @@ class TestLoggingOnlyApplyGuardrail:
         assert "standard_logging_guardrail_information" not in kwargs["litellm_params"]["metadata"]
         assert kwargs["standard_logging_object"] == {"guardrail_information": None}
 
+    @pytest.mark.parametrize(
+        "scope,expected_calls",
+        (
+            (None, [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            ("both", [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            ("input", [("request", ["hello there"])]),
+            ("output", [("response", ["general kenobi"])]),
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_logging_only_scope_scans_configured_directions(
+        self,
+        scope: LoggingOnlyScope | None,
+        expected_calls: list[tuple[str, list[str]]],
+    ) -> None:
+        guardrail: Final = _ApplyOnlyObserver()
+        guardrail.logging_only_scope = scope
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == expected_calls
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert len(entries) == len(expected_calls)
+        assert [entry["guardrail_mode"] for entry in entries] == ["logging_only"] * len(expected_calls)
+
     @pytest.mark.asyncio
     async def test_appends_to_pre_call_verdicts_without_duplicating_them(self):
         guardrail = _ApplyOnlyObserver()
@@ -2606,14 +2628,17 @@ class TestLoggingOnlyApplyGuardrail:
 
     @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):
-        guardrail = _ApplyOnlyObserver(block=True)
+        guardrail: Final = _ApplyOnlyObserver(block=True)
         kwargs, response = _logged_call([{"role": "user", "content": "flagged content"}])
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        assert guardrail.calls == [("request", ["flagged content"])]
-        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
-        assert [e["guardrail_status"] for e in entries] == ["guardrail_intervened"]
+        assert guardrail.calls == [
+            ("request", ["flagged content"]),
+            ("response", ["general kenobi"]),
+        ]
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_status"] for entry in entries] == ["guardrail_intervened", "guardrail_intervened"]
 
     @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
@@ -2939,9 +2964,7 @@ async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response(
     from litellm.types.utils import Choices, Message, ModelResponse
 
     guardrail = _NativeLifecycleLoggingGuardrail()
-    assembled = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="assembled stream text"))]
-    )
+    assembled = ModelResponse(choices=[Choices(message=Message(role="assistant", content="assembled stream text"))])
     sentinel_result = object()
     kwargs = {
         "model": "gpt-5.4-mini",

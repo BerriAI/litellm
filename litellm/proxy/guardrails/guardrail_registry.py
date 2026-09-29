@@ -54,6 +54,7 @@ from .guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail as initialize_llm_as_a_judge,
 )
 from .guardrail_initializers import (
+    _configured_event_hooks,
     initialize_bedrock,
     initialize_hide_secrets,
     initialize_lakera,
@@ -439,6 +440,20 @@ def _as_callback_tuple(
 def _configure_callback_scoping(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
 ) -> None:
+    custom_guardrail_callback.logging_only_scope = litellm_params.logging_only_scope
+    logging_only_scope: Final = litellm_params.logging_only_scope
+    if logging_only_scope is not None and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(
+        litellm_params.mode
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: logging_only_scope is set, but mode does not include logging_only, "
+            "so it would never apply. Add logging_only to mode or remove logging_only_scope."
+        )
+    if logging_only_scope in ("input", "output") and not custom_guardrail_callback.supports_logging_only_scope():
+        raise ValueError(
+            f"Guardrail {guardrail_name}: logging_only_scope={logging_only_scope!r} is not supported by this "
+            "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
+        )
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
