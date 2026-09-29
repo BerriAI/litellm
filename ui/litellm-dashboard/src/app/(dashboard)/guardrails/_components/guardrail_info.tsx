@@ -39,7 +39,6 @@ import {
   getGuardrailLogoAndName,
   guardrail_provider_map,
   loggingOnlyScopeToChoice,
-  normalizeLoggingOnlyScopeChoice,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
   supportsDirectionalLoggingOnlyScope,
@@ -245,12 +244,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       form.setValue("optional_params", guardrailData.litellm_params.optional_params);
     }
   }, [guardrailData, guardrailProviderSpecificParams, form]);
-
-  useEffect(() => {
-    const scopeChoice = form.getValues("logging_only_scope_choice");
-    const normalizedScopeChoice = normalizeLoggingOnlyScopeChoice(scopeChoice, directionalScopeSupported);
-    if (normalizedScopeChoice !== scopeChoice) form.setValue("logging_only_scope_choice", normalizedScopeChoice);
-  }, [directionalScopeSupported, form, guardrailData]);
 
   const resetToolPermissionEditor = useCallback(() => {
     if (guardrailData?.litellm_params?.guardrail === "tool_permission") {
@@ -525,7 +518,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
   const isConfigGuardrail = guardrailData.guardrail_definition_location === "config";
 
-  /* eslint-disable max-lines -- keep edit-form scope normalization with its owning view */
   return (
     <div className="p-4">
       <div>

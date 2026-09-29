@@ -18,7 +18,6 @@ import {
   getSupportedModesForProvider,
   guardrail_provider_map,
   modeIncludesLoggingOnly,
-  normalizeLoggingOnlyScopeChoice,
   populateGuardrailProviderMap,
   populateGuardrailProviders,
   shouldRenderContentFilterConfigSettings,
@@ -245,12 +244,6 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     return (providerValue || "").toLowerCase() === "tool_permission";
   }, [selectedProvider]);
   const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, selectedProvider);
-
-  useEffect(() => {
-    const scopeChoice = form.getValues("logging_only_scope_choice");
-    const normalizedScopeChoice = normalizeLoggingOnlyScopeChoice(scopeChoice, directionalScopeSupported);
-    if (normalizedScopeChoice !== scopeChoice) form.setValue("logging_only_scope_choice", normalizedScopeChoice);
-  }, [directionalScopeSupported, form]);
 
   // Fetch guardrail UI settings + provider params on mount / accessToken change
   useEffect(() => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { CircleHelp } from "lucide-react";
-import React, { useId } from "react";
+import React, { useEffect, useId } from "react";
 import { useController, type Control, type ControllerRenderProps, type RegisterOptions } from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   getLoggingOnlyScopeOptions,
   modeIncludesLoggingOnly,
+  normalizeLoggingOnlyScopeChoice,
   type LoggingOnlyScopeChoice,
 } from "./guardrail_info_helpers";
 
@@ -43,6 +44,9 @@ export const asText = (value: unknown): string => {
   if (typeof value === "number") return String(value);
   return "";
 };
+
+const isLoggingOnlyScopeChoice = (value: unknown): value is LoggingOnlyScopeChoice =>
+  value === "default" || value === "input" || value === "output" || value === "both";
 
 export const asStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string");
@@ -136,6 +140,12 @@ export const LoggingOnlyScopeSelect: React.FC<{
 }> = ({ control, directionalScopeSupported }) => {
   const { id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy } = control;
   const items = getLoggingOnlyScopeOptions(directionalScopeSupported);
+
+  useEffect(() => {
+    const currentChoice = isLoggingOnlyScopeChoice(value) ? value : "default";
+    const choice = normalizeLoggingOnlyScopeChoice(currentChoice, directionalScopeSupported);
+    if (choice !== value) onChange(choice);
+  }, [value, directionalScopeSupported, onChange]);
 
   return (
     <Select items={items} value={asText(value) || "default"} onValueChange={onChange}>
