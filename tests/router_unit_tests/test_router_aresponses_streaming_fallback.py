@@ -428,7 +428,7 @@ async def test_aresponses_failure_before_output_still_uses_fallback():
     ) as mock_fallback:
         collected = [event async for event in wrapped]
 
-    assert collected == [created, fallback_event]
+    assert collected == [fallback_event]
     mock_fallback.assert_awaited_once()
 
 

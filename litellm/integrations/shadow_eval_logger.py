@@ -111,7 +111,7 @@ def _chat_request_from_anthropic_messages(
     because the logged optional_params switch dialect per provider path (the bridge's
     inner completion rewrites them to chat shape mid-flight); the adapter translates
     them alongside the messages, and sampling params copy through untranslated."""
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 

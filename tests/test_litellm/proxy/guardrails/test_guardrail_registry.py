@@ -615,7 +615,8 @@ def test_presidio_siblings_are_tracked_and_deleted_together():
         siblings = handler.guardrail_id_to_sibling_callbacks[PRESIDIO_SIBLINGS_GID]
         assert primary is registered[0]
         assert siblings == tuple(registered[1:])
-        assert [sibling.event_hook for sibling in siblings] == [GuardrailEventHooks.post_call] * 2
+        assert not primary.should_run_guardrail({}, GuardrailEventHooks.post_call)
+        assert all(sibling.should_run_guardrail({}, GuardrailEventHooks.post_call) for sibling in siblings)
 
         for cb_list in lists[1:]:
             cb_list.extend(registered)
@@ -643,11 +644,12 @@ def test_update_in_memory_guardrail_rebuilds_presidio_siblings_and_keeps_their_s
         roles_before = [
             (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in tracked
         ]
-        assert roles_before == [
-            (False, True, [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]),
-            (False, True, GuardrailEventHooks.post_call),
-            (True, False, GuardrailEventHooks.post_call),
-        ]
+        assert [
+            callback for callback in tracked if callback.should_run_guardrail({}, GuardrailEventHooks.pre_call)
+        ] == tracked[:1]
+        assert [
+            callback for callback in tracked if callback.should_run_guardrail({}, GuardrailEventHooks.post_call)
+        ] == tracked[1:]
 
         updated = Guardrail(
             guardrail_id=PRESIDIO_SIBLINGS_GID,
