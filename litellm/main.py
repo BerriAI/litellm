@@ -4234,7 +4234,7 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             provider_config=provider_config,
         )
     elif bedrock_route == "converse":
-        model = model.replace("converse/", "")
+        model = model.replace("converse/", "").replace("chat_completions/", "")
         response = bedrock_converse_chat_completion.completion(
             model=model,
             messages=messages,

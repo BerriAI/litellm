@@ -801,7 +801,7 @@ def is_bedrock_application_inference_profile_arn(model: str) -> bool:
 
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
+    for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
         if model.startswith(prefix):
             model = model.split("/", 1)[1]
     return model
@@ -820,9 +820,6 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     return None, stripped
 
 
-BEDROCK_RUNTIME_PRICE_MAP_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse"))
-
-
 def _bedrock_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
     return tuple(
         litellm.model_cost.get(key)
@@ -832,32 +829,6 @@ def _bedrock_price_map_entries(model: str) -> tuple[Mapping[str, object] | None,
 
 def _bedrock_price_map_flag(model: str, flag: str) -> bool:
     return any(entry is not None and entry.get(flag) is True for entry in _bedrock_price_map_entries(model))
-
-
-def _bedrock_runtime_row_lists_chat_completions(entry: Mapping[str, object]) -> bool:
-    endpoints: Final = entry.get("supported_endpoints")
-    return (
-        entry.get("litellm_provider") in BEDROCK_RUNTIME_PRICE_MAP_PROVIDERS
-        and isinstance(endpoints, (list, tuple))
-        and "/v1/chat/completions" in endpoints
-    )
-
-
-def uses_bedrock_runtime_chat_completions(model: str) -> bool:
-    """Whether this Bedrock model should use runtime native Chat Completions.
-
-    Data-driven from ``/v1/chat/completions`` in the price-map row's ``supported_endpoints``,
-    the same per-model signal ``bedrock_supports_openai_responses`` reads for ``/v1/responses``,
-    so onboarding a model is a JSON change. Explicit ``converse/`` still wins in
-    ``get_bedrock_route`` because prefix routes are checked first, and a request
-    that needs a Converse-only feature (``bedrock_request_needs_converse``) is
-    served by Converse even on a listed model. Only a bedrock-runtime row counts: a
-    ``bedrock_mantle`` row lists the endpoints of the Mantle host, not this one.
-    """
-    return any(
-        entry is not None and _bedrock_runtime_row_lists_chat_completions(entry)
-        for entry in _bedrock_price_map_entries(model)
-    )
 
 
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
@@ -908,7 +879,7 @@ def _response_format_needs_converse(model: str, response_format: object) -> bool
 
 
 def bedrock_request_needs_converse(model: str, request_params: Mapping[str, object]) -> bool:
-    """Whether a request on a runtime-Chat-Completions model must still be served by Converse.
+    """Whether a request on the opt-in ``chat_completions/`` route must still be served by Converse.
 
     Converse-shaped body keys (``BEDROCK_CONVERSE_ONLY_REQUEST_KEYS``, the Anthropic-style ``thinking``
     block and the ``additionalModelRequestFields`` / ``top_k`` extension params included, which only Converse
@@ -1314,8 +1285,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Get the bedrock route for the given model.
 
-        ``request_params`` (the caller's chat params) lets a runtime Chat Completions
-        model fall back to Converse for the requests only Converse can serve.
+        ``chat_completions/`` opts a model into bedrock-runtime's native OpenAI Chat Completions;
+        ``request_params`` (the caller's chat params) sends such a request to Converse when it
+        needs a feature only Converse serves. Without the prefix, OpenAI-family models stay on Converse.
         """
         route_mappings: dict[
             str,
@@ -1351,6 +1323,11 @@ class BedrockModelInfo(BaseLLMModelInfo):
             if BedrockModelInfo._model_has_route_prefix(model, prefix):
                 return route_type
 
+        if BedrockModelInfo._model_has_route_prefix(model, "chat_completions/"):
+            if request_params is not None and bedrock_request_needs_converse(model, request_params):
+                return "converse"
+            return "chat_completions"
+
         # Check for nova spec prefixes (nova/ and nova-2/)
         _model_after_bedrock: Final = model.replace("bedrock/", "", 1)
         if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
@@ -1358,11 +1335,6 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         if is_bedrock_application_inference_profile_arn(model):
             return "converse"
-
-        if uses_bedrock_runtime_chat_completions(model) and not (
-            request_params is not None and bedrock_request_needs_converse(model, request_params)
-        ):
-            return "chat_completions"
 
         base_model: Final = BedrockModelInfo.get_base_model(model)
         alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)

@@ -3,14 +3,14 @@ Native OpenAI Chat Completions on Amazon Bedrock Runtime.
 
 AWS serves this surface at
 ``https://bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions``
-for the models whose price-map ``supported_endpoints`` lists ``/v1/chat/completions``
-(Grok 4.6, gpt-oss, the GPT-5.6 family): chat completions stay chat completions
-instead of being rewritten to Converse.
+for Grok 4.6, gpt-oss and the GPT-5.6 family. The ``chat_completions/`` route prefix
+opts a model in, so chat completions stay chat completions instead of being rewritten
+to Converse; without it these models stay on Converse.
 
-Usage: model="us.xai.grok-4.6", model="bedrock/openai.gpt-oss-20b-1:0" or
-model="bedrock/global.openai.gpt-5.6-sol". Explicit ``bedrock/converse/...``
-still uses Converse, and so does a request that needs a Converse-only feature
-(``bedrock_request_needs_converse`` in ``common_utils``).
+Usage: model="bedrock/chat_completions/openai.gpt-oss-20b-1:0" or
+model="bedrock/chat_completions/global.openai.gpt-5.6-sol". A request that needs a
+Converse-only feature (``bedrock_request_needs_converse`` in ``common_utils``) is
+still served by Converse.
 """
 
 from collections.abc import AsyncIterator, Iterator, Mapping

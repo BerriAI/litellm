@@ -1,4 +1,4 @@
-"""Native Bedrock Runtime Chat Completions: Grok, gpt-oss and GPT-5.6 stay on /openai/v1/chat/completions."""
+"""Opt-in Bedrock Runtime Chat Completions: ``bedrock/chat_completions/<model>`` posts to /openai/v1/chat/completions."""
 
 import json
 
@@ -21,7 +21,6 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_request_needs_converse,
     bedrock_route_for_request,
     get_bedrock_chat_config,
-    uses_bedrock_runtime_chat_completions,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -38,14 +37,13 @@ def local_cost_map(monkeypatch):
 @pytest.mark.parametrize(
     "model",
     [
-        "us.xai.grok-4.6",
-        "global.xai.grok-4.6",
-        "us-gov.xai.grok-4.6",
-        "bedrock/us.xai.grok-4.6",
+        "chat_completions/us.xai.grok-4.6",
+        "chat_completions/global.xai.grok-4.6",
+        "chat_completions/us-gov.xai.grok-4.6",
+        "bedrock/chat_completions/us.xai.grok-4.6",
     ],
 )
-def test_grok_runtime_models_use_chat_completions_route(local_cost_map, model):
-    assert uses_bedrock_runtime_chat_completions(model) is True
+def test_chat_completions_prefix_opts_grok_into_the_native_route(local_cost_map, model):
     assert BedrockModelInfo.get_bedrock_route(model) == "chat_completions"
     assert isinstance(get_bedrock_chat_config(model), AmazonBedrockRuntimeChatCompletionsConfig)
 
@@ -56,31 +54,44 @@ def test_explicit_converse_prefix_still_uses_converse(local_cost_map):
 
 
 def test_claude_stays_on_converse(local_cost_map):
-    assert uses_bedrock_runtime_chat_completions("us.anthropic.claude-3-sonnet-20240229-v1:0") is False
     assert BedrockModelInfo.get_bedrock_route("us.anthropic.claude-3-sonnet-20240229-v1:0") == "converse"
 
 
 @pytest.mark.parametrize(
-    "entry",
+    "model",
     [
-        {"litellm_provider": "bedrock_converse"},
-        {"litellm_provider": "bedrock_converse", "supported_endpoints": ["/v1/responses"]},
-        {"litellm_provider": "bedrock_converse", "supports_bedrock_runtime_chat_completions": True},
-        {"litellm_provider": "bedrock_mantle", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
-        {"litellm_provider": "openai", "supported_endpoints": ["/v1/chat/completions"]},
+        "us.xai.grok-4.6",
+        "bedrock/openai.gpt-oss-20b-1:0",
+        "openai.gpt-oss-120b-1:0",
+        "global.openai.gpt-5.6-sol",
+        "bedrock/us.openai.gpt-5.6-terra",
+        "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
     ],
 )
-def test_chat_completions_missing_from_supported_endpoints_means_no_chat_completions_route(monkeypatch, entry):
-    monkeypatch.setattr(litellm, "model_cost", {"us.xai.grok-4.6": entry})
-    assert uses_bedrock_runtime_chat_completions("us.xai.grok-4.6") is False
-    assert BedrockModelInfo.get_bedrock_route("us.xai.grok-4.6") == "converse"
+def test_models_without_the_prefix_stay_on_converse(local_cost_map, model):
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"
+    assert BedrockModelInfo.get_bedrock_route(model, {}) == "converse"
+    assert isinstance(get_bedrock_chat_config(model), litellm.AmazonConverseConfig)
 
 
-def test_chat_completions_in_supported_endpoints_opts_into_the_native_route(monkeypatch):
-    entry = {"litellm_provider": "bedrock_converse", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]}
-    monkeypatch.setattr(litellm, "model_cost", {"us.xai.grok-4.6": entry})
-    assert uses_bedrock_runtime_chat_completions("us.xai.grok-4.6") is True
-    assert BedrockModelInfo.get_bedrock_route("bedrock/us.xai.grok-4.6") == "chat_completions"
+def test_cost_map_row_listing_chat_completions_leaves_the_default_route_alone(monkeypatch):
+    entry = {
+        "litellm_provider": "bedrock_converse",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": True,
+        "supports_bedrock_runtime_chat_completions_response_format": True,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {"openai.gpt-oss-20b-1:0": entry})
+    assert BedrockModelInfo.get_bedrock_route("bedrock/openai.gpt-oss-20b-1:0", {}) == "converse"
+    assert BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {}) == "chat_completions"
+
+
+@pytest.mark.parametrize("model", ["global.openai.gpt-5.6-sol", "openai.gpt-oss-20b-1:0", "us.xai.grok-4.6"])
+def test_chat_completions_prefix_prices_like_the_bare_model(local_cost_map, model):
+    prefixed = litellm.get_model_info(model=f"bedrock/chat_completions/{model}")
+    bare = litellm.get_model_info(model=f"bedrock/{model}")
+    assert prefixed["input_cost_per_token"] == bare["input_cost_per_token"] > 0
+    assert prefixed["output_cost_per_token"] == bare["output_cost_per_token"] > 0
 
 
 def test_complete_url_is_runtime_openai_chat_completions(monkeypatch):
@@ -113,7 +124,7 @@ def test_project_id_is_not_sent_as_openai_project_header():
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     headers = cfg.validate_environment(
         headers={},
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={},
         litellm_params={"aws_bedrock_project_id": "proj_from_config"},
@@ -125,7 +136,7 @@ def test_project_id_is_not_sent_as_openai_project_header():
 def test_transform_request_is_openai_chat_body_not_converse():
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     body = cfg.transform_request(
-        model="bedrock/us.xai.grok-4.6",
+        model="bedrock/chat_completions/us.xai.grok-4.6",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={"temperature": 0.2, "aws_region_name": "us-east-1"},
         litellm_params={},
@@ -178,10 +189,26 @@ def _recording_client(**response_kwargs):
     return requests, HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle)))
 
 
+@pytest.mark.parametrize(
+    "model, model_path",
+    [
+        ("bedrock/us.xai.grok-4.6", b"/model/us.xai.grok-4.6/converse"),
+        ("bedrock/openai.gpt-oss-20b-1:0", b"/model/openai.gpt-oss-20b-1%3A0/converse"),
+        ("bedrock/global.openai.gpt-5.6-sol", b"/model/global.openai.gpt-5.6-sol/converse"),
+    ],
+)
+def test_completion_without_the_prefix_posts_converse(local_cost_map, fake_aws_env, model, model_path):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    response = litellm.completion(model=model, messages=[{"role": "user", "content": "hello"}], client=client)
+
+    assert response.choices[0].message.content == "ok"
+    assert [request.url.raw_path for request in requests] == [model_path]
+
+
 def test_completion_posts_runtime_chat_completions(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "us.xai.grok-4.6"))
     response = litellm.completion(
-        model="us.xai.grok-4.6",
+        model="bedrock/chat_completions/us.xai.grok-4.6",
         messages=[{"role": "user", "content": "hello"}],
         client=client,
     )
@@ -198,7 +225,7 @@ def test_completion_posts_runtime_chat_completions(local_cost_map, fake_aws_env)
 def test_region_path_sends_the_bare_model_id_to_the_path_region(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
     litellm.completion(
-        model="bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/us-gov-west-1/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         client=client,
     )
@@ -211,7 +238,7 @@ def test_region_path_sends_the_bare_model_id_to_the_path_region(local_cost_map, 
 def test_explicit_aws_region_name_wins_over_the_region_path(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
     litellm.completion(
-        model="bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/us-gov-west-1/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         aws_region_name="us-gov-east-1",
         client=client,
@@ -220,6 +247,21 @@ def test_explicit_aws_region_name_wins_over_the_region_path(local_cost_map, fake
     assert str(requests[0].url) == "https://bedrock-runtime.us-gov-east-1.amazonaws.com/openai/v1/chat/completions"
     assert json.loads(requests[0].content)["model"] == "openai.gpt-oss-20b-1:0"
     assert "/us-gov-east-1/bedrock/aws4_request" in requests[0].headers["Authorization"]
+
+
+def test_region_path_falls_back_to_converse_in_the_path_region(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/chat_completions/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        stop=["END"],
+        client=client,
+    )
+
+    assert requests[0].url.host == "bedrock-runtime.us-gov-west-1.amazonaws.com"
+    assert requests[0].url.raw_path == b"/model/openai.gpt-oss-20b-1%3A0/converse"
+    assert json.loads(requests[0].content)["inferenceConfig"]["stopSequences"] == ["END"]
+    assert "/us-gov-west-1/bedrock/aws4_request" in requests[0].headers["Authorization"]
 
 
 OPENAI_RUNTIME_MODELS = (
@@ -244,26 +286,26 @@ GET_WEATHER_TOOL = {
 @pytest.mark.parametrize(
     "model",
     [
-        *OPENAI_RUNTIME_MODELS,
-        "bedrock/openai.gpt-oss-20b-1:0",
-        "us-gov.openai.gpt-oss-20b-1:0",
-        "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
-        "us-gov-east-1/openai.gpt-oss-120b-1:0",
+        *(f"chat_completions/{model}" for model in OPENAI_RUNTIME_MODELS),
+        "bedrock/chat_completions/openai.gpt-oss-20b-1:0",
+        "chat_completions/us-gov.openai.gpt-oss-20b-1:0",
+        "bedrock/chat_completions/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        "chat_completions/us-gov-east-1/openai.gpt-oss-120b-1:0",
     ],
 )
 def test_openai_runtime_models_use_chat_completions_route(local_cost_map, model):
-    assert uses_bedrock_runtime_chat_completions(model) is True
     assert BedrockModelInfo.get_bedrock_route(model) == "chat_completions"
     assert isinstance(get_bedrock_chat_config(model), AmazonBedrockRuntimeChatCompletionsConfig)
 
 
 @pytest.mark.parametrize("model", ["us.amazon.nova-micro-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0"])
 def test_nova_and_claude_stay_on_converse(local_cost_map, model):
-    assert uses_bedrock_runtime_chat_completions(model) is False
     assert BedrockModelInfo.get_bedrock_route(model, {"tools": [GET_WEATHER_TOOL]}) == "converse"
 
 
-@pytest.mark.parametrize("model", ["openai.gpt-oss-20b-1:0", "global.openai.gpt-5.6-sol"])
+@pytest.mark.parametrize(
+    "model", ["chat_completions/openai.gpt-oss-20b-1:0", "bedrock/chat_completions/global.openai.gpt-5.6-sol"]
+)
 def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
     guardrail = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
     assert bedrock_request_needs_converse(model, {"guardrailConfig": guardrail}) is True
@@ -272,7 +314,12 @@ def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
 
 
 @pytest.mark.parametrize(
-    "model", ["openai.gpt-oss-20b-1:0", "us.xai.grok-4.6", "global.openai.gpt-5.6-sol"]
+    "model",
+    [
+        "chat_completions/openai.gpt-oss-20b-1:0",
+        "chat_completions/us.xai.grok-4.6",
+        "bedrock/chat_completions/global.openai.gpt-5.6-sol",
+    ],
 )
 @pytest.mark.parametrize(
     "request_params",
@@ -299,15 +346,18 @@ def test_converse_extension_params_fall_back_to_converse(local_cost_map, model, 
     ],
 )
 def test_gpt56_tools_need_reasoning_none_on_chat_completions(local_cost_map, request_params, expected_route):
-    assert BedrockModelInfo.get_bedrock_route("global.openai.gpt-5.6-sol", request_params) == expected_route
-    assert BedrockModelInfo.get_bedrock_route("bedrock/us.openai.gpt-5.6-terra", request_params) == expected_route
+    assert BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params) == expected_route
+    assert (
+        BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/us.openai.gpt-5.6-terra", request_params)
+        == expected_route
+    )
 
 
 @pytest.mark.parametrize("reasoning_effort", ["low", "high", None])
 def test_gpt_oss_tools_with_any_reasoning_effort_stay_on_chat_completions(local_cost_map, reasoning_effort):
     params = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": reasoning_effort}
     assert bedrock_request_needs_converse("openai.gpt-oss-120b-1:0", params) is False
-    assert BedrockModelInfo.get_bedrock_route("openai.gpt-oss-120b-1:0", params) == "chat_completions"
+    assert BedrockModelInfo.get_bedrock_route("chat_completions/openai.gpt-oss-120b-1:0", params) == "chat_completions"
 
 
 @pytest.mark.parametrize(
@@ -320,14 +370,14 @@ def test_gpt_oss_tools_with_any_reasoning_effort_stay_on_chat_completions(local_
     ],
 )
 def test_gpt56_legacy_functions_route_like_tools(local_cost_map, request_params, expected_route):
-    assert BedrockModelInfo.get_bedrock_route("global.openai.gpt-5.6-sol", request_params) == expected_route
-    assert BedrockModelInfo.get_bedrock_route("openai.gpt-oss-120b-1:0", request_params) == "chat_completions"
+    assert BedrockModelInfo.get_bedrock_route("chat_completions/global.openai.gpt-5.6-sol", request_params) == expected_route
+    assert BedrockModelInfo.get_bedrock_route("chat_completions/openai.gpt-oss-120b-1:0", request_params) == "chat_completions"
 
 
 def test_thinking_block_goes_to_converse(local_cost_map):
     thinking = {"type": "enabled", "budget_tokens": 1024}
-    assert BedrockModelInfo.get_bedrock_route("us.xai.grok-4.6", {"thinking": thinking}) == "converse"
-    assert BedrockModelInfo.get_bedrock_route("us.xai.grok-4.6", {"thinking": None}) == "chat_completions"
+    assert BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": thinking}) == "converse"
+    assert BedrockModelInfo.get_bedrock_route("chat_completions/us.xai.grok-4.6", {"thinking": None}) == "chat_completions"
 
 
 def test_explicit_converse_prefix_wins_for_openai_models(local_cost_map):
@@ -500,15 +550,15 @@ def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, mod
 @pytest.mark.parametrize(
     "model, param",
     [
-        ("bedrock/global.openai.gpt-5.6-sol", {"frequency_penalty": 0.5}),
-        ("bedrock/global.openai.gpt-5.6-sol", {"logprobs": True, "top_logprobs": 2}),
-        ("bedrock/us.xai.grok-4.6", {"presence_penalty": 0.5}),
-        ("bedrock/openai.gpt-oss-20b-1:0", {"logit_bias": {"1": 1}}),
+        ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"frequency_penalty": 0.5}),
+        ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"logprobs": True, "top_logprobs": 2}),
+        ("bedrock/chat_completions/us.xai.grok-4.6", {"presence_penalty": 0.5}),
+        ("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {"logit_bias": {"1": 1}}),
     ],
     ids=lambda value: value if isinstance(value, str) else next(iter(value)),
 )
 def test_refused_params_are_dropped_or_refused_before_reaching_aws(local_cost_map, fake_aws_env, model, param):
-    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/")))
+    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/chat_completions/")))
     with pytest.raises(litellm.UnsupportedParamsError, match=next(iter(param))):
         litellm.completion(model=model, messages=[{"role": "user", "content": "hello"}], client=client, **param)
     litellm.completion(
@@ -651,7 +701,7 @@ def test_gpt_oss_completion_hits_chat_completions_and_splits_reasoning(local_cos
         json=_chat_completion_json("<reasoning>plan</reasoning>\n\nHi", "openai.gpt-oss-20b-1:0")
     )
     response = litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         max_tokens=64,
         reasoning_effort="low",
@@ -673,7 +723,7 @@ def test_gpt_oss_completion_hits_chat_completions_and_splits_reasoning(local_cos
 def test_gpt56_tools_with_reasoning_effort_go_to_converse(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=CONVERSE_JSON)
     response = litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
+        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
         messages=[{"role": "user", "content": "hello"}],
         tools=[GET_WEATHER_TOOL],
         reasoning_effort="low",
@@ -691,7 +741,7 @@ def test_gpt56_tools_with_reasoning_none_stay_on_chat_completions(local_cost_map
     ]
     requests, client = _recording_client(json=_chat_completion_json(None, "global.openai.gpt-5.6-sol", tool_calls))
     response = litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
+        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
         reasoning_effort="none",
@@ -720,7 +770,7 @@ def test_gpt56_tools_with_reasoning_none_stay_on_chat_completions(local_cost_map
 def test_converse_only_request_keys_go_to_converse(local_cost_map, fake_aws_env, converse_only_param):
     requests, client = _recording_client(json=CONVERSE_JSON)
     litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         client=client,
         **converse_only_param,
@@ -739,7 +789,7 @@ def test_operator_owned_request_metadata_goes_to_converse(local_cost_map, fake_a
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_team_alias"])
     requests, client = _recording_client(json=CONVERSE_JSON)
     litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         metadata={"user_api_key_team_alias": "search"},
         client=client,
@@ -752,7 +802,7 @@ def test_operator_owned_request_metadata_goes_to_converse(local_cost_map, fake_a
 def test_dropped_converse_only_key_keeps_the_request_on_chat_completions(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
     litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         guardrailConfig={"guardrailIdentifier": "gr-1", "guardrailVersion": "1"},
         additional_drop_params=["guardrailConfig"],
@@ -770,7 +820,7 @@ def test_dropped_converse_only_key_keeps_the_request_on_chat_completions(local_c
 def test_dropped_tools_keep_gpt56_reasoning_request_on_chat_completions(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "global.openai.gpt-5.6-sol"))
     litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
+        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
         messages=[{"role": "user", "content": "hello"}],
         tools=[GET_WEATHER_TOOL],
         reasoning_effort="low",
@@ -787,7 +837,7 @@ def test_dropped_tools_keep_gpt56_reasoning_request_on_chat_completions(local_co
 def test_legacy_functions_stay_on_chat_completions(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
     litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         functions=[GET_WEATHER_TOOL["function"]],
         client=client,
@@ -801,14 +851,14 @@ def test_gpt56_legacy_functions_with_reasoning_fall_back_to_converse(local_cost_
     requests, client = _recording_client(json=CONVERSE_JSON)
     with pytest.raises(litellm.UnsupportedParamsError, match="functions"):
         litellm.completion(
-            model="bedrock/global.openai.gpt-5.6-sol",
+            model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
             messages=[{"role": "user", "content": "hello"}],
             functions=[GET_WEATHER_TOOL["function"]],
             reasoning_effort="low",
             client=client,
         )
     litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
+        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
         messages=[{"role": "user", "content": "hello"}],
         functions=[GET_WEATHER_TOOL["function"]],
         reasoning_effort="low",
@@ -826,7 +876,7 @@ def test_grok_thinking_block_is_served_by_converse(local_cost_map, fake_aws_env)
     requests, client = _recording_client(json=CONVERSE_JSON)
     thinking = {"type": "enabled", "budget_tokens": 1024}
     litellm.completion(
-        model="bedrock/us.xai.grok-4.6",
+        model="bedrock/chat_completions/us.xai.grok-4.6",
         messages=[{"role": "user", "content": "hello"}],
         thinking=thinking,
         client=client,
@@ -841,14 +891,14 @@ def test_converse_fallback_validates_against_converse_params(local_cost_map, fak
     guardrail = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
     with pytest.raises(litellm.UnsupportedParamsError, match="seed"):
         litellm.completion(
-            model="bedrock/openai.gpt-oss-20b-1:0",
+            model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
             messages=[{"role": "user", "content": "hello"}],
             guardrailConfig=guardrail,
             seed=7,
             client=client,
         )
     litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         guardrailConfig=guardrail,
         seed=7,
@@ -864,13 +914,13 @@ def test_n_is_rejected_before_reaching_chat_completions(local_cost_map, fake_aws
     requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
     with pytest.raises(litellm.UnsupportedParamsError, match="'n'"):
         litellm.completion(
-            model="bedrock/openai.gpt-oss-20b-1:0",
+            model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
             messages=[{"role": "user", "content": "hello"}],
             n=2,
             client=client,
         )
     litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         n=2,
         drop_params=True,
@@ -892,7 +942,7 @@ def test_gpt_oss_streaming_completion_splits_reasoning(local_cost_map, fake_aws_
     )
     requests, client = _recording_client(content=_sse(chunks), headers={"content-type": "text/event-stream"})
     stream = litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "hello"}],
         stream=True,
         client=client,
@@ -931,7 +981,9 @@ class Answer(BaseModel):
     word: str
 
 
-@pytest.mark.parametrize("model", ["openai.gpt-oss-20b-1:0", "bedrock/openai.gpt-oss-120b-1:0"])
+@pytest.mark.parametrize(
+    "model", ["chat_completions/openai.gpt-oss-20b-1:0", "bedrock/chat_completions/openai.gpt-oss-120b-1:0"]
+)
 @pytest.mark.parametrize(
     "response_format, expected_route",
     [
@@ -949,7 +1001,11 @@ def test_gpt_oss_response_format_falls_back_to_converse(local_cost_map, model, r
     assert BedrockModelInfo.get_bedrock_route(model, params) == expected_route
 
 
-RESPONSE_FORMAT_ENFORCING_MODELS = ["global.openai.gpt-5.6-sol", "us.xai.grok-4.6", "bedrock/us-gov.xai.grok-4.6"]
+RESPONSE_FORMAT_ENFORCING_MODELS = [
+    "chat_completions/global.openai.gpt-5.6-sol",
+    "chat_completions/us.xai.grok-4.6",
+    "bedrock/chat_completions/us-gov.xai.grok-4.6",
+]
 
 
 JSON_OBJECT_WITH_RESPONSE_SCHEMA = {
@@ -980,7 +1036,7 @@ def test_json_object_keeps_converse_where_aws_would_demand_the_word_json(local_c
     assert BedrockModelInfo.get_bedrock_route(model, params) == "converse"
 
 
-SYNTHETIC_NATIVE_MODEL = "vendor.native-model-v1:0"
+SYNTHETIC_NATIVE_MODEL = "chat_completions/vendor.native-model-v1:0"
 
 
 @pytest.mark.parametrize(
@@ -1008,12 +1064,8 @@ SYNTHETIC_NATIVE_MODEL = "vendor.native-model-v1:0"
     ],
 )
 def test_capability_flags_are_read_from_the_cost_map(monkeypatch, capability_flags, request_params, needs_converse):
-    entry = {
-        "litellm_provider": "bedrock_converse",
-        "supported_endpoints": ["/v1/chat/completions"],
-        **capability_flags,
-    }
-    monkeypatch.setattr(litellm, "model_cost", {SYNTHETIC_NATIVE_MODEL: entry})
+    entry = {"litellm_provider": "bedrock_converse", **capability_flags}
+    monkeypatch.setattr(litellm, "model_cost", {"vendor.native-model-v1:0": entry})
     assert bedrock_request_needs_converse(SYNTHETIC_NATIVE_MODEL, request_params) is needs_converse
     route = bedrock_route_for_request(SYNTHETIC_NATIVE_MODEL, request_params, None)
     assert (route == "chat_completions") is (not needs_converse)
@@ -1021,18 +1073,16 @@ def test_capability_flags_are_read_from_the_cost_map(monkeypatch, capability_fla
 
 def test_route_for_request_ignores_dropped_params(local_cost_map):
     params = {"response_format": RESPONSE_FORMAT_JSON_SCHEMA, "guardrailConfig": {"guardrailIdentifier": "gr-1"}}
-    assert bedrock_route_for_request("openai.gpt-oss-20b-1:0", params, None) == "converse"
-    assert bedrock_route_for_request("openai.gpt-oss-20b-1:0", params, ["guardrailConfig"]) == "converse"
-    assert (
-        bedrock_route_for_request("openai.gpt-oss-20b-1:0", params, ["guardrailConfig", "response_format"])
-        == "chat_completions"
-    )
+    model = "chat_completions/openai.gpt-oss-20b-1:0"
+    assert bedrock_route_for_request(model, params, None) == "converse"
+    assert bedrock_route_for_request(model, params, ["guardrailConfig"]) == "converse"
+    assert bedrock_route_for_request(model, params, ["guardrailConfig", "response_format"]) == "chat_completions"
 
 
 def test_gpt_oss_response_format_goes_to_converse_with_json_tool_call(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=CONVERSE_JSON)
     litellm.completion(
-        model="bedrock/openai.gpt-oss-20b-1:0",
+        model="bedrock/chat_completions/openai.gpt-oss-20b-1:0",
         messages=[{"role": "user", "content": "Reply with the single word pong."}],
         response_format=RESPONSE_FORMAT_JSON_SCHEMA,
         max_tokens=64,
@@ -1051,7 +1101,7 @@ def test_gpt_oss_response_format_goes_to_converse_with_json_tool_call(local_cost
 def test_gpt56_response_format_is_sent_as_is_on_chat_completions(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=_chat_completion_json('{"word": "pong"}', "global.openai.gpt-5.6-sol"))
     response = litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
+        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
         messages=[{"role": "user", "content": "Reply with the single word pong."}],
         response_format=RESPONSE_FORMAT_JSON_SCHEMA,
         client=client,
@@ -1065,7 +1115,7 @@ def test_gpt56_response_format_is_sent_as_is_on_chat_completions(local_cost_map,
 def test_gpt56_schema_less_json_object_goes_to_converse_without_a_schema_tool(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=CONVERSE_JSON)
     litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
+        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
         messages=[{"role": "user", "content": "Reply with the single word pong."}],
         response_format={"type": "json_object"},
         max_tokens=64,
@@ -1082,7 +1132,7 @@ def test_gpt56_schema_less_json_object_goes_to_converse_without_a_schema_tool(lo
 def test_gpt56_json_object_with_response_schema_goes_to_converse_as_a_json_tool(local_cost_map, fake_aws_env):
     requests, client = _recording_client(json=CONVERSE_JSON)
     litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
+        model="bedrock/chat_completions/global.openai.gpt-5.6-sol",
         messages=[{"role": "user", "content": "Reply with the single word pong."}],
         response_format=JSON_OBJECT_WITH_RESPONSE_SCHEMA,
         max_tokens=64,
