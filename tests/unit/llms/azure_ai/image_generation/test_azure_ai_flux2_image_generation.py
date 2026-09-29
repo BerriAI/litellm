@@ -271,6 +271,37 @@ def test_flux2_pro_catalog_row_bills_its_megapixel_tiers() -> None:
     assert cost != pytest.approx(info.get("output_cost_per_image"))
 
 
+@pytest.mark.parametrize(
+    ("deployment_prices", "deployment_first_price", "deployment_additional_price"),
+    [
+        ({"output_cost_per_first_megapixel": 0.05, "output_cost_per_additional_megapixel": None}, 0.05, None),
+        ({"output_cost_per_first_megapixel": None, "output_cost_per_additional_megapixel": 0.02}, None, 0.02),
+    ],
+)
+def test_flux2_pro_partial_deployment_megapixel_price_keeps_the_other_catalog_tier(
+    deployment_prices: dict[str, float | None],
+    deployment_first_price: float | None,
+    deployment_additional_price: float | None,
+) -> None:
+    info: Final = litellm.get_model_info("azure_ai/FLUX.2-pro")
+    first: Final = deployment_first_price or _PRICE.validate_python(info.get("output_cost_per_first_megapixel"))
+    additional: Final = deployment_additional_price or _PRICE.validate_python(
+        info.get("output_cost_per_additional_megapixel")
+    )
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")])
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-pro",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="2048x2048",
+        call_type="image_generation",
+        model_info=deployment_prices,
+    )
+
+    assert cost == pytest.approx(first + 3 * additional)
+
+
 def test_flux2_pro_deployment_flat_image_price_overrides_catalog_megapixel_tiers() -> None:
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
 

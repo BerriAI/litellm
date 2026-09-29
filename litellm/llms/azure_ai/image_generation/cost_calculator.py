@@ -12,12 +12,8 @@ from litellm.types.utils import ImageResponse, ModelInfo
 
 PIXELS_PER_MEGAPIXEL: Final[int] = 1_048_576
 _IMAGE_SIZE: Final = re.compile(r"(\d+)(?:x|-x-)(\d+)")
-_IMAGE_PRICE_FIELDS: Final = (
-    "output_cost_per_first_megapixel",
-    "output_cost_per_additional_megapixel",
-    "output_cost_per_image",
-    "input_cost_per_pixel",
-)
+_MEGAPIXEL_PRICE_FIELDS: Final = ("output_cost_per_first_megapixel", "output_cost_per_additional_megapixel")
+_FLAT_PRICE_FIELDS: Final = ("output_cost_per_image", "input_cost_per_pixel")
 
 
 def _input_cost_per_pixel(resolved: ModelInfo) -> float:
@@ -31,15 +27,29 @@ def _input_cost_per_pixel(resolved: ModelInfo) -> float:
     return shared_entry.get("input_cost_per_pixel") or 0.0
 
 
-def _megapixel_tiers(resolved: ModelInfo, deployment: ModelInfo | None) -> tuple[float, float] | None:
-    deployment_prices_images: Final = deployment is not None and any(
-        deployment.get(field) is not None for field in _IMAGE_PRICE_FIELDS
+def _prices_any(model_info: ModelInfo | None, fields: tuple[str, ...]) -> bool:
+    return model_info is not None and any(model_info.get(field) is not None for field in fields)
+
+
+def _megapixel_price(resolved: ModelInfo, deployment: ModelInfo | None, field: str) -> float | None:
+    deployment_price: Final = (
+        _get_cost_per_unit(deployment, field, default_value=None) if deployment is not None else None
     )
-    source: Final = deployment if deployment is not None and deployment_prices_images else resolved
-    first: Final = _get_cost_per_unit(source, "output_cost_per_first_megapixel", default_value=None)
-    if first is None:
+    if deployment_price is not None:
+        return deployment_price
+    model_cost_key: Final = resolved.get("key")
+    shared_entry: Final = litellm.model_cost.get(model_cost_key) if model_cost_key is not None else None
+    shared_price: Final = shared_entry.get(field) if shared_entry is not None else None
+    return float(shared_price) if isinstance(shared_price, (int, float)) else None
+
+
+def _megapixel_tiers(resolved: ModelInfo, deployment: ModelInfo | None) -> tuple[float, float] | None:
+    if _prices_any(deployment, _FLAT_PRICE_FIELDS) and not _prices_any(deployment, _MEGAPIXEL_PRICE_FIELDS):
         return None
-    additional: Final = _get_cost_per_unit(source, "output_cost_per_additional_megapixel", default_value=None)
+    first: Final = _megapixel_price(resolved, deployment, "output_cost_per_first_megapixel")
+    additional: Final = _megapixel_price(resolved, deployment, "output_cost_per_additional_megapixel")
+    if first is None:
+        return None if additional is None else (additional, additional)
     return first, first if additional is None else additional
 
 
