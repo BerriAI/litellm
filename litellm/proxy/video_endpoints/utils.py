@@ -82,7 +82,6 @@ def routing_model_for_id(llm_router: Router, model_id: str) -> str | None:
 
 
 def video_id_for_provider(llm_router: Router, video_id: str) -> str:
-    # fal.ai reads its model path back from the id, so swap the deployment id for the model the deployment calls
     decoded: Final = decode_video_id_with_provider(video_id)
     provider: Final = decoded.get("custom_llm_provider")
     deployment: Final = llm_router.get_deployment(model_id=decoded.get("model_id") or "")

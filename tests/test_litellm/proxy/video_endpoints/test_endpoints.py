@@ -827,7 +827,6 @@ FAL_MODEL = "fal-ai/kling-video/v2/master/text-to-video"
 
 
 def _video_router() -> Router:
-    # weight 0 keeps the group from ever picking deployment-b, so only a pin reaches it
     return Router(
         model_list=[
             {
@@ -880,12 +879,10 @@ FOLLOW_UP_CALLS = {
 @pytest.mark.parametrize(
     ("model_id", "expected_model"),
     [
-        ("deployment-b", "deployment-b"),
-        # ids created before the fix name the group, so they still load-balance
-        ("sora-2", "sora-2"),
-        ("", None),
-        # a deleted deployment takes the direct provider call, as it did before the fix
-        ("deployment-gone", None),
+        pytest.param("deployment-b", "deployment-b", id="deployment_id_pins"),
+        pytest.param("sora-2", "sora-2", id="group_id_load_balances"),
+        pytest.param("", None, id="no_model_in_id"),
+        pytest.param("deployment-gone", None, id="deleted_deployment_calls_provider_directly"),
     ],
 )
 async def test_follow_up__model_comes_from_the_id(harness, endpoint, model_id, expected_model):
@@ -933,7 +930,6 @@ async def test_status__fal_id_keeps_the_model_path_fal_reads(harness):
 
 @pytest.mark.asyncio
 async def test_status__response_id_keeps_the_deployment_for_content(harness):
-    # The provider drops the model from status ids, and the OpenAI SDK create_and_poll() downloads with the status id
     harness.base_process.return_value = VideoObject(
         id=encode_video_id_with_provider("video_orig", "openai", None), object="video", status="completed"
     )
