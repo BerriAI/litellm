@@ -2756,6 +2756,7 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
                 "model": "azure-gpt",
                 "messages": [{"role": "user", "content": "hello"}],
                 "max_tokens": 10,
+                "prompt_cache_key": "user-123-cache",
                 "vertex_credentials": {"private_key": "canary-private-key", "client_email": "sa@example.com"},
                 "extra_headers": {"Authorization": "Bearer canary-extra-header"},
                 "tools": [
@@ -2781,6 +2782,7 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
     assert parsed["tools"][1]["server_url"] == "https://mcp.example.com"
     assert parsed["metadata"] == identity_metadata
     assert parsed["max_tokens"] == 10
+    assert parsed["prompt_cache_key"] == "user-123-cache"
     assert parsed["messages"] == [{"role": "user", "content": "hello"}]
 
 

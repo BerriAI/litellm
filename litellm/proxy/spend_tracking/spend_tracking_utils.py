@@ -1086,13 +1086,19 @@ def _get_messages_for_spend_logs_payload(
 
 _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
-_PROXY_KEY_IDENTITY_FIELDS: Final = frozenset(StandardLoggingUserAPIKeyMetadata.__annotations__) | {"user_api_key"}
+_NON_CREDENTIAL_KEY_FIELDS: Final = frozenset(StandardLoggingUserAPIKeyMetadata.__annotations__) | {
+    "user_api_key",
+    "prompt_cache_key",
+    "idempotency_key",
+    "cache_key",
+    "preset_cache_key",
+}
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
     return (
         isinstance(value, str)
-        and key not in _PROXY_KEY_IDENTITY_FIELDS
+        and key not in _NON_CREDENTIAL_KEY_FIELDS
         and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
     )
 
