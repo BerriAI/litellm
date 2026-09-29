@@ -23,9 +23,10 @@ def model_usage_task_type(request_tags: str) -> str:
     except ValidationError:
         return MODEL_INSIGHTS_DEFAULT_TASK
     for tag in tags:
-        task = tag.removeprefix(MODEL_INSIGHTS_TASK_TAG_PREFIX) if isinstance(tag, str) else None
-        if task in MODEL_INSIGHTS_TASK_TYPES:
-            return task
+        if isinstance(tag, str) and tag.startswith(MODEL_INSIGHTS_TASK_TAG_PREFIX):
+            task = tag.removeprefix(MODEL_INSIGHTS_TASK_TAG_PREFIX)
+            if task in MODEL_INSIGHTS_TASK_TYPES:
+                return task
     return MODEL_INSIGHTS_DEFAULT_TASK
 
 
