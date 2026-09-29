@@ -15,7 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -297,6 +297,13 @@ def _vector_store_table(repo: _PrismaTableHolder[_PrismaVectorStoreRow]) -> _Pri
 
 def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_PrismaUserRow]:
     return _DeadlineBoundedTable(repo.table, "user")
+
+
+def _user_writer_table(prisma_client: PrismaClient) -> _PrismaAuthTable[_PrismaUserRow]:
+    """The user table on the writer, so a row another request just inserted is not hidden by replica lag."""
+    writer: Final = prisma_client.writer_db
+    table: Final = cast("_PrismaAuthTable[_PrismaUserRow]", writer.litellm_usertable)  # cast-ok: untyped wrapper
+    return _DeadlineBoundedTable(table, "user")
 
 
 class _VectorStorePermissionsRow(Protocol):
@@ -2680,20 +2687,29 @@ async def get_user_object(
                         budget_duration=new_user_params["budget_duration"]
                     )
 
-                response = await _user_table(UserRepository(prisma_client)).create(
-                    data=new_user_params,
-                    include={"organization_memberships": True},
-                )
+                from prisma.errors import UniqueViolationError
 
-                default_teams: Final = check_if_default_team_set()
-                if default_teams:
-                    await add_new_user_to_default_team(
-                        user_id=user_id,
-                        user_email=user_email,
-                        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-                        teams=default_teams,
-                        prisma_client=prisma_client,
+                try:
+                    response = await _user_table(UserRepository(prisma_client)).create(
+                        data=new_user_params,
+                        include={"organization_memberships": True},
                     )
+                except UniqueViolationError:
+                    response = await _user_writer_table(prisma_client).find_unique(
+                        where={"user_id": user_id}, include={"organization_memberships": True}
+                    )
+                    if response is None:
+                        raise
+                else:
+                    default_teams: Final = check_if_default_team_set()
+                    if default_teams:
+                        await add_new_user_to_default_team(
+                            user_id=user_id,
+                            user_email=user_email,
+                            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                            teams=default_teams,
+                            prisma_client=prisma_client,
+                        )
             else:
                 if should_check_db:
                     _update_last_db_access_time(
