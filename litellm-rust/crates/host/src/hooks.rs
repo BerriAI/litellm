@@ -61,7 +61,11 @@ pub trait CallHooks<R: HookRuntime>: Sized {
         Ok(R::ready(()))
     }
 
-    fn on_stream_open(&mut self, _runtime: R::Context<'_>) -> Result<(), R::Error> {
+    fn on_stream_open(
+        &mut self,
+        _runtime: R::Context<'_>,
+        _head: &R::Response,
+    ) -> Result<(), R::Error> {
         Ok(())
     }
 

@@ -101,6 +101,17 @@ where
             .await
     }
 
+    async fn result_ready(
+        &self,
+        facts: crate::interceptors::ExecutionFacts,
+    ) -> Result<(), P::Error> {
+        self.0
+            .request_reply(|reply| {
+                HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply })
+            })
+            .await
+    }
+
     async fn after_provider_response(&self, raw: RawResponse) -> Result<(), P::Error> {
         self.0
             .request_reply(|reply| {

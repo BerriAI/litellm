@@ -1,4 +1,3 @@
-use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use bytes::Bytes;
@@ -34,14 +33,40 @@ impl super::MessagesRoute {
     pub fn machine(
         self,
         request: super::MessagesCall,
-        observers: Option<ObservationSender>,
+        options: impl Into<crate::CallOptions>,
     ) -> MessagesMachine {
+        let crate::CallOptions {
+            cache: cache_options,
+            observers,
+        } = options.into();
         hosted_call(
             request,
             observers,
             move |call, _, interceptors, observers| async move {
-                self.run(call, &interceptors, observers.as_ref()).await
+                self.run(call, cache_options, &interceptors, observers.as_ref())
+                    .await
             },
         )
+    }
+}
+
+impl crate::caching::Cachable for Messages {
+    const SURFACE: &'static str = "messages";
+}
+
+impl crate::caching::StreamCachable for Messages {
+    const TERMINAL_EVENT: &'static str = "message_stop";
+
+    fn replay(data: bytes::Bytes) -> Option<litellm_host::call::OutputOf<Self>> {
+        Some(litellm_host::call::CallOutput::Stream {
+            head: MessagesStreamHead {
+                headers: Vec::new(),
+            },
+            chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
+        })
+    }
+
+    fn bytes(chunk: &Self::Chunk) -> &[u8] {
+        chunk.as_ref()
     }
 }

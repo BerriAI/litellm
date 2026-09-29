@@ -3552,8 +3552,10 @@ name = "litellm-cache-response"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-gcs",
  "litellm-cache-memory",
  "litellm-cache-redis",
+ "litellm-http",
  "py_literal",
  "redis",
  "redis-test",
@@ -3562,6 +3564,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -3646,7 +3649,11 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
+ "litellm-cache",
+ "litellm-cache-memory",
+ "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-framing",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
@@ -3669,6 +3676,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "url",
  "veil",
@@ -3808,8 +3816,11 @@ dependencies = [
  "bytes",
  "futures-util",
  "litellm-auth",
+ "litellm-cache-memory",
+ "litellm-cache-response",
  "litellm-core",
  "litellm-gateway-auth",
+ "litellm-host",
  "litellm-host-http",
  "litellm-http",
  "litellm-llms",
@@ -3817,6 +3828,7 @@ dependencies = [
  "litellm-secrets",
  "litellm-types",
  "rstest",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",

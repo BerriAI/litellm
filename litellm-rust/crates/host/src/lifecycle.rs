@@ -52,7 +52,12 @@ pub enum CallEvent<Response = (), Error = (), Raw = RawResponse> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExecutionEvent<Raw = RawResponse> {
-    ProviderResponseReceived { raw: Raw },
+    ResultReady {
+        facts: crate::interceptors::ExecutionFacts,
+    },
+    ProviderResponseReceived {
+        raw: Raw,
+    },
 }
 
 impl<Response, Error, Raw: std::borrow::Borrow<RawResponse>> CallEvent<Response, Error, Raw> {
@@ -64,6 +69,11 @@ impl<Response, Error, Raw: std::borrow::Borrow<RawResponse>> CallEvent<Response,
             Self::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                 CallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
                     raw: raw.borrow().clone(),
+                })
+            }
+            Self::Execution(ExecutionEvent::ResultReady { facts }) => {
+                CallEvent::Execution(ExecutionEvent::ResultReady {
+                    facts: facts.clone(),
                 })
             }
             Self::Succeeded { timing, .. } => CallEvent::Succeeded {
