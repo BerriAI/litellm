@@ -259,7 +259,7 @@ from litellm.router_utils.routing_groups import (
     parse_routing_groups,
     validate_routing_strategy,
 )
-from litellm.router_utils.routing_read_batch import RoutingReadBatch
+from litellm.router_utils.routing_read_batch import RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
@@ -537,6 +537,10 @@ def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: b
 
 def _is_retriable_anthropic_status(status_code: int) -> bool:
     return status_code == 429 or status_code >= 500
+
+
+def _without_line_breaks(value: object) -> str:
+    return str(value).replace("\r", "").replace("\n", "")
 
 
 def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
@@ -1729,6 +1733,25 @@ class Router:
         return frozenset(
             normalized for normalized in map(self._normalize_strategy, configured) if normalized is not None
         )
+
+    def arm_routing_read_prefetch(self, model: str, request_kwargs: dict[str, object] | None = None) -> None:
+        """Declare the cooldown read (and, for usage-based routing, the usage read) that
+        `async_get_available_deployment` will make for `model` on the request's Redis batch, so admission's
+        flush carries it. A miss (alias, no batch) costs nothing: routing then reads as it always has."""
+        try:
+            strategy, selector = self._get_routing_context(model, request_kwargs)
+            usage_selector: Final = (
+                selector
+                if strategy == "usage-based-routing-v2" and isinstance(selector, LowestTPMLoggingHandler_v2)
+                else None
+            )
+            deployments: Final = self.get_model_list(model_name=model)
+            if deployments:
+                RoutingPrefetch.arm(self, usage_selector, deployments)
+        except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request
+            verbose_router_logger.debug(
+                "routing read prefetch not armed for %s: %s", _without_line_breaks(model), _without_line_breaks(e)
+            )
 
     def _get_routing_context(
         self, model: str, request_kwargs: dict | None = None
