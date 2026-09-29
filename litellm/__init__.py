@@ -172,6 +172,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "levo",
     "compression_interception",
     "newrelic",
+    "signoz",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -209,6 +210,7 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
 )
 log_raw_request_response: bool = False
 log_client_error_tracebacks: bool = False
+log_auth_failure_key_identity: bool = False
 request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False

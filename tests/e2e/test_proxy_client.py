@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import Final, cast
 
 import pytest
-from e2e_config import parse_replica_urls
+from e2e_config import StackEndpoints, parse_control_plane_replica_urls, parse_replica_urls
 from e2e_http import NoBody, Result, Success, without_retries
 from idp import Keycloak
 from lifecycle import ResourceManager
@@ -110,7 +110,7 @@ def caller_boundary(
     thread.start()
     url: Final = f"http://127.0.0.1:{server.server_port}"
     proxy: Final = build_proxy_client(
-        base_url=url, control_plane_base_url=url, replica_urls=(url,), master_key="bootstrap"
+        base_url=url, control_plane_base_url=url, replica_urls=(url,), control_replica_urls=(url,), master_key="bootstrap"
     )
     try:
         yield ManagementClient(proxy=proxy, master_key="bootstrap"), received
@@ -343,6 +343,50 @@ class TestParseReplicaUrls:
         assert parse_replica_urls(raw, "http://lb") == ("http://127.0.0.1:4010", "http://127.0.0.1:4011")
 
 
+class TestParseControlPlaneReplicaUrls:
+    def test_an_exported_list_wins_over_the_base_url_rule(self) -> None:
+        assert parse_control_plane_replica_urls(
+            " http://router/, http://router ",
+            control_plane_base_url="http://router",
+            base_url="http://router",
+            replica_urls=("http://10.0.0.1:4000", "http://10.0.0.2:4000"),
+        ) == ("http://router",)
+
+    def test_unset_with_one_shared_base_follows_the_data_plane_replicas(self) -> None:
+        assert parse_control_plane_replica_urls(
+            "", control_plane_base_url="http://lb", base_url="http://lb", replica_urls=("http://pod-1", "http://pod-2")
+        ) == ("http://pod-1", "http://pod-2")
+
+    def test_unset_with_a_split_control_plane_polls_its_base_alone(self) -> None:
+        assert parse_control_plane_replica_urls(
+            "", control_plane_base_url="http://backend", base_url="http://lb", replica_urls=("http://gateway-1",)
+        ) == ("http://backend",)
+
+
+class TestStackEndpointsControlReplicas:
+    STACK: Final = StackEndpoints(
+        base_url="http://router",
+        control_plane_base_url="http://router",
+        replica_urls=("http://10.0.0.1:4000", "http://10.0.0.2:4000"),
+        control_replica_urls=("http://router",),
+    )
+
+    def test_the_stacks_own_endpoints_take_its_exported_control_list(self) -> None:
+        assert self.STACK.control_replica_urls_for(
+            base_url="http://router",
+            control_plane_base_url="http://router",
+            replica_urls=("http://10.0.0.1:4000", "http://10.0.0.2:4000"),
+        ) == ("http://router",)
+
+    def test_any_other_endpoints_follow_the_base_url_rule(self) -> None:
+        assert self.STACK.control_replica_urls_for(
+            base_url="http://router", control_plane_base_url="http://router", replica_urls=("http://10.0.0.1:4000",)
+        ) == ("http://10.0.0.1:4000",)
+        assert self.STACK.control_replica_urls_for(
+            base_url="http://lb", control_plane_base_url="http://backend", replica_urls=("http://gateway-1",)
+        ) == ("http://backend",)
+
+
 def _answers(answers: Iterable[str]) -> ReplicaRead[str]:
     it: Final = iter(answers)
     return lambda _timeout: next(it)
@@ -390,6 +434,7 @@ class TestReplicasFor:
             base_url="http://lb",
             control_plane_base_url="http://backend",
             replica_urls=("http://gateway-1", "http://gateway-2"),
+            control_replica_urls=("http://backend",),
         )
         assert set(client.replicas_for("/key/info")) == {"http://backend"}
         assert set(client.replicas_for("/project/info")) == {"http://backend"}
@@ -400,8 +445,62 @@ class TestReplicasFor:
             base_url="http://lb",
             control_plane_base_url="http://lb",
             replica_urls=("http://pod-1", "http://pod-2"),
+            control_replica_urls=("http://pod-1", "http://pod-2"),
         )
         assert set(client.replicas_for("/key/info")) == {"http://pod-1", "http://pod-2"}
+
+    def test_gateway_pods_behind_one_router_read_management_routes_back_from_the_router(self) -> None:
+        """The Buildkite PR stack names each gateway pod in PROXY_REPLICA_URLS while
+        both planes share the router base, so a management read-back polls the
+        router (CONTROL_PLANE_REPLICA_URLS) rather than the pods, which trim
+        management routes, while a data-plane read-back still polls every pod."""
+        client: Final = build_proxy_client(
+            base_url="http://router",
+            control_plane_base_url="http://router",
+            replica_urls=("http://10.0.0.1:4000", "http://10.0.0.2:4000"),
+            control_replica_urls=("http://router",),
+        )
+        assert set(client.replicas_for("/key/info")) == {"http://router"}
+        assert set(client.replicas_for("/v1/models")) == {"http://10.0.0.1:4000", "http://10.0.0.2:4000"}
+
+    def test_a_client_built_for_another_proxy_reads_management_routes_back_from_that_proxy(self) -> None:
+        """A caller that points the client at its own server (test_provider_cache.py)
+        names no control list, so the derived one has to follow that server rather
+        than the env proxy, on a shared base and on split ones alike."""
+        local: Final = build_proxy_client(
+            base_url="http://local", control_plane_base_url="http://local", replica_urls=("http://local",)
+        )
+        assert set(local.replicas_for("/key/info")) == {"http://local"}
+        assert set(local.replicas_for("/v1/models")) == {"http://local"}
+        split: Final = build_proxy_client(
+            base_url="http://lb", control_plane_base_url="http://backend", replica_urls=("http://gateway-1",)
+        )
+        assert set(split.replicas_for("/key/info")) == {"http://backend"}
+        assert set(split.replicas_for("/v1/models")) == {"http://gateway-1"}
+
+    def test_management_read_backs_poll_the_control_replicas_only(self) -> None:
+        """A gateway pod answers /key/info 404 even after the write landed on the
+        control plane, so a read-back that polled the data-plane replicas for it
+        would never converge there."""
+        with caller_boundary(status=404) as (pod, pod_headers), caller_boundary() as (router, router_headers):
+            pod_url: Final = next(iter(pod.proxy.replicas))
+            router_url: Final = next(iter(router.proxy.replicas))
+            proxy: Final = build_proxy_client(
+                base_url=router_url,
+                control_plane_base_url=router_url,
+                replica_urls=(pod_url,),
+                control_replica_urls=(router_url,),
+                master_key="bootstrap",
+            )
+            read: Final = proxy.read_back_everywhere(
+                "/key/info",
+                params=NoBody(),
+                response_type=KeyInfoResponse,
+                converged=lambda result: isinstance(result, Success),
+            )
+            assert set(read) == {router_url}
+            assert router_headers.get_nowait() == "Bearer bootstrap"
+            assert router_headers.empty() and pod_headers.empty()
 
     def test_mcp_admin_routes_read_back_from_every_data_plane_replica(self) -> None:
         """/v1/mcp/* is a lazily mounted feature, so a data-plane replica serves it
@@ -412,6 +511,7 @@ class TestReplicasFor:
             base_url="http://lb",
             control_plane_base_url="http://backend",
             replica_urls=("http://gateway-1", "http://gateway-2"),
+            control_replica_urls=("http://backend",),
         )
         assert set(client.replicas_for("/v1/mcp/server/abc")) == {"http://gateway-1", "http://gateway-2"}
         assert set(client.replicas_for("/v1/mcp/toolset/abc")) == {"http://gateway-1", "http://gateway-2"}
@@ -531,6 +631,7 @@ class TestSplitCallerPropagation:
                 base_url=data_url,
                 control_plane_base_url=control_url,
                 replica_urls=(data_url,),
+                control_replica_urls=(control_url,),
                 master_key="bootstrap",
             ).with_caller(Caller(credential="tenant-token", kind="direct_jwt", role="team_member"))
             proxy.key_info("owned")
@@ -543,8 +644,13 @@ class TestSplitCallerPropagation:
                 response_type=KeyInfoResponse,
                 converged=lambda result: isinstance(result, Success),
             )
-            assert control_headers.get_nowait() == "Bearer tenant-token"
-            assert control_headers.get_nowait() == "Bearer tenant-token"
+            proxy.read_back_everywhere(
+                "/v1/models",
+                params=NoBody(),
+                response_type=ModelsListResponse,
+                converged=lambda result: isinstance(result, Success),
+            )
+            assert tuple(control_headers.get_nowait() for _ in range(3)) == ("Bearer tenant-token",) * 3
             assert data_headers.get_nowait() == "Bearer tenant-token"
             assert control_headers.empty() and data_headers.empty()
 

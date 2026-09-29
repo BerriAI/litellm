@@ -127,6 +127,7 @@ class Cache:
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
+        _backend: BaseCache | None = None,
         **kwargs,
     ):
         """
@@ -183,7 +184,9 @@ class Cache:
         Returns:
             None. Cache is set as a litellm param
         """
-        if type == LiteLLMCacheType.REDIS:
+        if _backend is not None:
+            self.cache: BaseCache = _backend
+        elif type == LiteLLMCacheType.REDIS:
             # Check REDIS_CLUSTER_NODES env var if no explicit startup nodes
             if not redis_startup_nodes:
                 _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
@@ -205,7 +208,7 @@ class Cache:
                 if gcp_ssl_ca_certs is not None:
                     cluster_kwargs["gcp_ssl_ca_certs"] = gcp_ssl_ca_certs
 
-                self.cache: BaseCache = RedisClusterCache(**cluster_kwargs)
+                self.cache = RedisClusterCache(**cluster_kwargs)
             else:
                 self.cache = RedisCache(
                     host=host,
@@ -313,12 +316,6 @@ class Cache:
 
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
-
-        from litellm.rust_bridge.response_cache import resolve_response_cache
-
-        # The Rust catalog picks the store per backend. When it selects Rust, the storage calls
-        # below go to the native runtime and the Python backend stays only for its direct API.
-        self._native_cache = resolve_response_cache(self)
 
     # Params whose values carry prompt content. Excluded from semantic-cache
     # scope keys so differently worded prompts share a bucket and match via

@@ -694,6 +694,10 @@ CallTypesLiteral = Literal[
     "acreate_realtime_transcription_session",
 ]
 
+MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {CallTypes.call_mcp_tool.value, CallTypes.list_mcp_tools.value}
+)
+
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Chat Completions
@@ -2970,6 +2974,7 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 
 RoutingDecisionCause = Literal[
+    "prompt_cache_cost",
     "heuristic_scorer",
     "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
@@ -3678,6 +3683,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
     newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
+    signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
@@ -4135,6 +4143,7 @@ class LlmProviders(str, Enum):
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     SCX_AI = "scx-ai"
+    PRISM = "prism"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
