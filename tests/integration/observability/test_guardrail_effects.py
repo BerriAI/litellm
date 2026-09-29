@@ -606,6 +606,50 @@ def test_empty_instructions_are_not_scanned_while_input_and_chat_system_masking_
             ]
 
 
+def test_skip_system_message_leaves_instructions_and_system_items_unscanned_on_responses(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    instructions: Final = "Escalations go to " + _SSN + " " + uuid.uuid4().hex
+    system_item: Final = "House rules: never share " + _SSN + " " + uuid.uuid4().hex
+    developer_item: Final = "Developer note " + _SSN + " " + uuid.uuid4().hex
+    latest: Final = "my contact is " + _SSN + " " + uuid.uuid4().hex
+
+    with wire_server(_panw_scanner) as policy, wire_server(_responses_provider) as upstream:
+        config: Final = _panw_config(
+            tmp_path, identity, policy.url, mask_request_content=True, skip_system_message_in_guardrail=True
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            response = candidate.request(
+                "POST",
+                "/v1/responses",
+                {
+                    "model": model,
+                    "instructions": instructions,
+                    "input": [
+                        {"role": "system", "content": system_item},
+                        {"role": "developer", "content": developer_item},
+                        {"role": "user", "content": latest},
+                    ],
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert _scanned_prompts(policy.drain()) == [developer_item, latest]
+            (sent,) = _forwarded_bodies(upstream.drain())
+            assert sent["instructions"] == instructions, f"sent {sent}"
+            assert sent["input"] == [
+                {"role": "system", "content": system_item},
+                {"role": "developer", "content": developer_item.replace(_SSN, _MASKED_SSN)},
+                {"role": "user", "content": latest.replace(_SSN, _MASKED_SSN)},
+            ], f"sent {sent}"
+
+
 def test_instructions_masking_lands_next_to_multimodal_and_tool_loop_input_items(
     gateway: Gateway, tmp_path: Path
 ) -> None:
