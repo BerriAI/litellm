@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { filterKeyActivity, keyActivityMatches } from "./keyActivityFilter";
+import { filterKeyActivity, keyActivityMatches, parseKeyQuery } from "./keyActivityFilter";
 import type { KeyMetadata, ModelActivityData } from "./types";
 
 function activity(label: string, key_metadata?: KeyMetadata): ModelActivityData {
@@ -75,6 +75,56 @@ describe("keyActivityMatches", () => {
   });
 });
 
+describe("parseKeyQuery and keyActivityMatches", () => {
+  it("matches anchored, case-insensitive globs", () => {
+    expect(keyActivityMatches("hash-alice", alice, "alice-*")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "batch-*")).toBe(false);
+    expect(keyActivityMatches("hash-alice", activity("production batch-key", aliceMeta), "batch-*")).toBe(false);
+    expect(keyActivityMatches("hash-alice", alice, "*-batch")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "ALICE-*")).toBe(true);
+  });
+
+  it("treats regex punctuation literally in globs", () => {
+    expect(keyActivityMatches("hash-alice", alice, "alice.batch*")).toBe(false);
+  });
+
+  it("matches the key hash with a glob", () => {
+    expect(keyActivityMatches("deadbeef", orphan, "dead*")).toBe(true);
+  });
+
+  it("matches regular expressions with standard case sensitivity", () => {
+    expect(keyActivityMatches("hash-bob", bob, "/^user-bob-\\d+$/")).toBe(true);
+    expect(keyActivityMatches("hash-alice", alice, "/^user-bob-\\d+$/")).toBe(false);
+    expect(keyActivityMatches("hash-alice", alice, "/^ALICE/")).toBe(false);
+    expect(keyActivityMatches("hash-alice", alice, "/^ALICE/i")).toBe(true);
+  });
+
+  it("marks malformed regular expressions invalid and matches nothing", () => {
+    expect(parseKeyQuery("/[/")).toEqual({ kind: "invalid", source: "/[/" });
+    expect(keyActivityMatches("hash-alice", alice, "/[/")).toBe(false);
+  });
+
+  it("strips stateful flags from a regular expression reused for multiple matches", () => {
+    const query = parseKeyQuery("/^alice/g");
+    expect(query.kind).toBe("pattern");
+    if (query.kind !== "pattern") return;
+
+    expect(query.regex.flags).not.toContain("g");
+    expect(query.regex.test("alice-batch")).toBe(true);
+    expect(query.regex.test("alice-batch")).toBe(true);
+    expect(
+      Object.keys(
+        filterKeyActivity({ "hash-alice": alice, "hash-alice-2": activity("alice-secondary", aliceMeta) }, "/^alice/g"),
+      ),
+    ).toEqual(["hash-alice", "hash-alice-2"]);
+  });
+
+  it("keeps a lone slash and a slash within text as substring queries", () => {
+    expect(parseKeyQuery("/")).toEqual({ kind: "substring", needle: "/" });
+    expect(parseKeyQuery("a/b")).toEqual({ kind: "substring", needle: "a/b" });
+  });
+});
+
 describe("filterKeyActivity", () => {
   it("returns the same object when the query is blank", () => {
     expect(filterKeyActivity(keyMetrics, "")).toBe(keyMetrics);
@@ -87,5 +137,9 @@ describe("filterKeyActivity", () => {
 
   it("returns an empty record when nothing matches", () => {
     expect(filterKeyActivity(keyMetrics, "nobody")).toEqual({});
+  });
+
+  it("keeps the hashes matching a glob", () => {
+    expect(filterKeyActivity(keyMetrics, "user-bob-*")).toEqual({ "hash-bob": bob });
   });
 });

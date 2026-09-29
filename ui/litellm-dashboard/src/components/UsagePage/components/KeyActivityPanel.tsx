@@ -4,7 +4,7 @@ import React, { useMemo, useState } from "react";
 import { ActivityMetrics } from "@/components/activity_metrics";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 
-import { filterKeyActivity } from "../keyActivityFilter";
+import { filterKeyActivity, parseKeyQuery } from "../keyActivityFilter";
 import type { ModelActivityData } from "../types";
 
 interface KeyActivityPanelProps {
@@ -14,10 +14,12 @@ interface KeyActivityPanelProps {
 
 const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePromptCachingMetrics = false }) => {
   const [query, setQuery] = useState("");
+  const parsed = useMemo(() => parseKeyQuery(query), [query]);
   const filtered = useMemo(() => filterKeyActivity(keyMetrics, query), [keyMetrics, query]);
   const totalKeys = Object.keys(keyMetrics).length;
   const shownKeys = Object.keys(filtered).length;
-  const isFiltering = query.trim() !== "";
+  const isFiltering = parsed.kind !== "all";
+  const hasNoMatches = isFiltering && totalKeys > 0 && shownKeys === 0;
 
   return (
     <div className="space-y-4">
@@ -28,7 +30,7 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePro
           </InputGroupAddon>
           <InputGroupInput
             aria-label="Search keys"
-            placeholder="Search by key alias, key hash, user ID, or email"
+            placeholder="Search by key alias, hash, user ID, or email. Supports * and /regex/"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -44,11 +46,17 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({ keyMetrics, hidePro
           Showing {shownKeys.toLocaleString()} of {totalKeys.toLocaleString()} keys
         </span>
       </div>
-      {isFiltering && totalKeys > 0 && shownKeys === 0 ? (
+      {parsed.kind === "invalid" && (
+        <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+          Invalid regular expression: {parsed.source}
+        </p>
+      )}
+      {parsed.kind !== "invalid" && hasNoMatches && (
         <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
           No keys match &quot;{query.trim()}&quot; in this date range
         </p>
-      ) : (
+      )}
+      {parsed.kind !== "invalid" && !hasNoMatches && (
         <ActivityMetrics modelMetrics={filtered} hidePromptCachingMetrics={hidePromptCachingMetrics} />
       )}
     </div>

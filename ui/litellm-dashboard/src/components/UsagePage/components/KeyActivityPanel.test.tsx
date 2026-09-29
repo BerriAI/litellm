@@ -53,6 +53,21 @@ describe("KeyActivityPanel", () => {
     expect(screen.getByText("Showing 1 of 2 keys")).toBeInTheDocument();
   });
 
+  it("narrows the rendered keys with a glob", () => {
+    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
+    fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "bob-*" } });
+    expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-bob");
+    expect(screen.getByTestId("rendered-keys")).not.toHaveTextContent("hash-alice");
+    expect(screen.getByText("Showing 1 of 2 keys")).toBeInTheDocument();
+  });
+
+  it("shows an invalid regular expression state instead of the keys", () => {
+    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
+    fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "/[/" } });
+    expect(screen.getByText("Invalid regular expression: /[/")).toBeInTheDocument();
+    expect(screen.queryByTestId("rendered-keys")).not.toBeInTheDocument();
+  });
+
   it("shows an empty state instead of zeroed metrics when nothing matches", () => {
     render(<KeyActivityPanel keyMetrics={keyMetrics} />);
     fireEvent.change(screen.getByLabelText("Search keys"), { target: { value: "carol" } });
