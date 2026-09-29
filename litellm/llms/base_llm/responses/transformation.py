@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -363,6 +364,15 @@ class BaseResponsesAPIConfig(ABC):
             else:
                 out.append(item)
         return cast(ResponseInputParam, out)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return extra_body
 
     @staticmethod
     def normalize_responses_api_request_dict(data: dict[str, Any]) -> dict[str, Any]:

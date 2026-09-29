@@ -310,8 +310,6 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
-    TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
-    TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -679,7 +677,6 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
-        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -706,7 +703,6 @@ class LiteLLMRoutes(enum.Enum):
             "/user/list",
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
-            "/user/daily/activity/aggregated/search",
             # team
             "/team/new",
             "/team/update",
@@ -724,8 +720,6 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
-            "/team/daily/activity/export",
-            "/team/daily/activity/aggregated/search",
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
@@ -897,8 +891,6 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
-        "/team/daily/activity/export",
-        "/team/daily/activity/aggregated/search",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
@@ -914,7 +906,6 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
-        "/user/daily/activity/aggregated/search",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
@@ -998,8 +989,6 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
-            "/team/daily/activity/export",
-            "/team/daily/activity/aggregated/search",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",
@@ -2664,6 +2653,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    fail_closed_rate_limit_enforcement: bool | None = Field(
+        None,
+        description=(
+            "reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of "
+            "enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times "
+            "the limit across N pods)"
+        ),
+    )
     control_plane_url: str | None = Field(
         None,
         description=(
@@ -2973,6 +2970,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this "
             "are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. "
             "Set this well above health_check_interval because /health and the UI read the latest row per model."
+        ),
+    )
+    maximum_daily_tag_spend_retention_period: str | None = Field(
+        None,
+        description=(
+            "Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older "
+            "than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never "
+            "deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter."
         ),
     )
     use_spend_logs_partitioning: bool | None = Field(
@@ -4017,6 +4022,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
+    )
+
+    signoz: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="signoz",
+        ui_callback_name="SigNoz",
+        litellm_callback_params=("SIGNOZ_INGESTION_ENDPOINT", "SIGNOZ_INGESTION_KEY"),
     )
 
     zerobus: CallbackOnUI = CallbackOnUI(

@@ -26,6 +26,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, UnionType
@@ -213,6 +214,8 @@ try:
     import orjson
     import yaml
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import STATE_STOPPED
+    from apscheduler.triggers.base import BaseTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
@@ -275,7 +278,6 @@ from litellm.constants import (
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
     CLI_SSO_SESSION_TTL_SECONDS,
-    DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -545,6 +547,7 @@ from litellm.proxy.health_endpoints._health_endpoints import router as health_ro
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import fail_closed_rate_limit_enforcement_enabled
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
@@ -756,9 +759,6 @@ from litellm.proxy.shutdown.scheduled_jobs import (
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
     release_unbound_budget_reservation,
-)
-from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
-    run_scheduled_daily_global_spend_reconcile,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
@@ -1470,6 +1470,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     ProxyStartupEvent._warn_budget_without_db(
         max_budget=litellm.max_budget,
         prisma_client=prisma_client,
+    )
+    ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
+        fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
+        redis_usage_cache=redis_usage_cache,
     )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -2543,7 +2547,7 @@ def general_settings_view() -> Mapping[str, object]:
     return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
 
 
-config_passthrough_endpoints: list[dict[str, Any]] | None = None
+config_passthrough_endpoints: list[dict[str, object]] | None = None
 log_file: Final = "api_log.json"
 worker_config: Final = None
 master_key: str | None = None
@@ -2577,7 +2581,7 @@ use_queue = False
 health_check_interval = None
 health_check_concurrency = None
 health_check_details = None
-health_check_results: dict[str, int | list[dict[str, Any]]] = {}
+health_check_results: dict[str, int | list[dict[str, object]]] = {}
 background_health_check_loop_active = False
 background_health_check_cycle_seq = 0
 queue: Final[list] = []
@@ -5073,6 +5077,20 @@ def _current_general_settings() -> Mapping[str, object]:
     return general_settings
 
 
+_CLEANUP_SCHEDULE_KEYS: Final = (
+    "maximum_spend_logs_retention_period",
+    "maximum_autorouter_session_retention_period",
+    "maximum_health_check_retention_period",
+    "maximum_daily_tag_spend_retention_period",
+    "maximum_spend_logs_cleanup_cron",
+    "maximum_spend_logs_retention_interval",
+)
+
+
+def _cleanup_schedule_of(settings: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(settings.get(key) for key in _CLEANUP_SCHEDULE_KEYS)
+
+
 @lru_cache(maxsize=4096)
 def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     verbose_proxy_logger.warning(
@@ -5081,6 +5099,61 @@ def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
         model_id,
         ", ".join(fields),
     )
+
+
+_DB_CONFIG_CALLBACK_EVENT_TYPES: Final[Mapping[str, tuple[Literal["success", "failure"], ...]]] = MappingProxyType(
+    {"success_callback": ("success",), "failure_callback": ("failure",), "callbacks": ("success", "failure")}
+)
+_CALLBACK_LIST_NAMES: Final = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+)
+
+
+def _callback_list_entries(list_name: str) -> tuple[tuple[str, object], ...]:
+    return tuple((list_name, entry) for entry in getattr(litellm, list_name))
+
+
+def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
+    return tuple(chain.from_iterable(_callback_list_entries(list_name) for list_name in _CALLBACK_LIST_NAMES))
+
+
+def _entries_missing_from(
+    entries: tuple[tuple[str, object], ...], others: tuple[tuple[str, object], ...]
+) -> tuple[tuple[str, object], ...]:
+    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in others)
+    return tuple((list_name, entry) for list_name, entry in entries if (list_name, id(entry)) not in other_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class _DbCallbackRegistration:
+    added: tuple[tuple[str, object], ...] = ()
+    displaced: tuple[tuple[str, object], ...] = ()
+
+
+def _restore_displaced_callback(list_name: str, entry: object) -> None:
+    callback_list: Final = getattr(litellm, list_name)
+    if entry not in callback_list:
+        callback_list.append(entry)
+
+
+def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
+    for list_name, entry in registration.added:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            getattr(litellm, list_name), entry, require_self=False
+        )
+    for list_name, entry in registration.displaced:
+        _restore_displaced_callback(list_name, entry)
+
+
+def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key: str) -> tuple[tuple[str, str], ...]:
+    callbacks: Final = litellm_settings.get(setting_key)
+    if not isinstance(callbacks, list):
+        return ()
+    return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
 
 
 class ProxyConfig:
@@ -5095,6 +5168,8 @@ class ProxyConfig:
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._last_cleanup_schedule_attempt: tuple[object, ...] | None = None
+        self._cleanup_reschedule_failed: bool = False
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -5113,6 +5188,7 @@ class ProxyConfig:
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
+        self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
                 "general_settings": self.settings,
@@ -7137,7 +7213,7 @@ class ProxyConfig:
         still_desired_ids: frozenset[str] | None = None
 
         # Load config separately so a timeout here doesn't block model loading
-        config_data: dict = {}
+        config_data: dict | None = None
         search_tools = None
         try:
             config_data = await proxy_config.get_config()
@@ -7196,8 +7272,8 @@ class ProxyConfig:
         if llm_router is not None:
             llm_model_list = llm_router.get_model_list()
 
-        # check if user set any callbacks in Config Table
-        self._add_callbacks_from_db_config(config_data)
+        if config_data is not None:
+            self._add_callbacks_from_db_config(config_data)
 
         # router settings
         await self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
@@ -7230,37 +7306,34 @@ class ProxyConfig:
                 litellm.logging_callback_manager.add_litellm_callback(callback)
 
     def _add_callbacks_from_db_config(self, config_data: dict) -> None:
-        """
-        Adds callbacks from DB config to litellm
-        """
         litellm_settings: Final = config_data.get("litellm_settings", {}) or {}
-        success_callbacks: Final = litellm_settings.get("success_callback", None)
-        failure_callbacks: Final = litellm_settings.get("failure_callback", None)
-        callbacks: Final = litellm_settings.get("callbacks", None)
+        configured: Final = tuple(
+            chain.from_iterable(
+                _configured_db_callbacks(litellm_settings, setting_key)
+                for setting_key in _DB_CONFIG_CALLBACK_EVENT_TYPES
+            )
+        )
+        still_configured: Final = frozenset(configured)
+        for key, registration in self._db_config_callback_entries.items():
+            if key not in still_configured:
+                _unregister_db_callback(registration)
+        self._db_config_callback_entries = MappingProxyType(
+            {key: self._register_db_config_callback(*key) for key in dict.fromkeys(configured)}
+        )
 
-        if success_callbacks is not None and isinstance(success_callbacks, list):
-            for success_callback in success_callbacks:
-                self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                    callback=success_callback,
-                    event_types=["success"],
-                    existing_callbacks=litellm.success_callback,
-                )
-
-        if failure_callbacks is not None and isinstance(failure_callbacks, list):
-            for failure_callback in failure_callbacks:
-                self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                    callback=failure_callback,
-                    event_types=["failure"],
-                    existing_callbacks=litellm.failure_callback,
-                )
-
-        if callbacks is not None and isinstance(callbacks, list):
-            for callback in callbacks:
-                self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                    callback=callback,
-                    event_types=["success", "failure"],
-                    existing_callbacks=litellm.callbacks,
-                )
+    def _register_db_config_callback(self, setting_key: str, callback: str) -> _DbCallbackRegistration:
+        previous: Final = self._db_config_callback_entries.get((setting_key, callback), _DbCallbackRegistration())
+        before: Final = _registered_callback_entries()
+        self._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback=callback,
+            event_types=list(_DB_CONFIG_CALLBACK_EVENT_TYPES[setting_key]),
+            existing_callbacks=getattr(litellm, setting_key),
+        )
+        after: Final = _registered_callback_entries()
+        return _DbCallbackRegistration(
+            added=previous.added + _entries_missing_from(after, before),
+            displaced=previous.displaced + _entries_missing_from(before, after),
+        )
 
     def _encrypt_env_variables(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
         """
@@ -7450,69 +7523,67 @@ class ProxyConfig:
         if scheduler is None:
             return
 
-        # Remove existing job if it exists
-        try:
-            scheduler.remove_job("spend_log_cleanup_job")
-            verbose_proxy_logger.info("Removed existing spend log cleanup job")
-        except Exception:
-            pass  # Job might not exist, which is fine
-
-        # Schedule new job if retention period is set (not None)
-        retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
-        autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
-        health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
-        if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
-            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
-                SpendLogCleanup,
+        wants_job: Final = any(
+            general_settings.get(key) is not None
+            for key in (
+                "maximum_spend_logs_retention_period",
+                "maximum_autorouter_session_retention_period",
+                "maximum_health_check_retention_period",
+                "maximum_daily_tag_spend_retention_period",
             )
+        )
+        if not wants_job:
+            if scheduler.get_job("spend_log_cleanup_job") is not None:
+                scheduler.remove_job("spend_log_cleanup_job")
+                verbose_proxy_logger.info("Removed existing spend log cleanup job")
+            return
 
-            spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+        trigger: Final = self._spend_log_cleanup_trigger()
+        if trigger is None:
+            return
+        from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+            SpendLogCleanup,
+        )
 
-            if cleanup_cron:
-                from apscheduler.triggers.cron import CronTrigger
+        scheduler.add_job(
+            SpendLogCleanup().cleanup_old_spend_logs,
+            trigger,
+            args=[prisma_client],
+            id="spend_log_cleanup_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
 
-                try:
-                    cron_trigger: Final = CronTrigger.from_crontab(cleanup_cron)
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        cron_trigger,
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with cron: %s", cleanup_cron)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
-            else:
-                # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import (
-                    duration_in_seconds,
-                )
+    def _spend_log_cleanup_trigger(self) -> BaseTrigger | None:
+        cleanup_cron: Final[object] = general_settings.get("maximum_spend_logs_cleanup_cron")
+        if cleanup_cron:
+            from apscheduler.triggers.cron import CronTrigger
 
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
-                try:
-                    interval_seconds: Final = duration_in_seconds(retention_interval)
-                    # this runs against a started scheduler, which the startup stagger sweep
-                    # cannot reach, so the offset is applied here or the job reconverges across
-                    # replicas the first time an admin edits the retention settings
-                    scheduler.add_job(
-                        spend_log_cleanup.cleanup_old_spend_logs,
-                        stagger_trigger(
-                            job_id="spend_log_cleanup_job",
-                            trigger=IntervalTrigger(seconds=interval_seconds),
-                            period_seconds=interval_seconds,
-                            settings=parse_stagger_settings(general_settings),
-                        ),
-                        args=[prisma_client],
-                        id="spend_log_cleanup_job",
-                        replace_existing=True,
-                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                    )
-                    verbose_proxy_logger.info("Spend log cleanup rescheduled with interval: %s", retention_interval)
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+            try:
+                cron_trigger: Final[BaseTrigger] = CronTrigger.from_crontab(cleanup_cron)
+            except (ValueError, TypeError, AttributeError):
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
+                return None
+            return cron_trigger
+        retention_interval: Final[object] = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+        if not isinstance(retention_interval, str):
+            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
+            return None
+        # this runs against a started scheduler, which the startup stagger sweep
+        # cannot reach, so the offset is applied here or the job reconverges across
+        # replicas the first time an admin edits the retention settings
+        try:
+            interval_seconds: Final = duration_in_seconds(retention_interval)
+            return stagger_trigger(
+                job_id="spend_log_cleanup_job",
+                trigger=IntervalTrigger(seconds=interval_seconds),
+                period_seconds=interval_seconds,
+                settings=parse_stagger_settings(general_settings),
+            )
+        except (ValueError, OverflowError):
+            verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value: %r", retention_interval)
+            return None
 
     async def _update_general_settings(self, db_general_settings: Mapping[str, SettingsJsonValue] | None) -> None:
         global general_settings
@@ -7521,32 +7592,28 @@ class ProxyConfig:
         if not isinstance(general_settings, SettingsStore):
             self.settings.load_yaml(_as_settings_mapping(general_settings))
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
-        previous_retention_values: Final = self._resolved_retention_values()
+        previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
         previous_pass_through_endpoints: Final = self.settings.get("pass_through_endpoints")
         self.settings.apply_db_row("general_settings", db_general_settings)
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
             cache_size_was_db,
-            previous_retention_values,
+            previous_cleanup_schedule,
             previous_pass_through_endpoints,
         )
 
-    def _resolved_retention_values(self) -> tuple[SettingsJsonValue | None, ...]:
-        return tuple(
-            self.settings.get(key)
-            for key in (
-                "maximum_spend_logs_retention_period",
-                "maximum_autorouter_session_retention_period",
-                "maximum_health_check_retention_period",
-            )
-        )
+    def _resolved_cleanup_schedule(self) -> tuple[object, ...]:
+        return _cleanup_schedule_of(self.settings)
+
+    def record_cleanup_schedule_attempt(self, settings: Mapping[str, object]) -> None:
+        self._last_cleanup_schedule_attempt = _cleanup_schedule_of(settings)
 
     async def _apply_general_settings_side_effects(
         self,
         db_values: Mapping[str, SettingsJsonValue],
         cache_size_was_db: bool,
-        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[object, ...],
         previous_pass_through_endpoints: SettingsJsonValue | None,
     ) -> None:
         effects: Final = (
@@ -7555,7 +7622,7 @@ class ProxyConfig:
             self._apply_boolean_settings,
             partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
             self._apply_store_model_in_db_setting,
-            partial(self._apply_retention_settings, previous_retention_values=previous_retention_values),
+            partial(self._apply_retention_settings, previous_cleanup_schedule=previous_cleanup_schedule),
             self._apply_ssrf_settings,
         )
         for effect in effects:
@@ -7650,10 +7717,36 @@ class ProxyConfig:
     async def _apply_retention_settings(
         self,
         db_values: Mapping[str, SettingsJsonValue],
-        previous_retention_values: tuple[SettingsJsonValue | None, ...],
+        previous_cleanup_schedule: tuple[object, ...],
     ) -> None:
-        if previous_retention_values != self._resolved_retention_values():
+        # while the scheduler is still stopped the startup block owns the first registration
+        if scheduler is not None and scheduler.state == STATE_STOPPED:
+            return
+        schedule: Final = self._resolved_cleanup_schedule()
+        wants_job: Final = any(value is not None for value in schedule[:4])
+        has_job: Final = scheduler is not None and scheduler.get_job("spend_log_cleanup_job") is not None
+        baseline: Final = (
+            self._last_cleanup_schedule_attempt
+            if has_job and self._last_cleanup_schedule_attempt is not None
+            else previous_cleanup_schedule
+        )
+        retry_due: Final = (
+            wants_job
+            and (not has_job or self._cleanup_reschedule_failed)
+            and schedule != self._last_cleanup_schedule_attempt
+        )
+        if not (baseline != schedule or retry_due or (has_job and not wants_job)):
+            return
+        try:
             await self._reschedule_spend_log_cleanup_job()
+        except Exception as exc:
+            self._cleanup_reschedule_failed = True
+            verbose_proxy_logger.exception(
+                "Spend log cleanup could not be rescheduled, will retry on next sync: %s", exc
+            )
+            return
+        self._cleanup_reschedule_failed = False
+        self._last_cleanup_schedule_attempt = schedule
 
     async def _apply_ssrf_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         _apply_ssrf_general_settings(db_values)
@@ -9827,6 +9920,20 @@ class ProxyStartupEvent:
             max_budget,
         )
 
+    @staticmethod
+    def _warn_fail_closed_rate_limits_without_redis(
+        fail_closed_rate_limit_enforcement: bool, redis_usage_cache: RedisCache | None
+    ) -> None:
+        if redis_usage_cache is not None or not fail_closed_rate_limit_enforcement:
+            return
+
+        verbose_proxy_logger.warning(
+            "general_settings.fail_closed_rate_limit_enforcement is enabled but no Redis is configured, so rate "
+            "limits are enforced per pod from memory and the setting rejects nothing. Configure "
+            "general_settings.coordination_redis (or REDIS_HOST/REDIS_PORT/REDIS_PASSWORD) to share the counters "
+            "across pods and make the setting effective."
+        )
+
     @classmethod
     def _initialize_startup_logging(
         cls,
@@ -10460,12 +10567,6 @@ class ProxyStartupEvent:
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
-        cls._initialize_daily_global_spend_reconcile_job(
-            scheduler=scheduler,
-            proxy_logging_obj=proxy_logging_obj,
-            prisma_client=prisma_client,
-        )
-
         cls._initialize_spend_capture_rate_check_job(
             scheduler=scheduler,
             proxy_logging_obj=proxy_logging_obj,
@@ -10516,15 +10617,19 @@ class ProxyStartupEvent:
             )
 
         ### SPEND LOG CLEANUP ###
+        cleanup_settings: Final = _current_general_settings()
         if (
-            general_settings.get("maximum_spend_logs_retention_period") is not None
-            or general_settings.get("maximum_autorouter_session_retention_period") is not None
-            or general_settings.get("maximum_health_check_retention_period") is not None
+            cleanup_settings.get("maximum_spend_logs_retention_period") is not None
+            or cleanup_settings.get("maximum_autorouter_session_retention_period") is not None
+            or cleanup_settings.get("maximum_health_check_retention_period") is not None
+            or cleanup_settings.get("maximum_daily_tag_spend_retention_period") is not None
         ):
             spend_log_cleanup: Final = SpendLogCleanup()
-            cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")
+            cleanup_cron: Final = cleanup_settings.get("maximum_spend_logs_cleanup_cron")
 
-            if cleanup_cron:
+            if cleanup_cron and not isinstance(cleanup_cron, str):
+                verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %r", cleanup_cron)
+            elif isinstance(cleanup_cron, str) and cleanup_cron:
                 from apscheduler.triggers.cron import CronTrigger
 
                 try:
@@ -10542,8 +10647,10 @@ class ProxyStartupEvent:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_cleanup_cron value: %s", cleanup_cron)
             else:
                 # Interval-based scheduling (existing behavior)
-                retention_interval: Final = general_settings.get("maximum_spend_logs_retention_interval", "1d")
+                retention_interval: Final = cleanup_settings.get("maximum_spend_logs_retention_interval", "1d")
                 try:
+                    if not isinstance(retention_interval, str):
+                        raise ValueError(retention_interval)
                     interval_seconds: Final = duration_in_seconds(retention_interval)
                     scheduler.add_job(
                         spend_log_cleanup.cleanup_old_spend_logs,
@@ -10554,8 +10661,11 @@ class ProxyStartupEvent:
                         replace_existing=True,
                         misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
                     )
-                except ValueError:
-                    verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
+                except (ValueError, OverflowError):
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value: %r", retention_interval
+                    )
+            proxy_config.record_cleanup_schedule_attempt(cleanup_settings)
         ### CHECK BATCH COST ###
         if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
             try:
@@ -10813,39 +10923,6 @@ class ProxyStartupEvent:
                 "Expired UI session key cleanup disabled (set "
                 "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
-
-    @classmethod
-    def _initialize_daily_global_spend_reconcile_job(
-        cls,
-        scheduler: AsyncIOScheduler,
-        proxy_logging_obj: ProxyLogging,
-        prisma_client: PrismaClient,
-    ) -> None:
-        async def alert(message: str) -> None:
-            await proxy_logging_obj.alerting_handler(
-                message=message,
-                level="High",
-                alert_type=AlertType.failed_tracking_spend,
-            )
-
-        async def reconcile() -> None:
-            await run_scheduled_daily_global_spend_reconcile(
-                prisma_client,
-                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
-                alert=alert,
-            )
-
-        scheduler.add_job(
-            reconcile,
-            "cron",
-            hour=0,
-            minute=30,
-            timezone="UTC",
-            id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
-        )
 
     @classmethod
     def _initialize_spend_capture_rate_check_job(
@@ -13574,7 +13651,7 @@ async def _try_provider_token_count(
     model_to_use: str,
     messages: list | None,
     contents: list | None,
-    deployment: dict[str, Any] | None,
+    deployment: dict[str, object] | None,
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
@@ -14373,7 +14450,7 @@ async def _fetch_db_models_for_search(
     sort_by: str | None,
     is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
     model_name: str | None = None,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, object]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
     `(decrypted_models, total_count)` where `total_count` is the cheap
@@ -14520,7 +14597,7 @@ async def _apply_search_filter_to_models(
     router_models_count: Final = config_models_count + db_models_in_router_count
 
     # Query database for additional models with search term
-    db_models: list[dict[str, Any]] = []
+    db_models: list[dict[str, object]] = []
     exact_name_can_match: Final = model_name is None or search_lower in model_name.lower()
     if prisma_client is not None and exact_name_can_match:
         try:
@@ -14715,7 +14792,7 @@ def _matches_model_info_filters(
 
 
 def _paginate_models_response(
-    all_models: list[dict[str, Any]],
+    all_models: Sequence[Mapping[str, object]],
     page: int,
     size: int,
     total_count: int | None,
@@ -17890,6 +17967,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "store_prompts_in_spend_logs": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
+        "maximum_daily_tag_spend_retention_period": "String",
         "maximum_spend_logs_cleanup_batch_size": "Integer",
         "maximum_spend_logs_cleanup_max_batches": "Integer",
         "maximum_spend_logs_cleanup_run_budget": "String",

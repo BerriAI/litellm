@@ -463,3 +463,23 @@ def test_convert_mcp_hook_response_to_kwargs_invalid_original_raises(proxy_loggi
         proxy_logging._convert_mcp_hook_response_to_kwargs(
             response_data={"modified_arguments": {"a": 1}}, original_kwargs=None  # type: ignore[arg-type]
         )
+
+
+def test_convert_mcp_to_llm_format_carries_tool_text_for_a_discovery_scan(proxy_logging, make_mcp_request_obj):
+    req = make_mcp_request_obj(tool_name="delete_note", arguments={})
+    schema = {"type": "object", "properties": {"id": {"type": "string", "description": "Note id"}}}
+    out = proxy_logging._convert_mcp_to_llm_format(
+        request_obj=req,
+        kwargs={"mcp_tool_description": "Delete a note", "mcp_input_schema": schema},
+    )
+    assert out["mcp_tool_description"] == "Delete a note"
+    assert out["mcp_input_schema"] == schema
+    assert "Description: Delete a note" in out["messages"][0]["content"]
+
+
+def test_convert_mcp_to_llm_format_has_no_description_keys_at_call_time(proxy_logging, make_mcp_request_obj):
+    req = make_mcp_request_obj(tool_name="delete_note", arguments={"id": "1"})
+    out = proxy_logging._convert_mcp_to_llm_format(request_obj=req, kwargs={})
+    assert "mcp_tool_description" not in out
+    assert "mcp_input_schema" not in out
+    assert "Description:" not in out["messages"][0]["content"]

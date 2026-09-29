@@ -3,6 +3,7 @@
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
@@ -661,12 +662,7 @@ class OpenTelemetryV2(CustomLogger):
         if error_override is None and start_time is None and end_time is None and parent_otel_span is None:
             return None
         if error_override is not None and data.error is None:
-            data = ServiceSpanData(
-                service_name=data.service_name,
-                call_type=data.call_type,
-                error=SpanError(message=error_override),
-                event_metadata=data.event_metadata,
-            )
+            data = replace(data, error=SpanError(message=error_override))
         # Parent like every other span: ambient context first (so identity Baggage
         # rides along and the call nests under whatever request phase is active —
         # e.g. a DB lookup under the live ``auth`` span), falling back to the

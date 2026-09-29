@@ -1,23 +1,24 @@
-use std::{convert::Infallible, sync::Mutex};
+use litellm_host::lifecycle::ExecutionEvent;
+use std::sync::Mutex;
 
 use litellm_core::messages::route::Messages;
 use litellm_host::{
-    event::{CallEvent, MachineEvent, RequestContext, WireRequest},
-    host::Host,
+    interceptors::{RequestContext, WireRequest},
+    lifecycle::CallEvent,
 };
-use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use rstest::rstest;
 
 use super::*;
 
 type Rewrite = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sync>;
 
-/// Projects like `LocalMessagesHost`, answers `before_send` through `rewrite`, and keeps
+/// Projects like `LocalMessagesHost`, answers `before_provider_request` through `rewrite`, and keeps
 /// every event the driver emits.
 struct RecordingHost {
     call: LocalMessagesHost,
     rewrite: Rewrite,
-    events: Mutex<Vec<CallEvent>>,
+    events: super::support::Observations,
     optional_params: Mutex<Vec<Value>>,
 }
 
@@ -26,7 +27,7 @@ impl RecordingHost {
         Self {
             call: LocalMessagesHost::new(call),
             rewrite,
-            events: Mutex::new(Vec::new()),
+            events: super::support::Observations::default(),
             optional_params: Mutex::new(Vec::new()),
         }
     }
@@ -41,7 +42,7 @@ impl RecordingHost {
             .unwrap()
             .iter()
             .filter_map(|event| match event {
-                CallEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
+                CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                     Some(raw.body.clone())
                 }
                 _ => None,
@@ -50,19 +51,32 @@ impl RecordingHost {
     }
 }
 
-impl Host<Messages> for RecordingHost {
-    async fn project(&self) -> Result<MessagesCall, Error> {
-        self.call.project().await
+impl RecordingHost {
+    pub fn request(&self) -> Result<MessagesCall, Error> {
+        self.call.request()
     }
-
-    async fn custom_op(&self, op: Infallible) -> Result<(), Error> {
-        match op {}
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
+        litellm_host_native::in_process::Host {
+            services: &(),
+            interceptors: self,
+            stream: &(),
+            observers: Some(&self.events.sender),
+        }
     }
+}
 
-    async fn before_send(
+impl litellm_host::lifecycle::CallObserver for RecordingHost {
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
+        self.events.sender.emit(event);
+    }
+}
+impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
+    for RecordingHost
+{
+    async fn before_provider_request(
         &self,
         wire: WireRequest,
-        context: &RequestContext,
+        context: RequestContext,
     ) -> Result<WireRequest, Error> {
         self.optional_params
             .lock()
@@ -70,15 +84,26 @@ impl Host<Messages> for RecordingHost {
             .push(context.optional_params.clone());
         (self.rewrite)(wire)
     }
-
-    async fn emit(&self, event: &CallEvent) -> Result<(), Error> {
-        self.events.lock().unwrap().push(event.clone());
+    async fn after_provider_response(
+        &self,
+        raw: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
+        );
         Ok(())
     }
 }
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(messages_machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host_native::in_process::run_hosted(
+        machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
+        host.runtime(),
+    )
+    .await
 }
 
 fn authenticated(call: MessagesCall, api_base: String) -> MessagesCall {
@@ -129,8 +154,7 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
 
     let error = run_through(&host)
         .await
-        .err()
-        .expect("the host failure fails the call");
+        .expect_err("the host failure fails the call");
 
     assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
     assert!(received(&upstream).await.is_empty());
@@ -146,7 +170,7 @@ async fn the_raw_upstream_text_is_emitted_once_for_a_message(call: MessagesCall)
 
     let output = run_through(&host).await.expect("messages call succeeds");
 
-    assert!(matches!(output, MessagesOutput::Message(_)));
+    assert!(matches!(output, MessagesOutput::Complete(_)));
     let [emitted] = <[String; 1]>::try_from(host.raw_responses())
         .unwrap_or_else(|raws| panic!("expected one raw response, got {}", raws.len()));
     assert_eq!(serde_json::from_str::<Value>(&emitted).unwrap(), raw);
@@ -161,10 +185,10 @@ async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
     #[case] response: ResponseTemplate,
 ) {
     let upstream = upstream([response]).await;
-    let mut body = call.body.clone();
-    body.insert("stream".into(), json!(true));
-    let host =
-        RecordingHost::passthrough(authenticated(MessagesCall { body, ..call }, upstream.uri()));
+    let host = RecordingHost::passthrough(authenticated(
+        with_fields(call, json!({"stream": true})),
+        upstream.uri(),
+    ));
 
     let _ = run_through(&host).await;
 
@@ -180,15 +204,8 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     call: MessagesCall,
 ) {
     let upstream = upstream([message_response()]).await;
-    let body: Map<String, Value> = call
-        .body
-        .clone()
-        .into_iter()
-        .chain([("temperature".to_string(), json!(0.2))])
-        .collect();
     let host = RecordingHost::passthrough(authenticated(
         MessagesCall {
-            body,
             shaping: MessagesShaping {
                 capabilities: AnthropicModelCapabilities {
                     supports_sampling_params: false,
@@ -197,7 +214,7 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
                 drop_params: true,
                 ..MessagesShaping::default()
             },
-            ..call
+            ..with_fields(call, json!({"temperature": 0.2}))
         },
         upstream.uri(),
     ));
@@ -205,6 +222,6 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     run_through(&host).await.expect("messages call succeeds");
 
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
-        .unwrap_or_else(|seen| panic!("before_send runs once, saw {}", seen.len()));
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
 }
