@@ -1,5 +1,5 @@
 use litellm_llms_types::formats::responses::{
-    ResponsesApiResponse, streaming_websocket::ResponsesWsEvent,
+    ResponsesApiResponse, ResponsesInput, ResponsesRequest, streaming_websocket::ResponsesWsEvent,
 };
 use serde_json::{Map, Value};
 
@@ -165,26 +165,23 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         input: Value,
         params: Map<String, Value>,
     ) -> Result<Value, Error> {
-        if !input.is_string() && !input.is_array() {
-            return Err(Error::InvalidRequest(
-                "responses input must be a string or an array".into(),
-            ));
-        }
+        let input: ResponsesInput = serde_json::from_value(input).map_err(|_| {
+            Error::InvalidRequest("responses input must be a string or an array".into())
+        })?;
         if params
             .get("stream")
             .is_some_and(|stream| !stream.is_boolean())
         {
             return Err(Error::InvalidRequest("stream must be a boolean".into()));
         }
-        Ok(Value::Object(
-            params
+        Ok(serde_json::json!(ResponsesRequest {
+            model: model.into(),
+            input,
+            extra: params
                 .into_iter()
-                .chain([
-                    ("model".into(), Value::String(model.into())),
-                    ("input".into(), input),
-                ])
+                .filter(|(key, _)| !matches!(key.as_str(), "model" | "input"))
                 .collect(),
-        ))
+        }))
     }
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {

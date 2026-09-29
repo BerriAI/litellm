@@ -10,7 +10,7 @@ use litellm_core_utils::{
 };
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, ChatMessageContent,
+    ChatCompletionsUsage, ChatContentPart, ChatMessage, ChatMessageContent,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -421,8 +421,8 @@ fn has_blank_text(message: &ChatMessage) -> bool {
         None => false,
         Some(ChatMessageContent::Text(text)) => text.trim().is_empty(),
         Some(ChatMessageContent::Parts(parts)) => parts.iter().any(|part| {
-            part.get("text")
-                .and_then(Value::as_str)
+            part.known()
+                .and_then(ChatContentPart::text)
                 .is_none_or(|text| text.trim().is_empty())
         }),
     }

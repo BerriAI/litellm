@@ -7,8 +7,8 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::core_helpers::unix_now;
 use litellm_llms_types::formats::chat_completions::{
-    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, PromptTokensDetails,
+    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsRequest,
+    ChatCompletionsResponse, ChatCompletionsUsage, ChatMessage, PromptTokensDetails,
 };
 use serde_json::{Map, Value, json};
 
@@ -102,16 +102,12 @@ impl BaseConfig for OpenAILikeChatConfig {
         if let Some(limit) = params.remove("max_completion_tokens") {
             params.insert("max_tokens".to_string(), limit);
         }
-        let body = Map::from_iter(
-            [
-                ("model".to_string(), json!(model)),
-                ("messages".to_string(), json!(messages)),
-            ]
-            .into_iter()
-            .chain(params),
-        );
         Ok(ProviderChatRequestData {
-            body: Value::Object(body),
+            body: json!(ChatCompletionsRequest {
+                model: model.into(),
+                messages,
+                extra: params,
+            }),
             stream_shape: Default::default(),
         })
     }

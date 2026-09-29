@@ -341,3 +341,38 @@ fn tool_parameters_decline_before_the_call() {
         Some(Unsupported("unrecognized request parameter"))
     );
 }
+
+#[rstest]
+#[case::text(json!({"type": "text", "text": "hi"}), None)]
+#[case::text_extension(json!({"type": "text", "text": "hi", "extension": null}), Some(Unsupported("non-text message content")))]
+#[case::image(json!({"type": "image_url", "image_url": {"url": "https://example.test/image"}}), Some(Unsupported("non-text message content")))]
+#[case::unknown(json!({"type": "future_part", "text": "hi"}), Some(Unsupported("non-text message content")))]
+#[case::malformed(json!({"type": "text", "text": null}), Some(Unsupported("non-text message content")))]
+#[case::scalar(json!(7), Some(Unsupported("non-text message content")))]
+fn typed_content_does_not_expand_the_adapter_capability_gate(
+    #[case] part: Value,
+    #[case] expected: Option<Unsupported>,
+) {
+    assert_eq!(
+        reason(json!([{"role": "user", "content": [part]}]), json!({})),
+        expected
+    );
+}
+
+#[rstest]
+fn request_builder_preserves_typed_content_and_opaque_extensions() {
+    let conversation = json!([{"role": "user", "content": [
+        {"type": "text", "text": "hi", "cache_control": null},
+        {"type": "image_url", "image_url": {"url": "https://example.test/image", "detail": null}},
+        {"type": "future_part", "data": [null, 1]}
+    ]}]);
+    let body = transform(
+        "test-model",
+        conversation.clone(),
+        json!({"provider_option": {"nested": null}}),
+    );
+    assert_eq!(
+        body,
+        json!({"model": "test-model", "messages": conversation, "provider_option": {"nested": null}})
+    );
+}
