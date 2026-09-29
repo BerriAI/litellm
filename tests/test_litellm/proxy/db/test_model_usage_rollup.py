@@ -6,10 +6,12 @@ import pytest
 from litellm.proxy.db.model_usage_rollup import increment_daily_model_usage, model_usage_task_type
 
 
-def test_model_usage_task_type_maps_supported_calls() -> None:
-    assert model_usage_task_type("acompletion") == "chat"
-    assert model_usage_task_type("aembedding") == "embeddings"
-    assert model_usage_task_type("not-a-real-call") == "unknown"
+def test_model_usage_task_type_reads_task_tag_or_defaults() -> None:
+    assert model_usage_task_type('["team-a", "task:classification"]') == "classification"
+    assert model_usage_task_type('["task:made-up"]') == "uncategorized"
+    assert model_usage_task_type('["debugging"]') == "debugging"
+    assert model_usage_task_type("[]") == "uncategorized"
+    assert model_usage_task_type("not json") == "uncategorized"
 
 
 @pytest.mark.asyncio
@@ -59,4 +61,29 @@ async def test_increment_daily_model_usage_uses_atomic_prisma_upsert() -> None:
     call = table.upsert.await_args.kwargs
     assert call["data"]["create"]["request_count"] == 1
     assert call["data"]["update"]["completion_tokens"] == {"increment": 20}
-    assert call["data"]["create"]["task_type"] == "chat"
+    assert call["data"]["create"]["task_type"] == "uncategorized"
+
+
+@pytest.mark.asyncio
+async def test_increment_daily_model_usage_records_task_from_request_tags() -> None:
+    table = MagicMock()
+    table.upsert = AsyncMock()
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_dailymodelusage = table
+    payload = {
+        "call_type": "acompletion",
+        "spend": 0.1,
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "startTime": datetime(2026, 9, 28, tzinfo=timezone.utc),
+        "model": "gpt-5",
+        "model_group": "gpt-5",
+        "metadata": "{}",
+        "request_tags": '["task:debugging"]',
+        "custom_llm_provider": "openai",
+        "status": "success",
+    }
+
+    await increment_daily_model_usage(prisma_client, payload)
+
+    assert table.upsert.await_args.kwargs["data"]["create"]["task_type"] == "debugging"
