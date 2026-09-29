@@ -8572,12 +8572,8 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.01,
-            "search_context_size_low": 0.01,
-            "search_context_size_medium": 0.01
-        },
-        "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models",
+        "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
+        "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -8594,7 +8590,7 @@
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
-        "supports_none_reasoning_effort": true,
+        "supports_none_reasoning_effort": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -8620,12 +8616,8 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.01,
-            "search_context_size_low": 0.01,
-            "search_context_size_medium": 0.01
-        },
-        "source": "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/models",
+        "search_context_cost_per_query": {"search_context_size_high":0.01,"search_context_size_low":0.01,"search_context_size_medium":0.01},
+        "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -8642,7 +8634,7 @@
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
-        "supports_none_reasoning_effort": true,
+        "supports_none_reasoning_effort": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
