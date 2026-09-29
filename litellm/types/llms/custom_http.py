@@ -35,6 +35,7 @@ class httpxSpecialProvider(str, Enum):
     ModelCostMap = "model_cost_map"
     PasswordBreachCheck = "password_breach_check"
     ASGI = "asgi"
+    OsoAuthorization = "oso_authorization"
 
 
 VerifyTypes = str | bool | ssl.SSLContext
