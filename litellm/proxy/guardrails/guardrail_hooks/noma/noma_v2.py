@@ -62,6 +62,7 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: str | None = None,
         monitor_mode: bool | None = None,
         block_failures: bool | None = None,
+        gateway_name: str | None = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -69,6 +70,9 @@ class NomaV2Guardrail(CustomGuardrail):
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
         self.api_base = (api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
         self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
+        self.gateway_name = self._get_non_empty_str(gateway_name) or self._get_non_empty_str(
+            os.environ.get("NOMA_GATEWAY_NAME")
+        )
         if monitor_mode is None:
             self.monitor_mode = os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
         else:
@@ -166,6 +170,8 @@ class NomaV2Guardrail(CustomGuardrail):
         }
         if application_id:
             payload["application_id"] = application_id
+        if self.gateway_name:
+            payload["gateway_name"] = self.gateway_name
         return payload
 
     @staticmethod
