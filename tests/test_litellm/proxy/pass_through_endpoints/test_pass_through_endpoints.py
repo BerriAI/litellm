@@ -3533,7 +3533,6 @@ def test_get_registered_pass_through_route_with_custom_root():
         ("", "exact", "/ml", True),
         ("", "exact", "/ml/extra", False),
         ("/llmproxy", "subpath", "/ml/api/v1/time-series-forecast/predict", True),
-        ("/llmproxy", "subpath", "/ml/api/v1/time-series-forecast/predict", True),
         ("/llmproxy", "exact", "/ml", True),
         ("/llmproxy", "subpath", "/other/api", False),
     ],
