@@ -1,11 +1,7 @@
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import {
-  formatGuardrailMode,
-  formatLoggingOnlyScope,
-  modeIncludesLoggingOnly,
-} from "./guardrail_info_helpers";
+import { formatGuardrailMode, formatLoggingOnlyScope, modeIncludesLoggingOnly } from "./guardrail_info_helpers";
 
 type GuardrailModeParams = {
   mode?: unknown;

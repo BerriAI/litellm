@@ -226,7 +226,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
     if (!guardrailData) return;
     form.setValue("guardrail_name", guardrailData.guardrail_name);
     form.setValue("default_on", guardrailData.litellm_params?.default_on);
-    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(guardrailData.litellm_params?.logging_only_scope));
+    const storedLoggingOnlyScope = guardrailData.litellm_params?.logging_only_scope;
+    form.setValue("logging_only_scope_choice", loggingOnlyScopeToChoice(storedLoggingOnlyScope));
     form.setValue(
       "skip_system_message_choice",
       skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail),

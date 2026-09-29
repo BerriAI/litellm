@@ -118,11 +118,7 @@ describe("AddGuardrailForm create payload characterization", () => {
     await pickProvider(user, "Bedrock Guardrail");
     await user.click(screen.getByLabelText("Mode"));
     await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
-    await chooseSelectOption(
-      user,
-      await screen.findByLabelText("Logging only scope"),
-      "Output only (response)",
-    );
+    await chooseSelectOption(user, await screen.findByLabelText("Logging only scope"), "Output only (response)");
 
     await user.type(await screen.findByPlaceholderText("The guardrail id on Bedrock"), "gr-123");
     await user.click(screen.getByRole("button", { name: "Next" }));

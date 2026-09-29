@@ -168,10 +168,10 @@ export const supportsDirectionalLoggingOnlyScope = (
   selectedProvider: string | null,
 ): boolean => {
   const providerKey = selectedProvider
-    ? (guardrail_provider_map[selectedProvider] ??
-        Object.values(guardrail_provider_map).find(
-          (value) => value.toLowerCase() === selectedProvider.toLowerCase(),
-        ))?.toLowerCase()
+    ? (
+        guardrail_provider_map[selectedProvider] ??
+        Object.values(guardrail_provider_map).find((value) => value.toLowerCase() === selectedProvider.toLowerCase())
+      )?.toLowerCase()
     : null;
   return !providerKey || !settings?.providers_without_directional_logging_only_scope?.includes(providerKey);
 };
