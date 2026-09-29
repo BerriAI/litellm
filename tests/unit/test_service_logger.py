@@ -315,15 +315,22 @@ def test_sync_service_hook_starts_no_event_loop_without_callbacks(monkeypatch, s
 
 @pytest.mark.parametrize("hook_name, extra_kwargs", _SYNC_HOOK_CALLS)
 def test_sync_service_hook_still_delivers_to_configured_callbacks(
-    monkeypatch, started_loops, hook_name, extra_kwargs
+    monkeypatch, hook_name, extra_kwargs
 ):
-    """With a service callback, the event is still delivered."""
-    monkeypatch.setattr(litellm, "service_callback", ["datadog"])
-    service_logger = ServiceLogging()
-    async_hook_name = f"async_{hook_name}"
+    """With a service callback, the event still reaches it: a real OTel logger exports the span."""
+    from litellm.integrations.otel.model.spans import SpanRole
 
-    with patch.object(service_logger, async_hook_name, new_callable=AsyncMock) as mock_hook:
-        getattr(service_logger, hook_name)(service=ServiceTypes.REDIS, duration=0.1, call_type="test", **extra_kwargs)
+    v2_logger, exporter = _make_otel_v2_logger()
+    parent = v2_logger._emitter.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    monkeypatch.setattr(litellm, "service_callback", [v2_logger])
 
-    mock_hook.assert_awaited_once()
-    assert started_loops
+    getattr(ServiceLogging(), hook_name)(
+        service=ServiceTypes.REDIS,
+        duration=0.1,
+        call_type="test",
+        parent_otel_span=parent,
+        **extra_kwargs,
+    )
+    parent.end()
+
+    assert "redis test" in [span.name for span in exporter.get_finished_spans()]
