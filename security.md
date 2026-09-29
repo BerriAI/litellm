@@ -1,5 +1,8 @@
 # Data Privacy and Security
 
+## Security Announcements
+
+Anyone can subscribe to the LiteLLM security announcements mailing list, where we give a heads up before publishing a fix for a particularly severe vulnerability (for example a critical CVE). Sign up at [berriai.github.io/security-announce-signup](https://berriai.github.io/security-announce-signup/)
 
 ## Security Vulnerability Reporting Guidelines
 
