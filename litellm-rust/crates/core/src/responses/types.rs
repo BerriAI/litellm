@@ -5,7 +5,7 @@ use litellm_host::call::CallOutput;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, responses::transformation::BaseResponsesApiConfig,
 };
-use litellm_types::responses::main::ResponsesApiResponse;
+use litellm_llms_types::formats::responses::ResponsesApiResponse;
 use serde_json::{Map, Value};
 
 use super::Error;
@@ -30,7 +30,7 @@ pub type ResponsesOutput = CallOutput<ResponsesApiResponse, ResponsesStreamHead,
 pub(super) struct ProviderResponsesRequest {
     pub config: &'static dyn BaseResponsesApiConfig,
     pub environment: ValidatedEnvironment,
-    pub url: String,
+    pub endpoint: litellm_llms::base_llm::endpoint::ResolvedEndpoint,
     pub body: Value,
     pub context: litellm_host::interceptors::RequestContext,
     pub timeout: Option<Duration>,

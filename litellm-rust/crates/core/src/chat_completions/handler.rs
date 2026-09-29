@@ -1,5 +1,4 @@
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
+use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
@@ -9,7 +8,7 @@ use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     chat::transformation::ProviderChatResponseData,
 };
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use serde_json::Value;
 
 use super::Error;
@@ -54,13 +53,14 @@ pub(super) async fn execute(
     let wire = interceptors
         .before_provider_request(
             WireRequest {
-                url,
+                url: url.as_url().to_string(),
                 headers: authenticated.headers,
                 body,
             },
             context,
         )
         .await?;
+    let (wire, destination) = crate::outbound::validate_wire_url(url, wire)?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
     let cache_request =
         crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
@@ -76,7 +76,8 @@ pub(super) async fn execute(
                     headers: wire.headers,
                     signer: authenticated.signer,
                 },
-                wire.url,
+                reqwest::Method::POST,
+                destination,
                 &wire.body,
                 timeout,
             )?;
@@ -148,12 +149,14 @@ pub(super) fn as_response_error(err: Error) -> Error {
 
 pub(super) fn outbound_request(
     authenticated: Authenticated,
-    url: String,
+    method: reqwest::Method,
+    url: litellm_core_utils::url_utils::ApiUrl<litellm_core_utils::url_utils::Complete>,
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<OutboundRequest, Error> {
-    crate::outbound::outbound_request(
+    crate::outbound::endpoint_request(
         authenticated,
+        method,
         url,
         body,
         Some(timeout.unwrap_or(Duration::from_secs(CHAT_COMPLETIONS_TIMEOUT_SECS))),

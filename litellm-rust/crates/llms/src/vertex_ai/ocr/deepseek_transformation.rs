@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use litellm_auth_gcp as vertex;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
@@ -8,10 +9,13 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
-        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-        decode_and_normalize_response, decode_response_value,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
+        decode_response_value,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrResponseFormat,
+    OcrUsageInfo,
 };
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
@@ -85,7 +89,7 @@ enum DeepSeekContent {
 #[derive(Deserialize)]
 struct DeepSeekPage {
     #[serde(default)]
-    #[serde_as(deserialize_as = "litellm_core_utils::serde_compat::LaxI64")]
+    #[serde_as(deserialize_as = "litellm_python_compat::serde_compat::LaxI64")]
     index: i64,
     #[serde(default)]
     markdown: String,
@@ -132,16 +136,21 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<ResolvedEndpoint, Error> {
         let config = vertex_config(request)?;
         let location =
             vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
                 .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
-        self.get_complete_url(
+        let url = self.get_complete_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,
             &location,
-        )
+        )?;
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
+        })
     }
 
     async fn async_transform_ocr_request(
@@ -424,7 +433,8 @@ mod tests {
         DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig, normalize_response,
         provider_model,
     };
-    use crate::base_llm::ocr::transformation::{BaseOcrConfig, OcrDocument};
+    use crate::base_llm::ocr::transformation::BaseOcrConfig;
+    use litellm_llms_types::formats::ocr::OcrDocument;
 
     fn document() -> OcrDocument {
         serde_json::from_value(json!({"type":"image_url","image_url":"gs://bucket/a.png"})).unwrap()

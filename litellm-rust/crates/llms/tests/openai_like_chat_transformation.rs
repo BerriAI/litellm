@@ -6,7 +6,7 @@ use litellm_llms::{
     },
     openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
 };
-use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use litellm_llms_types::formats::chat_completions::{ChatCompletionsResponse, ChatMessage};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -340,4 +340,91 @@ fn tool_parameters_decline_before_the_call() {
         ),
         Some(Unsupported("unrecognized request parameter"))
     );
+}
+
+#[rstest]
+#[case::text(json!({"type": "text", "text": "hi"}), None)]
+#[case::text_extension(json!({"type": "text", "text": "hi", "extension": null}), Some(Unsupported("non-text message content")))]
+#[case::image(json!({"type": "image_url", "image_url": {"url": "https://example.test/image"}}), Some(Unsupported("non-text message content")))]
+#[case::unknown(json!({"type": "future_part", "text": "hi"}), Some(Unsupported("non-text message content")))]
+#[case::malformed(json!({"type": "text", "text": null}), Some(Unsupported("non-text message content")))]
+#[case::scalar(json!(7), Some(Unsupported("non-text message content")))]
+fn typed_content_does_not_expand_the_adapter_capability_gate(
+    #[case] part: Value,
+    #[case] expected: Option<Unsupported>,
+) {
+    assert_eq!(
+        reason(json!([{"role": "user", "content": [part]}]), json!({})),
+        expected
+    );
+}
+
+#[rstest]
+fn request_builder_preserves_typed_content_and_opaque_extensions() {
+    let conversation = json!([{"role": "user", "content": [
+        {"type": "text", "text": "hi", "cache_control": null},
+        {"type": "image_url", "image_url": {"url": "https://example.test/image", "detail": null}},
+        {"type": "future_part", "data": [null, 1]}
+    ]}]);
+    let body = transform(
+        "test-model",
+        conversation.clone(),
+        json!({"provider_option": {"nested": null}}),
+    );
+    assert_eq!(
+        body,
+        json!({"model": "test-model", "messages": conversation, "provider_option": {"nested": null}})
+    );
+}
+
+#[rstest]
+#[case::cache_read_and_write(json!({"cached_tokens": 11, "cache_write_tokens": 7, "text_tokens": 3}), 11, 7, 3)]
+#[case::legacy_cache_creation(json!({"cached_tokens": 11, "cache_creation_tokens": 5}), 11, 5, 0)]
+#[case::legacy_precedence(json!({"cache_creation_tokens": 0, "cache_write_tokens": 7}), 0, 0, 0)]
+#[case::independent_malformed_counts(json!({"cached_tokens": "11", "cache_write_tokens": 7, "text_tokens": -1}), 0, 7, 0)]
+#[case::nulls(json!({"cached_tokens": null, "cache_write_tokens": null, "text_tokens": null}), 0, 0, 0)]
+#[case::unknown_extension(json!({"cached_tokens": 11, "future_field": {"tokens": 99}}), 11, 0, 0)]
+#[case::empty(json!({}), 0, 0, 0)]
+#[case::non_object(json!([11]), 0, 0, 0)]
+fn cache_usage_normalizes_typed_counts(
+    #[case] details: Value,
+    #[case] read: u64,
+    #[case] write: u64,
+    #[case] text: u64,
+) {
+    let response = transform_response(json!({
+        "choices": [{"message": {"content": "hello"}}],
+        "usage": {
+            "prompt_tokens": 23,
+            "completion_tokens": null,
+            "total_tokens": 23,
+            "prompt_tokens_details": details
+        }
+    }))
+    .unwrap();
+    assert_eq!(response.usage.prompt_tokens, 23);
+    assert_eq!(response.usage.completion_tokens, 0);
+    assert_eq!(response.usage.total_tokens, 23);
+    assert_eq!(response.usage.prompt_tokens_details.cached_tokens, read);
+    assert_eq!(
+        response.usage.prompt_tokens_details.cache_creation_tokens,
+        write
+    );
+    assert_eq!(response.usage.prompt_tokens_details.text_tokens, text);
+}
+
+#[rstest]
+#[case::negative(json!(-1))]
+#[case::string(json!("3"))]
+#[case::fractional(json!(1.5))]
+#[case::object(json!({"count": 3}))]
+fn malformed_usage_count_does_not_discard_valid_siblings(#[case] count: Value) {
+    let response = transform_response(json!({
+        "choices": [{"message": {"content": "hello"}}],
+        "usage": {"prompt_tokens": count, "completion_tokens": 5, "total_tokens": 8}
+    }))
+    .unwrap();
+    assert_eq!(response.usage.prompt_tokens, 0);
+    assert_eq!(response.usage.completion_tokens, 5);
+    assert_eq!(response.usage.total_tokens, 8);
 }

@@ -9,7 +9,7 @@ repository.workspace = true
 test-support = ["litellm-http/test-support"]
 
 [dependencies]
-litellm-types.workspace = true
+litellm-llms-types.workspace = true
 litellm-core-utils.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
@@ -19,7 +19,7 @@ litellm-host.workspace = true
 litellm-framing.workspace = true
 litellm-http.workspace = true
 litellm-secrets.workspace = true
-litellm-python-compat.workspace = true
+litellm-python-compat = { workspace = true, features = ["serde-compat"] }
 base64.workspace = true
 bytes.workspace = true
 data-url = "0.3.2"

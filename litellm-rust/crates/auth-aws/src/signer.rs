@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, time::SystemTime};
 
 use crate::{
     AwsAuthService, AwsCredentialSource, Error, aws_signature_headers, is_sigv4_computed_header,
-    sign_post,
+    sign_request,
 };
 use aws_credential_types::Credentials;
 use litellm_http::outbound::{RequestSigner, UnsignedRequest};
@@ -57,10 +57,18 @@ impl RequestSigner for SigV4Signer {
             return Err(litellm_http::Error::ComputedHeader(name.clone()));
         }
         let headers: BTreeMap<String, String> = request.headers.iter().cloned().collect();
-        sign_post(
+        let signature_headers = aws_signature_headers(&headers);
+        let signable = aws_sigv4::http_request::SignableRequest::new(
+            request.method.as_str(),
             request.url,
-            request.body,
-            &aws_signature_headers(&headers),
+            signature_headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+            aws_sigv4::http_request::SignableBody::Bytes(request.body),
+        )
+        .map_err(|error| litellm_http::Error::Signature(error.to_string()))?;
+        sign_request(
+            signable,
             &self.region,
             self.service,
             &self.credentials,
@@ -73,12 +81,36 @@ impl RequestSigner for SigV4Signer {
 
 #[cfg(test)]
 mod tests {
+    use crate::sign_post;
     use std::time::{Duration, UNIX_EPOCH};
 
     use litellm_http::outbound::OutboundRequest;
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[rstest::rstest]
+    fn signatures_include_the_declared_method() {
+        let signer = signer("textract");
+        let url = litellm_core_utils::url_utils::ApiUrl::parse_exact(
+            "https://signing.test/operation?tenant=a",
+        )
+        .unwrap();
+        let build = |method| {
+            OutboundRequest::endpoint_json(
+                method,
+                url.clone(),
+                Vec::new(),
+                &json!({}),
+                None,
+                Some(&signer),
+            )
+            .unwrap()
+        };
+        let post = build(reqwest::Method::POST);
+        let delete = build(reqwest::Method::DELETE);
+        assert_ne!(post.header("authorization"), delete.header("authorization"));
+    }
 
     fn fixed_clock() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_700_000_000)

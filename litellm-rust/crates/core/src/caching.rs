@@ -37,12 +37,21 @@ pub struct CacheRequest {
 
 impl CacheRequest {
     pub fn from_wire(identity: ProviderIdentity, wire: Option<&WireRequest>) -> Self {
+        Self::from_wire_with_method(identity, wire, &reqwest::Method::POST)
+    }
+
+    pub fn from_wire_with_method(
+        identity: ProviderIdentity,
+        wire: Option<&WireRequest>,
+        method: &reqwest::Method,
+    ) -> Self {
         Self {
             input: wire.map_or(Value::Null, |wire| {
                 serde_json::json!({
                     "provider": identity.provider,
                     "model": identity.model,
                     "url": wire.url,
+                    "method": method.as_str(),
                     "headers": wire.headers,
                     "body": wire.body,
                 })
@@ -315,4 +324,32 @@ async fn publish(
         }));
     }
     interceptors.result_ready(facts).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    fn different_methods_never_share_cache_identity() {
+        let identity = ProviderIdentity {
+            model: "model".into(),
+            provider: "provider".into(),
+        };
+        let wire = WireRequest {
+            url: "https://gateway.test/operation?tenant=a".into(),
+            headers: Vec::new(),
+            body: serde_json::json!({}),
+        };
+        let key = |method: &reqwest::Method| {
+            let request =
+                CacheRequest::from_wire_with_method(identity.clone(), Some(&wire), method);
+            let cache_request = CacheOptions::new(litellm_cache_response::CacheScope::Shared)
+                .request("namespace", "surface", request.input);
+            cache_key(&cache_request.key)
+        };
+        assert_ne!(key(&reqwest::Method::POST), key(&reqwest::Method::GET));
+        assert_eq!(key(&reqwest::Method::POST), key(&reqwest::Method::POST));
+    }
 }

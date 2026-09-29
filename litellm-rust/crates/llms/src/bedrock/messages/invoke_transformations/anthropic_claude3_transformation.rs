@@ -1,7 +1,10 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use std::convert::Infallible;
 
-use crate::anthropic::messages::handler::shape_anthropic_messages_request;
-use crate::base_llm::messages::context::MessagesTransformContext;
+use crate::{
+    anthropic::messages::handler::shape_anthropic_messages_request,
+    base_llm::messages::context::MessagesTransformContext,
+};
 use futures_util::StreamExt;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
@@ -12,8 +15,13 @@ use litellm_auth_aws::{
     },
     resolve_bedrock_region,
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
-use litellm_types::messages::streaming::{MessagesStreamEvent, MessagesStreamUsage};
+use litellm_llms_types::{
+    formats::messages::{
+        MessagesRequest, MessagesUsage,
+        streaming::{MessagesStreamEvent, MessagesStreamUsage},
+    },
+    providers::bedrock::BedrockInvocationMetrics,
+};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -23,20 +31,13 @@ use crate::{
         base_model_iterator::{StreamError, StreamTransformer, transform_stream},
         messages::{
             streaming::{ByteStream, EventStream, StreamDecoder},
-            transformation::{BaseAnthropicMessagesConfig, Headers, ValidatedEnvironment},
+            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
         },
     },
     bedrock::chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
 };
 
 const INVOCATION_METRICS_KEY: &str = "amazon-bedrock-invocationMetrics";
-
-const METRICS_USAGE_KEYS: [(&str, &str); 4] = [
-    ("input_tokens", "inputTokenCount"),
-    ("output_tokens", "outputTokenCount"),
-    ("cache_read_input_tokens", "cacheReadInputTokenCount"),
-    ("cache_creation_input_tokens", "cacheWriteInputTokenCount"),
-];
 
 const INVOKE_PATH: &str = "invoke";
 const INVOKE_STREAM_PATH: &str = "invoke-with-response-stream";
@@ -84,12 +85,12 @@ fn invoke_url(
     format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
 }
 
-impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
     fn shape_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         reasoning_auto_summary: bool,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, reasoning_auto_summary)
     }
 
@@ -98,8 +99,10 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_PATH))
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = invoke_url(api_base, model, env_lookup, INVOKE_PATH);
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url)
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn complete_stream_url(
@@ -107,15 +110,17 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH))
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH);
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url)
+            .map_err(|error| Error::InvalidRequest(crate::ErrorDetail::invalid("api_base", error)))
     }
 
     fn transform_anthropic_messages_request(
         &self,
-        _request: AnthropicMessagesRequest,
+        _request: MessagesRequest,
         _context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         Err(Error::Unsupported(
             "Bedrock invoke messages request shaping",
         ))
@@ -165,38 +170,58 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
     }
 }
 
-fn with_invocation_usage(chunk: Value) -> Value {
+fn with_invocation_usage(chunk: Value) -> Result<Value, Error> {
     match chunk {
-        Value::Object(fields) => Value::Object(with_metrics_usage(fields)),
-        other => other,
+        Value::Object(fields) => with_metrics_usage(fields).map(Value::Object),
+        other => Ok(other),
     }
 }
 
-fn with_metrics_usage(mut fields: Map<String, Value>) -> Map<String, Value> {
+fn with_metrics_usage(mut fields: Map<String, Value>) -> Result<Map<String, Value>, Error> {
     let Some(Value::Object(metrics)) = fields.remove(INVOCATION_METRICS_KEY) else {
-        return fields;
+        return Ok(fields);
     };
     if metrics.is_empty() {
-        return fields;
+        return Ok(fields);
     }
-    let preserved = match fields.remove("usage") {
-        Some(Value::Object(usage)) => usage,
-        _ => Map::new(),
+    let metrics: BedrockInvocationMetrics = serde_json::from_value(Value::Object(metrics))
+        .map_err(|error| {
+            Error::InvalidResponse(crate::ErrorDetail::invalid(
+                "Bedrock invocation metrics",
+                error,
+            ))
+        })?;
+    let preserved: MessagesUsage = match fields.remove("usage") {
+        Some(Value::Object(usage)) => {
+            serde_json::from_value(Value::Object(usage)).map_err(|error| {
+                Error::InvalidResponse(crate::ErrorDetail::invalid("Messages usage", error))
+            })?
+        }
+        _ => MessagesUsage::default(),
     };
-    let usage: Map<String, Value> = METRICS_USAGE_KEYS
-        .iter()
-        .filter_map(|(anthropic, metric)| {
-            Some((anthropic.to_string(), metrics.get(*metric)?.clone()))
-        })
-        .chain(preserved)
-        .collect();
-    fields.insert("usage".to_string(), Value::Object(usage));
-    fields
+    let usage = MessagesUsage {
+        input_tokens: preserved.input_tokens.or(metrics.input_token_count),
+        output_tokens: preserved.output_tokens.or(metrics.output_token_count),
+        cache_read_input_tokens: preserved
+            .cache_read_input_tokens
+            .or(metrics.cache_read_input_token_count),
+        cache_creation_input_tokens: preserved
+            .cache_creation_input_tokens
+            .or(metrics.cache_write_input_token_count),
+        extra: preserved.extra,
+    };
+    fields.insert(
+        "usage".to_string(),
+        serde_json::to_value(usage).map_err(|error| {
+            Error::InvalidResponse(crate::ErrorDetail::invalid("Messages usage", error))
+        })?,
+    );
+    Ok(fields)
 }
 
 pub fn bedrock_anthropic_messages_event_stream(bytes: ByteStream) -> EventStream {
     let events = invoke_chunk_stream(bytes)
-        .map(|chunk| decode_invoke_anthropic_chunk(with_invocation_usage(chunk?)));
+        .map(|chunk| decode_invoke_anthropic_chunk(with_invocation_usage(chunk?)?));
     Box::pin(
         transform_stream(events, MessageStopUsagePromoter::default())
             .map(|item| item.map_err(StreamError::into_decode)),
@@ -441,6 +466,22 @@ mod tests {
         json!({"type": "message_stop", "usage": {"input_tokens": 1}, "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "cacheReadInputTokenCount": 40}}),
         json!({"type": "message_stop", "usage": {"cache_read_input_tokens": 40, "input_tokens": 1}}),
     )]
+    #[case::all_token_fields_and_extensions(
+        json!({"type": "message_stop", "usage": {"future_usage": 7}, "amazon-bedrock-invocationMetrics": {"inputTokenCount": 1, "outputTokenCount": 2, "cacheReadInputTokenCount": 3, "cacheWriteInputTokenCount": 4, "futureMetric": 5}}),
+        json!({"type": "message_stop", "usage": {"input_tokens": 1, "output_tokens": 2, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 4, "future_usage": 7}}),
+    )]
+    #[case::existing_zero_and_null_counts_win(
+        json!({"type": "message_stop", "usage": {"input_tokens": 0, "output_tokens": null, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}, "amazon-bedrock-invocationMetrics": {"inputTokenCount": 1, "outputTokenCount": 2, "cacheReadInputTokenCount": 3, "cacheWriteInputTokenCount": 4}}),
+        json!({"type": "message_stop", "usage": {"input_tokens": 0, "output_tokens": null, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}),
+    )]
+    #[case::existing_malformed_cache_counts_win(
+        json!({"type": "message_stop", "usage": {"cache_read_input_tokens": null, "cache_creation_input_tokens": "7"}, "amazon-bedrock-invocationMetrics": {"cacheReadInputTokenCount": 3, "cacheWriteInputTokenCount": 4}}),
+        json!({"type": "message_stop", "usage": {"cache_read_input_tokens": null, "cache_creation_input_tokens": "7"}}),
+    )]
+    #[case::malformed_counts_reach_stream_validation_unchanged(
+        json!({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": "3", "outputTokenCount": -1, "cacheReadInputTokenCount": null, "cacheWriteInputTokenCount": {"count": 4}}}),
+        json!({"type": "message_stop", "usage": {"input_tokens": "3", "output_tokens": -1, "cache_read_input_tokens": null, "cache_creation_input_tokens": {"count": 4}}}),
+    )]
     #[case::no_metrics_leaves_the_chunk(
         json!({"type": "message_stop"}),
         json!({"type": "message_stop"}),
@@ -450,7 +491,7 @@ mod tests {
         json!({"type": "message_stop"}),
     )]
     fn invocation_metrics_become_anthropic_usage(#[case] chunk: Value, #[case] expected: Value) {
-        assert_eq!(with_invocation_usage(chunk), expected);
+        assert_eq!(with_invocation_usage(chunk).unwrap(), expected);
     }
 
     fn aws_frame(chunk: &Value) -> Vec<u8> {
@@ -463,11 +504,12 @@ mod tests {
         wire
     }
 
+    #[rstest]
     #[tokio::test]
     async fn bedrock_stream_yields_the_sse_an_anthropic_client_reads() {
         let chunks = [
             json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}}),
-            json!({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "cacheReadInputTokenCount": 40}}),
+            json!({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "outputTokenCount": 9, "cacheReadInputTokenCount": 40, "cacheWriteInputTokenCount": 7}}),
         ];
         let wire: Vec<u8> = chunks.iter().flat_map(aws_frame).collect();
         let bytes: ByteStream = futures_util::stream::iter(
@@ -486,10 +528,10 @@ mod tests {
 
         let expected: Vec<u8> = [
             message_delta(
-                json!({"output_tokens": 5, "cache_read_input_tokens": 40, "input_tokens": 3}),
+                json!({"output_tokens": 5, "cache_read_input_tokens": 40, "cache_creation_input_tokens": 7, "input_tokens": 3}),
             ),
             message_stop(Some(
-                json!({"input_tokens": 3, "cache_read_input_tokens": 40}),
+                json!({"input_tokens": 3, "output_tokens": 9, "cache_read_input_tokens": 40, "cache_creation_input_tokens": 7}),
             )),
         ]
         .iter()
@@ -498,7 +540,7 @@ mod tests {
         assert_eq!(sse, expected);
     }
 
-    #[test]
+    #[rstest]
     fn config_uses_the_streaming_url_only_for_streams() {
         let env = |_: &str| -> Option<String> { None };
         let config = AmazonAnthropicClaudeMessagesConfig;
@@ -506,10 +548,16 @@ mod tests {
         assert_eq!(
             config
                 .get_complete_url(None, "anthropic.claude-3", &env)
-                .unwrap(),
+                .unwrap()
+                .url()
+                .as_url()
+                .as_str(),
             config
                 .complete_stream_url(None, "anthropic.claude-3", &env)
                 .unwrap()
+                .url()
+                .as_url()
+                .as_str()
                 .replace(INVOKE_STREAM_PATH, INVOKE_PATH)
         );
     }

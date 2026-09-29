@@ -3,9 +3,8 @@ use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, build_conversation},
 };
-use litellm_types::{
-    llms::openai::ChatMessage,
-    utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -50,16 +49,16 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
 ];
 
 #[derive(Deserialize)]
-struct MessageResponse {
+struct TextResponseProjection {
     model: String,
-    content: Vec<ContentBlock>,
-    usage: MessageUsage,
+    content: Vec<TextResponseBlock>,
+    usage: ResponseUsageProjection,
     stop_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ContentBlock {
+enum TextResponseBlock {
     Text {
         text: String,
     },
@@ -68,7 +67,7 @@ enum ContentBlock {
 }
 
 #[derive(Deserialize)]
-struct MessageUsage {
+struct ResponseUsageProjection {
     input_tokens: u64,
     output_tokens: u64,
     #[serde(default)]
@@ -104,7 +103,7 @@ impl BaseConfig for AnthropicConfig {
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
+        complete_anthropic_url(api_base, env_lookup)
     }
 
     fn transform_request(
@@ -124,16 +123,17 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let body: MessageResponse = serde_json::from_value(response.body).map_err(|error| {
-            Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
-        })?;
+        let body: TextResponseProjection =
+            serde_json::from_value(response.body).map_err(|error| {
+                Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
+            })?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
         // Decline rather than silently dropping it; the host falls back.
         if body
             .content
             .iter()
-            .any(|block| matches!(block, ContentBlock::Other))
+            .any(|block| matches!(block, TextResponseBlock::Other))
         {
             return Err(Error::Unsupported("non-text response content block"));
         }
@@ -141,8 +141,8 @@ impl BaseConfig for AnthropicConfig {
             .content
             .into_iter()
             .map(|block| match block {
-                ContentBlock::Text { text } => text,
-                ContentBlock::Other => String::new(),
+                TextResponseBlock::Text { text } => text,
+                TextResponseBlock::Other => String::new(),
             })
             .collect();
 

@@ -2,8 +2,8 @@ use litellm_auth::SecretValue;
 use litellm_core_utils::settings::Lookup;
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
+use litellm_llms_types::formats::chat_completions::ChatMessage;
 use litellm_secrets::source::Secrets;
-use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
 use super::{
@@ -119,7 +119,8 @@ pub(super) fn prepare_provider_request(
         model,
         custom_llm_provider: request.custom_llm_provider,
         config,
-        url,
+        url: litellm_core_utils::url_utils::ApiUrl::parse_exact(&url)
+            .map_err(litellm_http::Error::from)?,
         body: transformed.body,
         optional_params: request.optional_params,
         environment,
@@ -201,7 +202,10 @@ mod tests {
         ))
         .expect("prepares");
         assert_eq!(prepared.model, "claude-sonnet-4-5");
-        assert_eq!(prepared.url, "https://api.anthropic.com/v1/messages");
+        assert_eq!(
+            prepared.url.as_url().as_str(),
+            "https://api.anthropic.com/v1/messages"
+        );
         assert_eq!(prepared.body["model"], json!("claude-sonnet-4-5"));
     }
 
@@ -425,7 +429,7 @@ mod tests {
         call.api_key = None;
         let prepared = prepare_chat_completions_call(call).expect("prepares");
         assert_eq!(
-            prepared.url,
+            prepared.url.as_url().as_str(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
         );
         assert!(matches!(
@@ -475,6 +479,7 @@ mod tests {
         .expect("resolves");
         let signed = crate::chat_completions::handler::outbound_request(
             authenticated,
+            reqwest::Method::POST,
             prepared.url,
             &prepared.body,
             prepared.timeout,
@@ -534,6 +539,7 @@ mod tests {
         .expect("resolves");
         let error = crate::chat_completions::handler::outbound_request(
             authenticated,
+            reqwest::Method::POST,
             prepared.url,
             &prepared.body,
             prepared.timeout,

@@ -3366,6 +3366,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-types",
  "litellm-auth-types",
+ "litellm-core-utils",
  "litellm-http",
  "moka",
  "reqwest 0.12.28",
@@ -3619,7 +3620,6 @@ dependencies = [
  "litellm-auth",
  "litellm-host",
  "litellm-host-python",
- "litellm-types",
  "proptest",
  "pyo3",
  "rstest",
@@ -3658,9 +3658,9 @@ dependencies = [
  "litellm-host-native",
  "litellm-http",
  "litellm-llms",
+ "litellm-llms-types",
  "litellm-secrets",
  "litellm-tracing",
- "litellm-types",
  "mime_guess",
  "moka",
  "rand 0.8.7",
@@ -3688,13 +3688,12 @@ name = "litellm-core-utils"
 version = "0.1.0"
 dependencies = [
  "fancy-regex 0.19.2",
+ "litellm-llms-types",
  "litellm-tracing",
- "litellm-types",
  "rstest",
  "serde",
  "serde_json",
  "serde_path_to_error",
- "serde_with",
  "strum",
  "thiserror 2.0.19",
  "url",
@@ -3824,9 +3823,9 @@ dependencies = [
  "litellm-host-http",
  "litellm-http",
  "litellm-llms",
+ "litellm-llms-types",
  "litellm-router",
  "litellm-secrets",
- "litellm-types",
  "rstest",
  "serde",
  "serde_json",
@@ -3999,9 +3998,9 @@ dependencies = [
  "litellm-framing",
  "litellm-host",
  "litellm-http",
+ "litellm-llms-types",
  "litellm-python-compat",
  "litellm-secrets",
- "litellm-types",
  "reqwest 0.12.28",
  "rstest",
  "serde",
@@ -4016,12 +4015,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-llms-types"
+version = "0.1.0"
+dependencies = [
+ "litellm-python-compat",
+ "macro_rules_attribute",
+ "rstest",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum",
+]
+
+[[package]]
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
  "indexmap 2.14.0",
  "jsonschema",
- "litellm-types",
+ "litellm-llms-types",
  "rstest",
  "schemars 1.2.2",
  "serde",
@@ -4059,12 +4072,13 @@ dependencies = [
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",
+ "litellm-llms-types",
+ "litellm-python-compat",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
  "litellm-token-counter",
  "litellm-tracing",
- "litellm-types",
  "pyo3",
  "pyo3-async-runtimes",
  "qdrant-client",
@@ -4097,6 +4111,7 @@ dependencies = [
  "serde",
  "serde-pickle",
  "serde_json",
+ "serde_with",
  "thiserror 2.0.19",
 ]
 
@@ -4352,17 +4367,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "litellm-types"
-version = "0.1.0"
-dependencies = [
- "rstest",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "strum",
 ]
 
 [[package]]

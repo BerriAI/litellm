@@ -1,3 +1,5 @@
+use crate::azure_ai::endpoints::AnalyzeDocument;
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use std::{collections::BTreeSet, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -5,13 +7,11 @@ use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{
     call_arguments::CallArguments,
-    serde_compat::{FiniteF64, LaxI64},
-    url_utils::ApiUrl,
+    url_utils::{ApiUrl, Complete, QueryParameter, QueryPolicy},
 };
 use reqwest::Url;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
-use serde_with::serde_as;
+use serde::Serialize;
+use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::base_llm::ocr::{
@@ -20,11 +20,17 @@ use crate::base_llm::ocr::{
     handler::{CallHooks, OcrClient, read_json_response},
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES,
-        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrDocument, OcrPage,
-        OcrPageDimensions, OcrResponseContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, DecodedOcrResponse, OCR_INLINE_MAX_BYTES, OCR_POLL_RETRY_SECS,
+        OcrConnection, OcrCredentialInputs, OcrResponseContext, PreparedOcrRequest,
         ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
+};
+use litellm_llms_types::providers::azure::{
+    AzureDocumentIntelligenceOperation, AzureDocumentIntelligencePage, DocumentIntelligenceRequest,
+    OperationStatus,
 };
 
 const AZURE_DI_SUBSCRIPTION_HEADER: &str = "Ocp-Apim-Subscription-Key";
@@ -42,89 +48,6 @@ pub struct DocumentIntelligenceParams {
     pub features: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum DocumentIntelligenceRequest {
-    UrlSource {
-        #[serde(rename = "urlSource")]
-        url_source: String,
-    },
-    Base64Source {
-        #[serde(rename = "base64Source")]
-        base64_source: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum OperationStatus {
-    Succeeded,
-    Running,
-    NotStarted,
-    Failed,
-    Unknown(String),
-}
-
-impl<'de> Deserialize<'de> for OperationStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match String::deserialize(deserializer)?.as_str() {
-            "succeeded" => Self::Succeeded,
-            "running" => Self::Running,
-            "notStarted" => Self::NotStarted,
-            "failed" => Self::Failed,
-            value => Self::Unknown(value.to_string()),
-        })
-    }
-}
-
-impl std::fmt::Display for OperationStatus {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Succeeded => "succeeded",
-            Self::Running => "running",
-            Self::NotStarted => "notStarted",
-            Self::Failed => "failed",
-            Self::Unknown(value) => value,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct AzureDocumentIntelligenceOperation {
-    status: Option<OperationStatus>,
-    #[serde(rename = "analyzeResult")]
-    analyze_result: Option<AzureDocumentIntelligenceAnalyzeResult>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-struct AzureDocumentIntelligenceAnalyzeResult {
-    pub content: Option<String>,
-    #[serde(default)]
-    pub pages: Vec<AzureDocumentIntelligencePage>,
-    pub tables: Option<Vec<Map<String, Value>>>,
-    #[serde(rename = "keyValuePairs")]
-    pub key_value_pairs: Option<Vec<Map<String, Value>>>,
-}
-
-#[serde_as]
-#[derive(Clone, Debug, Deserialize)]
-struct AzureDocumentIntelligencePage {
-    #[serde(rename = "pageNumber")]
-    #[serde_as(deserialize_as = "Option<LaxI64>")]
-    pub page_number: Option<i64>,
-    #[serde_as(deserialize_as = "Option<FiniteF64>")]
-    pub width: Option<f64>,
-    #[serde_as(deserialize_as = "Option<FiniteF64>")]
-    pub height: Option<f64>,
-    pub unit: Option<String>,
-    #[serde(default)]
-    pub lines: Vec<AzureDocumentIntelligenceLine>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct AzureDocumentIntelligenceLine {
-    pub content: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 pub struct AzureDocumentIntelligenceOcrConfig;
 
@@ -133,8 +56,21 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     type ProviderRequest = DocumentIntelligenceRequest;
     type Environment = Vec<(String, String)>;
 
+    fn matches_endpoint(&self, model: &str, path: &str) -> Result<bool, Error> {
+        AnalyzeDocument::new(model_id(model)?)
+            .map_err(|_| Error::DotModel)?
+            .matches(path)
+            .map_err(|_| Error::RequestField {
+                path: "endpoint".into(),
+            })
+    }
+
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["pages", "features", "req_format"]
+    }
+
+    fn connection_env_vars(&self) -> (Option<&'static str>, Option<&'static str>) {
+        super::super::transformation::AzureAiOcrConfig.connection_env_vars()
     }
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
@@ -200,11 +136,11 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         request: &PreparedOcrRequest,
         optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<ResolvedEndpoint, Error> {
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(request.connection.secret(AZURE_DI_ENDPOINT_ENV)))
             .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
-        self.build_ocr_url(
+        self.build_ocr_endpoint(
             &endpoint,
             &request.model,
             optional_params,
@@ -488,12 +424,14 @@ async fn read_operation_response(
         crate::base_llm::ocr::handler::read_response_bytes(response, connection.max_response_bytes)
             .await?;
     hooks.response_received(&bytes).await?;
-    poll_operation(http_client, operation, headers, connection, native, hooks).await
+    let complete =
+        ApiUrl::<Complete>::parse_exact(operation.as_str()).map_err(|_| Error::PollOrigin)?;
+    poll_operation(http_client, complete, headers, connection, native, hooks).await
 }
 
 async fn poll_operation(
     http_client: &litellm_http::Client,
-    url: Url,
+    url: ApiUrl<Complete>,
     headers: &[(String, String)],
     connection: &OcrConnection,
     native: bool,
@@ -509,7 +447,7 @@ async fn poll_operation(
             .filter(|remaining| !remaining.is_zero())
             .ok_or(Error::PollTimeout)?;
         let builder = http_client
-            .get(url.clone())
+            .get(url.as_url().clone())
             .timeout(remaining.min(connection.timeout));
         let builder = litellm_http::request::with_headers(
             builder,
@@ -564,38 +502,30 @@ async fn poll_operation(
 }
 
 impl AzureDocumentIntelligenceOcrConfig {
-    pub fn analyze_path(model: &str) -> Result<[String; 3], Error> {
-        Ok([
-            "documentintelligence".into(),
-            "documentModels".into(),
-            format!("{}:analyze", model_id(model)?),
-        ])
-    }
-
-    fn build_ocr_url(
+    fn build_ocr_endpoint(
         &self,
         endpoint: &str,
         model: &str,
         params: &DocumentIntelligenceParams,
         api_version: &str,
-    ) -> Result<String, Error> {
-        let path = Self::analyze_path(model)?;
-        ApiUrl::parse(endpoint)
-            .and_then(|url| url.complete_path(&path.each_ref().map(String::as_str)))
-            .map(|url| {
-                url.append_query_pairs(
-                    [("api-version", api_version)]
-                        .into_iter()
-                        .chain(params.pages.iter().map(|pages| ("pages", pages.as_str())))
-                        .chain(
-                            params
-                                .features
-                                .iter()
-                                .map(|features| ("features", features.as_str())),
-                        ),
-                )
-                .into_string()
+    ) -> Result<ResolvedEndpoint, Error> {
+        let operation = AnalyzeDocument::new(model_id(model)?).map_err(|_| Error::DotModel)?;
+        let query = std::iter::once(("api-version", api_version))
+            .chain(params.pages.iter().map(|pages| ("pages", pages.as_str())))
+            .chain(
+                params
+                    .features
+                    .iter()
+                    .map(|features| ("features", features.as_str())),
+            )
+            .map(|(key, value)| QueryParameter {
+                key,
+                value,
+                policy: QueryPolicy::Default,
             })
+            .collect::<Vec<_>>();
+        operation
+            .resolve_legacy(endpoint, &query)
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
             })

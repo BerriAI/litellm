@@ -1,6 +1,5 @@
-use litellm_types::{
-    llms::openai::{ChatMessage, ChatMessageContent},
-    utils::ChatCompletionsResponse,
+use litellm_llms_types::formats::chat_completions::{
+    ChatCompletionsResponse, ChatContentPart, ChatMessage, ChatMessageContent,
 };
 use serde_json::{Map, Value};
 
@@ -156,9 +155,10 @@ pub fn unsupported_message(message: &ChatMessage) -> Option<Unsupported> {
         Some(ChatMessageContent::Parts(parts)) => parts
             .iter()
             .any(|part| {
-                part.get("type").and_then(Value::as_str) != Some("text")
-                    || part.get("text").and_then(Value::as_str).is_none()
-                    || part.as_object().is_some_and(|object| object.len() != 2)
+                !matches!(
+                    part.known(),
+                    Some(ChatContentPart::Text { extra, .. }) if extra.is_empty()
+                )
             })
             .then_some(Unsupported("non-text message content")),
     }

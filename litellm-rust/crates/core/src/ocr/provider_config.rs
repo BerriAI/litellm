@@ -6,16 +6,15 @@ use litellm_llms::{
         transformation::TextractDetectTextConfig,
     },
     azure_ai::ocr::{
-        cohere_parse_transformation::{AZURE_COHERE_PARSE_PATH, AzureAICohereParseConfig},
+        cohere_parse_transformation::AzureAICohereParseConfig,
         document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
-        transformation::{AZURE_AI_OCR_PATH, AzureAiOcrConfig},
+        transformation::AzureAiOcrConfig,
     },
     base_llm::ocr::{
         error::Error,
         handler::{self, CallHooks, OcrClient},
         transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
-            PreparedOcrRequest, ResolvedOcrCredentials,
+            BaseOcrConfig, OcrCredentialInputs, PreparedOcrRequest, ResolvedOcrCredentials,
         },
     },
     cohere::ocr::transformation::CohereParseConfig,
@@ -25,6 +24,7 @@ use litellm_llms::{
         deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 macro_rules! with_config {
     ($kind:expr, $config:ident => $body:expr) => {
@@ -110,6 +110,10 @@ impl OcrConfigKind {
         with_config!(self, config => config.get_supported_ocr_params(model))
     }
 
+    pub fn connection_env_vars(&self) -> (Option<&'static str>, Option<&'static str>) {
+        with_config!(*self, config => config.connection_env_vars())
+    }
+
     pub(crate) fn get_api_key_env_var(self) -> Option<&'static str> {
         with_config!(self, config => config.get_api_key_env_var())
     }
@@ -165,21 +169,8 @@ pub fn passthrough_response(
     body: &[u8],
 ) -> Result<Option<LiteLLMOcrResponse>, Error> {
     let (model, config) = resolve_provider_config(model, Some("azure_ai"))?;
-    let segments: Vec<&str> = endpoint
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
-    let is_ocr_endpoint = match config {
-        OcrConfigKind::AzureAi => segments == AZURE_AI_OCR_PATH,
-        OcrConfigKind::AzureCohere => segments == AZURE_COHERE_PARSE_PATH,
-        OcrConfigKind::AzureDocumentIntelligence => {
-            segments == AzureDocumentIntelligenceOcrConfig::analyze_path(&model)?
-        }
-        other => {
-            let provider: &'static str = other.provider().into();
-            return Err(Error::InvalidProvider(provider.to_owned()));
-        }
-    };
+    let is_ocr_endpoint =
+        with_config!(config, config => config.matches_endpoint(&model, endpoint))?;
     if !is_ocr_endpoint {
         return Ok(None);
     }

@@ -18,8 +18,8 @@ use super::Error;
 use super::constants::{
     AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
     AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
-    AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
-    DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
+    AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE, DEFAULT_BEDROCK_REGION,
+    DEFAULT_SESSION_NAME_PREFIX, SigV4Header,
 };
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
@@ -428,37 +428,49 @@ fn default_session_name() -> String {
     format!("{DEFAULT_SESSION_NAME_PREFIX}-{seconds}")
 }
 
-/// The subset of `headers` SigV4 should cover.
-///
-/// Python signs only these and reattaches the rest afterwards, so a forwarded
-/// client header cannot change the canonical request and invalidate the
-/// signature. Signing everything instead makes the request 403 on a header the
-/// caller supplied, on a deployment that works on the Python path.
 pub fn aws_signature_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     headers
         .iter()
         .filter(|(name, _)| {
             let name = name.to_ascii_lowercase();
-            AWS_SIGNED_HEADER_NAMES.contains(&name.as_str())
-                || name.starts_with("x-amz-")
-                || name.starts_with("x-amzn-")
+            name != "x-amzn-trace-id"
+                && (matches!(
+                    SigV4Header::parse(&name),
+                    Some(SigV4Header::Host | SigV4Header::ContentType | SigV4Header::Date)
+                ) || name.starts_with("x-amz-")
+                    || name.starts_with("x-amzn-"))
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
 
-/// Whether the signer produces `name` itself.
-///
-/// Python's reattach loop skips these, so a caller-supplied copy never reaches
-/// the wire next to the computed one.
 pub fn is_sigv4_computed_header(name: &str) -> bool {
-    SIGV4_COMPUTED_HEADER_NAMES.contains(&name.to_ascii_lowercase().as_str())
+    SigV4Header::parse(name).is_some_and(SigV4Header::is_computed)
 }
 
 pub fn sign_post(
     url: &str,
     body: &[u8],
     headers: &BTreeMap<String, String>,
+    region: &str,
+    service: &str,
+    credentials: &Credentials,
+    signing_time: SystemTime,
+) -> Result<BTreeMap<String, String>, Error> {
+    let request = SignableRequest::new(
+        "POST",
+        url,
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str())),
+        SignableBody::Bytes(body),
+    )
+    .map_err(|error| Error::AwsSignableRequest(error.to_string()))?;
+    sign_request(request, region, service, credentials, signing_time)
+}
+
+pub fn sign_request(
+    request: SignableRequest<'_>,
     region: &str,
     service: &str,
     credentials: &Credentials,
@@ -474,22 +486,15 @@ pub fn sign_post(
         .build()
         .map(SigningParams::from)
         .map_err(|error| Error::AwsSigningParameters(error.to_string()))?;
-    let header_refs = headers
-        .iter()
-        .map(|(name, value)| (name.as_str(), value.as_str()));
-    let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
-        .map_err(|error| Error::AwsSignableRequest(error.to_string()))?;
     let (instructions, _) = sign(request, &params)
         .map_err(|error| Error::AwsSigning(error.to_string()))?
         .into_parts();
     Ok(instructions
         .headers()
         .map(|(name, value)| {
-            let normalized_name = match name {
-                "authorization" => "Authorization",
-                "x-amz-date" => "X-Amz-Date",
-                "x-amz-security-token" => "X-Amz-Security-Token",
-                _ => name,
+            let normalized_name = match SigV4Header::parse(name) {
+                Some(header) => header.as_str(),
+                None => name,
             };
             (normalized_name.to_string(), value.to_string())
         })
@@ -925,11 +930,29 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest::rstest]
+    #[case::authorization("aUtHoRiZaTiOn", false, true)]
+    #[case::date("DaTe", true, true)]
+    #[case::amz_date("X-aMz-DaTe", true, true)]
+    #[case::token("X-aMz-SeCuRiTy-ToKeN", true, true)]
+    #[case::host("hOsT", true, false)]
+    #[case::content_type("CoNtEnT-TyPe", true, false)]
+    #[case::amz_extension("X-Amz-Custom", true, false)]
+    #[case::amzn_extension("X-Amzn-Custom", true, false)]
+    #[case::trace("X-AmZn-TrAcE-Id", false, false)]
+    #[case::forwarded("X-Request-Id", false, false)]
+    fn header_policy_is_case_insensitive(
+        #[case] name: &str,
+        #[case] signed: bool,
+        #[case] computed: bool,
+    ) {
+        let headers = BTreeMap::from([(name.to_string(), "value".to_string())]);
+        assert_eq!(aws_signature_headers(&headers).contains_key(name), signed);
+        assert_eq!(is_sigv4_computed_header(name), computed);
+    }
+
+    #[rstest::rstest]
     fn a_forwarded_client_header_is_not_folded_into_the_signature() {
-        // Python signs only the AWS header set, so a header a caller forwarded
-        // cannot change the canonical request. Signing it instead makes the
-        // request 403 the moment anything on the wire rewrites or drops it.
         let (url, body, mut headers) = parity_inputs();
         headers.insert("x-request-id".to_string(), "abc-123".to_string());
         headers.insert("Accept-Encoding".to_string(), "gzip".to_string());
@@ -938,8 +961,7 @@ mod tests {
 
         assert!(!signable.contains_key("x-request-id"));
         assert!(!signable.contains_key("Accept-Encoding"));
-        // The AWS-prefixed one is genuinely part of the signature.
-        assert!(signable.contains_key("x-amzn-trace-id"));
+        assert!(!signable.contains_key("x-amzn-trace-id"));
         assert!(signable.contains_key("Content-Type"));
 
         let credentials = Credentials::new(
@@ -966,6 +988,7 @@ mod tests {
             !authorization.contains("x-request-id"),
             "forwarded header reached SignedHeaders: {authorization}"
         );
+        assert!(!authorization.contains("x-amzn-trace-id"));
         assert!(
             !authorization.contains("accept-encoding"),
             "forwarded header reached SignedHeaders: {authorization}"

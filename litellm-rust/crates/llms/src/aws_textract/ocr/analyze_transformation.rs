@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use litellm_core_utils::call_arguments::{CallArguments, parse_options};
@@ -12,10 +13,10 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
-        PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 const DEFAULT_FEATURE_TYPES: [FeatureType; 2] = [FeatureType::Layout, FeatureType::Tables];
 
@@ -78,8 +79,13 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         request: &PreparedOcrRequest,
         _optional_params: &AnalyzeDocumentOptions,
         environment: &TextractEnvironment,
-    ) -> Result<String, Error> {
-        Ok(endpoint(request, environment))
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = endpoint(request, environment);
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
+        })
     }
 
     fn transform_ocr_request(

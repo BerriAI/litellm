@@ -175,9 +175,9 @@ mod tests {
     #[serde_with::serde_as]
     #[derive(Debug, serde::Deserialize, serde::Serialize, PartialEq)]
     struct Numbers {
-        #[serde_as(deserialize_as = "Option<Vec<litellm_core_utils::serde_compat::LaxI64>>")]
+        #[serde_as(deserialize_as = "Option<Vec<litellm_python_compat::serde_compat::LaxI64>>")]
         integers: Option<Vec<i64>>,
-        #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::FiniteF64>")]
+        #[serde_as(deserialize_as = "Option<litellm_python_compat::serde_compat::FiniteF64>")]
         float: Option<f64>,
     }
 

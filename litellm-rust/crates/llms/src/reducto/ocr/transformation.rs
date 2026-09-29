@@ -1,3 +1,4 @@
+use crate::base_llm::endpoint::ResolvedEndpoint;
 use std::collections::BTreeMap;
 
 use litellm_core_utils::{
@@ -6,58 +7,36 @@ use litellm_core_utils::{
     url_utils::ApiUrl,
 };
 use litellm_http::outbound::OutboundRequest;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::base_llm::ocr::{
     document::InlineDocument,
     error::Error,
-    handler::{CallHooks, OcrClient, build_http_request, guardrail_document},
+    handler::{CallHooks, OcrClient, guardrail_document},
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-        OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, OcrRequestContext, PreparedOcrRequest,
         decode_and_normalize_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
+};
+use litellm_llms_types::providers::reducto::{
+    ReductoFileId, ReductoLegacyOptions, ReductoLegacyRequest, ReductoUploadResponse,
+    ReductoV3Request,
 };
 
 const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
 const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";
 const REDUCTO_ID_PREFIX: &str = "reducto://";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ReductoFileId(String);
-
-pub type ReductoV3Params = OpaqueParams;
-pub type ReductoLegacyParams = OpaqueParams;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReductoV3Request {
-    pub input: ReductoFileId,
-    #[serde(flatten)]
-    pub params: ReductoV3Params,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReductoLegacyRequest {
-    pub document_url: ReductoFileId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<ReductoLegacyOptions>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReductoLegacyOptions {
-    pub enhance: Value,
-}
-
-#[derive(Deserialize)]
-struct ReductoUploadResponse {
-    pub file_id: Option<String>,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReductoResponse {
-    #[serde(default, deserialize_with = "present_nullable")]
+    #[serde(
+        default,
+        deserialize_with = "serde_with::rust::double_option::deserialize"
+    )]
     result: Option<Option<ReductoResult>>,
     usage: Option<ReductoUsage>,
     #[serde(default)]
@@ -72,9 +51,9 @@ struct ReductoResult {
 #[serde_with::serde_as]
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ReductoUsage {
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::LaxI64>")]
+    #[serde_as(deserialize_as = "Option<litellm_python_compat::serde_compat::LaxI64>")]
     pub num_pages: Option<i64>,
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::FiniteF64>")]
+    #[serde_as(deserialize_as = "Option<litellm_python_compat::serde_compat::FiniteF64>")]
     pub credits: Option<f64>,
 }
 
@@ -83,6 +62,9 @@ struct ReductoChunk {
     pub content: Option<String>,
     pub blocks: Option<Vec<Map<String, Value>>>,
 }
+
+pub type ReductoV3Params = OpaqueParams;
+pub type ReductoLegacyParams = OpaqueParams;
 
 #[derive(Clone, Debug)]
 pub struct ReductoParseV3Config;
@@ -125,8 +107,13 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
-        build_ocr_url(request.connection.api_base.as_deref())
+    ) -> Result<ResolvedEndpoint, Error> {
+        let url = build_ocr_url(request.connection.api_base.as_deref())?;
+        ResolvedEndpoint::parse_exact(reqwest::Method::POST, &url).map_err(|_| {
+            Error::RequestField {
+                path: "api_base".into(),
+            }
+        })
     }
 
     fn transform_ocr_request(
@@ -138,7 +125,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
     ) -> Result<Self::ProviderRequest, Error> {
         Ok(ReductoV3Request {
             input: uploaded_file_id(document)?,
-            params: optional_params.clone(),
+            params: optional_params.clone().into(),
         })
     }
 
@@ -153,7 +140,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         let file_id = ensure_file_id_async(document, headers, context).await?;
         Ok(ReductoV3Request {
             input: file_id,
-            params: optional_params.clone(),
+            params: optional_params.clone().into(),
         })
     }
 
@@ -217,7 +204,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         request: &PreparedOcrRequest,
         optional_params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<ResolvedEndpoint, Error> {
         ReductoParseV3Config.get_complete_url(request, optional_params, environment)
     }
 
@@ -276,8 +263,9 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
 ) -> Result<OutboundRequest, Error> {
     let params = config.map_ocr_params(&request.optional_params, &request.model)?;
     let headers = config.validate_environment(request, client).await?;
-    let url = config.get_complete_url(request, &params, &headers)?;
-    let (document, headers) = guardrail_document(request, &url, &headers, hooks).await?;
+    let endpoint = config.get_complete_url(request, &params, &headers)?;
+    let url = endpoint.url().as_url().as_str();
+    let (document, headers) = guardrail_document(request, url, &headers, hooks).await?;
     let body = config
         .async_transform_ocr_request(
             &request.model,
@@ -295,7 +283,15 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
         &body,
         config.get_supported_ocr_params(&request.model),
     )?;
-    build_http_request(request, url, headers, &body)
+    let (method, url) = endpoint.into_parts();
+    Ok(OutboundRequest::endpoint_json(
+        method,
+        url,
+        headers,
+        &body,
+        Some(request.connection.timeout),
+        None,
+    )?)
 }
 
 fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {
@@ -311,12 +307,6 @@ fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {
         });
     }
     Ok(ReductoFileId(document.source().into()))
-}
-
-fn present_nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
-    deserializer: D,
-) -> Result<Option<Option<T>>, D::Error> {
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 fn block_page_number(value: &Value) -> Option<i64> {
@@ -710,7 +700,7 @@ mod tests {
 
     #[test]
     fn response_normalization_groups_blocks_and_distinguishes_null_result() {
-        use crate::reducto::ocr::transformation::{ReductoResponse, normalize_response};
+        use crate::reducto::ocr::transformation::normalize_response;
 
         let raw = json!({"usage":{"num_pages":"2","credits":"3"},"result":{"type":"full","chunks":[
             {"blocks":[{

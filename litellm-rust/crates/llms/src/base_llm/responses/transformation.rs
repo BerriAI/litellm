@@ -1,5 +1,7 @@
-use litellm_types::responses::main::ResponsesApiResponse;
-use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
+use crate::base_llm::endpoint::ResolvedEndpoint;
+use litellm_llms_types::formats::responses::{
+    ResponsesApiResponse, streaming_websocket::ResponsesWsEvent,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -23,7 +25,7 @@ pub trait BaseResponsesApiConfig: Sync {
         &self,
         api_base: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> String;
+    ) -> Result<ResolvedEndpoint, Error>;
 
     fn transform_responses_api_request(
         &self,
@@ -53,7 +55,14 @@ pub trait ResponsesWebSocketProviderConfig: Sync {
         false
     }
 
-    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> String;
+    fn complete_websocket_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+    ) -> Result<
+        litellm_core_utils::url_utils::WebSocketUrl<litellm_core_utils::url_utils::Complete>,
+        Error,
+    >;
 
     fn transform_ws_request(
         &self,

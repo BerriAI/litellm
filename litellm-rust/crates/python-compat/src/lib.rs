@@ -26,6 +26,8 @@ pub mod json;
 pub mod literal;
 pub mod pickle;
 pub mod repr;
+#[cfg(feature = "serde-compat")]
+pub mod serde_compat;
 pub mod truthy;
 mod value;
 

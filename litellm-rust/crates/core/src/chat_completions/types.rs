@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use litellm_auth::SecretValue;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
-use litellm_types::llms::openai::ChatMessage;
+use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
 /// A `/chat/completions` call as it crosses into the core.
@@ -65,7 +65,7 @@ pub struct ProviderChatCompletionsRequest {
     pub model: String,
     pub custom_llm_provider: String,
     pub config: &'static dyn BaseConfig,
-    pub url: String,
+    pub url: litellm_core_utils::url_utils::ApiUrl<litellm_core_utils::url_utils::Complete>,
     pub body: Value,
     /// The route's parameters before the provider transformation, reported to the host
     /// beside the wire request.

@@ -1,8 +1,5 @@
-use litellm_core_utils::{
-    call_arguments::{CallArguments, parse_options},
-    serde_compat::LaxI64,
-    url_utils::ApiUrl,
-};
+use litellm_core_utils::call_arguments::{CallArguments, parse_options};
+use litellm_python_compat::serde_compat::LaxI64;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
@@ -12,13 +9,19 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-        OcrPage, OcrPageImage, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, PreparedOcrRequest,
         decode_and_normalize_response, decode_response_value,
     },
 };
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageImage, OcrResponseFormat, OcrUsageInfo,
+};
 
-const COHERE_PARSE_API_BASE: &str = "https://api.cohere.com";
+use crate::cohere::endpoints::DEFAULT_API_BASE as COHERE_PARSE_API_BASE;
+use crate::{
+    base_llm::endpoint::{ProviderEndpoint, ResolvedEndpoint},
+    cohere::endpoints::{CohereEndpoint, legacy_target},
+};
 const COHERE_API_KEY_ENV: &str = "COHERE_API_KEY";
 
 const COHERE_PARSE_HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC";
@@ -136,8 +139,8 @@ impl BaseOcrConfig for CohereParseConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
-        self.build_ocr_url(
+    ) -> Result<ResolvedEndpoint, Error> {
+        self.build_ocr_endpoint(
             request
                 .connection
                 .api_base
@@ -203,15 +206,22 @@ impl CohereParseConfig {
         )
     }
 
+    fn build_ocr_endpoint(&self, api_base: &str) -> Result<ResolvedEndpoint, Error> {
+        CohereEndpoint::Parse
+            .resolve(
+                &legacy_target(api_base.trim()).map_err(|_| Error::RequestField {
+                    path: "api_base".into(),
+                })?,
+            )
+            .map_err(|_| Error::RequestField {
+                path: "api_base".into(),
+            })
+    }
+
+    #[cfg(test)]
     fn build_ocr_url(&self, api_base: &str) -> Result<String, Error> {
-        let parsed = reqwest::Url::parse(api_base).map_err(|_| invalid_api_base())?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err(invalid_api_base());
-        }
-        ApiUrl::parse(api_base)
-            .and_then(|url| url.complete_path(&["v2", "parse"]))
-            .map(|url| url.into_string())
-            .map_err(|_| invalid_api_base())
+        self.build_ocr_endpoint(api_base)
+            .map(|endpoint| endpoint.url().as_url().to_string())
     }
 }
 
@@ -327,12 +337,6 @@ fn normalize_page(page: CoherePage, position: usize) -> Result<OcrPage, Error> {
 
 fn billed_pages(response: &CohereResponse) -> Option<i64> {
     response.meta.as_ref()?.billed_units.as_ref()?.pages
-}
-
-fn invalid_api_base() -> Error {
-    Error::RequestField {
-        path: "api_base".into(),
-    }
 }
 
 #[cfg(test)]
@@ -561,10 +565,10 @@ mod tests {
     #[rstest]
     fn response_types_documented_block_variants(
         #[values(
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Litellm,
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Native
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Litellm,
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Native
         )]
-        response_format: crate::base_llm::ocr::transformation::OcrResponseFormat,
+        response_format: litellm_llms_types::formats::ocr::OcrResponseFormat,
     ) {
         let payload = json!({
             "pages": [{
@@ -634,10 +638,10 @@ mod tests {
             Some(1)
         );
         match response_format {
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Litellm => {
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Litellm => {
                 assert!(normalized.provider_native_response.is_none());
             }
-            crate::base_llm::ocr::transformation::OcrResponseFormat::Native => {
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Native => {
                 assert_eq!(
                     normalized.provider_native_response.as_ref(),
                     payload.as_object()

@@ -1,43 +1,22 @@
-use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams};
 
 use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat,
-        OcrUsageInfo, PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrConnection, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::providers::mistral::ocr::{MistralOcrRequest, MistralOcrResponse};
 
-const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
+use crate::mistral::endpoints::DEFAULT_API_BASE as MISTRAL_OCR_API_BASE;
+use crate::{
+    base_llm::endpoint::{ProviderEndpoint, ResolvedEndpoint},
+    mistral::endpoints::{MistralEndpoint, legacy_target},
+};
 
 const MISTRAL_OCR_API_KEY_ENV_VAR: &str = "MISTRAL_API_KEY";
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MistralOcrRequest {
-    pub model: String,
-    pub document: OcrDocument,
-    #[serde(flatten)]
-    pub params: OpaqueParams,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct MistralOcrResponse {
-    #[serde(default)]
-    pub pages: Vec<OcrPage>,
-    #[serde(
-        default,
-        deserialize_with = "serde_with::rust::double_option::deserialize"
-    )]
-    pub model: Option<Option<String>>,
-    pub document_annotation: Option<Value>,
-    pub usage_info: Option<OcrUsageInfo>,
-
-    #[serde(flatten)]
-    pub extra_fields: serde_json::Map<String, Value>,
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct MistralOcrConfig;
@@ -46,6 +25,13 @@ impl BaseOcrConfig for MistralOcrConfig {
     type OcrParams = OpaqueParams;
     type ProviderRequest = MistralOcrRequest;
     type Environment = Vec<(String, String)>;
+
+    fn connection_env_vars(&self) -> (Option<&'static str>, Option<&'static str>) {
+        (
+            Some("MISTRAL_AZURE_API_KEY"),
+            Some("MISTRAL_AZURE_API_BASE"),
+        )
+    }
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &[
@@ -102,8 +88,8 @@ impl BaseOcrConfig for MistralOcrConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
-        self.build_ocr_url(request.connection.api_base.as_deref())
+    ) -> Result<ResolvedEndpoint, Error> {
+        self.build_ocr_endpoint(request.connection.api_base.as_deref())
     }
 
     fn transform_ocr_request(
@@ -116,7 +102,7 @@ impl BaseOcrConfig for MistralOcrConfig {
         Ok(MistralOcrRequest {
             model: model.to_string(),
             document,
-            params: optional_params.clone(),
+            params: optional_params.clone().into(),
         })
     }
 
@@ -161,17 +147,28 @@ impl MistralOcrConfig {
         )
     }
 
-    fn build_ocr_url(&self, api_base: Option<&str>) -> Result<String, Error> {
-        let base = api_base
-            .map(str::trim)
-            .filter(|base| !base.is_empty())
-            .unwrap_or(MISTRAL_OCR_API_BASE);
-        ApiUrl::parse(base)
-            .and_then(|url| url.complete_path(&["v1", "ocr"]))
-            .map(|url| url.into_string())
+    fn build_ocr_endpoint(&self, api_base: Option<&str>) -> Result<ResolvedEndpoint, Error> {
+        MistralEndpoint::Ocr
+            .resolve(
+                &legacy_target(
+                    api_base
+                        .map(str::trim)
+                        .filter(|base| !base.is_empty())
+                        .unwrap_or(MISTRAL_OCR_API_BASE),
+                )
+                .map_err(|_| Error::RequestField {
+                    path: "api_base".into(),
+                })?,
+            )
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
             })
+    }
+
+    #[cfg(test)]
+    fn build_ocr_url(&self, api_base: Option<&str>) -> Result<String, Error> {
+        self.build_ocr_endpoint(api_base)
+            .map(|endpoint| endpoint.url().as_url().to_string())
     }
 }
 
@@ -326,7 +323,7 @@ mod tests {
             .transform_ocr_response(
                 "model",
                 raw,
-                crate::base_llm::ocr::transformation::OcrResponseFormat::Native,
+                litellm_llms_types::formats::ocr::OcrResponseFormat::Native,
             )
             .unwrap();
         assert_eq!(response.pages[0].index, 2);
