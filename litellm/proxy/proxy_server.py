@@ -14723,10 +14723,11 @@ async def _fetch_db_models_for_search(
         match_conditions.append({"model_id": {"not": {"in": list(db_model_ids_in_router)}}})
     # Keep the single-condition shape flat: it is what existing callers (and
     # tests) assert, and Prisma treats both forms identically.
-    if len(match_conditions) == 1:
-        db_where_condition: Final[dict[str, Any]] = match_conditions[0]
-    else:
-        db_where_condition = {"AND": match_conditions}
+    # Keep the single-condition shape flat: it is what existing callers (and
+    # tests) assert, and Prisma treats both forms identically.
+    db_where_condition: Final[dict[str, Any]] = (
+        match_conditions[0] if len(match_conditions) == 1 else {"AND": match_conditions}
+    )
 
     # Unsorted searches only need enough DB rows to fill the current
     # page after counting router-side matches. Sorted searches need
