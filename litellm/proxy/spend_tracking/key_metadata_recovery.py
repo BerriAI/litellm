@@ -41,9 +41,11 @@ ORDER BY token, deleted_at DESC
 """
 
 
-def _named_spend_log_edge_row_sql(direction: Literal["ASC", "DESC"]) -> str:
+def _named_spend_log_edge_row_sql(
+    direction: Literal["ASC", "DESC"], since: Literal["$2::timestamp", "oldest_probe.stopped_at"]
+) -> str:
     return f"""
-    SELECT key_alias, team_id, user_id
+    SELECT "startTime", key_alias, team_id, user_id
     FROM (
         SELECT "startTime",
             NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
@@ -53,7 +55,7 @@ def _named_spend_log_edge_row_sql(direction: Literal["ASC", "DESC"]) -> str:
             SELECT "startTime", metadata, team_id, "user"
             FROM "LiteLLM_SpendLogs"
             WHERE api_key = keys.digest
-              AND "startTime" >= $2::timestamp
+              AND "startTime" >= {since}
               AND "startTime" < $3::timestamp
             ORDER BY "startTime" {direction}
             LIMIT {SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE}
@@ -65,6 +67,19 @@ def _named_spend_log_edge_row_sql(direction: Literal["ASC", "DESC"]) -> str:
     """
 
 
+_OLDEST_PROBE_STOPPED_AT_SQL: Final = f"""
+    SELECT COALESCE(first_row."startTime", (
+        SELECT "startTime"
+        FROM "LiteLLM_SpendLogs"
+        WHERE api_key = keys.digest
+          AND "startTime" >= $2::timestamp
+          AND "startTime" < $3::timestamp
+        ORDER BY "startTime" ASC
+        OFFSET {SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE - 1}
+        LIMIT 1
+    )) AS stopped_at
+"""
+
 _SPEND_LOG_ALIAS_SQL: Final = f"""
 SELECT keys.digest,
     first_row.key_alias AS first_alias,
@@ -74,11 +89,13 @@ SELECT keys.digest,
     first_row.user_id AS first_owner,
     last_row.user_id AS last_owner
 FROM unnest($1::text[]) AS keys(digest)
-LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("ASC")}) first_row ON true
-LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("DESC")}) last_row ON true
+LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("ASC", "$2::timestamp")}) first_row ON true
+LEFT JOIN LATERAL ({_OLDEST_PROBE_STOPPED_AT_SQL}) oldest_probe ON true
+LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("DESC", "oldest_probe.stopped_at")}) last_row ON true
 """
 
 _SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
+_SPEND_LOG_NO_BITMAP_SCAN_SQL: Final = "SET LOCAL enable_bitmapscan = off"
 _SPEND_LOG_TRANSACTION_TIMEOUT: Final = timedelta(milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS)
 
 _HASHED_JWT_PREFIX: Final = "hashed-jwt-"
@@ -336,6 +353,7 @@ async def _spend_log_rows_within_the_statement_timeout(
     start, end = window
     async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
         await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
+        await transaction.execute_raw(_SPEND_LOG_NO_BITMAP_SCAN_SQL)
         return await transaction.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(digests), start, end)
 
 
