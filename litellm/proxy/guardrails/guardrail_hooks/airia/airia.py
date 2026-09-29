@@ -155,7 +155,7 @@ class AiriaGuardrail(CustomGuardrail):
         if not self._is_applicable_rewrite(structured_messages, inputs.get("structured_messages")):
             raise self._blocked()
 
-        rewritten: Final[GenericGuardrailAPIInputs] = {**inputs}  # mutable-ok: fresh copy; caller's object untouched
+        rewritten: Final[GenericGuardrailAPIInputs] = {**inputs}
         if isinstance(texts, list):
             rewritten["texts"] = texts
         if isinstance(structured_messages, list):
