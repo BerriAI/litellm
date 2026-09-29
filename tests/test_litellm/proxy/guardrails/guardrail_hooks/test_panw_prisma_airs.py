@@ -4792,7 +4792,7 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
     )
     async def test_flag_true_with_skip_system_still_scans_only_the_latest_turn_on_responses(
         self, history_tail: Sequence[Mapping[str, object]]
-    ):
+    ) -> None:
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
         )
@@ -4812,7 +4812,7 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
         assert [call.kwargs["content"] for call in mock_api.call_args_list] == [self.LATEST]
 
     @pytest.mark.asyncio
-    async def test_flag_false_responses_scans_instructions_and_full_history(self):
+    async def test_flag_false_responses_scans_instructions_and_full_history(self) -> None:
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
         )
@@ -4971,7 +4971,7 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
         ]
 
     @pytest.mark.asyncio
-    async def test_flag_true_texts_short_of_the_input_items_fall_back_to_scanning_everything(self):
+    async def test_flag_true_texts_short_of_the_input_items_fall_back_to_scanning_everything(self) -> None:
         handler = make_handler(experimental_use_latest_role_message_only=True)
         reasoning = {"type": "reasoning", "id": "rs_1", "content": [{"type": "reasoning_text", "text": "thinking"}]}
         inputs: GenericGuardrailAPIInputs = {

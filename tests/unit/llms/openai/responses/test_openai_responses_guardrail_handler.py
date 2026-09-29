@@ -70,7 +70,7 @@ class MockGuardrail(CustomGuardrail):
 class RecordingMaskingGuardrail(MockGuardrail):
     """MockGuardrail that also records the texts and structured message contents it was shown"""
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self.seen_texts: List[List[str]] = []
         self.seen_message_contents: List[List[object]] = []
@@ -101,7 +101,7 @@ class LastTextDroppingGuardrail(CustomGuardrail):
 class TextsReplacingGuardrail(CustomGuardrail):
     """Answers with the given texts list, or without a texts key at all when given None"""
 
-    def __init__(self, guardrail_name: str, texts: tuple[str, ...] | None):
+    def __init__(self, guardrail_name: str, texts: tuple[str, ...] | None) -> None:
         super().__init__(guardrail_name=guardrail_name)
         self.texts: Final = texts
 
@@ -292,7 +292,7 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"][1]["content"] == " [GUARDRAILED]"
 
     @pytest.mark.asyncio
-    async def test_instructions_over_string_input_are_scanned_first_and_rewritten_in_place(self):
+    async def test_instructions_over_string_input_are_scanned_first_and_rewritten_in_place(self) -> None:
         handler = OpenAIResponsesHandler()
         guardrail = RecordingMaskingGuardrail(guardrail_name="test")
         data = {"model": "gpt-4", "instructions": "Be terse", "input": "Hello"}
@@ -305,7 +305,7 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"] == "Hello [GUARDRAILED]"
 
     @pytest.mark.asyncio
-    async def test_instructions_over_list_input_are_scanned_first_and_rewritten_in_place(self):
+    async def test_instructions_over_list_input_are_scanned_first_and_rewritten_in_place(self) -> None:
         handler = OpenAIResponsesHandler()
         guardrail = RecordingMaskingGuardrail(guardrail_name="test")
         data = {
@@ -328,7 +328,7 @@ class TestOpenAIResponsesHandlerInputProcessing:
         ]
 
     @pytest.mark.asyncio
-    async def test_empty_instructions_are_not_scanned(self):
+    async def test_empty_instructions_are_not_scanned(self) -> None:
         handler = OpenAIResponsesHandler()
         guardrail = RecordingMaskingGuardrail(guardrail_name="test")
         data = {"model": "gpt-4", "instructions": "", "input": "Hello"}
@@ -340,7 +340,7 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"] == "Hello [GUARDRAILED]"
 
     @pytest.mark.asyncio
-    async def test_text_answer_missing_the_instructions_row_is_rejected_and_leaves_request_untouched(self):
+    async def test_text_answer_missing_the_instructions_row_is_rejected_and_leaves_request_untouched(self) -> None:
         from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
         handler = OpenAIResponsesHandler()
@@ -416,7 +416,7 @@ class TestSkipSystemMessageScopesInstructions:
         assert rewritten == "Hello [GUARDRAILED]"
 
     @pytest.mark.asyncio
-    async def test_system_input_items_leave_scope_and_user_items_still_align_with_structured_messages(self):
+    async def test_system_input_items_leave_scope_and_user_items_still_align_with_structured_messages(self) -> None:
         handler = OpenAIResponsesHandler()
         guardrail = _skipping_system(RecordingMaskingGuardrail(guardrail_name="test"))
         data = {
@@ -441,7 +441,7 @@ class TestSkipSystemMessageScopesInstructions:
         ]
 
     @pytest.mark.asyncio
-    async def test_only_system_content_means_nothing_is_scanned(self):
+    async def test_only_system_content_means_nothing_is_scanned(self) -> None:
         handler = OpenAIResponsesHandler()
         guardrail = _skipping_system(RecordingMaskingGuardrail(guardrail_name="test"))
         data = {"model": "gpt-4", "instructions": "Be terse", "input": [{"role": "system", "content": "Rules"}]}
@@ -453,7 +453,7 @@ class TestSkipSystemMessageScopesInstructions:
         assert result == original
 
     @pytest.mark.asyncio
-    async def test_structured_rewrite_of_the_scoped_rows_keeps_the_skipped_system_prompt(self):
+    async def test_structured_rewrite_of_the_scoped_rows_keeps_the_skipped_system_prompt(self) -> None:
         handler = OpenAIResponsesHandler()
         data = {
             "model": "gpt-5.6",
@@ -477,7 +477,7 @@ class TestSkipSystemMessageScopesInstructions:
         ]
 
     @pytest.mark.asyncio
-    async def test_full_coverage_claim_over_only_the_scoped_rows_still_keeps_the_skipped_system_prompt(self):
+    async def test_full_coverage_claim_over_only_the_scoped_rows_still_keeps_the_skipped_system_prompt(self) -> None:
         handler = OpenAIResponsesHandler()
         data = {
             "model": "gpt-5.6",
@@ -499,7 +499,7 @@ class TestSkipSystemMessageScopesInstructions:
         ]
 
     @pytest.mark.asyncio
-    async def test_full_coverage_claim_over_the_whole_request_is_installed_without_a_second_merge(self):
+    async def test_full_coverage_claim_over_the_whole_request_is_installed_without_a_second_merge(self) -> None:
         handler = OpenAIResponsesHandler()
         data = {
             "model": "gpt-5.6",
@@ -2879,7 +2879,7 @@ class TestPerMessageRewriteWriteBack:
         assert [_texts(item) for item in result["input"]] == [["My SSN is " + REDACTED_SSN + "."]]
 
     @pytest.mark.asyncio
-    async def test_texts_only_per_message_answer_over_a_string_input_lands_on_instructions_and_input(self):
+    async def test_texts_only_per_message_answer_over_a_string_input_lands_on_instructions_and_input(self) -> None:
         guardrail = _per_message_redactor()
         data = _string_input_request()
 
