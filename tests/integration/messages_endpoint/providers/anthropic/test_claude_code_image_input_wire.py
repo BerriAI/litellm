@@ -64,4 +64,5 @@ def test_tool_result_image_block_and_pasted_image_reach_anthropic_identical(gate
             "POST", "/v1/messages", {**pasted, "model": model}, params={"beta": "true"}, headers=headers
         )
         assert response2.status_code == 200, response2.text
-        assert len(wire.drain()) == 2
+        bodies: Final = tuple(cc.JSON_OBJECT.validate_json(request.body) for request in wire.drain())
+        assert bodies == (first_expected, second_expected), bodies

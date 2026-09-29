@@ -163,4 +163,5 @@ def test_interleaved_thinking_text_and_tool_use_history_reaches_anthropic_identi
         ]
         assert started == [(0, "thinking"), (1, "text"), (2, "tool_use")], started
         assert events[-1][0] == "message_stop"
-        assert len(wire.drain()) == 2
+        bodies: Final = tuple(cc.JSON_OBJECT.validate_json(request.body) for request in wire.drain())
+        assert bodies == (turn2_expected, turn3_expected), bodies

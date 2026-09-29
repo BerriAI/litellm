@@ -101,7 +101,8 @@ def test_claude_code_tool_loop_round_trips_thinking_tool_use_and_tool_result(gat
         events2: Final = cc.sse_events(response2.text)
         assert events2[2][1]["delta"] == {"type": "text_delta", "text": "PROBE"}
         assert events2[4][1]["delta"]["stop_reason"] == "end_turn"
-        assert len(wire.drain()) == 2
+        bodies: Final = tuple(cc.JSON_OBJECT.validate_json(request.body) for request in wire.drain())
+        assert bodies == (first_expected, second_expected), bodies
         rows: Final = eventually(
             lambda: read_rows(
                 'SELECT prompt_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s',

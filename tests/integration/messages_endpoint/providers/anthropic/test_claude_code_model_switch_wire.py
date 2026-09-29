@@ -71,7 +71,8 @@ def test_claude_code_mid_loop_model_switch_replays_history_byte_identical(gatewa
             "POST", "/v1/messages", {**turn2, "model": opus}, params={"beta": "true"}, headers=headers
         )
         assert response2.status_code == 200, response2.text
-        assert len(wire.drain()) == 2
+        bodies: Final = tuple(cc.JSON_OBJECT.validate_json(request.body) for request in wire.drain())
+        assert bodies == (first_expected, second_expected), bodies
         rows: Final = eventually(
             lambda: read_rows(
                 'SELECT model FROM "LiteLLM_SpendLogs" WHERE request_id=%s',

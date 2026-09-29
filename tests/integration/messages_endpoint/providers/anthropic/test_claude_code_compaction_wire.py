@@ -105,4 +105,5 @@ def test_compaction_edit_and_applied_edit_block_round_trip_through_anthropic(gat
             "POST", "/v1/messages", {**turn3, "model": model}, params={"beta": "true"}, headers=headers
         )
         assert response2.status_code == 200, response2.text
-        assert len(wire.drain()) == 2
+        bodies: Final = tuple(cc.JSON_OBJECT.validate_json(request.body) for request in wire.drain())
+        assert bodies == (first_expected, second_expected), bodies
