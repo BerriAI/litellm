@@ -875,3 +875,65 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+def test_vertex_ai_sonnet_5_5_response_format_json_tool_is_not_forced(local_model_cost_map):
+    result = VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=False,
+    )
+
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+    assert "tool_choice" not in result
+    assert result["json_mode"] is True
+    assert "output_format" not in result
+
+
+def test_vertex_ai_sonnet_5_5_response_format_reaches_sampling_gate_with_real_model(local_model_cost_map):
+    result = VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            },
+            "temperature": 0.2,
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+
+
+def test_vertex_ai_sonnet_4_6_response_format_still_forces_json_tool_call(local_model_cost_map):
+    result = VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-sonnet-4-6",
+        drop_params=False,
+    )
+
+    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]

@@ -395,6 +395,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model_lower: Final = model.lower()
         return any(v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7"))
 
+    def _uses_native_structured_output(self, model: str) -> bool:
+        return AnthropicConfig._supports_model_capability(
+            model, "supports_native_structured_output", self._resolved_provider
+        )
+
     @staticmethod
     def _supports_effort_level(model: str, level: str, custom_llm_provider: str) -> bool:
         """Check ``supports_{level}_reasoning_effort`` in the model map."""
@@ -1526,11 +1531,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if AnthropicConfig._supports_model_capability(
-                    model,
-                    "supports_native_structured_output",
-                    self._resolved_provider,
-                ):
+                if self._uses_native_structured_output(model):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:
                         optional_params["output_format"] = _output_format
