@@ -1,10 +1,14 @@
+use litellm_auth::CredentialPlacement;
 use litellm_llms::{
-    base_llm::chat::transformation::{
-        BaseConfig, Error, ProviderChatResponseData, RequestAuth, Unsupported,
+    Error,
+    base_llm::{
+        auth::AuthScheme,
+        chat::transformation::{BaseConfig, ProviderChatResponseData, Unsupported},
     },
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
 };
 use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use rstest::rstest;
 use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -127,40 +131,34 @@ fn declines_top_k_because_python_routes_it_by_base_model() {
     );
 }
 
-#[test]
-fn declines_tools_and_other_params_outside_the_allowlist() {
-    for param in [
-        json!({"tools": []}),
-        json!({"tool_choice": {"auto": {}}}),
-        json!({"thinking": {"type": "enabled"}}),
-        json!({"requestMetadata": {"k": "v"}}),
-        json!({"outputConfig": {}}),
-        json!({"_parallel_tool_use_config": {}}),
-    ] {
-        assert_eq!(
-            reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
-            Some(Unsupported("unrecognized request parameter")),
-            "expected {param} to decline"
-        );
-    }
+#[rstest]
+#[case::tools(json!({"tools": []}))]
+#[case::tool_choice(json!({"tool_choice": {"auto": {}}}))]
+#[case::thinking(json!({"thinking": {"type": "enabled"}}))]
+#[case::request_metadata(json!({"requestMetadata": {"k": "v"}}))]
+#[case::output_config(json!({"outputConfig": {}}))]
+#[case::parallel_tool_use_config(json!({"_parallel_tool_use_config": {}}))]
+fn declines_tools_and_other_params_outside_the_allowlist(#[case] param: Value) {
+    assert_eq!(
+        reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
+        Some(Unsupported("unrecognized request parameter")),
+        "expected {param} to decline"
+    );
 }
 
-#[test]
-fn declines_blank_text_rather_than_substituting_the_anthropic_placeholder() {
-    for content in [
-        json!(""),
-        json!("   "),
-        json!([{"type": "text", "text": " "}]),
-    ] {
-        assert_eq!(
-            reason(
-                json!([{"role": "user", "content": content}, {"role": "user", "content": "hi"}]),
-                json!({})
-            ),
-            Some(Unsupported("blank message text")),
-            "expected blank content {content} to decline"
-        );
-    }
+#[rstest]
+#[case::empty_string(json!(""))]
+#[case::whitespace_string(json!("   "))]
+#[case::whitespace_text_block(json!([{"type": "text", "text": " "}]))]
+fn declines_blank_text_rather_than_substituting_the_anthropic_placeholder(#[case] content: Value) {
+    assert_eq!(
+        reason(
+            json!([{"role": "user", "content": content}, {"role": "user", "content": "hi"}]),
+            json!({})
+        ),
+        Some(Unsupported("blank message text")),
+        "expected blank content {content} to decline"
+    );
 }
 
 #[test]
@@ -273,22 +271,36 @@ fn prefers_an_explicit_runtime_endpoint_over_the_api_base() {
     );
 }
 
+/// The bearer token a config named, or `None` for a SigV4 scheme in the given region.
+fn bearer_or_region(auth: AuthScheme) -> Result<String, String> {
+    match auth {
+        AuthScheme::Credential {
+            placement: CredentialPlacement::Bearer,
+            secret,
+        } => Ok(secret.expose().to_string()),
+        AuthScheme::AwsSigV4 {
+            region,
+            service: "bedrock",
+            ..
+        } => Err(region),
+        other => panic!("unexpected auth {other:?}"),
+    }
+}
+
 #[test]
 fn signs_with_sigv4_in_the_resolved_region() {
-    let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
+    let validated = BEDROCK_CHAT_COMPLETIONS_CONFIG
+        .validate_environment(
+            Vec::new(),
+            None,
+            "eu-central-1/anthropic.claude-v2",
+            &Map::new(),
+            &|_| None,
+        )
+        .expect("auth resolves");
     assert_eq!(
-        config
-            .auth(
-                None,
-                "eu-central-1/anthropic.claude-v2",
-                &Map::new(),
-                &|_| None
-            )
-            .expect("auth resolves"),
-        RequestAuth::AwsSigV4 {
-            region: "eu-central-1".to_string(),
-            service: "bedrock",
-        }
+        bearer_or_region(validated.auth),
+        Err("eu-central-1".to_string())
     );
 }
 
@@ -302,22 +314,21 @@ fn a_bearer_token_outranks_sigv4_the_way_python_resolves_it() {
         |key: &str| (key == "AWS_BEARER_TOKEN_BEDROCK").then(|| "from-env".to_string());
     let no_env = |_: &str| None;
     let resolve = |api_key, env: &dyn Fn(&str) -> Option<String>| {
-        BEDROCK_CHAT_COMPLETIONS_CONFIG
-            .auth(
-                api_key,
-                "eu-central-1/anthropic.claude-v2",
-                &Map::new(),
-                env,
-            )
-            .expect("auth resolves")
+        bearer_or_region(
+            BEDROCK_CHAT_COMPLETIONS_CONFIG
+                .validate_environment(
+                    Vec::new(),
+                    api_key,
+                    "eu-central-1/anthropic.claude-v2",
+                    &Map::new(),
+                    env,
+                )
+                .expect("auth resolves")
+                .auth,
+        )
     };
-    let bearer = |token: &str| RequestAuth::Bearer {
-        token: token.to_string(),
-    };
-    let sigv4 = RequestAuth::AwsSigV4 {
-        region: "eu-central-1".to_string(),
-        service: "bedrock",
-    };
+    let bearer = |token: &str| Ok(token.to_string());
+    let sigv4 = Err("eu-central-1".to_string());
 
     // A caller-supplied key is the bearer token, and outranks the env.
     assert_eq!(
@@ -493,16 +504,29 @@ fn declines_a_response_carrying_a_tool_use_block() {
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("converse response is not an object".to_string())
+        Error::InvalidResponse("converse response is not an object".to_string().into())
     );
     assert_eq!(
         transform_response(json!({"usage": {}})).expect_err("no output"),
-        Error::MissingField("output.message.content")
+        Error::InvalidResponse("invalid Converse response: missing field `output`".into())
     );
     assert_eq!(
         transform_response(json!({"output": {"message": {"content": []}}})).expect_err("no usage"),
-        Error::MissingField("usage")
+        Error::InvalidResponse("invalid Converse response: missing field `usage`".into())
     );
+}
+
+#[test]
+fn rejects_malformed_text_and_token_counts() {
+    for response in [
+        json!({"output": {"message": {"content": [{"text": 123}]}}, "usage": {"inputTokens": 1, "outputTokens": 1}}),
+        json!({"output": {"message": {"content": [{"text": "x"}]}}, "usage": {"inputTokens": "1", "outputTokens": 1}}),
+    ] {
+        assert!(matches!(
+            transform_response(response),
+            Err(Error::InvalidResponse(message)) if message.to_string().starts_with("invalid Converse response:")
+        ));
+    }
 }
 
 #[test]

@@ -1186,10 +1186,21 @@ class TestConfiguredBucketNameResolution:
         assert config._get_configured_bucket_name({"gcs_bucket_name": "new", "bucket_name": "legacy"}) == "new"
 
     def test_should_fall_back_to_env(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.setenv("GCS_BUCKET_NAME", "env-bucket")
         assert config._get_configured_bucket_name({}) == "env-bucket"
 
+    def test_should_prefer_batch_env_over_logging_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        monkeypatch.setenv("GCS_BUCKET_NAME", "logging-bucket")
+        assert config._get_configured_bucket_name({}) == "batch-bucket"
+
+    def test_should_prefer_litellm_params_over_batch_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BATCH_BUCKET_NAME", "batch-bucket")
+        assert config._get_configured_bucket_name({"gcs_bucket_name": "per-model-bucket"}) == "per-model-bucket"
+
     def test_should_raise_when_no_bucket_anywhere(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BATCH_BUCKET_NAME", raising=False)
         monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
         with pytest.raises(ValueError, match="GCS bucket_name is required"):
             config._get_configured_bucket_name({})

@@ -3,18 +3,43 @@ use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
     base_llm::chat::transformation::BaseConfig,
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
+    openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
 };
 use serde_json::{Map, Value};
 
 use super::Error;
+use crate::provider::LlmProviders;
 
 const HEADER_CONTEXT: &str = "chat completions";
 
-pub(super) fn chat_completions_provider_config(provider: &str) -> Option<&'static dyn BaseConfig> {
+pub(super) enum ChatProvider {
+    Anthropic,
+    Bedrock,
+    OpenaiLike,
+}
+
+impl ChatProvider {
+    pub(super) fn config(self) -> &'static dyn BaseConfig {
+        match self {
+            Self::Anthropic => &ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
+            Self::Bedrock => &BEDROCK_CHAT_COMPLETIONS_CONFIG,
+            Self::OpenaiLike => &OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
+        }
+    }
+}
+
+pub(super) fn chat_completions_provider(provider: LlmProviders) -> Option<ChatProvider> {
     match provider {
-        "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
-        "bedrock" => Some(&BEDROCK_CHAT_COMPLETIONS_CONFIG),
-        _ => None,
+        LlmProviders::Anthropic => Some(ChatProvider::Anthropic),
+        LlmProviders::Bedrock => Some(ChatProvider::Bedrock),
+        LlmProviders::OpenaiLike => Some(ChatProvider::OpenaiLike),
+        LlmProviders::AwsTextract
+        | LlmProviders::AzureAi
+        | LlmProviders::Cohere
+        | LlmProviders::Mistral
+        | LlmProviders::Openai
+        | LlmProviders::Reducto
+        | LlmProviders::VertexAi => None,
     }
 }
 
