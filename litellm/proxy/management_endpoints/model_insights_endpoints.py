@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from litellm.constants import MODEL_INSIGHTS_MAX_RANGE_DAYS, MODEL_INSIGHTS_TOP_MODELS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.repositories.table_repositories import DailyModelUsageRepository
 from litellm.types.model_insights import (
     ModelInsightDailyMetric,
@@ -170,4 +171,5 @@ async def get_model_insights(
         top_models=[_metric(row) for row in model_rows],
         daily=[_daily_metric(row) for row in daily_rows],
         by_task=[_task_metric(row) for row in task_rows],
+        tasks=list(load_model_insight_tasks().values()),
     )
