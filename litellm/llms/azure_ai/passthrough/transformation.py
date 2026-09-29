@@ -96,7 +96,7 @@ def with_requested_image_size(response: ImageResponse, request_data: Mapping[str
     height: Final = request_data.get("height")
     if response.size is not None or type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
         return response
-    return response.model_copy(update={"size": f"{width}x{height}"})
+    return response.model_copy(update=MappingProxyType({"size": f"{width}x{height}"}))
 
 
 class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
