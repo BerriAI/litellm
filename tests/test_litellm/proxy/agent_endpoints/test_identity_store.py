@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from prisma.models import LiteLLM_VerifiedSubject
 
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
     AgentsRepository,
@@ -56,6 +57,7 @@ def stored_agent(**overrides: object) -> AgentResponse:
 def setup_store(
     agent: AgentResponse | None = stored_agent(),
     human: LiteLLM_VerifiedSubject | None = None,
+    cache: UserApiKeyCache | None = None,
 ) -> tuple[AgentIdentityStore, AsyncMock, AsyncMock, AsyncMock]:
     agents: Final = AsyncMock()
     identities: Final = AsyncMock()
@@ -72,7 +74,7 @@ def setup_store(
         )
     )
     return (
-        AgentIdentityStore(AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db)),
+        AgentIdentityStore(AgentsRepository(db), AgentIdentityRepository(db), VerifiedSubjectRepository(db), cache=cache),
         agents,
         identities,
         humans,
@@ -91,13 +93,39 @@ async def test_application_authentication_has_no_fabricated_human() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_is_read_on_every_request_without_cached_allow() -> None:
-    store, agents, _, _ = setup_store()
-    agents.find_unique.side_effect = [stored_agent(), stored_agent(enabled=False)]
+async def test_shared_binding_lookup_cache_keeps_policy_reads_authoritative() -> None:
+    cache: Final = UserApiKeyCache()
+    store, agents, identities, _ = setup_store(cache=cache)
+    other: Final = AgentIdentityStore(store.agents, store.identities, store.humans, cache=cache)
+    assert isinstance(await store.resolve_verified_claims(CLAIMS), ManagedAgentContext)
+    assert isinstance(await other.resolve_verified_claims(CLAIMS), ManagedAgentContext)
+    identities.find_unique.assert_awaited_once()
+    assert agents.find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed",
+    [
+        None,
+        stored_agent(enabled=False),
+        stored_agent(identity=None),
+        stored_agent(identity_managed=False),
+        stored_agent(execution_mode="delegated"),
+        stored_agent(identity=BINDING.model_copy(update={"active": False})),
+        stored_agent(identity=BINDING.model_copy(update={"client_id": HUMAN, "revision": "new-binding"})),
+        stored_agent(identity=BINDING.model_copy(update={"required_roles": ("New.Role",), "revision": "new-policy"})),
+    ],
+)
+async def test_lifecycle_is_read_on_every_request_without_cached_allow(changed: AgentResponse | None) -> None:
+    store, agents, identities, _ = setup_store(cache=UserApiKeyCache())
+    agents.find_unique.side_effect = [stored_agent(), changed]
     assert isinstance(await store.resolve_verified_claims(CLAIMS), ManagedAgentContext)
     denial: Final = await store.resolve_verified_claims(CLAIMS)
     assert isinstance(denial, AgentIdentityFailure)
     assert denial.code == "identity_denied"
+    identities.find_unique.assert_awaited_once()
+    assert agents.find_unique.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -109,6 +137,19 @@ async def test_identity_store_failure_never_becomes_a_legacy_allow(unavailable_t
     result: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
     assert isinstance(result, AgentIdentityFailure)
     assert result.code == "policy_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable_table", ["agents", "humans"])
+async def test_cached_binding_cannot_hide_authoritative_storage_failure(unavailable_table: str) -> None:
+    store, agents, identities, humans = setup_store(cache=UserApiKeyCache())
+    assert isinstance(await store.resolve_verified_claims(CLAIMS), ManagedAgentContext)
+    table: Final = {"agents": agents, "humans": humans}[unavailable_table]
+    table.find_unique.side_effect = ConnectionError("writer unavailable")
+    result: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
+    assert isinstance(result, AgentIdentityFailure)
+    assert result.code == "policy_unavailable"
+    identities.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -133,7 +174,7 @@ async def test_delegated_subject_uses_canonical_sso_user_not_email_claim() -> No
         verified_via="sso_interactive",
         verified_at=datetime.now(timezone.utc),
     )
-    store, _, _, humans = setup_store(human=human)
+    store, _, identities, humans = setup_store(human=human, cache=UserApiKeyCache())
     result: Final = await store.resolve_verified_claims(
         {
             **CLAIMS,
@@ -148,6 +189,12 @@ async def test_delegated_subject_uses_canonical_sso_user_not_email_claim() -> No
     humans.find_unique.assert_awaited_once_with(
         where={"issuer_tenant_id_oid": {"issuer": ISSUER, "tenant_id": TENANT, "oid": HUMAN}}
     )
+    humans.find_unique.return_value = None
+    denied: Final = await store.resolve_verified_claims({**CLAIMS, "oid": HUMAN, "scp": "user_impersonation"})
+    assert isinstance(denied, AgentIdentityFailure)
+    assert denied.code == "identity_denied"
+    identities.find_unique.assert_awaited_once()
+    assert humans.find_unique.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -286,7 +333,7 @@ async def test_new_binding_is_enforced_after_another_worker_commits_it() -> None
             litellm_retiredagent=retired,
         )
     )
-    worker: Final = AgentIdentityStore.from_client(db)
+    worker: Final = AgentIdentityStore.from_client(db, cache=UserApiKeyCache())
     claims: Final = {**CLAIMS, "oid": "55555555-5555-4555-8555-555555555555"}
     assert await worker.resolve_verified_claims(claims) is None
     identities.find_unique.return_value = BINDING
@@ -294,6 +341,7 @@ async def test_new_binding_is_enforced_after_another_worker_commits_it() -> None
     assert isinstance(denied, AgentIdentityFailure)
     assert denied.code == "identity_denied"
     assert "Application token contradicts" in denied.message
+    assert identities.find_unique.await_count == 2
 
 
 @pytest.mark.asyncio
