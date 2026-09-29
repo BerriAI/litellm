@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
+from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
@@ -4820,13 +4821,20 @@ async def _wait_for_success_kwargs_with_input(
 @pytest.mark.asyncio
 @respx.mock
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize(
+    "supported_call_types",
+    [["aresponses", "responses"], ["responses"]],
+    ids=["both_call_types", "responses_only"],
+)
 async def test_wrapper_aresponses_reads_cache_once_and_replays_from_that_read(
-    monkeypatch: pytest.MonkeyPatch, stream: bool
+    monkeypatch: pytest.MonkeyPatch, stream: bool, supported_call_types: list[CachingSupportedCallTypes]
 ) -> None:
     capture: Final = _install_converted_stream_callbacks(monkeypatch)
     monkeypatch.setattr(litellm, "callbacks", [capture])
     counting: Final = _ReadCountingInMemoryCache()
-    monkeypatch.setattr(litellm, "cache", Cache(type="local", _backend=counting))
+    monkeypatch.setattr(
+        litellm, "cache", Cache(type="local", _backend=counting, supported_call_types=supported_call_types)
+    )
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     route: Final = _native_responses_route(stream)
