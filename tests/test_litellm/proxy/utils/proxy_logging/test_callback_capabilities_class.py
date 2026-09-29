@@ -271,25 +271,71 @@ def test_needs_per_chunk_streaming_hook_error_raises(proxy_logging, monkeypatch)
 
 def test_has_during_call_guardrails_truth_table(monkeypatch, mock_callbacks_disabled):
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
 
-    class _G(CustomGuardrail):
+    class _PreCallOnly(CustomGuardrail):
         def __init__(self):
-            super().__init__(guardrail_name="g", event_hook="pre_call")
+            super().__init__(guardrail_name="g-pre", event_hook=GuardrailEventHooks.pre_call)
+
+    class _DuringCall(CustomGuardrail):
+        def __init__(self):
+            super().__init__(guardrail_name="g-during", event_hook=GuardrailEventHooks.during_call)
 
     snapshot = {
         "empty_false": ProxyLogging.has_during_call_guardrails(),
     }
-    monkeypatch.setattr(litellm, "callbacks", [_G()])
+    monkeypatch.setattr(litellm, "callbacks", [_PreCallOnly()])
     ProxyLogging._callback_capabilities_cache.clear()
-    snapshot["with_guardrail_true"] = ProxyLogging.has_during_call_guardrails()
+    snapshot["pre_call_only_false"] = ProxyLogging.has_during_call_guardrails()
+    monkeypatch.setattr(litellm, "callbacks", [_DuringCall()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    snapshot["with_during_call_true"] = ProxyLogging.has_during_call_guardrails()
     monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
     ProxyLogging._callback_capabilities_cache.clear()
     snapshot["only_plain_logger_false"] = ProxyLogging.has_during_call_guardrails()
     assert snapshot == {
         "empty_false": False,
-        "with_guardrail_true": True,
+        "pre_call_only_false": False,
+        "with_during_call_true": True,
         "only_plain_logger_false": False,
     }
+
+
+def test_streaming_fast_path_ignores_pre_call_only_guardrails(monkeypatch, mock_callbacks_disabled):
+    """pre_call-only CustomGuardrails must not disable the streaming fast path."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class _PreCallOnly(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="pre-only",
+                event_hook=GuardrailEventHooks.pre_call,
+                default_on=True,
+            )
+
+    class _PostCall(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="post",
+                event_hook=GuardrailEventHooks.post_call,
+                default_on=True,
+            )
+
+    monkeypatch.setattr(litellm, "callbacks", [_PreCallOnly()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    caps = ProxyLogging._callback_capabilities()
+    assert caps.has_guardrail is True
+    assert caps.has_streaming_guardrail is False
+    assert ProxyLogging.has_streaming_callbacks() is False
+    assert ProxyLogging.has_streaming_chunk_hook_overrides() is False
+
+    monkeypatch.setattr(litellm, "callbacks", [_PreCallOnly(), _PostCall()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    caps = ProxyLogging._callback_capabilities()
+    assert caps.has_guardrail is True
+    assert caps.has_streaming_guardrail is True
+    assert ProxyLogging.has_streaming_callbacks() is True
 
 
 def test_has_during_call_guardrails_resolution_error_raises(monkeypatch):
