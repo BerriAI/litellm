@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,57 +12,32 @@ vi.mock("@/components/ui/chart", () => ({
   ChartTooltipContent: () => null,
 }));
 vi.mock("recharts", () => ({
-  Area: () => null,
-  AreaChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Bar: () => null,
+  BarChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   CartesianGrid: () => null,
+  Treemap: () => null,
   XAxis: () => null,
   YAxis: () => null,
 }));
 
+const metrics = {
+  model_group: "fast-chat",
+  model: "openai/gpt-5.4-mini",
+  provider: "openai",
+  spend: 2.5,
+  prompt_tokens: 1000,
+  completion_tokens: 2000,
+  requests: 12,
+  successful_requests: 12,
+  failed_requests: 0,
+};
+
 const response = {
-  start_date: "2026-09-09",
+  start_date: "2025-09-29",
   end_date: "2026-09-28",
-  top_models: [
-    {
-      model_group: "fast-chat",
-      model: "openai/gpt-5.4-mini",
-      provider: "openai",
-      spend: 2.5,
-      prompt_tokens: 1000,
-      completion_tokens: 2000,
-      requests: 12,
-      successful_requests: 12,
-      failed_requests: 0,
-    },
-  ],
-  daily: [
-    {
-      model_group: "fast-chat",
-      model: "openai/gpt-5.4-mini",
-      provider: "openai",
-      date: "2026-09-28",
-      spend: 2.5,
-      prompt_tokens: 1000,
-      completion_tokens: 2000,
-      requests: 12,
-      successful_requests: 12,
-      failed_requests: 0,
-    },
-  ],
-  by_task: [
-    {
-      model_group: "fast-chat",
-      model: "openai/gpt-5.4-mini",
-      provider: "openai",
-      task_type: "chat",
-      spend: 2.5,
-      prompt_tokens: 1000,
-      completion_tokens: 2000,
-      requests: 12,
-      successful_requests: 12,
-      failed_requests: 0,
-    },
-  ],
+  top_models: [metrics],
+  daily: [{ ...metrics, date: "2026-09-28" }],
+  by_task: [{ ...metrics, task_type: "code_generation" }],
 };
 
 describe("ModelInsightsView", () => {
@@ -70,14 +45,15 @@ describe("ModelInsightsView", () => {
     vi.mocked(apiClient.get).mockResolvedValue(response);
   });
 
-  it("renders actual model rankings, task usage, and provider logo", async () => {
+  it("shows the ranking with share and the task legend from the API response", async () => {
     render(<ModelInsightsView accessToken="token" />);
 
-    await waitFor(() => expect(screen.getAllByText("fast-chat").length).toBeGreaterThan(0));
-    expect(screen.getByText("Top model usage")).toBeInTheDocument();
-    expect(screen.getByText("Top models by task")).toBeInTheDocument();
-    expect(screen.getByText("chat")).toBeInTheDocument();
-    expect(screen.getByText("Cost per session")).toBeInTheDocument();
+    expect(await screen.findByText("fast-chat")).toBeInTheDocument();
+    expect(screen.getByText("by openai")).toBeInTheDocument();
+    expect(screen.getByText("Code")).toBeInTheDocument();
+    expect(screen.getAllByText("100.0%")).toHaveLength(2);
+    expect(screen.getByRole("tab", { name: "tokens" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "log" })).toBeInTheDocument();
     expect(apiClient.get).toHaveBeenCalledWith("/model-insights", { accessToken: "token" });
   });
 });
