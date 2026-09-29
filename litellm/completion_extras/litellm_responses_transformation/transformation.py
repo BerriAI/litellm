@@ -698,12 +698,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         tool_call_index = 0
 
         for item in output_items:
-            reasoning_item: Final = _reasoning_item_from_output_item(item)
+            reasoning_item = _reasoning_item_from_output_item(item)
             if reasoning_item is not None:
                 pending_reasoning_items.append(reasoning_item)
-                summary_texts: Final = [s["text"] for s in reasoning_item["summary"] if s.get("text")]
+                summary_texts = [s["text"] for s in reasoning_item["summary"] if s.get("text")]
                 if summary_texts:
-                    step_text: Final = " ".join(summary_texts)
+                    step_text = " ".join(summary_texts)
                     reasoning_content = f"{reasoning_content} {step_text}".strip() if reasoning_content else step_text
 
             elif isinstance(item, ResponseOutputMessage):
