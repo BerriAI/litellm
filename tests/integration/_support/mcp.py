@@ -58,7 +58,16 @@ class McpPeer:
 
     def registration(self) -> dict[str, object]:
         if self.transport == "stdio":
-            return {"transport": "stdio", "command": self.command, "args": list(self.args)}
+            return {
+                "transport": "stdio",
+                "command": self.command,
+                "args": list(self.args),
+                **(
+                    {"env": {"COVERAGE_PROCESS_CONFIG": os.environ["COVERAGE_PROCESS_CONFIG"]}}
+                    if os.environ.get("COVERAGE_PROCESS_CONFIG")
+                    else {}
+                ),
+            }
         if self.spec_path is not None:
             return {"transport": "http", "url": self.url, "spec_path": str(self.spec_path)}
         return {"transport": self.transport, "url": self.url}
