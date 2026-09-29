@@ -12,8 +12,8 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
-    ResponseEnvelope,
+    CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig,
+    ResponseCacheService, ResponseEnvelope,
 };
 use litellm_core::{
     RouteError,
@@ -117,9 +117,9 @@ async fn call(
 
 #[rstest]
 #[case::normal(CacheOptions::new(CacheScope::Shared), true, true)]
-#[case::no_cache(CacheOptions { no_cache: true, ..CacheOptions::new(CacheScope::Shared) }, false, true)]
-#[case::no_store(CacheOptions { no_store: true, ..CacheOptions::new(CacheScope::Shared) }, true, false)]
-#[case::disabled(CacheOptions { caching: Some(false), ..CacheOptions::new(CacheScope::Shared) }, false, false)]
+#[case::no_cache(CacheOptions { policy: CachePolicy { no_cache: true, ..CachePolicy::default() }, ..CacheOptions::new(CacheScope::Shared) }, false, true)]
+#[case::no_store(CacheOptions { policy: CachePolicy { no_store: true, ..CachePolicy::default() }, ..CacheOptions::new(CacheScope::Shared) }, true, false)]
+#[case::disabled(CacheOptions { policy: CachePolicy { caching: Some(false), ..CachePolicy::default() }, ..CacheOptions::new(CacheScope::Shared) }, false, false)]
 #[tokio::test]
 async fn cache_controls_apply_to_both_reads_and_writes(
     cache: Arc<dyn ResponseCacheService>,
@@ -411,7 +411,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
     #[case] poisoned: Value,
 ) {
     use litellm_core::responses::route::Responses;
-    use litellm_types::responses::main::ResponsesApiResponse;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
         ResponseCache::new(Arc::new(InMemoryCache::default())),
@@ -461,7 +461,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
     #[case] changed: Value,
 ) {
     use litellm_core::messages::route::Messages;
-    use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+    use litellm_llms_types::formats::messages::MessagesResponse;
 
     let calls = AtomicUsize::new(0);
     for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
@@ -487,7 +487,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                 None,
                 || async {
                     let call = calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(Box::new(serde_json::from_value::<AnthropicMessagesResponse>(json!({
+                    Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({
                     "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
                     "content":[{"type":"text","text":format!("answer {call}")}],
                     "stop_reason":"end_turn", "stop_sequence":null
@@ -723,9 +723,9 @@ async fn unary_call(
 
 #[rstest]
 #[case::normal(CacheOptions::new(CacheScope::Shared), true, true)]
-#[case::no_cache(CacheOptions { no_cache: true, ..CacheOptions::new(CacheScope::Shared) }, false, true)]
-#[case::no_store(CacheOptions { no_store: true, ..CacheOptions::new(CacheScope::Shared) }, true, false)]
-#[case::disabled(CacheOptions { caching: Some(false), ..CacheOptions::new(CacheScope::Shared) }, false, false)]
+#[case::no_cache(CacheOptions { policy: CachePolicy { no_cache: true, ..CachePolicy::default() }, ..CacheOptions::new(CacheScope::Shared) }, false, true)]
+#[case::no_store(CacheOptions { policy: CachePolicy { no_store: true, ..CachePolicy::default() }, ..CacheOptions::new(CacheScope::Shared) }, true, false)]
+#[case::disabled(CacheOptions { policy: CachePolicy { caching: Some(false), ..CachePolicy::default() }, ..CacheOptions::new(CacheScope::Shared) }, false, false)]
 #[tokio::test]
 async fn unary_cache_controls_do_not_change_the_shared_service(
     cache: Arc<dyn ResponseCacheService>,
@@ -843,7 +843,7 @@ async fn responses_cache_only_reuses_completed_responses(
     #[case] expected_calls: usize,
 ) {
     use litellm_core::responses::route::Responses;
-    use litellm_types::responses::main::ResponsesApiResponse;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let calls = AtomicUsize::new(0);
     for _ in 0..2 {

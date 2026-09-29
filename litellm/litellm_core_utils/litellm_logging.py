@@ -1884,7 +1884,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
                 "litellm_logging_obj": self,
-                "service_tier": (self.optional_params.get("service_tier") if self.optional_params else None),
                 "data_residency": (
                     self.litellm_params.get("data_residency")
                     if hasattr(self, "litellm_params") and self.litellm_params
@@ -2432,7 +2431,7 @@ class Logging(LiteLLMLoggingBaseClass):
         await invalidate_baseline_cache(self, reason, completed=completed)
 
     def _build_standard_logging_payload(
-        self, init_response_obj: object, start_time: Any, end_time: Any
+        self, init_response_obj: object, start_time: dt_object, end_time: dt_object
     ) -> StandardLoggingPayload | None:
         """Build StandardLoggingPayload and accumulate its construction time."""
         _start: Final = time.time()
@@ -2732,7 +2731,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def success_handler(
         self,
-        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        result: object = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
@@ -3171,7 +3170,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     async def async_success_handler(
         self,
-        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        result: object = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
@@ -3189,7 +3188,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     async def _async_success_handler_body(
         self,
-        result: Any = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
+        result: object = None,  # heterogeneous response object; varies by call type (ANN401 ignored, see ruff-strict.toml)
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
@@ -4296,7 +4295,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return result
 
-    def _handle_a2a_response_logging(self, result: Any) -> Any:
+    def _handle_a2a_response_logging(self, result: Any) -> object:
         """
         Handles logging for A2A (Agent-to-Agent) responses.
 
@@ -5705,7 +5704,7 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_standard_logging_metadata(
-        metadata: dict[str, Any] | None,
+        metadata: Mapping[str, object] | None,
         litellm_params: dict | None = None,
         prompt_integration: str | None = None,
         applied_guardrails: list[str] | None = None,

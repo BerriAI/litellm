@@ -5,7 +5,7 @@ use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 
 use super::{
     ChatCompletionsRoute, Error,
@@ -55,7 +55,7 @@ impl ChatCompletionsRoute {
     pub(super) async fn run_call(
         &self,
         call: ChatCompletionsCall,
-        cache_options: Option<litellm_cache_response::CacheOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {

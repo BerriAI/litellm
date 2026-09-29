@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use litellm_core::chat_completions::{Error, types::ChatCompletionsRequest};
 use litellm_http::transport::Error as TransportError;
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;

@@ -1,5 +1,5 @@
 use litellm_llms::base_llm::messages::normalization::fold_system_role_messages;
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use litellm_llms_types::formats::messages::MessagesRequest;
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -14,7 +14,7 @@ fn folding_preserves_block_fields_order_and_unrelated_request_fields(
     let cache_control = json!({"type": "ephemeral", "scope": "global", "future": true});
     let folded_block = json!({"type": "text", "text": "second", "cache_control": cache_control});
     let user = json!({"role": "user", "content": "hello", "future_message": 42});
-    let request: AnthropicMessagesRequest = serde_json::from_value(json!({
+    let request: MessagesRequest = serde_json::from_value(json!({
         "model": "test-model",
         "max_tokens": 64,
         "system": system,

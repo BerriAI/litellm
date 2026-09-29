@@ -1,5 +1,4 @@
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
+use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
@@ -9,7 +8,7 @@ use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     chat::transformation::ProviderChatResponseData,
 };
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use serde_json::Value;
 
 use super::Error;
@@ -23,7 +22,7 @@ pub(super) async fn execute(
     auth: &AuthServices,
     request: ProviderChatCompletionsRequest,
     cache: Option<litellm_cache_response::ScopedCache>,
-    cache_options: Option<litellm_cache_response::CacheOptions>,
+    cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
