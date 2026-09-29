@@ -545,6 +545,30 @@ async def _is_fallback_target_within_budget(
     return False
 
 
+def _is_fallback_target_tag_satisfiable(
+    litellm_router: LitellmRouter,
+    fallback_entry: str | Mapping[str, object],
+    kwargs: Mapping[str, object],
+) -> bool:
+    """
+    Skip a fallback leg whose model group cannot satisfy confirmed tag-routing
+    tags. Mirrors the authorized/budget pre-checks: structurally unsatisfiable
+    legs must not be attempted, raised, logged at ERROR, or counted as failures.
+    """
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if target is None:
+        return True
+    from litellm.router_strategy.tag_based_routing import can_satisfy_confirmed_routing_tags
+
+    if can_satisfy_confirmed_routing_tags(litellm_router, target, kwargs):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: no deployment can satisfy confirmed tag routing tags",
+        mask_sensitive_structure(fallback_entry),
+    )
+    return False
+
+
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
     True when a file, batch, or fine-tuning job operation names an id that only exists
@@ -653,6 +677,8 @@ async def run_async_fallback(
         if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
             continue
         if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
+            continue
+        if not _is_fallback_target_tag_satisfiable(litellm_router, mg, kwargs):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:

@@ -693,3 +693,77 @@ def _get_tags_from_request_kwargs(
         typed_litellm_params: Final[Mapping[str, object]] = litellm_params
         return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []
+
+
+def can_satisfy_confirmed_routing_tags(
+    llm_router_instance: LitellmRouter,
+    model: str,
+    request_kwargs: Mapping[str, object] | None = None,
+    metadata_variable_name: Literal["metadata", "litellm_metadata"] | None = None,
+) -> bool:
+    """
+    Whether attempting ``model`` can possibly succeed under the request's
+    ``tag_routing_prefix``-confirmed tags.
+
+    Returns False only when confirmed routing tags make success structurally
+    impossible for every deployment in the model group — so
+    ``run_async_fallback`` can skip that leg without raising, logging ERROR, or
+    counting a deployment failure. Returns True when the check does not apply
+    (no prefix, no confirmed tags, tag filtering off) or the group might still
+    serve the request.
+    """
+    routing_prefix: Final = getattr(llm_router_instance, "tag_routing_prefix", None) or ""
+    if not routing_prefix or request_kwargs is None:
+        return True
+
+    request_tags: Final = _get_tags_from_request_kwargs(request_kwargs, metadata_variable_name)
+    rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags, routing_prefix)
+    if not routing_confirmed:
+        return True
+
+    try:
+        deployments: Final = llm_router_instance._get_all_deployments(model_name=model)
+    except Exception:  # noqa: BLE001  # fail safe toward attempting the leg on lookup errors
+        return True
+    if not deployments:
+        return True
+
+    request_enable_tag_filtering: Final = request_kwargs.get("enable_tag_filtering")
+    chain_enable_tag_filtering: Final = _chain_tag_filtering_override(llm_router_instance, model, deployments)
+    router_enable_tag_filtering: Final = getattr(llm_router_instance, "enable_tag_filtering", False)
+    chain_default: Final = (
+        chain_enable_tag_filtering if chain_enable_tag_filtering is not None else router_enable_tag_filtering
+    )
+    if request_enable_tag_filtering is not True and chain_default is not True:
+        return True
+
+    required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+    excluded_set: Final = frozenset(excluded_patterns)
+    required_set: Final = frozenset(required_tags)
+    candidates: Final = _require_all_tags(_exclude_deployments(deployments, excluded_set), required_set)
+
+    confirmed_required: Final = required_set & routing_confirmed
+    confirmed_excluded: Final = excluded_set & routing_confirmed
+    if not candidates and (confirmed_required or confirmed_excluded):
+        return False
+
+    confirmed_positive: Final = [tag for tag in positive_tags if tag in routing_confirmed]
+    if not confirmed_positive:
+        return True
+
+    # A tag_regex deployment may still match via request headers even when plain
+    # tags do not; leave those legs to the normal attempt path.
+    if any(d.get("litellm_params", MappingProxyType({})).get("tag_regex") for d in candidates):
+        return True
+
+    # Confirmed positive tags force a hard deny when nothing matches (defaults /
+    # fail-open do not apply). Skip the leg rather than attempting it.
+    match_any: Final = getattr(llm_router_instance, "tag_filtering_match_any", True)
+    return any(
+        is_valid_deployment_tag(
+            d.get("litellm_params", MappingProxyType({})).get("tags") or [],
+            positive_tags,
+            match_any,
+        )
+        for d in candidates
+    )
