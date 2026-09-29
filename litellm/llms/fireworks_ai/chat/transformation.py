@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
 
@@ -40,13 +40,14 @@ from ...openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
 from ..common_utils import (
+    FIREROUTER,
     FireworksAIException,
     FireworksAIMixin,
     resolve_fireworks_resource_name,
 )
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -574,12 +575,20 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         short_name = short_name.removeprefix("accounts/fireworks/models/")
         return short_name
 
+    @staticmethod
+    def _firerouter_family_cost_keys(model: str) -> tuple[str, ...]:
+        firerouter_resource: Final = f"accounts/fireworks/routers/{FIREROUTER}"
+        if not resolve_fireworks_resource_name(model).startswith(f"{firerouter_resource}/"):
+            return ()
+        return (f"fireworks_ai/{firerouter_resource}",)
+
     def _get_model_cost_capability_exact(self, model: str, capability: str) -> bool | None:
         short_name: Final = self._short_model_name(model)
         candidate_keys: Final = (
             model,
             f"fireworks_ai/{short_name}",
             f"fireworks_ai/accounts/fireworks/models/{short_name}",
+            *self._firerouter_family_cost_keys(model),
         )
         for candidate_key in candidate_keys:
             model_info = litellm.model_cost.get(candidate_key)
@@ -708,7 +717,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -759,7 +768,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "FireworksAIChatCompletionStreamingHandler":
         return FireworksAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

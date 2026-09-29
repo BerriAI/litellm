@@ -25,7 +25,7 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
@@ -448,7 +448,7 @@ async def test_handle_authentication_error_budget_exceeded():
         )
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
+    assert int(exc_info.value.code) == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -594,6 +594,101 @@ async def test_resolved_identity_exported_on_auth_failure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "log_identity_enabled, resolved_identity, expected_fragment, absent_fragment",
+    [
+        pytest.param(
+            True,
+            UserAPIKeyAuth(
+                token="hashed-token",
+                key_alias="skip-laptop-key",
+                user_id="skip-user",
+                user_email="skip@example.com",
+                team_id="team-123",
+                team_alias="research-team",
+            ),
+            "Key Identity: key_alias=skip-laptop-key user_id=skip-user user_email=skip@example.com "
+            "team_id=team-123 team_alias=research-team",
+            None,
+            id="expired_key_owner_named_in_log",
+        ),
+        pytest.param(
+            True,
+            UserAPIKeyAuth(token="hashed-token", user_id="skip-user"),
+            "Key Identity: user_id=skip-user",
+            "key_alias=",
+            id="unset_fields_omitted",
+        ),
+        pytest.param(
+            True,
+            UserAPIKeyAuth(token="hashed-token", team_alias="ops\nRequester IP Address:10.0.0.1"),
+            "Key Identity: team_alias=ops\\nRequester IP Address:10.0.0.1",
+            "\nRequester IP Address:10.0.0.1",
+            id="control_chars_in_alias_cannot_forge_log_lines",
+        ),
+        pytest.param(True, None, None, "Key Identity", id="unknown_key_has_no_identity_line"),
+        pytest.param(
+            False,
+            UserAPIKeyAuth(token="hashed-token", key_alias="skip-laptop-key", user_email="skip@example.com"),
+            None,
+            "Key Identity",
+            id="identity_logging_is_opt_in_and_off_by_default",
+        ),
+    ],
+)
+async def test_expired_key_error_log_names_the_key_owner(
+    log_identity_enabled, resolved_identity, expected_fragment, absent_fragment, caplog, monkeypatch
+):
+    """With `litellm.log_auth_failure_key_identity` on, an expired key rejection is logged with the
+    key alias, user and team auth already resolved, so an operator can trace the caller from the
+    log line alone. It defaults off because some deployments must keep PII out of logs."""
+    monkeypatch.setattr(litellm, "log_auth_failure_key_identity", log_identity_enabled)
+    handler = UserAPIKeyAuthExceptionHandler()
+    expired_key_error = ProxyException(
+        message="Authentication Error - Expired Key.",
+        type=ProxyErrorTypes.expired_key,
+        param="sk-...",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException):
+                await handler._handle_authentication_error(
+                    expired_key_error,
+                    MagicMock(),
+                    {"model": "gpt-4o"},
+                    "/v1/chat/completions",
+                    None,
+                    "sk-raw-key",
+                    resolved_identity=resolved_identity,
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1, [r.getMessage() for r in caplog.records]
+    logged = records[0].getMessage()
+    assert "Expired Key" in logged and "Requester IP Address:" in logged, logged
+    if expected_fragment is not None:
+        assert expected_fragment in logged, logged
+    if absent_fragment is not None:
+        assert absent_fragment not in logged, logged
+
+
+@pytest.mark.asyncio
 async def test_auth_failure_without_resolved_identity_still_logs():
     """When auth fails before any identity is resolved (e.g. an unknown key),
     the handler must still log a usable object carrying the raw api key and
@@ -687,7 +782,7 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
             {"allow_requests_on_db_unavailable": False},
             {},
             "10.1.2.3",
-            id="429_budget_exceeded",
+            id="422_budget_exceeded",
         ),
     ],
 )
@@ -697,7 +792,7 @@ async def test_auth_failure_logs_requester_ip_address(
     request_kwargs: dict[str, dict[str, str]],
     expected_ip: str,
 ) -> None:
-    """401s and budget 429s are rejected before `add_litellm_data_to_request` stamps
+    """401s and budget 422s are rejected before `add_litellm_data_to_request` stamps
     the caller IP, so without this the failure logs (spend logs, prometheus client_ip)
     had no IP, and a 401 rarely carries a key or user identity either."""
     with (

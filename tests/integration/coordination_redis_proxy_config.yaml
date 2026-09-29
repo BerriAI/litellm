@@ -1,0 +1,12 @@
+model_list: []
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_model_in_db: true
+  disable_spend_logs: false
+  proxy_batch_write_at: 1
+  coordination_redis:
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+router_settings:
+  disable_cooldowns: true

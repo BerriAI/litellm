@@ -115,12 +115,26 @@ def _is_mcp_only_mode(mode: str | list[str] | Mode) -> bool:
     return bool(hooks) and all(hook in _MCP_EVENT_HOOKS for hook in hooks)
 
 
+def _presidio_output_mode(mode: str | list[str] | Mode, *, include_mcp: bool) -> str | list[str] | Mode:
+    def output_hooks(hooks: str | list[str]) -> list[str]:
+        if not hooks or (not include_mcp and _is_mcp_only_mode(hooks)):
+            return []
+        return [GuardrailEventHooks.post_call.value]
+
+    if isinstance(mode, Mode):
+        return Mode(
+            tags={tag: output_hooks(hooks) for tag, hooks in mode.tags.items()},
+            default=output_hooks(mode.default) if mode.default is not None else None,
+        )
+    return output_hooks(mode)
+
+
 def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> tuple[CustomGuardrail, ...]:
     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
         _OPTIONAL_PresidioPIIMasking,
     )
 
-    explicit_filter_scope: Final = getattr(litellm_params, "presidio_filter_scope", None)
+    explicit_filter_scope: Final = litellm_params.presidio_filter_scope
     filter_scope: Final = explicit_filter_scope or ("input" if _is_mcp_only_mode(litellm_params.mode) else "both")
     run_input: Final = filter_scope in ("input", "both")
     run_output: Final = filter_scope in ("output", "both")
@@ -140,6 +154,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             presidio_language=litellm_params.presidio_language,
             presidio_entities_deny_list=litellm_params.presidio_entities_deny_list,
             apply_to_output=False,
+            _callback_role="scan",
         )
         params.update(overrides)
         # Passed outside the heterogeneous params dict so the argument keeps
@@ -155,7 +170,8 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     unmask_output_callback: Final = (
         _make_presidio_callback(
             output_parse_pii=True,
-            event_hook=GuardrailEventHooks.post_call.value,
+            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=True),
+            _callback_role="restore",
         )
         if run_input and litellm_params.output_parse_pii
         else None
@@ -163,8 +179,9 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     mask_output_callback: Final = (
         _make_presidio_callback(
             apply_to_output=True,
-            event_hook=GuardrailEventHooks.post_call.value,
+            event_hook=_presidio_output_mode(litellm_params.mode, include_mcp=explicit_filter_scope is not None),
             output_parse_pii=False,
+            mask_response_content=True,
         )
         if run_output
         else None

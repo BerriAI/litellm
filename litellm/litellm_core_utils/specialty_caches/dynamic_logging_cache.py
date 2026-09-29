@@ -1,10 +1,8 @@
 """
 This is a cache for LangfuseLoggers.
 
-Langfuse Python SDK initializes a thread for each client.
-
 This ensures we do
-1. Proper cleanup of Langfuse initialized clients.
+1. Release the initialized-client slot a LangfuseLogger holds when it expires.
 2. Re-use created langfuse clients.
 """
 
@@ -21,45 +19,34 @@ from ...caching import InMemoryCache
 
 class LangfuseInMemoryCache(InMemoryCache):
     """
-    Ensures we do proper cleanup of Langfuse initialized clients.
+    Decrements ``litellm.initialized_langfuse_clients`` when a LangFuseLogger entry expires.
 
-    Langfuse Python SDK initializes a thread for each client, we need to call Langfuse.shutdown() to properly cleanup.
-
-    This ensures we do proper cleanup of Langfuse initialized clients.
+    The counter is a soft budget: loggers built concurrently for one credential set before the
+    first lands in the cache each take a slot, and only the cached one gives it back on expiry.
+    The logger's ``stop()`` below hands its shared export channel back
+    (https://github.com/BerriAI/litellm/issues/11169).
     """
 
     def _remove_key(self, key: str) -> None:
-        """
-        Override _remove_key in InMemoryCache to ensure we do proper cleanup of Langfuse initialized clients.
-
-        LangfuseLoggers consume threads when initalized, this shuts them down when they are expired
-
-        Relevant Issue: https://github.com/BerriAI/litellm/issues/11169
-        """
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-        if isinstance(self.cache_dict[key], LangFuseLogger):
-            _created_langfuse_logger: Final[LangFuseLogger] = self.cache_dict[key]
-            #########################################################
-            # Clean up Langfuse initialized clients
-            #########################################################
+        evicted: Final = self.cache_dict.pop(key, None)
+        self.ttl_dict.pop(key, None)
+        if evicted is None:
+            return
+
+        if isinstance(evicted, LangFuseLogger):
             litellm.initialized_langfuse_clients -= 1
-            _created_langfuse_logger.Langfuse.flush()
-            _created_langfuse_logger.Langfuse.shutdown()
 
         # Loggers with a periodic flush task (e.g. NewRelicMetricsLogger) expose
         # stop() so eviction actually ends the task instead of leaking it.
-        _evicted_stop: Final = getattr(self.cache_dict[key], "stop", None)
-        if callable(_evicted_stop):
-            try:
-                _evicted_stop()
-            except Exception:  # noqa: BLE001  # a failing stop() must not block eviction
-                verbose_logger.debug("DynamicLoggingCache: stop() raised during eviction", exc_info=True)
-
-        #########################################################
-        # Call parent class to remove key from cache
-        #########################################################
-        return super()._remove_key(key)
+        _evicted_stop: Final = getattr(evicted, "stop", None)
+        if not callable(_evicted_stop):
+            return
+        try:
+            _evicted_stop()
+        except Exception:  # noqa: BLE001  # a failing stop() must not block eviction
+            verbose_logger.debug("DynamicLoggingCache: stop() raised during eviction", exc_info=True)
 
 
 class DynamicLoggingCache:

@@ -1,9 +1,128 @@
+mod host;
+
 use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 use serde_json::Value;
 
-use crate::errors::responses_error_to_pyerr;
-use crate::marshal::{marshal_headers, optional_timeout};
+use crate::{
+    errors::{RustBridgeDeclined, route_error_to_pyerr},
+    marshal::{marshal_headers, optional_timeout},
+};
+
+fn run_public(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>> {
+    use super::inference::InferenceHost;
+    use litellm_callbacks_legacy_python::LoggingOperation;
+    let host = InferenceHost::new(
+        request.clone().unbind(),
+        "litellm.rust_bridge.responses.route_host",
+    );
+    if let Some(reason) = py
+        .import("litellm.rust_bridge.responses.route_host")?
+        .getattr("decline_reason")?
+        .call1((&request,))?
+        .extract::<Option<String>>()?
+    {
+        return Err(RustBridgeDeclined::new_err(reason));
+    }
+    let model = host
+        .argument(py, &kwargs, "model")?
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
+        .extract::<String>()?;
+    let provider = host
+        .argument(py, &kwargs, "custom_llm_provider")?
+        .map(|value| value.extract::<String>())
+        .transpose()?;
+    if provider
+        .as_deref()
+        .is_some_and(|provider| provider != "openai")
+        || model
+            .strip_prefix("openai/")
+            .unwrap_or(&model)
+            .contains('/')
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "native HTTP responses provider",
+        ));
+    }
+    if host
+        .argument(py, &kwargs, "stream")?
+        .map(|value| litellm_host_python::from_py::<Value>(&value))
+        .transpose()?
+        .is_some_and(|value| value == Value::Bool(true))
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "native Python responses streaming",
+        ));
+    }
+    let cache_call_type = if asynchronous {
+        "aresponses"
+    } else {
+        "responses"
+    };
+    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
+    let (arguments, hooks) = crate::routes::call_hooks(
+        py,
+        LoggingOperation::Responses,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
+        move |py, arguments, request| {
+            let route = litellm_core::responses::ResponsesRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            let (cache, cache_options) =
+                crate::cache::configured_native(py, arguments, cache_call_type)?;
+            let route = match cache {
+                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                    cache,
+                    litellm_cache_response::CacheScope::Shared,
+                )),
+                None => route,
+            };
+            Ok(route.machine(request, cache_options))
+        },
+        host::ResponsesPythonHost(host),
+        hooks,
+        asynchronous,
+    )
+}
+
+#[pyfunction]
+pub(crate) fn responses(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+pub(crate) fn aresponses(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, true)
+}
 
 #[pyclass]
 pub(crate) struct ResponsesWebSocketConnection {
@@ -23,51 +142,50 @@ impl ResponsesWebSocketConnection {
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::logger::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
-                .map_err(responses_error_to_pyerr)?;
+                .map_err(route_error_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
         })
     }
 
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner
-                .send_text(text)
-                .await
-                .map_err(responses_error_to_pyerr)
+        crate::logger::run_async_value(py, async move {
+            inner.send_text(text).await.map_err(route_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.recv_text().await.map_err(responses_error_to_pyerr)
+        crate::logger::run_async_value(py, async move {
+            inner.recv_text().await.map_err(route_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.close().await.map_err(responses_error_to_pyerr)
+        crate::logger::run_async_value(py, async move {
+            inner.close().await.map_err(route_error_to_pyerr)
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
-    use std::time::Duration;
+    use std::{ffi::CString, time::Duration};
 
     use futures_util::{SinkExt, StreamExt};
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{prelude::*, types::PyDict};
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test server shares the routes' runtime"
+    )]
     fn responses_websocket_connection_round_trips_through_python() {
         Python::initialize();
         let runtime = pyo3_async_runtimes::tokio::get_runtime();

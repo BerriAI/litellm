@@ -1,0 +1,110 @@
+{
+  "setup": [
+    "call_type",
+    "args",
+    "kwargs",
+    "start_time",
+    "asynchronous"
+  ],
+  "finalize": [
+    "response",
+    "logger",
+    "kwargs",
+    "start_time",
+    "end_time"
+  ],
+  "update_logging": [
+    "logger",
+    "kwargs",
+    "model",
+    "optional_params",
+    "litellm_params",
+    "custom_llm_provider"
+  ],
+  "pre_call": [
+    "logger",
+    "input",
+    "api_key",
+    "additional_args"
+  ],
+  "post_call": [
+    "logger",
+    "original_response",
+    "api_key",
+    "additional_args"
+  ],
+  "defers_async_logging": [
+    "logger"
+  ],
+  "defer_success": [
+    "logger",
+    "pending"
+  ],
+  "sync_success_for_async_call": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "failure_handler": [
+    "logger",
+    "error",
+    "start",
+    "end",
+    "asynchronous"
+  ],
+  "submit_success": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "async_success_handler": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
+  "enqueue_logging": [
+    "coroutine"
+  ],
+  "restore_context": [
+    "logger"
+  ],
+  "custom_pricing_fields": [],
+  "is_internal_call": [],
+  "before_deployment_call": [
+    "kwargs",
+    "call_type"
+  ],
+  "after_deployment_success": [
+    "kwargs",
+    "response",
+    "call_type"
+  ],
+  "after_deployment_failure": [
+    "kwargs",
+    "error",
+    "call_type"
+  ],
+  "stream_opened": [
+    "logger"
+  ],
+  "stream_success": [
+    "logger",
+    "url_route",
+    "endpoint_type",
+    "request_body",
+    "chunks",
+    "start",
+    "end",
+    "first_chunk"
+  ],
+  "stream_failure": [
+    "logger",
+    "endpoint_type",
+    "request_body",
+    "chunks",
+    "error"
+  ]
+}

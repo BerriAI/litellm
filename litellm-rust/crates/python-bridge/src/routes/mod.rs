@@ -1,13 +1,77 @@
 pub(crate) mod audio_transcription;
 pub(crate) mod chat_completions;
+pub(crate) mod embeddings;
+mod inference;
 pub(crate) mod messages;
 pub(crate) mod ocr;
 pub(crate) mod responses;
+pub(crate) mod token_counter;
+
+use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
+use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
+use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
+
+fn call_hooks(
+    py: Python<'_>,
+    operation: LoggingOperation,
+    request: &Bound<'_, PyAny>,
+    args: &Bound<'_, PyTuple>,
+    kwargs: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
+    let call = PublicCall::capture(request, args, kwargs)?;
+    let arguments = call.arguments(py);
+    Ok((
+        arguments,
+        LegacyLogging::new(py, operation, call, asynchronous),
+    ))
+}
+
+fn run_public_call<H, M>(
+    py: Python<'_>,
+    arguments: Py<PyDict>,
+    start: impl FnOnce(
+        Python<'_>,
+        &Bound<'_, PyDict>,
+        <H::Protocol as Protocol>::Request,
+    ) -> PyResult<M>
+    + Send
+    + Sync
+    + 'static,
+    host: H,
+    hooks: impl PythonCallHooks + 'static,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>>
+where
+    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
+{
+    litellm_host_python::run_call(
+        py,
+        move |py, arguments, request| {
+            start(py, arguments, request).map(crate::logger::LoggedMachine::new)
+        },
+        host,
+        HookChain::new()
+            .with(hooks)
+            .with(crate::preflight::SdkPolicy),
+        arguments,
+        crate::lifecycle::call_options(asynchronous),
+    )
+}
 
 #[cfg(test)]
 mod tests {
-    use pyo3::prelude::*;
-    use pyo3::types::{PyDict, PyList};
+    use pyo3::{
+        prelude::*,
+        types::{PyDict, PyList},
+    };
 
     #[test]
     fn sync_and_async_route_signatures_match_the_python_contract() {
@@ -19,11 +83,6 @@ mod tests {
                     "transcription",
                     "atranscription",
                     "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
-                ),
-                (
-                    "messages",
-                    "amessages",
-                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
                 ),
                 (
                     "chat_completions",
@@ -111,25 +170,6 @@ value = Broken()
             );
             assert_eq!(async_chat_error.to_string(), sync_chat_error.to_string());
 
-            let invalid_body = PyList::empty(py);
-            let sync_messages_error = module
-                .getattr("messages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
-                .expect_err("sync Messages should reject a non-dict body");
-            let async_messages_error = module
-                .getattr("amessages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
-                .expect_err("async Messages should reject a non-dict body");
-
-            assert_eq!(
-                sync_messages_error.to_string(),
-                "ValueError: body must be a dict"
-            );
-            assert_eq!(
-                async_messages_error.to_string(),
-                sync_messages_error.to_string()
-            );
-
             let invalid_headers = PyList::empty(py);
             let kwargs = PyDict::new(py);
             kwargs
@@ -191,13 +231,6 @@ value = Broken()
             headers_kwargs
                 .set_item("extra_headers", &invalid)
                 .expect("kwargs should accept extra_headers");
-            let invalid_body = PyList::empty(py);
-            let error = module
-                .getattr("messages")
-                .and_then(|function| function.call(("model", &invalid_body), Some(&headers_kwargs)))
-                .expect_err("body should be validated before headers");
-            assert_eq!(error.to_string(), "ValueError: body must be a dict");
-
             let invalid_payload =
                 PyModule::new(py, "invalid_payload").expect("invalid payload should be created");
             let error = module

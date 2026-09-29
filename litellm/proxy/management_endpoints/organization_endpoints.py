@@ -306,6 +306,9 @@ async def _verify_org_access(
 _STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _BUDGET_SETTABLE_FIELDS: Final = frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
 _ORG_COLUMN_FIELDS: Final = frozenset({"organization_alias", "models"})
+_ORG_METADATA_FIELDS: Final = tuple(
+    field for field in LiteLLM_ManagementEndpoint_MetadataFields if field not in _BUDGET_SETTABLE_FIELDS
+)
 
 
 def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: str) -> Mapping[str, object]:
@@ -391,6 +394,8 @@ async def new_organization(
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - allowed_models: Optional[List[str]] - List of models the organization is allowed to access. If not set, defaults to the models field.
+    - temp_budget_increase: *Optional[float]* - Stored on the org budget row but only enforced for team member budgets today.
+    - temp_budget_expiry: *Optional[str]* - Stored on the org budget row but only enforced for team member budgets today.
     Case 1: Create new org **without** a budget_id
 
     ```bash
@@ -527,7 +532,7 @@ async def new_organization(
     organization_payload["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
     organization_row: Final = LiteLLM_OrganizationTable.model_validate(organization_payload)
 
-    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+    for field in _ORG_METADATA_FIELDS:
         if getattr(data, field, None) is not None:
             _set_object_metadata_field(
                 object_data=organization_row,

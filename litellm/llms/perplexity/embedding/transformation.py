@@ -130,7 +130,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         if isinstance(embedding_value, str):
             raw_bytes: Final = base64.b64decode(embedding_value)
             count: Final = len(raw_bytes)
-            int8_values: Final = struct.unpack(f"{count}b", raw_bytes)
+            int8_values: Final[tuple[int, ...]] = struct.unpack(f"{count}b", raw_bytes)
             return [float(v) / 127.0 for v in int8_values]
         return embedding_value
 

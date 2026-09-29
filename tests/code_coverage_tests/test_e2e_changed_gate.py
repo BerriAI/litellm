@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -9,6 +10,7 @@ import pytest
 GATE: Final = Path(__file__).resolve().parents[2] / ".github/e2e-stack/assert_tests_ran.py"
 SECRETS_TO_ENV: Final = GATE.with_name("secrets_to_env.py")
 SELECT_TESTS: Final = GATE.with_name("select_tests.py")
+REDACT_OUTPUT: Final = GATE.with_name("redact_output.py")
 CANARY: Final = ("tests/e2e/access_control/test_a.py", "tests/e2e/access_control/test_b.py")
 SELECTED: Final = ("tests/e2e/access_control/test_a.py", "tests/e2e/access_control/test_b.py")
 
@@ -104,15 +106,109 @@ def test_short_values_are_written_without_masking_every_digit_in_the_log(tmp_pat
     env_path: Final = tmp_path / ".env"
 
     result: Final = subprocess.run(
-        [sys.executable, str(SECRETS_TO_ENV), str(env_path)],
+        [sys.executable, "-I", str(SECRETS_TO_ENV), str(env_path)],
         input='{"FLAG": "1", "API_KEY": "sk-0123456789abcdef"}',
         capture_output=True,
         text=True,
+        env={**os.environ, "GITHUB_ACTIONS": "true"},
     )
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "::add-mask::sk-0123456789abcdef\n"
     assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"
+
+
+def test_outside_actions_no_value_is_printed(tmp_path: Path) -> None:
+    env_path: Final = tmp_path / ".env"
+    local_env: Final = {key: value for key, value in os.environ.items() if key != "GITHUB_ACTIONS"}
+
+    result: Final = subprocess.run(
+        [sys.executable, "-I", str(SECRETS_TO_ENV), str(env_path)],
+        input='{"FLAG": "1", "API_KEY": "sk-0123456789abcdef"}',
+        capture_output=True,
+        text=True,
+        env=local_env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert "sk-0123456789abcdef" not in result.stderr
+    assert env_path.read_text() == "FLAG='1'\nAPI_KEY='sk-0123456789abcdef'\n"
+
+
+def redact_output(tmp_path: Path, values: tuple[str, ...], text: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+    env_path: Final = tmp_path / ".env"
+    _ = env_path.write_text("".join(f"{name}='{value}'\n" for name, value in zip(("A", "B", "C"), values)))
+    stack_env: Final = tmp_path / "stack.env"
+    _ = stack_env.write_text("LITELLM_MASTER_KEY=sk-e2e-master0123\nREDIS_PORT=6379\n")
+    log: Final = tmp_path / "e2e-pass-1.log"
+    _ = log.write_text(text)
+    out_dir: Final = tmp_path / "redacted"
+    result: Final = subprocess.run(  # test-quality-ok: standalone script that imports its sibling by script directory
+        [
+            sys.executable,
+            str(REDACT_OUTPUT),
+            "--values",
+            str(env_path),
+            "--values",
+            str(stack_env),
+            "--out",
+            str(out_dir),
+            str(log),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result, out_dir / log.name
+
+
+def test_redacted_output_hides_every_masked_value_and_keeps_the_rest(tmp_path: Path) -> None:
+    text: Final = (
+        "FAILED key=sk-0123456789abcdef master=sk-e2e-master0123 flag=1 port=6379 message=Missing credentials\n"
+    )
+
+    result, redacted = redact_output(tmp_path, ("sk-0123456789abcdef", "1"), text)
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == "FAILED key=*** master=*** flag=1 port=6379 message=Missing credentials\n"
+    assert (redacted.stat().st_mode & 0o777) == 0o600
+    assert (tmp_path / "e2e-pass-1.log").read_text() == text
+    assert "sk-" not in result.stdout + result.stderr
+
+
+def test_a_masked_value_that_prefixes_a_longer_one_leaves_no_tail(tmp_path: Path) -> None:
+    result, redacted = redact_output(tmp_path, ("sk-0123456789", "sk-0123456789abcdef"), "token sk-0123456789abcdef\n")
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == "token ***\n"
+
+
+def test_a_json_secret_is_hidden_field_by_field_however_it_is_escaped(tmp_path: Path) -> None:
+    credentials: Final = (
+        '{"type": "service_account", "signing_key": "MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\\n'
+        'c2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\\n", "client_id": "104857600000000000001"}'
+    )
+    text: Final = (
+        "decoded MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\n"
+        "c2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\n"
+        "escaped MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\\nc2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\\n\n"
+        "twice MIIEvAIBADANBgkqhkiG9w0BAQEFAASC\\\\nc2VjcmV0LWtleS1ib2R5LWxpbmUtdHdv\n"
+        "client 104857600000000000001 status 403\n"
+    )
+
+    result, redacted = redact_output(tmp_path, (credentials,), text)
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == "decoded ***\n***\nescaped ***\\n***\\n\ntwice ***\\\\n***\nclient *** status 403\n"
+
+
+def test_a_secret_with_xml_special_characters_is_hidden_in_the_junit_file(tmp_path: Path) -> None:
+    text: Final = '<failure message="got p&amp;ss&lt;w&quot;rd-1">body p&amp;ss&lt;w"rd-1</failure>\n'
+
+    result, redacted = redact_output(tmp_path, ('p&ss<w"rd-1',), text)
+
+    assert result.returncode == 0, result.stderr
+    assert redacted.read_text() == '<failure message="got ***">body ***</failure>\n'
 
 
 def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
@@ -131,9 +227,15 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
     (
         (("tests/e2e/logging/test_datadog_e2e.py", "litellm/router.py"), ("tests/e2e/logging/test_datadog_e2e.py",)),
         (("tests/e2e/ui/test_keys.py", "tests/e2e/claude_code/test_cli.py", "tests/e2e/load/test_burst.py"), ()),
+        (("tests/e2e/migrations/test_startup.py", "tests/e2e/migrations/test_recovery.py"), ()),
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
+        (("tests/e2e/logging/test_otel_v2_langfuse_generation_output_e2e.py",), ()),
+        (
+            ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),
+            ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),
+        ),
         (
             ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),
             ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),
@@ -142,7 +244,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
             ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
             ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
         ),
-        (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/CLAUDE.md"), ()),
+        (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/AGENTS.md"), ()),
         (
             ("tests/e2e/logging/test_datadog_e2e.py", "tests/e2e/logging/test_datadog_e2e.py"),
             ("tests/e2e/logging/test_datadog_e2e.py",),
@@ -178,6 +280,10 @@ def test_harness_changes_run_the_canary_suite(harness_file: str) -> None:
 
 def test_a_changed_canary_file_is_selected_once_alongside_a_harness_change() -> None:
     assert select_tests((CANARY[1], "tests/e2e/proxy_client.py")) == CANARY
+
+
+def test_dedicated_migration_tests_do_not_suppress_shared_harness_canaries() -> None:
+    assert select_tests(("tests/e2e/migrations/test_startup.py", "tests/e2e/conftest.py")) == CANARY
 
 
 def test_the_canary_joins_directly_selected_files_in_sorted_order() -> None:
@@ -226,3 +332,61 @@ def test_an_unusable_secret_is_named_without_printing_its_value(
     assert unprintable not in result.stderr
     assert result.stdout == ""
     assert not env_path.exists()
+
+
+@pytest.mark.parametrize("phase", ("setup", "call", "teardown"))
+@pytest.mark.parametrize("required_count", ("1", "4"))
+def test_oauth_failure_diagnostics_do_not_publish_private_payloads(
+    tmp_path: Path, phase: str, required_count: str
+) -> None:
+    suite: Final = ET.Element("testsuite")
+    case: Final = ET.SubElement(suite, "testcase", file=SELECTED[0])
+    private: Final = "private-token-in-exception-message"
+    failure: Final = ET.SubElement(case, "failure", message=private)
+    failure.text = private
+    properties: Final = ET.SubElement(case, "properties")
+    for name, value in (
+        ("oauth_failure_phase", phase),
+        ("oauth_exception_type", "AssertionError"),
+        ("oauth_frame", "oauth_gateway.py:120:start"),
+        ("oauth_frame", f"injected\\n{private}"),
+        ("unrelated_property", private),
+    ):
+        _ = ET.SubElement(properties, "property", name=name, value=value)
+    report: Final = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result: Final = subprocess.run(
+        [sys.executable, "-I", str(GATE), str(report), SELECTED[0]],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "E2E_REQUIRED_TEST_COUNT": required_count},
+    )
+    assert result.returncode == 1
+    assert f"oauth_failure_phase: {phase}" in result.stdout
+    assert "oauth_exception_type: AssertionError" in result.stdout
+    assert "oauth_frame: oauth_gateway.py:120:start" in result.stdout
+    assert private not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("count", "skip", "expected"), ((0, False, 1), (3, False, 1), (4, False, 0), (5, False, 1), (4, True, 1))
+)
+def test_required_count_reports_cases_before_rejecting(tmp_path: Path, count: int, skip: bool, expected: int) -> None:
+    suite = ET.Element("testsuite")
+    for index in range(count):
+        case = ET.SubElement(suite, "testcase", file=SELECTED[0], classname="OAuth", name=f"variant{index}")
+        if skip and index == 0:
+            ET.SubElement(case, "skipped", message="private-skip-reason")
+    report = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result = subprocess.run(
+        [sys.executable, "-I", str(GATE), str(report), SELECTED[0]],
+        env={**os.environ, "E2E_REQUIRED_TEST_COUNT": "4"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected
+    assert f"{count} collected, {int(skip)} skipped" in result.stdout
+    if skip:
+        assert "skipped: OAuth::variant0" in result.stdout
+    assert "private-skip-reason" not in result.stdout + result.stderr

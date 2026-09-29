@@ -8,12 +8,18 @@
 # globals like `litellm.num_retries = 3` which pollute state for all tests
 # in the same xdist worker.
 
+import asyncio
 import importlib
 import os
+from collections.abc import AsyncIterator
+from typing import Final
 
 import pytest
+import pytest_asyncio
 
 import litellm
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
@@ -168,6 +174,15 @@ def isolate_litellm_state():
     for attr in _SCALAR_ATTRS:
         if attr in _DEFAULTS:
             setattr(litellm, attr, _DEFAULTS[attr])
+
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+
+@pytest_asyncio.fixture(loop_scope="function", autouse=True)
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
+    yield
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
 
 @pytest.fixture(scope="module", autouse=True)

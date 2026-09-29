@@ -15,7 +15,8 @@ import time
 import traceback
 from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel
 
@@ -24,7 +25,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
-from litellm.types.utils import EmbeddingResponse, all_litellm_params
+from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
@@ -37,6 +38,25 @@ from .redis_cache import RedisCache, log_redis_failure
 from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
+
+if TYPE_CHECKING:
+    from litellm.rust_bridge.response_cache import NativeCacheRequest, ResponseCacheRuntime
+
+
+def _native_response(result: object) -> object:
+    """The value Python's own reader would return for `result` once it is cached.
+
+    Python stores a model as its JSON text and `json.loads` a string response on read, so the
+    native store receives the decoded value and writes the envelope shape Python reads.
+    """
+    if isinstance(result, BaseModel):
+        return json.loads(result.model_dump_json())
+    if isinstance(result, str):
+        try:
+            return json.loads(result)
+        except ValueError:
+            return result
+    return result
 
 
 def print_verbose(print_statement):
@@ -55,6 +75,8 @@ class CacheMode(str, Enum):
 
 #### LiteLLM.Completion / Embedding Cache ####
 class Cache:
+    _native_cache: "ResponseCacheRuntime | None" = None
+
     def __init__(
         self,
         type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
@@ -81,7 +103,7 @@ class Cache:
         s3_aws_access_key_id: str | None = None,
         s3_aws_secret_access_key: str | None = None,
         s3_aws_session_token: str | None = None,
-        s3_config: Any | None = None,
+        s3_config: object | None = None,
         s3_path: str | None = None,
         gcs_bucket_name: str | None = None,
         gcs_path_service_account: str | None = None,
@@ -105,6 +127,7 @@ class Cache:
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
+        _backend: BaseCache | None = None,
         **kwargs,
     ):
         """
@@ -161,7 +184,9 @@ class Cache:
         Returns:
             None. Cache is set as a litellm param
         """
-        if type == LiteLLMCacheType.REDIS:
+        if _backend is not None:
+            self.cache: BaseCache = _backend
+        elif type == LiteLLMCacheType.REDIS:
             # Check REDIS_CLUSTER_NODES env var if no explicit startup nodes
             if not redis_startup_nodes:
                 _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
@@ -183,7 +208,7 @@ class Cache:
                 if gcp_ssl_ca_certs is not None:
                     cluster_kwargs["gcp_ssl_ca_certs"] = gcp_ssl_ca_certs
 
-                self.cache: BaseCache = RedisClusterCache(**cluster_kwargs)
+                self.cache = RedisClusterCache(**cluster_kwargs)
             else:
                 self.cache = RedisCache(
                     host=host,
@@ -349,7 +374,6 @@ class Cache:
             return preset_cache_key
 
         combined_kwargs: Final = ModelParamHelper._get_all_llm_api_params()
-        litellm_param_kwargs: Final = all_litellm_params
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
@@ -359,7 +383,7 @@ class Cache:
                 param_value: str | None = self._get_param_value(param, kwargs)
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
-            elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
+            elif not is_litellm_owned_kwarg(param):
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
@@ -570,6 +594,13 @@ class Cache:
         if "semantic-similarity" in cache_lookup_metadata:
             original_metadata["semantic-similarity"] = cache_lookup_metadata["semantic-similarity"]
 
+    @staticmethod
+    def _stamp_semantic_similarity(kwargs: Mapping[str, object], similarity: float | None) -> None:
+        """Write a native semantic lookup's similarity where the Python backends put it."""
+        metadata: Final = kwargs.get("metadata")
+        if similarity is not None and isinstance(metadata, dict):
+            metadata["semantic-similarity"] = similarity
+
     def get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
         Retrieves the cached result for the given arguments.
@@ -588,6 +619,15 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
+            if cache_key is not None and self._native_cache is not None:
+                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
+                if request is None:
+                    return None
+                if not self._is_semantic_cache():
+                    return self._native_cache.lookup(request)
+                response, similarity = self._native_cache.lookup_semantic(request)
+                self._stamp_semantic_similarity(kwargs, similarity)
+                return response
             if cache_key is not None:
                 cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
                 max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
@@ -620,6 +660,15 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(**kwargs)
+            if cache_key is not None and self._native_cache is not None:
+                request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
+                if request is None:
+                    return None
+                if not self._is_semantic_cache():
+                    return await self._native_cache.async_lookup(request)
+                response, similarity = await self._native_cache.async_lookup_semantic(request)
+                self._stamp_semantic_similarity(kwargs, similarity)
+                return response
             if cache_key is not None:
                 cache_control_args: Final = kwargs.get("cache", {})
                 max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
@@ -676,6 +725,11 @@ class Cache:
         try:
             if self.should_use_cache(**kwargs) is not True:
                 return
+            if self._native_cache is not None:
+                request = self._native_request(kwargs)
+                if request is not None:
+                    self._native_cache.store(request, _native_response(result))
+                return
             cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
             self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
@@ -694,6 +748,11 @@ class Cache:
         """
         try:
             if self.should_use_cache(**kwargs) is not True:
+                return
+            if self._native_cache is not None:
+                request = self._native_request(kwargs)
+                if request is not None:
+                    await self._native_cache.async_store(request, _native_response(result))
                 return
             if self.type == "redis" and self.redis_flush_size is not None:
                 # high traffic - fill in results in memory and then flush
@@ -718,35 +777,23 @@ class Cache:
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
         """
         try:
-            if isinstance(embedding_response, dict):
-                return {
-                    "embedding": embedding_response.get("embedding"),
-                    "index": embedding_response.get("index"),
-                    "object": embedding_response.get("object"),
-                    "model": model,
-                    "prompt_tokens": prompt_tokens,
-                    "prompt_tokens_details": prompt_tokens_details,
-                }
-            elif hasattr(embedding_response, "model_dump"):
-                data = embedding_response.model_dump()
-                return {
-                    "embedding": data.get("embedding"),
-                    "index": data.get("index"),
-                    "object": data.get("object"),
-                    "model": model,
-                    "prompt_tokens": prompt_tokens,
-                    "prompt_tokens_details": prompt_tokens_details,
-                }
-            else:
-                data = vars(embedding_response)
-                return {
-                    "embedding": data.get("embedding"),
-                    "index": data.get("index"),
-                    "object": data.get("object"),
-                    "model": model,
-                    "prompt_tokens": prompt_tokens,
-                    "prompt_tokens_details": prompt_tokens_details,
-                }
+            data: Final = (
+                embedding_response
+                if isinstance(embedding_response, dict)
+                else embedding_response.model_dump()
+                if hasattr(embedding_response, "model_dump")
+                else vars(embedding_response)
+            )
+            cached: Final[CachedEmbedding] = {
+                "embedding": data.get("embedding"),
+                "index": data.get("index"),
+                "object": data.get("object"),
+                "model": model,
+                "prompt_tokens": prompt_tokens,
+                "prompt_tokens_details": prompt_tokens_details,
+                "format_version": EMBEDDING_CACHE_FORMAT_VERSION,
+            }
+            return cached
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
 
@@ -862,6 +909,15 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
 
+            input_count: Final = len(kwargs["input"]) if isinstance(kwargs["input"], list) else 1
+            if len(result.data) != input_count:
+                verbose_logger.debug(
+                    "LiteLLM Cache: skipping embedding cache write, %d inputs but %d embeddings in the response",
+                    input_count,
+                    len(result.data),
+                )
+                return
+
             # set default ttl if not set
             if self.ttl is not None:
                 kwargs["ttl"] = self.ttl
@@ -879,12 +935,34 @@ class Cache:
                 cache_key, cached_data, kwargs = self.add_embedding_response_to_cache(result, kwargs["input"], kwargs)
                 cache_list.append((cache_key, cached_data))
 
-            if dynamic_cache_object is not None:
+            if self._native_cache is not None:
+                entries: Final = tuple(
+                    (request, cached_data["response"])
+                    for cache_key, cached_data in cache_list
+                    if (request := self._native_request(MappingProxyType({**kwargs, "cache_key": cache_key})))
+                    is not None
+                )
+                await self._native_cache.async_store_batch(
+                    tuple(request for request, _ in entries),
+                    tuple(response for _, response in entries),
+                )
+            elif dynamic_cache_object is not None:
                 await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
             else:
                 await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
+
+    def _native_request(self, kwargs: Mapping[str, object]) -> "NativeCacheRequest | None":
+        if self._native_cache is None:
+            return None
+        cache_key: Final = kwargs.get("cache_key")
+        return self._native_cache.request(
+            self,
+            kwargs
+            if isinstance(cache_key, str)
+            else MappingProxyType({**kwargs, "cache_key": self.get_cache_key(**kwargs)}),
+        )
 
     def should_use_cache(self, **kwargs):
         """

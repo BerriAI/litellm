@@ -294,6 +294,10 @@ class PolicyAttachment(BaseModel):
         le=2147483647,
         description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
     )
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
+    )
 
     model_config = ConfigDict(extra="forbid")
 
