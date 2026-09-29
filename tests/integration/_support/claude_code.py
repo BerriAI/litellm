@@ -141,7 +141,9 @@ def tools() -> tuple[dict[str, JsonValue], ...]:
                 {
                     "file_path": field("The absolute path to the file to modify", type="string"),
                     "old_string": field("The text to replace", type="string"),
-                    "new_string": field("The text to replace it with (must be different from old_string)", type="string"),
+                    "new_string": field(
+                        "The text to replace it with (must be different from old_string)", type="string"
+                    ),
                     "replace_all": field(
                         "Replace all occurrences of old_string (default false)",
                         default=False,
@@ -456,8 +458,12 @@ def tools() -> tuple[dict[str, JsonValue], ...]:
             "input_schema": schema(
                 {
                     "query": field("The search query to use", type="string", minLength=2),
-                    "allowed_domains": field("Only include search results from these domains", type="array", items={"type": "string"}),
-                    "blocked_domains": field("Never include search results from these domains", type="array", items={"type": "string"}),
+                    "allowed_domains": field(
+                        "Only include search results from these domains", type="array", items={"type": "string"}
+                    ),
+                    "blocked_domains": field(
+                        "Never include search results from these domains", type="array", items={"type": "string"}
+                    ),
                 },
                 ("query",),
             ),
@@ -470,8 +476,12 @@ def tools() -> tuple[dict[str, JsonValue], ...]:
                 "type": "object",
                 "properties": {
                     "script": field("Self-contained workflow script.", type="string", maxLength=524288),
-                    "name": field("Name of a predefined workflow (built-in or from .claude/workflows/).", type="string"),
-                    "description": field("Ignored — set the workflow description in the script's `meta` block.", type="string"),
+                    "name": field(
+                        "Name of a predefined workflow (built-in or from .claude/workflows/).", type="string"
+                    ),
+                    "description": field(
+                        "Ignored — set the workflow description in the script's `meta` block.", type="string"
+                    ),
                     "title": field("Ignored — set the workflow title in the script's `meta` block.", type="string"),
                     "args": field("Optional input value exposed to the script as the global `args`, verbatim."),
                     "scriptPath": field("Path to a workflow script file on disk.", type="string"),
@@ -489,7 +499,9 @@ def tools() -> tuple[dict[str, JsonValue], ...]:
             "description": "Writes a file to the local filesystem.",
             "input_schema": schema(
                 {
-                    "file_path": field("The absolute path to the file to write (must be absolute, not relative)", type="string"),
+                    "file_path": field(
+                        "The absolute path to the file to write (must be absolute, not relative)", type="string"
+                    ),
                     "content": field("The content to write to the file", type="string"),
                 },
                 ("file_path", "content"),

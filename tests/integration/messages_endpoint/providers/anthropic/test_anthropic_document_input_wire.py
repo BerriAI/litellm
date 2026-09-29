@@ -2,10 +2,9 @@ import base64
 import uuid
 from typing import Final
 
+from integration._support import claude_code as cc
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
-from integration._support import claude_code as cc
-from pydantic import JsonValue
 
 _PDF_BYTES: Final = (
     b"%PDF-1.1\n"

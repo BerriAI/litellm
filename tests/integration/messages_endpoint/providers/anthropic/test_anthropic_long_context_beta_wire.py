@@ -2,10 +2,10 @@ import uuid
 from typing import Final
 
 import pytest
+from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration._support import claude_code as cc
 
 _BETA_1M: Final = f"{cc.FRONTIER_CLI_BETA.replace(',effort-2025-11-24', ',context-1m-2025-08-07,effort-2025-11-24')}"
 

@@ -3,13 +3,12 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-import pytest
 import yaml
+from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
-from integration._support import claude_code as cc
 
 
 def _error_529() -> Reply:
