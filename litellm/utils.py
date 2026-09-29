@@ -6246,6 +6246,8 @@ def _get_model_info_helper(
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
                 output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
+                output_cost_per_first_megapixel=_model_info.get("output_cost_per_first_megapixel", None),
+                output_cost_per_additional_megapixel=_model_info.get("output_cost_per_additional_megapixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),

@@ -714,6 +714,16 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_first_megapixel": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD for the first megapixel of each generated image, partial megapixels rounded up."
+        },
+        "output_cost_per_additional_megapixel": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD for each megapixel after the first of each generated image, partial megapixels rounded up."
+        },
         "output_cost_per_reasoning_token": {
           "type": "number",
           "minimum": 0,

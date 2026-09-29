@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
@@ -16,6 +17,8 @@ from litellm.llms.azure_ai.image_generation.flux_transformation import (
 )
 from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params_image_gen
+
+_PRICE: Final = TypeAdapter(float)
 
 
 @pytest.fixture(autouse=True)
@@ -218,6 +221,86 @@ def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
     )
 
     assert cost == pytest.approx(2e-07 * 2048 * 1024 * 2)
+
+
+@pytest.mark.parametrize(
+    ("size", "optional_params", "response_size", "megapixels"),
+    [
+        ("512x512", None, None, 1),
+        ("1024-x-1024", None, None, 1),
+        ("1920x1080", None, None, 2),
+        ("1024x1024", {"width": 2048, "height": 2048}, None, 4),
+        (None, None, "1025x1024", 2),
+    ],
+)
+def test_flux2_pro_cost_bills_first_then_each_additional_rounded_up_megapixel_per_image(
+    size: str | None, optional_params: dict[str, object] | None, response_size: str | None, megapixels: int
+) -> None:
+    response: Final = ImageResponse(
+        data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")], size=response_size
+    )
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-pro",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size=size,
+        call_type="image_generation",
+        optional_params=optional_params,
+        model_info={"output_cost_per_first_megapixel": 0.05, "output_cost_per_additional_megapixel": 0.02},
+    )
+
+    assert cost == pytest.approx(2 * (0.05 + 0.02 * (megapixels - 1)))
+
+
+def test_flux2_pro_catalog_row_bills_its_megapixel_tiers() -> None:
+    info: Final = litellm.get_model_info("azure_ai/FLUX.2-pro")
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")])
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-pro",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="1920x1080",
+        call_type="image_generation",
+    )
+
+    first: Final = _PRICE.validate_python(info.get("output_cost_per_first_megapixel"))
+    additional: Final = _PRICE.validate_python(info.get("output_cost_per_additional_megapixel"))
+    assert cost == pytest.approx(first + additional)
+    assert cost != pytest.approx(info.get("output_cost_per_image"))
+
+
+def test_flux2_pro_deployment_flat_image_price_overrides_catalog_megapixel_tiers() -> None:
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-pro",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="2048x2048",
+        call_type="image_generation",
+        model_info={"output_cost_per_image": 0.07},
+    )
+
+    assert cost == pytest.approx(0.07 * 2)
+
+
+def test_flux2_pro_unparseable_size_falls_back_to_flat_image_price() -> None:
+    per_image: Final = _PRICE.validate_python(
+        litellm.get_model_info("azure_ai/FLUX.2-pro").get("output_cost_per_image")
+    )
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="FLUX.2-pro",
+        completion_response=response,
+        custom_llm_provider="azure_ai",
+        size="auto",
+        call_type="image_generation",
+    )
+
+    assert cost == pytest.approx(per_image * 2)
 
 
 def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel() -> None:

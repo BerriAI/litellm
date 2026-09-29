@@ -33150,6 +33150,8 @@ export interface components {
             organization?: string | null;
             /** Otpm */
             otpm?: number | null;
+            /** Output Cost Per Additional Megapixel */
+            output_cost_per_additional_megapixel?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
@@ -33158,6 +33160,8 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Character Above 128K Tokens */
             output_cost_per_character_above_128k_tokens?: number | null;
+            /** Output Cost Per First Megapixel */
+            output_cost_per_first_megapixel?: number | null;
             /** Output Cost Per Image */
             output_cost_per_image?: number | null;
             /** Output Cost Per Image 1024 */
@@ -46981,6 +46985,8 @@ export interface components {
             organization?: string | null;
             /** Otpm */
             otpm?: number | null;
+            /** Output Cost Per Additional Megapixel */
+            output_cost_per_additional_megapixel?: number | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
@@ -46989,6 +46995,8 @@ export interface components {
             output_cost_per_character?: number | null;
             /** Output Cost Per Character Above 128K Tokens */
             output_cost_per_character_above_128k_tokens?: number | null;
+            /** Output Cost Per First Megapixel */
+            output_cost_per_first_megapixel?: number | null;
             /** Output Cost Per Image */
             output_cost_per_image?: number | null;
             /** Output Cost Per Image 1024 */

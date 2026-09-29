@@ -293,12 +293,16 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub off_peak_pricing: Option<OffPeakPricing>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_additional_megapixel: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_audio_token: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_character: Option<f64>,
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_character_above_128k_tokens: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_first_megapixel: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

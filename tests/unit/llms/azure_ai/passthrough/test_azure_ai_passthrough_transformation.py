@@ -519,27 +519,27 @@ def test_cohere_rerank_relay_is_costed_per_search_unit():
     assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_query)
 
 
-def test_image_generation_relay_is_costed_per_image():
+def test_image_generation_relay_is_costed_as_one_default_size_megapixel():
     result, logging_obj = _relay_logging_result(
         AzureAIPassthroughConfig(), "FLUX.2-pro", "openai/deployments/FLUX.2-pro/images/generations", IMAGE_BODY
     )
-    per_image = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_image"]
+    first_megapixel = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_first_megapixel"]
 
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
-    assert per_image > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert first_megapixel > 0
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(first_megapixel)
 
 
-def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
+def test_flux_2_relay_through_the_provider_route_is_costed_as_one_default_size_megapixel():
     result, logging_obj = _relay_logging_result(
         AzureAIPassthroughConfig(), "FLUX.2-pro", "providers/blackforestlabs/v1/flux-2-pro", IMAGE_BODY
     )
-    per_image = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_image"]
+    first_megapixel = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_first_megapixel"]
 
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(first_megapixel)
 
 
 def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():

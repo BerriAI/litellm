@@ -1,4 +1,6 @@
+import re
 from collections.abc import Mapping
+from math import ceil
 from typing import Any, Final
 
 import litellm
@@ -8,6 +10,15 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     resolve_image_model_info,
 )
 from litellm.types.utils import ImageResponse, ModelInfo
+
+PIXELS_PER_MEGAPIXEL: Final[int] = 1_048_576
+_IMAGE_SIZE: Final = re.compile(r"(\d+)(?:x|-x-)(\d+)")
+_IMAGE_PRICE_FIELDS: Final = (
+    "output_cost_per_first_megapixel",
+    "output_cost_per_additional_megapixel",
+    "output_cost_per_image",
+    "input_cost_per_pixel",
+)
 
 
 def _input_cost_per_pixel(resolved: ModelInfo) -> float:
@@ -19,6 +30,32 @@ def _input_cost_per_pixel(resolved: ModelInfo) -> float:
     if shared_entry is None:
         return 0.0
     return shared_entry.get("input_cost_per_pixel") or 0.0
+
+
+def _megapixel_tiers(resolved: ModelInfo, deployment: ModelInfo | None) -> tuple[float, float] | None:
+    deployment_prices_images: Final = deployment is not None and any(
+        deployment.get(field) is not None for field in _IMAGE_PRICE_FIELDS
+    )
+    source: Final = deployment if deployment is not None and deployment_prices_images else resolved
+    first: Final = _get_cost_per_unit(source, "output_cost_per_first_megapixel", default_value=None)
+    if first is None:
+        return None
+    additional: Final = _get_cost_per_unit(source, "output_cost_per_additional_megapixel", default_value=None)
+    return first, first if additional is None else additional
+
+
+def _image_dimensions(size: str | None, optional_params: Mapping[str, object] | None) -> tuple[int, int] | None:
+    width: Final = optional_params.get("width") if optional_params else None
+    height: Final = optional_params.get("height") if optional_params else None
+    if type(width) is int and type(height) is int and width > 0 and height > 0:
+        return width, height
+    matched: Final = _IMAGE_SIZE.fullmatch(size) if size else None
+    return (int(matched.group(1)), int(matched.group(2))) if matched else None
+
+
+def _tiered_megapixel_cost(first: float, additional: float, width: int, height: int) -> float:
+    megapixels: Final = max(1, ceil(width * height / PIXELS_PER_MEGAPIXEL))
+    return first + additional * (megapixels - 1)
 
 
 def cost_calculator(
@@ -49,6 +86,11 @@ def cost_calculator(
             return token_based_cost
 
         num_images: Final = n if n is not None else len(image_response.data or ())
+        tiers: Final = _megapixel_tiers(_model_info, model_info)
+        dimensions: Final = _image_dimensions(size or image_response.size, optional_params)
+        if tiers is not None and dimensions is not None:
+            return _tiered_megapixel_cost(*tiers, *dimensions) * num_images
+
         output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
         if output_cost_per_image:
             return output_cost_per_image * num_images
@@ -56,13 +98,7 @@ def cost_calculator(
         if _input_cost_per_pixel(_model_info):
             from litellm.cost_calculator import default_image_cost_calculator
 
-            width: Final = optional_params.get("width") if optional_params else None
-            height: Final = optional_params.get("height") if optional_params else None
-            pixel_size: Final = (
-                f"{width}x{height}"
-                if type(width) is int and type(height) is int and width > 0 and height > 0
-                else size or image_response.size
-            )
+            pixel_size: Final = f"{dimensions[0]}x{dimensions[1]}" if dimensions else size or image_response.size
             return default_image_cost_calculator(
                 model=_model_info.get("key", model),
                 custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
