@@ -5,7 +5,7 @@ import email.policy
 import io
 import socket
 import threading
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from email.parser import BytesParser
@@ -17,9 +17,8 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import TypeAdapter
-
 from integration._support.wire import Reply, Request, Wire, wire_server
+from pydantic import TypeAdapter
 
 _CONFIG_ADAPTER: Final = TypeAdapter(dict[str, object])
 
@@ -259,11 +258,17 @@ def non_loopback_ipv4() -> str:
     return address
 
 
-def write_proxy_config(directory: Path, callbacks: tuple[str, ...]) -> Path:
+def write_proxy_config(directory: Path, callbacks: tuple[str, ...], *, redis_db: int | None = None) -> Path:
     base: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
     config: Final = _CONFIG_ADAPTER.validate_python(yaml.safe_load(base.read_text()))
     settings: Final = _CONFIG_ADAPTER.validate_python(config["litellm_settings"])
-    configured_settings: Final = {**settings, "callbacks": list(callbacks)}
+    cache_params: Final = _CONFIG_ADAPTER.validate_python(settings["cache_params"])
+    additional_cache_params: Final = {} if redis_db is None else {"db": redis_db}
+    configured_settings: Final = {
+        **settings,
+        "callbacks": list(callbacks),
+        "cache_params": {**cache_params, **additional_cache_params},
+    }
     configured: Final = {**config, "litellm_settings": configured_settings}
     destination: Final = directory / "proxy_config.yaml"
     destination.write_text(yaml.safe_dump(configured, sort_keys=False))

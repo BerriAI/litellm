@@ -19,12 +19,12 @@ from uuid import uuid4
 import httpx
 import psutil
 import pytest
-from pydantic import TypeAdapter
-
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
-from integration._support.database import write_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.process import OwnedProxy, group_members, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from pydantic import TypeAdapter
+
 from tests.integration.observability._s3_v2_support import SURFACES, call_surface, surface_reply
 from tests.integration.observability._ternary_support import (
     CsvRow,
@@ -32,8 +32,8 @@ from tests.integration.observability._ternary_support import (
     MultipartSink,
     bound_sink_server,
     non_loopback_ipv4,
-    running_sink,
     row_by_alias,
+    running_sink,
     ternary_environment,
     uploads_for_alias,
     vantage_environment,
@@ -677,8 +677,9 @@ def _special_proxy(
     callbacks: tuple[str, ...] = ("ternary",),
     environment: Mapping[str, str] | None = None,
     remove_environment: tuple[str, ...] = (),
+    redis_db: int | None = None,
 ) -> Generator[OwnedProxy, None, None]:
-    config: Final = write_proxy_config(directory, callbacks)
+    config: Final = write_proxy_config(directory, callbacks, redis_db=redis_db)
     default_environment: Final = ternary_environment(sink_url)
     environment_values: Final = {**default_environment, **(environment or {})}
     overrides: Final = MappingProxyType(
@@ -751,16 +752,34 @@ def test_ternary_rejects_non_loopback_http_sink(gateway: Gateway, tmp_path: Path
                 assert "base_url must be an HTTPS URL" in log_text
 
 
-@pytest.mark.parametrize("connection_id", ("audit/id", "..", "bad id"), ids=("slash", "dot-dot", "whitespace"))
+@pytest.mark.parametrize(
+    "connection_id",
+    ("/", "audit/id", "..", "bad id"),
+    ids=("bare-slash", "embedded-slash", "dot-dot", "whitespace"),
+)
 def test_ternary_rejects_unsafe_connection_id(gateway: Gateway, tmp_path: Path, connection_id: str) -> None:
     with running_sink(MultipartSink()) as sink, wire_server(surface_reply) as provider:
-        environment: Final = MappingProxyType({**ternary_environment(sink.url), "TERNARY_CONNECTION_ID": connection_id})
-        with _special_proxy(gateway, tmp_path, sink.url, environment=environment) as owned:
+        environment: Final = MappingProxyType(
+            {
+                **ternary_environment(sink.url),
+                "TERNARY_CONNECTION_ID": connection_id,
+            }
+        )
+        with _special_proxy(gateway, tmp_path, sink.url, environment=environment, redis_db=15) as owned:
             with owned.gateway.scenario() as scenario:
                 models: Final = _models(scenario, provider)
                 key: Final = _request_key(scenario, f"r13-{uuid4().hex[:8]}", models)
                 response: Final = _chat(owned.gateway, models[0], key, f"r13-{uuid4().hex[:8]}")
                 assert response.status_code == 200, response.text
+                spend_rows: Final = eventually(
+                    lambda: read_rows(
+                        'SELECT api_requests FROM "LiteLLM_DailyUserSpend" WHERE api_key=%s',
+                        (_database_key(key),),
+                    ),
+                    lambda rows: bool(rows),
+                    seconds=15,
+                )
+                assert spend_rows
                 log_text: Final = eventually(
                     lambda: owned.log.read_text(),
                     lambda text: "connection_id must not contain" in text,
@@ -994,12 +1013,11 @@ def test_ternary_worker_kill_keeps_serving_and_delivers_successful_aliases(terna
                 )
                 assert len(worker_processes) >= 2, "two proxy workers were not running"
                 assert any(not future.done() for future in burst_futures), "worker kill did not occur during the burst"
-                surviving_worker: Final = worker_processes[1]
                 worker_processes[0].kill()
-                eventually(lambda: _worker_is_alive(worker_processes[0]), lambda running: not running, seconds=5)
-                assert _worker_is_alive(surviving_worker), "the surviving proxy worker exited after its peer was killed"
             finally:
                 ternary_rig.upstream_gate.set()
+            eventually(lambda: _worker_is_alive(worker_processes[0]), lambda running: not running, seconds=5)
+            assert _worker_is_alive(worker_processes[1]), "the surviving proxy worker exited after its peer was killed"
             burst_answers: Final = tuple(future.result() for future in burst_futures)
         readiness_url: Final = str(ternary_rig.owned.gateway.client.base_url.join("/health/readiness"))
         with httpx.Client(
