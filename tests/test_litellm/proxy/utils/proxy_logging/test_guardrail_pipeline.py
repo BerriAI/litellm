@@ -832,6 +832,27 @@ async def test_run_guardrail_with_metrics_returns_fail_open_result_on_timeout(mo
     assert (recorded["status"], recorded["error_type"]) == ("timeout", "Timeout")
 
 
+@pytest.mark.asyncio
+async def test_run_guardrail_with_metrics_keeps_guardrail_raised_timeout_as_error_when_fail_open(monkeypatch):
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom])
+    guardrail = _hanging_guardrail(delay_seconds=0, hook_timeout=5, fallback="fail_open")
+
+    async def vendor_timed_out():
+        raise asyncio.TimeoutError("vendor read timeout")
+
+    with pytest.raises(asyncio.TimeoutError, match="vendor read timeout"):
+        await ProxyLogging._run_guardrail_with_metrics(
+            callback=guardrail,
+            coro=vendor_timed_out(),
+            hook_type="post_mcp_call",
+            request_data={},
+            fail_open_result={"original": "response"},
+        )
+
+    assert prom._record_guardrail_metrics.call_args.kwargs["status"] == "error"
+
+
 # ---------------------------------------------------------------------------
 # during_call / post_call phases emit the latency metric (LIT-3999 regression)
 # ---------------------------------------------------------------------------

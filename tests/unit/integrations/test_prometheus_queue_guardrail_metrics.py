@@ -470,6 +470,28 @@ class TestPrometheusGuardrailMetrics:
         )
         mock_errors_metric.labels.return_value.inc.assert_called_once()
 
+    def test_record_guardrail_metrics_timeout_counts_as_error(self):
+        prometheus_logger = PrometheusLogger()
+        prometheus_logger.litellm_guardrail_latency_metric = MagicMock()
+        prometheus_logger.litellm_guardrail_requests_total = MagicMock()
+        mock_errors_metric = MagicMock()
+        prometheus_logger.litellm_guardrail_errors_total = mock_errors_metric
+
+        prometheus_logger._record_guardrail_metrics(
+            guardrail_name="slow_guardrail",
+            latency_seconds=2.0,
+            status="timeout",
+            error_type="Timeout",
+            hook_type="pre_call",
+        )
+
+        mock_errors_metric.labels.assert_called_once_with(
+            guardrail_name="slow_guardrail",
+            error_type="Timeout",
+            hook_type="pre_call",
+        )
+        mock_errors_metric.labels.return_value.inc.assert_called_once()
+
     def test_record_guardrail_metrics_during_call_hook(self):
         """Test recording guardrail metrics for during_call hook"""
         # Arrange

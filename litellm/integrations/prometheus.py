@@ -3243,7 +3243,7 @@ class PrometheusLogger(CustomLogger):
             ).inc()
 
             # Record error count if there was an error
-            if status == "error" and error_type:
+            if status in ("error", "timeout") and error_type:
                 self.litellm_guardrail_errors_total.labels(
                     guardrail_name=guardrail_name,
                     error_type=error_type,

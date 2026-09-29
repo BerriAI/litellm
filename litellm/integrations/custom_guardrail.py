@@ -184,19 +184,34 @@ class GuardrailHookTimedOut:
         return f"Guardrail '{self.guardrail_name}' did not finish within {self.timeout}s"
 
 
+@dataclass(frozen=True)
+class _HookRaisedTimeout:
+    error: TimeoutError | asyncio.TimeoutError
+
+
+async def _capture_hook_timeout(coro: Awaitable[_T]) -> _T | _HookRaisedTimeout:
+    try:
+        return await coro
+    except (TimeoutError, asyncio.TimeoutError) as e:
+        return _HookRaisedTimeout(e)
+
+
 async def await_within_hook_timeout(callback: object, coro: Awaitable[_T]) -> _T | GuardrailHookTimedOut:
     """Await a guardrail check, bounded by the callback's configured ``hook_timeout``."""
     if not isinstance(callback, CustomGuardrail) or callback.hook_timeout is None:
         return await coro
     timeout: Final = callback.hook_timeout
     try:
-        return await asyncio.wait_for(coro, timeout)
-    except asyncio.TimeoutError:
+        outcome: Final = await asyncio.wait_for(_capture_hook_timeout(coro), timeout)
+    except (TimeoutError, asyncio.TimeoutError):
         return GuardrailHookTimedOut(
             guardrail_name=callback.guardrail_name,
             timeout=timeout,
             fail_open=callback.hook_timeout_fallback == "fail_open",
         )
+    if isinstance(outcome, _HookRaisedTimeout):
+        raise outcome.error
+    return outcome
 
 
 def resolve_hook_timeout(outcome: _T | GuardrailHookTimedOut, fail_open_result: _T) -> _T:
