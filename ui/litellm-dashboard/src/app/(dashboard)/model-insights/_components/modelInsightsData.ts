@@ -19,39 +19,22 @@ export type ModelInsightsResponse = {
   daily: DailyMetric[];
   top_models: ModelMetric[];
   by_task: TaskMetric[];
+  tasks: TaskInfo[];
 };
 
 export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
-export type TaskCategory = "General" | "Code" | "Agent" | "Data";
+export type TaskInfo = { task_type: string; label: string; category: string };
 export type TaskTile = {
   task: string;
   label: string;
-  category: TaskCategory;
+  category: string;
   value: number;
   share: number;
   leader: string;
   provider: string;
 };
 
-export const TASK_CATEGORIES: Record<string, TaskCategory> = {
-  code_generation: "Code",
-  debugging: "Code",
-  code_review: "Code",
-  frontend_ui: "Code",
-  shell_execution: "Code",
-  workflow_execution: "Agent",
-  multi_step_planning: "Agent",
-  tool_dispatch: "Agent",
-  data_extraction: "Data",
-  data_transformation: "Data",
-};
-export const CATEGORY_ORDER: TaskCategory[] = ["General", "Agent", "Code", "Data"];
-
-export const taskLabel = (task: string) =>
-  task
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+const UNCATEGORIZED: Omit<TaskInfo, "task_type"> = { label: "Uncategorized", category: "General" };
 
 const DAY_MS = 86_400_000;
 const WEEK_DAYS = 7;
@@ -154,15 +137,16 @@ export const rankModels = (
     }));
 };
 
-export const buildTaskTiles = (rows: TaskMetric[], metric: Metric): TaskTile[] => {
+export const buildTaskTiles = (rows: TaskMetric[], tasks: TaskInfo[], metric: Metric): TaskTile[] => {
+  const info = new Map(tasks.map((task) => [task.task_type, task]));
   const byTask = new Map<string, TaskMetric[]>();
   for (const row of rows) byTask.set(row.task_type, [...(byTask.get(row.task_type) ?? []), row]);
   const tiles = [...byTask.entries()].map(([task, taskRows]) => {
     const leader = [...taskRows].sort((a, b) => metricValue(b, metric) - metricValue(a, metric))[0];
     return {
       task,
-      label: taskLabel(task),
-      category: TASK_CATEGORIES[task] ?? "General",
+      label: (info.get(task) ?? UNCATEGORIZED).label,
+      category: (info.get(task) ?? UNCATEGORIZED).category,
       value: taskRows.reduce((sum, row) => sum + metricValue(row, metric), 0),
       share: 0,
       leader: leader.model_group,
