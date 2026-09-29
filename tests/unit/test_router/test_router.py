@@ -18548,3 +18548,68 @@ async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: E
             await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]
+
+def test_router_does_not_forward_model_alias_map() -> None:
+    """model_alias_map is internal routing state and must not reach the provider payload."""
+    captured_kwargs: dict = {}
+
+    def _capture(**kwargs: object) -> None:
+        captured_kwargs.update(kwargs)
+        raise RuntimeError("stop-after-capture")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "alias-model",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.6-luna",
+                    "api_base": "https://example.invalid",
+                    "api_key": "sk-test",
+                    "model_alias_map": {"alias-model": "azure_ai/gpt-5.6-luna"},
+                },
+            }
+        ]
+    )
+
+    with patch("litellm.completion", side_effect=_capture):
+        with pytest.raises(RuntimeError, match="stop-after-capture"):
+            router.completion(
+                model="alias-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert "model_alias_map" not in captured_kwargs
+
+
+@pytest.mark.asyncio
+async def test_router_does_not_forward_model_alias_map_async() -> None:
+    """Same guarantee on the async path."""
+    captured_kwargs: dict = {}
+
+    async def _capture(**kwargs: object) -> None:
+        captured_kwargs.update(kwargs)
+        raise RuntimeError("stop-after-capture")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "alias-model",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.6-luna",
+                    "api_base": "https://example.invalid",
+                    "api_key": "sk-test",
+                    "model_alias_map": {"alias-model": "azure_ai/gpt-5.6-luna"},
+                },
+            }
+        ]
+    )
+
+    with patch("litellm.acompletion", side_effect=_capture):
+        with pytest.raises(RuntimeError, match="stop-after-capture"):
+            await router.acompletion(
+                model="alias-model",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    assert "model_alias_map" not in captured_kwargs
+
