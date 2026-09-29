@@ -99,7 +99,11 @@ describe("buildTaskTiles", () => {
       { ...row({ model_group: "b", spend: 2 }), task_type: "code_generation" },
       { ...row({ model_group: "c", spend: 2 }), task_type: "classification" },
     ];
-    const tiles = buildTaskTiles(rows, "spend");
+    const tasks = [
+      { task_type: "code_generation", label: "Code Generation", category: "Code" },
+      { task_type: "classification", label: "Classification", category: "General" },
+    ];
+    const tiles = buildTaskTiles(rows, tasks, "spend");
     expect(tiles.map((t) => [t.label, t.category, t.share, t.leader])).toEqual([
       ["Code Generation", "Code", 80, "a"],
       ["Classification", "General", 20, "c"],
