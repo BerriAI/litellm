@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly, TypedDict, Unpack
 from litellm.proxy.roi_calculator.estimator import CompletionCaller, Estimator, EstimatorModel, cache_context
 from litellm.proxy.roi_calculator.github import GitHub, GitHubPullListItem, SourceError
 from litellm.proxy.roi_calculator.pull_cache import cache_key, settings_fingerprint
+from litellm.repositories.chunked_in import find_many_in
 from litellm.types.roi_calculator import (
     ROIEstimate,
     ROIPullEvidence,
@@ -54,7 +55,7 @@ class _UserTable(Protocol):
     async def find_many(
         self,
         *,
-        where: dict[str, object],
+        where: Mapping[str, object],
     ) -> Sequence[Mapping[str, object]]: ...
 
 
@@ -133,14 +134,7 @@ async def read_spend(
     )
     user_ids: Final = tuple(sorted(frozenset(group.user_id for group in groups if group.user_id)))
     user_table: Final = database.litellm_usertable
-    user_filter: Final[dict[str, object]] = {"user_id": {"in": list(user_ids)}}
-    users: Final = _USER_EMAILS.validate_python(
-        await user_table.find_many(
-            where=user_filter,
-        )
-        if user_ids
-        else ()
-    )
+    users: Final = _USER_EMAILS.validate_python(await find_many_in(user_table, "user_id", user_ids))
     emails: Final[Mapping[str, str]] = MappingProxyType(
         {user.user_id: normalize_email(user.user_email) for user in users if normalize_email(user.user_email)}
     )
