@@ -175,7 +175,17 @@ class AgentRequestHandler:
                     or user_api_key_auth is None
                 ):
                     return False
-                fresh_auth: Final = user_api_key_auth.model_copy(update={"requires_fresh_policy": True})
+                from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+                key_hash: Final = user_api_key_auth.api_key or user_api_key_auth.token
+                authority: Final = (
+                    await MCPRequestHandler._reload_admitted_key(key_hash, check_db_only=True)
+                    if key_hash
+                    and user_api_key_auth.managed_agent_policy is None
+                    and not user_api_key_auth.is_session_token
+                    else user_api_key_auth
+                )
+                fresh_auth: Final = authority.model_copy(update={"requires_fresh_policy": True})
                 explicit: Final = await _granted_agent_ids(
                     fresh_auth,
                     _strict_agent_access,
@@ -643,16 +653,18 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
         return RestrictedAgentAccess(capped)
     if context.user_id is None:
         return RestrictedAgentAccess(frozenset())
-    human_ids: Final = await verified_human_agent_grants(context.user_id)
+    human_ids: Final = await verified_human_agent_grants(context.user_id, auth.team_id)
     return RestrictedAgentAccess(capped.intersection(human_ids))
 
 
-async def verified_human_agent_grants(user_id: str | None) -> frozenset[str]:
+async def verified_human_agent_grants(user_id: str | None, team_id: str | None = None) -> frozenset[str]:
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
     if user_id is None:
         return frozenset()
     human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
-    sources: Final = await MCPRequestHandler.admitted_subject_sources(human)
+    sources: Final = await MCPRequestHandler.admitted_subject_sources(
+        human, allowed_team_ids=frozenset((team_id,)) if team_id else frozenset()
+    )
     human_access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
     return frozenset().union(*(_granted_ids(access) for access in human_access))

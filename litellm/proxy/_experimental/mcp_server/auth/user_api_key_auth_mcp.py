@@ -1204,7 +1204,7 @@ class MCPRequestHandler:
             return None
 
     @staticmethod
-    async def _reload_admitted_key(key_hash: str) -> UserAPIKeyAuth:
+    async def _reload_admitted_key(key_hash: str, *, check_db_only: bool = False) -> UserAPIKeyAuth:
         """Reload the live key record an admitted envelope references and re-check live policy.
 
         Resolving the current ``UserAPIKeyAuth`` (cache first, then DB) is what stops the
@@ -1236,6 +1236,7 @@ class MCPRequestHandler:
                 hashed_token=key_hash,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+                check_db_only=check_db_only,
             )
         except (ProxyException, HTTPException):
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None
@@ -1841,7 +1842,9 @@ class MCPRequestHandler:
         return scoped
 
     @staticmethod
-    async def admitted_subject_sources(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+    async def admitted_subject_sources(
+        auth: UserAPIKeyAuth, *, allowed_team_ids: frozenset[str] | None = None
+    ) -> list[UserAPIKeyAuth]:
         """The independent sources a keyless admitted subject reaches MCP servers through: their own
         direct grants, plus every team they are a live roster member of.
 
@@ -1858,6 +1861,8 @@ class MCPRequestHandler:
         if not auth.user_id or prisma_client is None:
             return sources
         for team_id in await MCPRequestHandler._resolve_user_team_ids(auth.user_id, auth):
+            if allowed_team_ids is not None and team_id not in allowed_team_ids:
+                continue
             team_obj = await MCPRequestHandler._roster_team_object(team_id, auth)
             if team_obj is None:
                 continue
@@ -1942,7 +1947,9 @@ class MCPRequestHandler:
         return team_obj
 
     @staticmethod
-    async def admitted_source_grants(auth: UserAPIKeyAuth) -> list[tuple[UserAPIKeyAuth, set[str]]]:
+    async def admitted_source_grants(
+        auth: UserAPIKeyAuth, *, allowed_team_ids: frozenset[str] | None = None
+    ) -> list[tuple[UserAPIKeyAuth, set[str]]]:
         """``(source, the servers that source grants)`` for every source of an admitted subject.
 
         THE owner of "which source reaches which server". The reachable union, the per-team throttle
@@ -1951,15 +1958,17 @@ class MCPRequestHandler:
         roster instead of by grant charged unrelated teams' buckets)."""
         return [
             (source, set(await MCPRequestHandler.get_allowed_mcp_servers(source, keyless_source=True)))
-            for source in await MCPRequestHandler.admitted_subject_sources(auth)
+            for source in await MCPRequestHandler.admitted_subject_sources(auth, allowed_team_ids=allowed_team_ids)
         ]
 
     @staticmethod
-    async def resolve_admitted_subject_servers(auth: UserAPIKeyAuth) -> list[str]:
+    async def resolve_admitted_subject_servers(
+        auth: UserAPIKeyAuth, *, allowed_team_ids: frozenset[str] | None = None
+    ) -> list[str]:
         """Union of what each of the admitted subject's sources reaches, each answered by the
         canonical resolver so no rule is reimplemented for this caller shape."""
         reachable: Final[set[str]] = set()
-        for _source, granted in await MCPRequestHandler.admitted_source_grants(auth):
+        for _source, granted in await MCPRequestHandler.admitted_source_grants(auth, allowed_team_ids=allowed_team_ids):
             reachable.update(granted)
         return list(reachable)
 
@@ -2017,7 +2026,9 @@ class MCPRequestHandler:
         return min((source for source, _ in granting), key=lambda s: s.team_id or "")
 
     @staticmethod
-    async def resolve_admitted_subject_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str] | None:
+    async def resolve_admitted_subject_tools(
+        server_id: str, auth: UserAPIKeyAuth, *, allowed_team_ids: frozenset[str] | None = None
+    ) -> list[str] | None:
         """Effective tool allowlist on ``server_id`` for an admitted subject, as the union over the
         sources that actually grant that server.
 
@@ -2039,7 +2050,7 @@ class MCPRequestHandler:
         ) or await MCPRequestHandler.admin_view_unscoped(auth)
 
         allowed: Final[set[str]] = set()
-        for source, granted in await MCPRequestHandler.admitted_source_grants(auth):
+        for source, granted in await MCPRequestHandler.admitted_source_grants(auth, allowed_team_ids=allowed_team_ids):
             # The open channel is evaluated against the user's OWN source (team_id is None), so that
             # source's restrictions apply to it; a team's rules never ride an open-channel server.
             if server_id not in granted and not (reachable_via_open_channel and source.team_id is None):
@@ -3464,7 +3475,8 @@ class MCPRequestHandler:
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
                 obj_perm, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
             )
-            return list({*expanded_direct_servers, *access_group_servers, *toolset_grants})
+            inline_tools: Final = global_mcp_server_manager.expand_tool_permissions(obj_perm.mcp_tool_permissions)
+            return list({*expanded_direct_servers, *access_group_servers, *toolset_grants, *inline_tools})
         except Exception as e:
             if user_api_key_auth.managed_agent_policy is not None or isinstance(e, UnloadableEntitlementError):
                 raise

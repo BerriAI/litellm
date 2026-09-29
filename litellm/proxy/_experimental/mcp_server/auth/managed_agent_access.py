@@ -36,7 +36,9 @@ async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
         if context.user_id is None:
             return ()
         human: Final = await _delegated_resource_subject(context.user_id)
-        allowed: Final = await MCPRequestHandler.resolve_admitted_subject_servers(human)
+        allowed: Final = await MCPRequestHandler.resolve_admitted_subject_servers(
+            human, allowed_team_ids=frozenset((auth.team_id,)) if auth.team_id else frozenset()
+        )
         return tuple(sorted(own.intersection(allowed)))
     except Exception:  # noqa: BLE001  # Authorization boundary: every unresolved policy must deny access
         raise_identity_failure(
@@ -57,7 +59,9 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
         if context.user_id is None:
             return []
         human: Final = await _delegated_resource_subject(context.user_id)
-        human_tools: Final = await MCPRequestHandler.resolve_admitted_subject_tools(server_id, human)
+        human_tools: Final = await MCPRequestHandler.resolve_admitted_subject_tools(
+            server_id, human, allowed_team_ids=frozenset((auth.team_id,)) if auth.team_id else frozenset()
+        )
         if own is None:
             return human_tools
         return own if human_tools is None else sorted(frozenset(own).intersection(human_tools))

@@ -14,6 +14,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
@@ -3738,6 +3739,8 @@ async def _fetch_key_object_from_db_with_reconnect(
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
     deadline_seconds: float | None = None,
+    *,
+    check_db_only: bool = False,
 ) -> BaseModel | None:
     """
     Fetch key object from DB and retry once if a DB connection error can be healed.
@@ -3751,6 +3754,7 @@ async def _fetch_key_object_from_db_with_reconnect(
             prisma_client=prisma_client,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=check_db_only,
         ),
         name="key",
         deadline_seconds=deadline_seconds,
@@ -3762,10 +3766,13 @@ async def _fetch_key_object_from_db_unbounded(
     prisma_client: PrismaClient,
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
+    *,
+    check_db_only: bool = False,
 ) -> BaseModel | None:
+    fetch: Final = partial(prisma_client.get_data, use_writer=True) if check_db_only else prisma_client.get_data
     async with db_lookup_gate.current():
         try:
-            return await prisma_client.get_data(
+            return await fetch(
                 token=hashed_token,
                 table_name="combined_view",
                 parent_otel_span=parent_otel_span,
@@ -3787,7 +3794,7 @@ async def _fetch_key_object_from_db_unbounded(
                         lock_timeout_seconds=auth_reconnect_lock_timeout,
                     )
                 if did_reconnect:
-                    return await prisma_client.get_data(
+                    return await fetch(
                         token=hashed_token,
                         table_name="combined_view",
                         parent_otel_span=parent_otel_span,
@@ -3875,6 +3882,8 @@ async def get_key_object(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     check_cache_only: bool | None = None,
+    *,
+    check_db_only: bool = False,
 ) -> UserAPIKeyAuth:
     """
     - Check if team id in proxy Team Table
@@ -3889,9 +3898,8 @@ async def get_key_object(
 
     # Same flow as before: use cache only when we have a hit we can turn into UserAPIKeyAuth
     # (dict from Redis / model_dump, or UserAPIKeyAuth from in-memory). Otherwise fall through to DB.
-    user_api_key_auth: Final = await user_api_key_cache.async_get_cache(
-        key=key,
-        model_type=UserAPIKeyAuth,
+    user_api_key_auth: Final = (
+        None if check_db_only else await user_api_key_cache.async_get_cache(key=key, model_type=UserAPIKeyAuth)
     )
     if user_api_key_auth is not None:
         return _copy_user_api_key_auth_for_cache(user_api_key_obj=user_api_key_auth)
@@ -3905,6 +3913,7 @@ async def get_key_object(
         prisma_client=prisma_client,
         parent_otel_span=parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
     )
 
     if _valid_token is None:
@@ -3918,7 +3927,7 @@ async def get_key_object(
     _response: Final = UserAPIKeyAuth.model_validate(_valid_token.model_dump(exclude_none=True))
 
     # Load object_permission if object_permission_id exists but object_permission is not loaded
-    if _response.object_permission_id and not _response.object_permission:
+    if _response.object_permission_id and (check_db_only or not _response.object_permission):
         try:
             _response.object_permission = await get_object_permission(
                 object_permission_id=_response.object_permission_id,
@@ -3926,13 +3935,19 @@ async def get_key_object(
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                check_db_only=check_db_only,
             )
         except Exception as e:
+            if check_db_only:
+                raise
             verbose_proxy_logger.debug(
                 "Failed to load object_permission for key with object_permission_id=%s: %s",
                 _response.object_permission_id,
                 e,
             )
+
+    if check_db_only:
+        return _response
 
     # save the key object to cache
     await _cache_key_object(

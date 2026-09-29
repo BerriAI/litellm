@@ -10160,3 +10160,43 @@ async def test_managed_agent_model_policy_checks_dispatched_model(
         with pytest.raises((HTTPException, ModelAccessDeniedProxyException)) as failure:
             await checks
         assert str(getattr(failure.value, "status_code", getattr(failure.value, "code", None))) == "403"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconnect", (False, True))
+async def test_authoritative_key_load_bypasses_warm_key_and_permission_caches(reconnect: bool) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="current", agents=["allowed"])
+    stale: Final = UserAPIKeyAuth(token="hash", team_id="old-team", object_permission_id="old")
+    current: Final = UserAPIKeyAuth(token="hash", team_id="new-team", object_permission_id="current")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("hash", stale)
+    cache.set_cache(object_permission_cache_key("current"), permission.model_copy(update={"agents": ["revoked"]}))
+    database: Final = MagicMock()
+    database.get_data = AsyncMock(side_effect=[httpx.ConnectError("reset"), current] if reconnect else [current])
+    database.attempt_db_reconnect = AsyncMock(return_value=True)
+    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
+    fresh: Final = await get_key_object("hash", database, cache, check_db_only=True)
+    assert fresh.team_id == "new-team"
+    assert fresh.object_permission == permission
+    assert all(call.kwargs["use_writer"] is True for call in database.get_data.await_args_list)
+    database.db.litellm_objectpermissiontable.find_unique.assert_not_called()
+    cached: Final = await get_key_object("hash", database, cache)
+    assert cached.team_id == "old-team"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", (False, True))
+async def test_authoritative_key_cannot_keep_grants_when_permission_is_unavailable(missing: bool) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    database: Final = MagicMock()
+    database.get_data = AsyncMock(return_value=UserAPIKeyAuth(
+        object_permission_id="grant", object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["allowed"])
+    ))
+    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=None, side_effect=None if missing else RuntimeError("writer unavailable")
+    )
+    with pytest.raises(Exception, match=r"does not exist|unavailable"):
+        await get_key_object("hash", database, UserApiKeyCache(), check_db_only=True)
