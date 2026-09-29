@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import httpx
 from integration._support.client import Gateway
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -54,7 +54,7 @@ def _chat(gateway: Gateway, model: str) -> httpx.Response:
     )
 
 
-def _bodies(wire) -> list[dict[str, JsonValue]]:
+def _bodies(wire: Wire) -> tuple[dict[str, JsonValue], ...]:
     return [_JSON_OBJECT.validate_json(request.body) for request in wire.drain()]
 
 

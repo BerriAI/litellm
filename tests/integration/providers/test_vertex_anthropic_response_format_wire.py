@@ -110,21 +110,7 @@ def test_vertex_sonnet_5_5_response_format_sends_json_tool_without_forced_tool_c
     gateway: Gateway,
 ) -> None:
     def respond(request: Request) -> Reply:
-        assert request.target == _model_path(_SONNET_5_5)
-        body: Final = _JSON_OBJECT.validate_json(request.body)
-        tool_choice: Final = body.get("tool_choice")
-        if isinstance(tool_choice, dict) and tool_choice.get("type") in ("tool", "any"):
-            # Observed live from Vertex claude-sonnet-5-5 on 2026-09-29, LIT-8983
-            return Reply(
-                status=400,
-                body=json.dumps(
-                    {
-                        "type": "error",
-                        "error": {"type": "invalid_request_error", "message": _FORCED_TOOL_CHOICE_ERROR},
-                    }
-                ).encode(),
-            )
-        return Reply(body=json.dumps(_anthropic_tool_use_message(_SONNET_5_5)).encode())
+        return _forced_tool_choice_reply(_SONNET_5_5, request, _model_path(_SONNET_5_5))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5)
@@ -231,7 +217,7 @@ def _anthropic_text_message(model: str, text: str) -> bytes:
     ).encode()
 
 
-def _sse_frame(event: str, data: dict) -> bytes:
+def _sse_frame(event: str, data: dict[str, JsonValue]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
 

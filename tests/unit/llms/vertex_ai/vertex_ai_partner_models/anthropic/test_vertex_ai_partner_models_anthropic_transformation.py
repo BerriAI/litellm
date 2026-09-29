@@ -1,6 +1,7 @@
 
 import copy
 import json
+from typing import Final
 
 import pytest
 
@@ -878,7 +879,7 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
 
 
 def test_vertex_ai_sonnet_5_5_response_format_json_tool_is_not_forced(local_model_cost_map):
-    result = VertexAIAnthropicConfig().map_openai_params(
+    result: Final = VertexAIAnthropicConfig().map_openai_params(
         non_default_params={
             "response_format": {
                 "type": "json_schema",
@@ -900,7 +901,7 @@ def test_vertex_ai_sonnet_5_5_response_format_json_tool_is_not_forced(local_mode
 
 
 def test_vertex_ai_sonnet_5_5_response_format_reaches_sampling_gate_with_real_model(local_model_cost_map):
-    result = VertexAIAnthropicConfig().map_openai_params(
+    result: Final = VertexAIAnthropicConfig().map_openai_params(
         non_default_params={
             "response_format": {
                 "type": "json_schema",
@@ -920,7 +921,7 @@ def test_vertex_ai_sonnet_5_5_response_format_reaches_sampling_gate_with_real_mo
 
 
 def test_vertex_ai_sonnet_4_6_response_format_still_forces_json_tool_call(local_model_cost_map):
-    result = VertexAIAnthropicConfig().map_openai_params(
+    result: Final = VertexAIAnthropicConfig().map_openai_params(
         non_default_params={
             "response_format": {
                 "type": "json_schema",
