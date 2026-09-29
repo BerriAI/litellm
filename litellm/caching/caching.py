@@ -25,7 +25,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.types.caching import *
-from litellm.types.utils import EmbeddingResponse, all_litellm_params
+from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
@@ -127,6 +127,7 @@ class Cache:
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
+        _backend: BaseCache | None = None,
         **kwargs,
     ):
         """
@@ -183,7 +184,9 @@ class Cache:
         Returns:
             None. Cache is set as a litellm param
         """
-        if type == LiteLLMCacheType.REDIS:
+        if _backend is not None:
+            self.cache: BaseCache = _backend
+        elif type == LiteLLMCacheType.REDIS:
             # Check REDIS_CLUSTER_NODES env var if no explicit startup nodes
             if not redis_startup_nodes:
                 _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
@@ -205,7 +208,7 @@ class Cache:
                 if gcp_ssl_ca_certs is not None:
                     cluster_kwargs["gcp_ssl_ca_certs"] = gcp_ssl_ca_certs
 
-                self.cache: BaseCache = RedisClusterCache(**cluster_kwargs)
+                self.cache = RedisClusterCache(**cluster_kwargs)
             else:
                 self.cache = RedisCache(
                     host=host,
@@ -314,12 +317,6 @@ class Cache:
         if self.namespace is not None and isinstance(self.cache, RedisCache):
             self.cache.namespace = self.namespace
 
-        from litellm.rust_bridge.response_cache import resolve_response_cache
-
-        # The Rust catalog picks the store per backend. When it selects Rust, the storage calls
-        # below go to the native runtime and the Python backend stays only for its direct API.
-        self._native_cache = resolve_response_cache(self)
-
     # Params whose values carry prompt content. Excluded from semantic-cache
     # scope keys so differently worded prompts share a bucket and match via
     # vector similarity rather than being split into per-wording buckets.
@@ -377,7 +374,6 @@ class Cache:
             return preset_cache_key
 
         combined_kwargs: Final = ModelParamHelper._get_all_llm_api_params()
-        litellm_param_kwargs: Final = all_litellm_params
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
@@ -387,7 +383,7 @@ class Cache:
                 param_value: str | None = self._get_param_value(param, kwargs)
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
-            elif param not in litellm_param_kwargs:  # check if user passed in optional param - e.g. top_k
+            elif not is_litellm_owned_kwarg(param):
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params

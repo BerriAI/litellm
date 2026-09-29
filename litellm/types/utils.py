@@ -329,6 +329,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_video_per_second: float | None  # only for vertex ai models
     input_cost_per_audio_token_batches: ReadOnly[float | None]
     input_cost_per_image_token_batches: ReadOnly[float | None]
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
@@ -693,6 +694,10 @@ CallTypesLiteral = Literal[
     "arealtime_calls",
     "acreate_realtime_transcription_session",
 ]
+
+MCP_GUARDRAIL_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {CallTypes.call_mcp_tool.value, CallTypes.list_mcp_tools.value}
+)
 
 # Mapping of API routes to their corresponding call types
 API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
@@ -2780,6 +2785,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     acompletion: bool | None
     preset_cache_key: str | None
     no_log: bool | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_token: float | None
     output_cost_per_token: float | None
@@ -2970,6 +2976,7 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 
 RoutingDecisionCause = Literal[
+    "prompt_cache_cost",
     "heuristic_scorer",
     "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
@@ -3678,6 +3685,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
     newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
+    signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
@@ -3701,6 +3711,7 @@ class MirroredPricingParams(BaseModel):
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
     ## CUSTOM PRICING ##
+    cost_per_second: float | None = None
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
@@ -4135,6 +4146,7 @@ class LlmProviders(str, Enum):
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     SCX_AI = "scx-ai"
+    PRISM = "prism"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
