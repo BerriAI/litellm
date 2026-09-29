@@ -1527,7 +1527,15 @@ async def test_duplicate_agent_binding_returns_conflict_for_every_write(operatio
     registry: Final = AgentRegistry()
     client: Final = MagicMock()
     client.db.litellm_agentstable.find_unique = AsyncMock(return_value=_stored_agent_row({"agent_id": "agent-123"}))
-    failure: Final = UniqueViolationError({"user_facing_error": {"message": "Unique constraint failed", "meta": {"target": ["client_id"]}, "error_code": "P2002"}})
+    failure: Final = UniqueViolationError(
+        {
+            "user_facing_error": {
+                "message": "Unique constraint failed",
+                "meta": {"target": ["client_id"]},
+                "error_code": "P2002",
+            }
+        }
+    )
     client.db.litellm_agentstable.create = AsyncMock(side_effect=failure)
     client.db.litellm_agentstable.update = AsyncMock(side_effect=failure)
     incoming: Final = {"agent_name": "Agent", "agent_card_params": {}}
@@ -1542,3 +1550,84 @@ async def test_duplicate_agent_binding_returns_conflict_for_every_write(operatio
         await write
     assert denied.value.status_code == 409
     assert denied.value.detail == "Agent name or Entra application is already registered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "patch", "put"])
+@pytest.mark.parametrize("owner", ["previous-agent", None])
+async def test_retired_application_cannot_transfer_to_another_agent(operation: str, owner: str | None) -> None:
+    from fastapi import HTTPException
+
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    row: Final = _stored_agent_row({"agent_id": "agent-123"})
+    client.db.litellm_agentstable.find_unique = AsyncMock(return_value=row)
+    client.db.litellm_agentstable.create = AsyncMock(return_value=row)
+    client.db.litellm_agentstable.update = AsyncMock(return_value=row)
+    client.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(return_value=SimpleNamespace(agent_id=owner))
+    incoming: Final = {
+        "agent_name": "Agent",
+        "agent_card_params": {},
+        "identity": {
+            "provider": "microsoft_entra",
+            "tenant_id": "11111111-1111-4111-8111-111111111111",
+            "client_id": "22222222-2222-4222-8222-222222222222",
+            "service_principal_id": "33333333-3333-4333-8333-333333333333",
+        },
+    }
+    write: Final = (
+        registry.add_agent_to_db(incoming, client, created_by="admin")
+        if operation == "create"
+        else (registry.patch_agent_in_db if operation == "patch" else registry.update_agent_in_db)(
+            "agent-123", incoming, client, updated_by="admin"
+        )
+    )
+    with pytest.raises(HTTPException) as denied:
+        await write
+    assert denied.value.status_code == 409
+    client.db.litellm_agentstable.create.assert_not_awaited()
+    client.db.litellm_agentstable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "patch", "put"])
+@pytest.mark.parametrize("prior_owner", [False, True])
+async def test_application_registration_preserves_its_existing_owner(operation: str, prior_owner: bool) -> None:
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    row: Final = _stored_agent_row({"agent_id": "agent-123"})
+    client.db.litellm_agentstable.find_unique = AsyncMock(return_value=row)
+    client.db.litellm_agentstable.create = AsyncMock(return_value=row)
+    client.db.litellm_agentstable.update = AsyncMock(return_value=row)
+    client.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(
+        return_value=SimpleNamespace(agent_id="agent-123") if prior_owner and operation != "create" else None
+    )
+    incoming: Final = {
+        "agent_name": "Agent",
+        "agent_card_params": {},
+        "identity": {
+            "provider": "microsoft_entra",
+            "tenant_id": "11111111-1111-4111-8111-111111111111",
+            "client_id": "22222222-2222-4222-8222-222222222222",
+            "service_principal_id": "33333333-3333-4333-8333-333333333333",
+        },
+    }
+    if operation == "create":
+        result: Final = await registry.add_agent_to_db(incoming, client, created_by="admin")
+    else:
+        update: Final = registry.patch_agent_in_db if operation == "patch" else registry.update_agent_in_db
+        result = await update("agent-123", incoming, client, updated_by="admin")
+    assert result.agent_id == "agent-123"
+    write: Final = (
+        client.db.litellm_agentstable.create if operation == "create" else client.db.litellm_agentstable.update
+    )
+    data: Final = write.call_args.kwargs["data"]
+    if prior_owner and operation != "create":
+        assert "retired_identities" not in data
+    else:
+        assert data["retired_identities"] == {
+            "create": {
+                **{key: value for key, value in incoming["identity"].items() if key != "service_principal_id"},
+                "issuer": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
+            }
+        }

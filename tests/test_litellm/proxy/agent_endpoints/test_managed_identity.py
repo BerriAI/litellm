@@ -162,12 +162,12 @@ def test_each_application_binding_records_its_history_atomically() -> None:
     )
     created: Final = managed_write_fields({"identity": configuration}, None, "admin")
     assert not isinstance(created, AgentIdentityFailure)
-    assert created["retired_identities"]["connectOrCreate"]["create"]["client_id"] == CLIENT
+    assert created["retired_identities"]["create"]["client_id"] == CLIENT
     replacement: Final = managed_write_fields(
         {"identity": {**configuration, "client_id": HUMAN}}, managed_agent(), "admin"
     )
     assert not isinstance(replacement, AgentIdentityFailure)
-    assert replacement["retired_identities"]["connectOrCreate"]["create"]["client_id"] == HUMAN
+    assert replacement["retired_identities"]["create"]["client_id"] == HUMAN
 
 
 def test_unchanged_binding_preserves_revision_and_authentication_evidence() -> None:

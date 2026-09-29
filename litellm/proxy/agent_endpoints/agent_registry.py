@@ -22,7 +22,11 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.base_repository import is_unique_violation
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import AgentsRepository, ObjectPermissionRepository
+from litellm.repositories.table_repositories import (
+    AgentsRepository,
+    ObjectPermissionRepository,
+    RetiredAgentIdentityRepository,
+)
 from litellm.types.agents import AgentConfig, AgentKillSwitchConfig, AgentResponse, PatchAgentRequest
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
 
@@ -161,15 +165,33 @@ async def _permission_write(
     return updated
 
 
-def _managed_fields(
+async def _managed_fields(
     incoming: Mapping[str, object],
     existing: AgentResponse | None,
     updated_by: str,
+    client: PrismaClient,
 ) -> Mapping[str, object]:
     result: Final = managed_write_fields(incoming, existing, updated_by)
     if isinstance(result, AgentIdentityFailure):
         raise_identity_failure(result, 400)
-    return result
+    history: Final = result.get("retired_identities")
+    if history is None:
+        return result
+    entry: Final = history["create"]
+    prior: Final = await RetiredAgentIdentityRepository(client, use_writer=True).table.find_unique(
+        where={
+            "provider_tenant_id_client_id": {
+                "provider": entry["provider"],
+                "tenant_id": entry["tenant_id"],
+                "client_id": entry["client_id"],
+            }
+        }
+    )
+    if prior is None:
+        return result
+    if existing is None or prior.agent_id != existing.agent_id:
+        raise HTTPException(409, "Entra application was already registered to another agent")
+    return {key: value for key, value in result.items() if key != "retired_identities"}
 
 
 def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
@@ -631,7 +653,7 @@ class AgentRegistry:
 
             # Create agent in DB
             created_agent: Final = await agents_table(prisma_client).create(
-                data={**create_data, **_managed_fields(agent, None, created_by)},
+                data={**create_data, **await _managed_fields(agent, None, created_by, prisma_client)},
                 include={"object_permission": True, "identity": True},
             )
 
@@ -743,7 +765,9 @@ class AgentRegistry:
                 where={"agent_id": agent_id},
                 data={
                     **update_data,
-                    **_managed_fields(agent, AgentResponse.model_validate(existing_record.model_dump()), updated_by),
+                    **await _managed_fields(
+                        agent, AgentResponse.model_validate(existing_record.model_dump()), updated_by, prisma_client
+                    ),
                     "updated_by": updated_by,
                     "updated_at": datetime.now(timezone.utc),
                 },
@@ -839,10 +863,11 @@ class AgentRegistry:
                 where={"agent_id": agent_id},
                 data={
                     **update_data,
-                    **_managed_fields(
+                    **await _managed_fields(
                         agent,
                         AgentResponse.model_validate(existing_row.model_dump()) if existing_row else None,
                         updated_by,
+                        prisma_client,
                     ),
                 },
                 include={"object_permission": True, "identity": True},
