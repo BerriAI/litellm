@@ -126,6 +126,7 @@ def test_model_insights_scopes_daily_to_ranked_deployments_but_tasks_to_all_usag
     assert "model_group" not in daily_where
     assert "OR" not in task_where
     assert task_where["date"] == daily_where["date"]
+    assert "take" not in table.group_by.await_args_list[2].kwargs
 
 
 def test_model_insights_task_breakdown_does_not_change_with_the_chart_metric() -> None:
