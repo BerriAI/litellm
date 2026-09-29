@@ -10109,6 +10109,51 @@ def test_get_model_listing_info_keeps_each_deployment_price_separate():
     ), f"each deployment needs its own record and key, got {info.deployment_prices}"
 
 
+def test_pattern_deployments_yields_every_deployment_behind_every_pattern():
+    """The wildcard price scan reads through this to decide whether any pattern
+    configures a price at all, so it has to see all of them: missing one would skip
+    pattern matching and quote the catalog for a deployment that overrides it."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "k",
+                    "input_cost_per_token": 9e-06,
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "k",
+                    "input_cost_per_token": 4e-05,
+                },
+            },
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {
+                    "model": "anthropic/*",
+                    "api_key": "k",
+                    "input_cost_per_token": 2e-05,
+                },
+            },
+        ]
+    )
+
+    seen = [
+        deployment.get("litellm_params", {}).get("input_cost_per_token")
+        for deployment in router._pattern_deployments()
+    ]
+
+    assert sorted(price for price in seen if price) == [
+        9e-06,
+        2e-05,
+        4e-05,
+    ], f"every deployment behind every pattern must be visited, saw {seen}"
+
+
 def test_get_wildcard_listing_prices_reports_every_matched_deployment():
     """A pattern can front several deployments and routing can pick any of them, so the
     listing needs all their prices, not the first one's: the caller reports the dearest."""
