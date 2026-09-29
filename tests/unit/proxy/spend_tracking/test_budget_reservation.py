@@ -309,8 +309,9 @@ async def test_team_member_reservation_counter_adds_temp_increase_to_live_team_d
 @pytest.mark.asyncio
 @pytest.mark.parametrize("charged_agent", ("caller-agent", "target-agent"))
 @pytest.mark.parametrize("window", [None, "2026-01-02T00:00:00Z"])
+@pytest.mark.parametrize("outcome", ["success", "cancelled"])
 async def test_agent_invocation_reserves_exact_fee_and_reconciles_without_child_cost(
-    monkeypatch: pytest.MonkeyPatch, charged_agent: str, window: str | None,
+    monkeypatch: pytest.MonkeyPatch, charged_agent: str, window: str | None, outcome: str,
 ) -> None:
     from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
     from litellm.types.agents import AgentResponse
@@ -336,6 +337,13 @@ async def test_agent_invocation_reserves_exact_fee_and_reconciles_without_child_
     assert reservation["reserved_cost"] == pytest.approx(0.2)
     assert [entry["counter_key"] for entry in reservation["entries"]] == [counter_key]
     assert await cache.async_get_cache(counter_key) == pytest.approx(0.3)
+    if outcome == "cancelled":
+        from litellm.proxy.spend_tracking.budget_reservation import release_budget_reservation_on_cancel
+
+        await release_budget_reservation_on_cancel(reservation)
+        assert await cache.async_get_cache(counter_key) == pytest.approx(0.1)
+        assert reservation["finalized"] is True
+        return
     await proxy_server.increment_spend_counters(
         token=None, team_id=None, user_id=None, response_cost=0.2,
         billing_agent_id=charged_agent, billing_agent_counter_key=counter_key, budget_reservation=reservation,

@@ -337,7 +337,7 @@ async def reserve_budget_for_request(
         return None
 
     input_cost: Final = (
-        invocation_cost
+        0.0
         if invocation_cost is not None
         else estimate_request_input_cost(
             request_body=request_body,
