@@ -383,32 +383,26 @@ async def test_concurrent_native_profile_update_returns_conflict() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["Users", "Groups"])
-async def test_scoped_delete_propagates_human_and_team_deprovisioning(
-    kind: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from unittest.mock import AsyncMock
-
-    from litellm.proxy.management_endpoints.scim import scim_v2
+async def test_scoped_delete_propagates_human_and_team_deprovisioning(kind: str) -> None:
+    from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable
 
     service, tx, native = provisioning_fixture()
-    document: Final = SCIMUser(schemas=[], userName="human@example.com").model_dump(mode="json")
-    row: Final = native.model_copy(update={"kind": kind, "document": document})
+    row: Final = native.model_copy(update={"kind": kind, "document": SCIMUser(schemas=[], userName="human").model_dump()})
     tx.litellm_scimresource.find_unique.return_value = row
-    delete_user: Final = AsyncMock()
-    delete_group: Final = AsyncMock()
-    monkeypatch.setattr(scim_v2, "delete_user", delete_user)
-    monkeypatch.setattr(scim_v2, "delete_group", delete_group)
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id=row.local_id, teams=[]))
+    tx.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(team_id=row.local_id, members_with_roles=[]))
+    tx.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    tx.litellm_usertable.delete = AsyncMock()
+    tx.litellm_teamtable.delete = AsyncMock()
+    tx.litellm_invitationlink.delete_many = AsyncMock()
+    tx.litellm_organizationmembership.delete_many = AsyncMock()
+    tx.litellm_teammembership.delete_many = AsyncMock()
     await service.delete(kind, row.id)
-    if kind == "Users":
-        delete_user.assert_awaited_once_with(user_id=row.local_id)
-        delete_group.assert_not_awaited()
-    else:
-        delete_group.assert_awaited_once_with(group_id=row.local_id)
-        delete_user.assert_not_awaited()
+    deletion: Final = tx.litellm_usertable.delete if kind == "Users" else tx.litellm_teamtable.delete
+    deletion.assert_awaited_once_with(where={"user_id" if kind == "Users" else "team_id": row.local_id})
     tx.litellm_scimresource.update.assert_awaited_once_with(
-        where={"id": row.id},
-        data={"active": False, "deleted": True, "member_ids": []},
+        where={"id": row.id}, data={"active": False, "deleted": True, "member_ids": []},
     )
 
 
@@ -423,7 +417,7 @@ async def test_failed_human_deletion_remains_retryable(monkeypatch: pytest.Monke
     service, tx, native = provisioning_fixture()
     row: Final = native.model_copy(update={"document": SCIMUser(schemas=[], userName="human@example.com").model_dump()})
     tx.litellm_scimresource.find_unique.return_value = row
-    monkeypatch.setattr(scim_v2, "delete_user", AsyncMock(side_effect=HTTPException(503, "unavailable")))
+    tx.litellm_usertable.find_unique = AsyncMock(side_effect=HTTPException(503, "unavailable"))
     with pytest.raises(HTTPException) as failure:
         await service.delete("Users", row.id)
     assert failure.value.status_code == 503
@@ -1244,3 +1238,78 @@ async def test_group_addition_reuses_member_writes_and_defers_existing_audit_and
     assert any(call.kwargs.get("cache_keys") == (human.local_id,) for call in invalidate.await_args_list)
     audit.assert_called_once()
     assert audit.call_args.kwargs["existing_user_ids"] == frozenset([human.local_id])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_delete_retry_retires_directory_when_local_record_is_already_missing(kind, monkeypatch):
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, tx, native = provisioning_fixture()
+    row = native.model_copy(update={"kind": kind, "document": SCIMUser(schemas=[], userName="human").model_dump()})
+    tx.litellm_scimresource.find_unique.return_value = row
+    tx.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    tx.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    missing = ProxyException(message="not found", type="not_found", param=None, code=404)
+    monkeypatch.setattr(scim_v2, "delete_user", AsyncMock(side_effect=missing))
+    monkeypatch.setattr(scim_v2, "delete_group", AsyncMock(side_effect=missing))
+    await service.delete(kind, row.id)
+    assert tx.litellm_scimresource.update.call_args.kwargs["data"] == {
+        "active": False, "deleted": True, "member_ids": [],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_directory_retirement_failure_rolls_back_local_deletion(kind, monkeypatch):
+    from contextlib import asynccontextmanager
+    from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, tx, native = provisioning_fixture()
+    row = native.model_copy(update={"kind": kind, "document": SCIMUser(schemas=[], userName="human").model_dump()})
+    state = {"local_exists": True, "directory_active": True}
+    transaction_writes = []
+
+    @asynccontextmanager
+    async def transaction(**kwargs):
+        before = dict(state)
+        writes = set()
+        transaction_writes.append(writes)
+        try:
+            yield tx
+        except BaseException:
+            state.update({key: before[key] for key in writes})
+            raise
+        finally:
+            transaction_writes.pop()
+
+    async def delete_local(**kwargs):
+        if "where" in kwargs:
+            transaction_writes[-1].add("local_exists")
+        state["local_exists"] = False
+
+    async def retire(**kwargs):
+        transaction_writes[-1].add("directory_active")
+        state["directory_active"] = False
+        raise RuntimeError("directory write failed")
+
+    service.client.tx = transaction
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.litellm_scimresource.find_unique.return_value = row
+    tx.litellm_scimresource.update = AsyncMock(side_effect=retire)
+    tx.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id=row.local_id, teams=[]))
+    tx.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(team_id=row.local_id, members_with_roles=[], max_budget=99))
+    tx.litellm_usertable.delete = AsyncMock(side_effect=delete_local)
+    tx.litellm_teamtable.delete = AsyncMock(side_effect=delete_local)
+    tx.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    tx.litellm_invitationlink.delete_many = AsyncMock()
+    tx.litellm_organizationmembership.delete_many = AsyncMock()
+    tx.litellm_teammembership.delete_many = AsyncMock()
+    monkeypatch.setattr(scim_v2, "delete_user", delete_local)
+    monkeypatch.setattr(scim_v2, "delete_group", delete_local)
+    with pytest.raises(RuntimeError, match="directory write failed"):
+        await service.delete(kind, row.id)
+    assert state == {"local_exists": True, "directory_active": True}
+    assert tx.litellm_teamtable.find_unique.return_value.max_budget == 99

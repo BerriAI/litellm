@@ -1,13 +1,13 @@
 import re
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
-from functools import reduce, wraps
+from functools import reduce
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Concatenate, Final, Literal, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Final, Literal
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -212,23 +212,6 @@ def _replace_group_attributes(current: SCIMGroup, item: SCIMPatchOperation) -> S
 
 def group_members_after_patch(group: SCIMGroup, patch: SCIMPatchOp) -> SCIMGroup | SCIMProvisioningFailure:
     return reduce(_patch_group_operation, patch.Operations, group)
-
-
-Parameters = ParamSpec("Parameters")
-Result = TypeVar("Result")
-
-
-def serialized_source(
-    operation: Callable[Concatenate["AgentProvisioningService", Parameters], Awaitable[Result]],
-) -> Callable[Concatenate["AgentProvisioningService", Parameters], Awaitable[Result]]:
-    @wraps(operation)
-    async def execute(
-        service: "AgentProvisioningService", *args: Parameters.args, **kwargs: Parameters.kwargs
-    ) -> Result:
-        async with service.source_transaction():
-            return await operation(service, *args, **kwargs)
-
-    return execute
 
 
 def _identity_patch_children(value: object) -> tuple[object, ...] | Literal[True]:
@@ -500,27 +483,24 @@ class AgentProvisioningService:
         await SourceHumanProvisioner.finish_update(result)
         return result.document
 
-    @serialized_source
     async def delete(self, kind: Literal["Users", "Groups"], resource_id: str) -> None:
         from litellm.proxy.management_endpoints.scim import scim_v2
 
         where: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": resource_id}
-        async with self.client.tx() as tx:
+        admin_group: Final = await scim_v2.provisioning_group_admin_role() if kind == "Groups" else None
+        async with self.source_transaction() as tx:
             row: Final = await tx.litellm_scimresource.find_unique(where=where)
             if row is None or row.source_id != self.source.source_id or row.kind != kind:
                 raise HTTPException(404, "SCIM resource not found in this provisioning source")
             if row.deleted:
                 return
-        if row.local_id is not None:
-            try:
-                if kind == "Groups":
-                    await scim_v2.delete_group(group_id=row.local_id)
-                elif user_document(row).agent_user is None:
-                    await scim_v2.delete_user(user_id=row.local_id)
-            except HTTPException as exc:
-                if exc.status_code != 404:
-                    raise
-        async with self.client.tx() as tx:
+            user_deletion: Final = (
+                await scim_v2.write_scim_user_deletion(tx, self.client, row.local_id)
+                if row.local_id is not None and kind == "Users" and user_document(row).agent_user is None
+                else None
+            )
+            if row.local_id is not None and kind == "Groups":
+                await scim_v2.write_scim_group_deletion(tx, row.local_id, admin_group)
             if kind == "Users":
                 memberships: Final[LiteLLM_SCIMResourceWhereInput] = {
                     "source_id": self.source.source_id,
@@ -532,6 +512,7 @@ class AgentProvisioningService:
                     await remove_group_member(tx, group, row.id)
             retired: Final[LiteLLM_SCIMResourceUpdateInput] = {"active": False, "deleted": True, "member_ids": []}
             await tx.litellm_scimresource.update(where=where, data=retired)
+        await scim_v2.finish_scim_user_deletion(user_deletion)
 
     async def create_group(self, group: SCIMGroup) -> SCIMGroup:
         from litellm.proxy.management_endpoints.scim import scim_v2
