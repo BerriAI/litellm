@@ -5,7 +5,6 @@
 
 mod argument;
 mod binding;
-mod callable;
 mod driver;
 mod error;
 mod file_reader;
@@ -21,22 +20,21 @@ mod services;
 
 pub use argument::lookup;
 pub use binding::PythonBinding;
-pub use callable::wrap_failure;
-pub use driver::run_call;
+pub use driver::{CallOptions, run_call};
 pub use error::{InvokeError, missing_state};
 pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
-pub use handle::{Execution, ExecutionBody, ExecutionStep};
-pub use hooks::{HookEvent, HookResume, HookStep, Preflight, PythonCallHooks};
+pub use handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
+pub use hooks::{HookChain, HookResume, HookStep, PythonCallEvent, PythonCallHooks, PythonRuntime};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
 };
 pub use owned::PythonOwned;
 pub use runtime::{
     ForkedAfterNativeRuntimeStarted, ProcessReservedForForking, enter_native, poll_async_value,
-    reserve_process_for_forking, run_async, run_async_value, run_sync, run_sync_value,
-    runtime_started,
+    ready_future, reserve_process_for_forking, run_async, run_async_value, run_sync,
+    run_sync_value, runtime_started,
 };
 pub use services::PythonHostCalls;
 

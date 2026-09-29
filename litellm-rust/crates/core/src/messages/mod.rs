@@ -1,3 +1,4 @@
+use litellm_host::observation::ObservationSender;
 mod common_utils;
 mod handler;
 mod prepare;
@@ -16,27 +17,102 @@ pub struct MessagesRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
+    cache: Option<litellm_cache_response::ScopedCache>,
+}
+
+#[must_use]
+#[derive(Clone, Default)]
+pub struct MessagesRouteBuilder<Http = (), Auth = (), Secrets = ()> {
+    http: Http,
+    auth: Auth,
+    secrets: Secrets,
+    cache: Option<litellm_cache_response::ScopedCache>,
+}
+
+impl<Http, Auth, Secrets> MessagesRouteBuilder<Http, Auth, Secrets> {
+    pub fn with_http(
+        self,
+        http: litellm_http::Client,
+    ) -> MessagesRouteBuilder<litellm_http::Client, Auth, Secrets> {
+        MessagesRouteBuilder {
+            http,
+            auth: self.auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_auth(
+        self,
+        auth: Arc<AuthServices>,
+    ) -> MessagesRouteBuilder<Http, Arc<AuthServices>, Secrets> {
+        MessagesRouteBuilder {
+            http: self.http,
+            auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_secrets(
+        self,
+        secrets: Arc<dyn SecretSource>,
+    ) -> MessagesRouteBuilder<Http, Auth, Arc<dyn SecretSource>> {
+        MessagesRouteBuilder {
+            http: self.http,
+            auth: self.auth,
+            secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+        Self {
+            cache: Some(cache),
+            ..self
+        }
+    }
+}
+
+impl MessagesRouteBuilder<litellm_http::Client, Arc<AuthServices>, Arc<dyn SecretSource>> {
+    pub fn build(self) -> MessagesRoute {
+        MessagesRoute {
+            http: self.http,
+            auth: self.auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
 }
 
 impl MessagesRoute {
-    pub fn new(
-        http: litellm_http::Client,
-        auth: Arc<AuthServices>,
-        secrets: Arc<dyn SecretSource>,
-    ) -> Self {
+    pub fn builder() -> MessagesRouteBuilder {
+        MessagesRouteBuilder::default()
+    }
+
+    #[must_use]
+    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
         Self {
-            http,
-            auth,
-            secrets,
+            cache: Some(cache),
+            ..self
         }
     }
 
     pub async fn execute(
         &self,
         call: MessagesCall,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        options: impl Into<crate::CallOptions>,
     ) -> Result<MessagesResponse, Error> {
-        litellm_host::lifecycle::observe_call(hooks.observer(), self.run(call, hooks)).await
+        let crate::CallOptions {
+            cache: cache_options,
+            observers,
+        } = options.into();
+        litellm_host::lifecycle::observe_call(
+            observers.clone(),
+            self.run(call, cache_options, interceptors, observers.as_ref()),
+        )
+        .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -50,15 +126,36 @@ impl MessagesRoute {
     async fn run(
         &self,
         call: MessagesCall,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
     ) -> Result<MessagesResponse, Error> {
         crate::diagnostic::call(async {
-            let request = prepare::prepare(call, self.secrets.as_ref()).await?;
-            crate::diagnostic::provider(&request.body.model, request.provider.as_str());
-            let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
-                Box::pin(handler::execute(&self.http, &self.auth, request, hooks));
-            execute.await
+            self.run_provider(call, cache_options, interceptors, observers)
+                .await
         })
         .await
+    }
+
+    async fn run_provider(
+        &self,
+        call: MessagesCall,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
+    ) -> Result<MessagesResponse, Error> {
+        let request = prepare::prepare(call, self.secrets.as_ref()).await?;
+        crate::diagnostic::provider(&request.body.model, request.provider.as_str());
+        let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
+            Box::pin(handler::execute(
+                &self.http,
+                &self.auth,
+                request,
+                self.cache.clone(),
+                cache_options,
+                interceptors,
+                observers,
+            ));
+        execute.await
     }
 }

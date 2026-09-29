@@ -133,9 +133,9 @@ impl OcrConfigKind {
         self,
         client: &OcrClient,
         request: &PreparedOcrRequest,
-        hooks: &dyn CallHooks<Error>,
+        interceptors: &dyn CallHooks<Error>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        with_config!(self, config => handler::ocr(&config, client, request, hooks).await)
+        with_config!(self, config => handler::ocr(&config, client, request, interceptors).await)
     }
 }
 

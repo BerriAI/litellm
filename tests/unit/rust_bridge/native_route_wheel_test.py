@@ -153,9 +153,8 @@ def success_value(route: str, response: dict[object, object]) -> object:
     return response["choices"][0]["message"]["content"]
 
 
-def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
-    upstream_error: Final = native.RustUpstreamError
-    if not isinstance(error, upstream_error) or error.args[0] != 429:
+def assert_rate_limit(route: str, error: BaseException) -> None:
+    if error.args != (429, native_response(429, route).decode()):
         raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
 
 
@@ -165,8 +164,8 @@ def exercise_sync(native: object, api_base: str) -> None:
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
         try:
             function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
-            assert_rate_limit(native, route, error)
+        except native.RustUpstreamError as error:
+            assert_rate_limit(route, error)
         else:
             raise AssertionError(f"{route} accepted a 429 response")
 
@@ -177,8 +176,8 @@ async def exercise_async(native: object, api_base: str) -> None:
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
         try:
             await function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
-            assert_rate_limit(native, route, error)
+        except native.RustUpstreamError as error:
+            assert_rate_limit(route, error)
         else:
             raise AssertionError(f"a{route} accepted a 429 response")
 
