@@ -41,6 +41,10 @@ SUPPORTED_EVENT_HOOKS: Final = (GuardrailEventHooks.pre_call, GuardrailEventHook
 class AiriaGuardrail(CustomGuardrail):
     """Evaluates prompts and responses against your Airia guardrail policy."""
 
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [*SUPPORTED_EVENT_HOOKS]
+
     def __init__(
         self,
         api_base: str | None = None,

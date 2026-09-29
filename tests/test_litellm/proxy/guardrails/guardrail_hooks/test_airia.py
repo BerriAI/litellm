@@ -85,6 +85,13 @@ def test_during_call_is_not_a_supported_event_hook() -> None:
     assert list(hooks) == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
 
+def test_supported_event_hooks_are_exposed_for_ui() -> None:
+    assert AiriaGuardrail.get_supported_event_hooks() == [
+        GuardrailEventHooks.pre_call,
+        GuardrailEventHooks.post_call,
+    ]
+
+
 @pytest.mark.parametrize("missing", ["api_base", "api_key"])
 def test_missing_credentials_raise_at_construction(missing: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail at startup rather than on the first request."""
