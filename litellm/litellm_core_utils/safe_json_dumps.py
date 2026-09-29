@@ -93,10 +93,16 @@ def safe_dumps(
     """Serialize data to JSON text through safe_json_structure.
 
     ensure_ascii=False keeps non-ASCII characters as-is instead of \\uXXXX
-    escapes; the parsed value is identical either way.
+    escapes; the parsed value is identical either way. The result of an
+    ensure_ascii=False call is always encodable as UTF-8: if the text holds
+    something that is not (e.g. an unpaired surrogate such as "\\ud800"), the
+    escaped ensure_ascii=True output is returned instead.
     """
-    return json.dumps(
-        safe_json_structure(data, max_depth, value_transform),
-        default=str,
-        ensure_ascii=ensure_ascii,
-    )
+    structure: Final = safe_json_structure(data, max_depth, value_transform)
+    text: Final = json.dumps(structure, default=str, ensure_ascii=ensure_ascii)
+    if not ensure_ascii:
+        try:
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            return json.dumps(structure, default=str, ensure_ascii=True)
+    return text

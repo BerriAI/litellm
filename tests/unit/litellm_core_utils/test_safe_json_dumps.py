@@ -248,3 +248,26 @@ def test_ensure_ascii_false_keeps_non_ascii():
     result = safe_dumps(data, ensure_ascii=False)
     assert result == '{"text": "Привет, 世界", "nested": ["ü", {"k": "é"}]}'
     assert json.loads(result) == json.loads(safe_dumps(data))
+
+
+def test_ensure_ascii_false_unpaired_surrogate_falls_back_to_escaped_json():
+    data = {"t": "a\ud800b"}
+    result = safe_dumps(data, ensure_ascii=False)
+    result.encode("utf-8")
+    assert result == '{"t": "a\\ud800b"}'
+    assert json.loads(result) == data
+
+
+def test_ensure_ascii_false_surrogate_fallback_escapes_all_non_ascii():
+    # The fallback is the previous escaped output as a whole, not a partial repair
+    data = {"t": "Привет \ud800", "u": "こんにちは"}
+    result = safe_dumps(data, ensure_ascii=False)
+    result.encode("utf-8")
+    assert result == safe_dumps(data)
+    assert json.loads(result) == data
+
+
+def test_ensure_ascii_false_valid_non_ascii_not_escaped_alongside_ascii_only_default():
+    result = safe_dumps({"t": "Ünïcödé"}, ensure_ascii=False)
+    assert result == '{"t": "Ünïcödé"}'
+    result.encode("utf-8")

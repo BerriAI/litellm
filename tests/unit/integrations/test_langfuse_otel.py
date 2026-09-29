@@ -398,6 +398,119 @@ class TestLangfuseOtelIntegration:
         assert "\\u" not in input_raw and "\\u" not in output_raw
         assert json.loads(input_raw) == kwargs["messages"]
 
+    @staticmethod
+    def _raw_attributes(kwargs, response_obj):
+        """Run the attribute setter and return the raw {attribute: value} it wrote."""
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), kwargs, response_obj
+            )
+            return {
+                call.args[1]: call.args[2]
+                for call in mock_safe_set_attribute.call_args_list
+            }
+
+    def test_set_langfuse_specific_attributes_tool_calls_keep_non_ascii_unescaped(self):
+        """Tool call arguments with non-ASCII text are written as-is, not as \\uXXXX escapes."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from litellm.types.utils import (
+            ChatCompletionMessageToolCall,
+            Choices,
+            Function,
+            ModelResponse,
+        )
+
+        response_obj = ModelResponse(
+            id="chatcmpl-test",
+            model="gpt-4o",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            ChatCompletionMessageToolCall(
+                                function=Function(
+                                    arguments='{"greeting": "Привет, мир", "city": "東京"}',
+                                    name="say_hello",
+                                ),
+                                id="call_123",
+                                type="function",
+                            )
+                        ],
+                    },
+                )
+            ],
+        )
+
+        raw = self._raw_attributes({}, response_obj)
+
+        output_raw = raw[LangfuseSpanAttributes.OBSERVATION_OUTPUT.value]
+        assert "Привет, мир" in output_raw and "東京" in output_raw
+        assert "\\u" not in output_raw
+        assert json.loads(output_raw) == [
+            {
+                "id": "chatcmpl-test",
+                "name": "say_hello",
+                "arguments": {"greeting": "Привет, мир", "city": "東京"},
+                "call_id": "call_123",
+                "type": "function_call",
+            }
+        ]
+
+    def test_set_langfuse_specific_attributes_output_items_keep_non_ascii_unescaped(
+        self,
+    ):
+        """Responses API output items with non-ASCII text are written as-is, not as \\uXXXX escapes."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+        response_obj = ResponsesAPIResponse(
+            id="response-unicode",
+            created_at=1625247600,
+            output=[
+                ResponseOutputMessage(
+                    id="msg-001",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[
+                        ResponseOutputText(
+                            annotations=[],
+                            text="こんにちは, Ünïcödé",
+                            type="output_text",
+                        )
+                    ],
+                )
+            ],
+        )
+
+        raw = self._raw_attributes({"call_type": "responses"}, response_obj)
+
+        output_raw = raw[LangfuseSpanAttributes.OBSERVATION_OUTPUT.value]
+        assert "こんにちは, Ünïcödé" in output_raw
+        assert "\\u" not in output_raw
+        assert json.loads(output_raw) == [
+            {"role": "assistant", "content": "こんにちは, Ünïcödé"}
+        ]
+
+    def test_set_langfuse_specific_attributes_unpaired_surrogate_stays_utf8_encodable(
+        self,
+    ):
+        """An unpaired surrogate must not yield a string that cannot be UTF-8 encoded (OTLP export)."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        kwargs = {"messages": [{"role": "user", "content": "Привет \ud800 мир"}]}
+
+        raw = self._raw_attributes(kwargs, None)
+
+        input_raw = raw[LangfuseSpanAttributes.OBSERVATION_INPUT.value]
+        input_raw.encode("utf-8")
+        assert json.loads(input_raw) == kwargs["messages"]
+
     def test_set_langfuse_specific_attributes_with_tool_calls(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with tool calls in Langfuse format."""
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
