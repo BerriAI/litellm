@@ -1148,6 +1148,16 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
+        try:
+            from litellm.proxy.db.model_usage_rollup import increment_daily_model_usage
+
+            await increment_daily_model_usage(prisma_client=prisma_client, payload=payload_copy)
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: increment_daily_model_usage failed: %s",
+                traceback.format_exc(),
+            )
+
     async def _update_key_db(
         self,
         response_cost: float | None,
