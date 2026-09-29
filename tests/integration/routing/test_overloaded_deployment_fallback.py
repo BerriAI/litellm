@@ -9,7 +9,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 
 
 def _error_529() -> Reply:
@@ -19,7 +19,7 @@ def _error_529() -> Reply:
     )
 
 
-def test_anthropic_overloaded_primary_falls_back_to_second_deployment(gateway: Gateway, tmp_path: Path) -> None:
+def test_overloaded_primary_falls_back_to_second_deployment(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"msg_fb_{uuid.uuid4().hex}"
     request_body: Final = cc.claude_code_request(f"cache-bust-{uuid.uuid4().hex}")
 

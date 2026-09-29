@@ -1,4 +1,4 @@
-"""Shared Claude Code-shaped request builders and upstream stream fixtures for the /v1/messages contracts."""
+"""Shared Claude Code-shaped request builders and upstream stream fixtures for integration contracts."""
 
 import json
 from collections.abc import Mapping

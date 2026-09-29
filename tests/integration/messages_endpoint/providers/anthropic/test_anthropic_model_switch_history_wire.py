@@ -4,11 +4,11 @@ from typing import Final
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 from pydantic import JsonValue
 
 
-def test_claude_code_mid_loop_model_switch_replays_history_byte_identical(gateway: Gateway) -> None:
+def test_mid_loop_model_switch_replays_history_byte_identical(gateway: Gateway) -> None:
     identity1: Final = f"msg_sw1_{uuid.uuid4().hex}"
     identity2: Final = f"msg_sw2_{uuid.uuid4().hex}"
     turn1: Final = cc.frontier_request(

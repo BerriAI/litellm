@@ -4,7 +4,7 @@ from typing import Final
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 
 
 def test_client_disconnect_mid_stream_still_bills_the_message(gateway: Gateway) -> None:

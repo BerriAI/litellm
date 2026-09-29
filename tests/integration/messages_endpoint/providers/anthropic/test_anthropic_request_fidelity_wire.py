@@ -4,12 +4,12 @@ from typing import Final
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 
 _MODEL: Final = cc.SONNET
 
 
-def test_claude_code_streaming_request_reaches_anthropic_intact_and_streams_back(gateway: Gateway) -> None:
+def test_streaming_request_reaches_anthropic_intact_and_streams_back(gateway: Gateway) -> None:
     identity: Final = f"msg_cc_{uuid.uuid4().hex}"
     request_body: Final = cc.claude_code_request(f"cache-bust-{uuid.uuid4().hex}")
     cli_beta: Final = frozenset(cc.CLI_BETA.split(","))

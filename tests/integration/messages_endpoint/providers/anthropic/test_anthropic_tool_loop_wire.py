@@ -4,7 +4,7 @@ from typing import Final
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 from pydantic import JsonValue
 
 _THINKING: Final = "need to read the file"
@@ -20,7 +20,7 @@ def _diff(expected: dict[str, JsonValue], body: dict[str, JsonValue]) -> dict[st
     }
 
 
-def test_claude_code_tool_loop_round_trips_thinking_tool_use_and_tool_result(gateway: Gateway) -> None:
+def test_tool_loop_round_trips_thinking_tool_use_and_tool_result(gateway: Gateway) -> None:
     identity1: Final = f"msg_tl1_{uuid.uuid4().hex}"
     identity2: Final = f"msg_tl2_{uuid.uuid4().hex}"
     turn1: Final = cc.frontier_request(
@@ -114,7 +114,7 @@ def test_claude_code_tool_loop_round_trips_thinking_tool_use_and_tool_result(gat
         assert rows[0]["prompt_tokens"] == 30
 
 
-def test_claude_code_parallel_tool_results_reach_anthropic_in_client_order(gateway: Gateway) -> None:
+def test_parallel_tool_results_reach_anthropic_in_client_order(gateway: Gateway) -> None:
     turn1: Final = cc.frontier_request(
         f"cache-bust-{uuid.uuid4().hex}",
         "high",

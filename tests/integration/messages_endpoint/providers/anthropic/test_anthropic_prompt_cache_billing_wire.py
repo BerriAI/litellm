@@ -5,7 +5,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 from pydantic import JsonValue
 
 _USAGE: Final = {
@@ -16,7 +16,7 @@ _USAGE: Final = {
 }
 
 
-def test_claude_code_cached_turn_charges_cache_read_and_creation_rates(gateway: Gateway) -> None:
+def test_cached_turn_charges_cache_read_and_creation_rates(gateway: Gateway) -> None:
     identity: Final = f"msg_pc_{uuid.uuid4().hex}"
     turn1: Final = cc.frontier_request(
         f"cache-bust-{uuid.uuid4().hex}",

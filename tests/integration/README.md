@@ -30,6 +30,8 @@ Streaming checks send real HTTP transfer chunks, including one-byte partitions, 
 
 The `messages_endpoint/` directory holds `/v1/messages` endpoint contracts: native-provider backends under `providers/` (`anthropic`, `bedrock`, `gemini`) and the translation bridges (`responses_bridge`, `chat_bridge`) at the top level. It runs in the providers shard; `run.py` selects test files recursively under each scheduled directory
 
+A provider folder holds only what depends on that provider's wire format: request and response fidelity, multi-turn history, request parameters, content types, and provider-specific pricing. Behavior every provider shares, such as fallback or billing after a client disconnect, lives in the feature directory it exercises (`routing/`, `streaming/`, `spend/`). `_support/claude_code.py` holds a captured Claude Code request and stream builders that any directory can use as a realistic agent payload
+
 The sdk shard exercises the SDK's own HTTP clients against local protocol peers with no gateway in the path, so a case here fails only when the client library or its wire behavior changes. The HTTP/2 case runs a hypercorn TLS peer offering h2 and http/1.1 over ALPN, drives the sync and async httpx handlers at it with `LITELLM_HTTP2` off and on, and asserts the version both the client and the peer observed on the wire. Put a test here only when it needs no proxy, database or Redis; a case that reaches the gateway belongs in one of the other shards
 
 The extensions shard uses the built-in generic callback and guardrail transports. It checks callback correlation and credential exclusion, guardrail rewriting and denial, retained OpenAI consumers and A2A wire versions

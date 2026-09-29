@@ -4,7 +4,7 @@ from typing import Final
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 
 WEB_SEARCH_TOOL: Final = {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
 
@@ -103,7 +103,7 @@ def _web_search_stream(identity: str) -> tuple[bytes, ...]:
     )
 
 
-def test_claude_code_web_search_tool_passthrough_and_cited_response(gateway: Gateway) -> None:
+def test_web_search_tool_passthrough_and_cited_response(gateway: Gateway) -> None:
     identity: Final = f"msg_ws_{uuid.uuid4().hex}"
     base: Final = cc.frontier_request(
         f"cache-bust-{uuid.uuid4().hex}",

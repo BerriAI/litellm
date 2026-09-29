@@ -5,7 +5,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
-from integration.messages_endpoint import _claude_code as cc
+from integration._support import claude_code as cc
 from pydantic import JsonValue
 
 
@@ -17,7 +17,7 @@ def _diff(expected: dict[str, JsonValue], body: dict[str, JsonValue]) -> dict[st
     }
 
 
-def test_claude_code_adaptive_thinking_and_effort_reach_anthropic_intact(gateway: Gateway) -> None:
+def test_adaptive_thinking_and_effort_reach_anthropic_intact(gateway: Gateway) -> None:
     identity: Final = f"msg_fable_{uuid.uuid4().hex}"
     request_body: Final = cc.frontier_request(f"cache-bust-{uuid.uuid4().hex}", "high", 64000)
     cli_beta: Final = frozenset(cc.FRONTIER_CLI_BETA.split(","))
@@ -63,7 +63,7 @@ def test_claude_code_adaptive_thinking_and_effort_reach_anthropic_intact(gateway
         assert rows[0]["prompt_tokens"] == 12 and rows[0]["completion_tokens"] == 4
 
 
-def test_claude_code_xhigh_effort_reaches_anthropic_and_charges_by_usage(gateway: Gateway) -> None:
+def test_xhigh_effort_reaches_anthropic_and_charges_by_usage(gateway: Gateway) -> None:
     identity: Final = f"msg_opus_{uuid.uuid4().hex}"
     request_body: Final = cc.frontier_request(f"cache-bust-{uuid.uuid4().hex}", "xhigh", 128000)
     cli_beta: Final = frozenset(cc.FRONTIER_CLI_BETA.split(","))
