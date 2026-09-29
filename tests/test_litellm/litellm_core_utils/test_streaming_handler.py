@@ -2079,6 +2079,94 @@ def test_stream_spend_prices_vertex_anthropic_without_cache_read():
     assert stream_spend >= token_total - 1e-12
 
 
+def test_vertex_chunk_creator_drops_zero_cost_and_prices_tokens():
+    """Vertex stream chunks can carry usage.cost=0 with real token counts.
+
+    chunk_creator must not keep that 0 as a provider total. Token pricing on
+    the assembled stream still has to be a positive spend.
+    """
+    logging_obj = Logging(
+        model="claude-opus-5",
+        messages=[{"role": "user", "content": "count to five"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="vertex-zero-cost-chunk",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "vertex_ai"
+    logging_obj.optional_params = {}
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="claude-opus-5",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai",
+    )
+    source_chunks = _vertex_anthropic_stream_chunks(cache_read=44616, prompt_tokens=70961, completion_tokens=4096)
+    zero_cost_usage = source_chunks[-1].usage.model_copy(update={"cost": 0})
+    zero_cost_chunk = ModelResponseStream(
+        id="chatcmpl-vertex-zero-cost",
+        created=1745513207,
+        model="claude-opus-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="Hi", role="assistant"),
+            )
+        ],
+        usage=zero_cost_usage,
+    )
+
+    processed = wrapper.chunk_creator(chunk=zero_cost_chunk)
+
+    assert processed is not None
+    assert processed.usage.prompt_tokens == 70961
+    assert processed.usage.completion_tokens == 4096
+    assert processed.usage.cache_read_input_tokens == 44616
+    assert getattr(processed.usage, "cost", None) in (None,)
+
+    priced_chunk = ModelResponseStream(
+        id="chatcmpl-vertex-priced",
+        created=1745513208,
+        model="claude-opus-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="Hi", role="assistant"),
+            )
+        ],
+        usage=zero_cost_usage.model_copy(update={"cost": 0.01}),
+    )
+    priced = wrapper.chunk_creator(chunk=priced_chunk)
+    assert priced is not None
+    assert priced.usage.cost == 0.01
+
+    complete_response = litellm.stream_chunk_builder(
+        chunks=[processed],
+        messages=[{"role": "user", "content": "count to five"}],
+        logging_obj=logging_obj,
+    )
+    assert complete_response is not None
+    token_prompt, token_completion = litellm.cost_per_token(
+        model="claude-opus-5",
+        custom_llm_provider="vertex_ai",
+        usage_object=complete_response.usage,
+    )
+    token_total = token_prompt + token_completion
+    assert token_total > 0
+    stream_spend = _stream_spend_via_logging(
+        complete_response,
+        model="claude-opus-5",
+        custom_llm_provider="vertex_ai",
+    )
+    assert stream_spend > 0
+    assert stream_spend >= token_total - 1e-12
+
+
 def test_handle_special_delta_attributes(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):

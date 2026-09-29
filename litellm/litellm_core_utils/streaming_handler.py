@@ -1658,7 +1658,27 @@ class CustomStreamWrapper:
                 self.tool_call = True
 
             if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+                attached_usage = chunk.usage
+                if self.custom_llm_provider == "vertex_ai":
+                    # The vertex_ai branch returns before cost propagation, so a
+                    # leftover usage.cost=0 would otherwise be copied here and
+                    # treated as a provider total. Resolve it the same way as
+                    # stream assembly: non-positive is absent, token pricing runs.
+                    raw_cost = (
+                        attached_usage.get("cost")
+                        if isinstance(attached_usage, dict)
+                        else getattr(attached_usage, "cost", None)
+                    )
+                    if raw_cost is not None and CustomStreamWrapper._resolve_provider_reported_cost(raw_cost) is None:
+                        if isinstance(attached_usage, dict):
+                            attached_usage = {key: value for key, value in attached_usage.items() if key != "cost"}
+                        elif hasattr(attached_usage, "model_copy"):
+                            attached_usage = attached_usage.model_copy(update={"cost": None})
+                            try:
+                                del attached_usage.cost
+                            except (AttributeError, TypeError):
+                                pass
+                model_response.usage = attached_usage
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
