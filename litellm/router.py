@@ -134,7 +134,7 @@ from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
-from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import (
     _get_tags_from_request_kwargs,
@@ -259,6 +259,7 @@ from litellm.router_utils.routing_groups import (
     parse_routing_groups,
     validate_routing_strategy,
 )
+from litellm.router_utils.routing_read_batch import RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
@@ -1789,6 +1790,7 @@ class Router:
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: dict | None,
+        prefetched_usage: PrefetchedUsage | None = None,
     ) -> Any | None:
         """
         Asks the strategy selector for a deployment. Caller handles
@@ -1813,6 +1815,14 @@ class Router:
                     healthy_deployments=healthy_deployments,
                     messages=messages,
                     input=input,
+                )
+            case "usage-based-routing-v2" if isinstance(selector, LowestTPMLoggingHandler_v2):
+                return await selector.async_get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    prefetched_usage=prefetched_usage,
                 )
             case "usage-based-routing-v2" | "cost-based-routing":
                 return await selector.async_get_available_deployments(
@@ -12925,6 +12935,7 @@ class Router:
         specific_deployment: bool | None = False,
         parent_otel_span: Span | None = None,
         health_check_probe: bool = False,
+        routing_read_batch: RoutingReadBatch | None = None,
     ) -> list[dict] | dict:
         """
         Get the healthy deployments for a model.
@@ -12977,8 +12988,14 @@ class Router:
             health_check_probe=health_check_probe,
         )
 
-        cooldown_deployments: Final = await _async_get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+        cooldown_deployments: Final = (
+            await _async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            if routing_read_batch is None
+            else await routing_read_batch.async_get_cooldown_deployments(
+                litellm_router_instance=self,
+                healthy_deployments=healthy_deployments,
+                parent_otel_span=parent_otel_span,
+            )
         )
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug("cooldown deployments: %s", cooldown_deployments)
@@ -13256,6 +13273,7 @@ class Router:
             # the hook can replace `model` and routing-group lookup must key
             # off the final model name.
             strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
+            routing_read_batch: Final = RoutingReadBatch.for_strategy(strategy, strategy_selector)
 
             healthy_deployments: Final = await self.async_get_healthy_deployments(
                 model=model,
@@ -13264,6 +13282,7 @@ class Router:
                 input=input,
                 specific_deployment=specific_deployment,
                 parent_otel_span=parent_otel_span,
+                routing_read_batch=routing_read_batch,
             )
             if isinstance(healthy_deployments, dict):
                 await self._async_override_selector_pre_call_check(
@@ -13294,6 +13313,7 @@ class Router:
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                prefetched_usage=routing_read_batch.prefetched_usage if routing_read_batch is not None else None,
             )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
