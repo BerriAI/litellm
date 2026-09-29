@@ -12,6 +12,7 @@ from litellm.repositories.table_repositories import DailyModelUsageRepository
 from litellm.types.model_insights import (
     ModelInsightDailyMetric,
     ModelInsightMetric,
+    ModelInsightsMetric,
     ModelInsightsResponse,
     ModelInsightTaskMetric,
 )
@@ -79,12 +80,23 @@ def _metric(row: _GroupedModel) -> ModelInsightMetric:
     )
 
 
-def _total_tokens(row: _GroupedModel) -> int:
+def _rank_value(row: _GroupedModel, metric: ModelInsightsMetric) -> float:
+    if metric == "requests":
+        return row.sums.request_count
+    if metric == "spend":
+        return row.sums.spend
     return row.sums.prompt_tokens + row.sums.completion_tokens
 
 
-def _top_model_rows(rows: list[_GroupedModel]) -> list[_GroupedModel]:
-    return sorted(rows, key=_total_tokens, reverse=True)[:MODEL_INSIGHTS_TOP_MODELS]
+def _top_model_rows(rows: list[_GroupedModel], metric: ModelInsightsMetric) -> list[_GroupedModel]:
+    return sorted(rows, key=lambda row: _rank_value(row, metric), reverse=True)[:MODEL_INSIGHTS_TOP_MODELS]
+
+
+def _deployment_filter(rows: list[_GroupedModel]) -> list[dict[str, str]]:
+    return [
+        {"model_group": row.model_group, "model": row.model, "custom_llm_provider": row.custom_llm_provider}
+        for row in rows
+    ]
 
 
 def _daily_metric(row: _GroupedDaily) -> ModelInsightDailyMetric:
@@ -105,6 +117,7 @@ async def get_model_insights(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     start_date: Annotated[str | None, Query(description="YYYY-MM-DD, defaults to 365 days ago")] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD, defaults to today")] = None,
+    metric: Annotated[ModelInsightsMetric, Query(description="Metric the top models are ranked by")] = "tokens",
 ) -> ModelInsightsResponse:
     from litellm.proxy.proxy_server import prisma_client
 
@@ -129,9 +142,8 @@ async def get_model_insights(
             where=date_window,
         )
     )
-    model_rows: Final = _top_model_rows(grouped_model_rows)
-    selected_models: Final = [row.model_group for row in model_rows]
-    selected_window: Final = {**date_window, "model_group": {"in": selected_models}}
+    model_rows: Final = _top_model_rows(grouped_model_rows, metric)
+    selected_window: Final = {**date_window, "OR": _deployment_filter(model_rows)}
     daily_rows: Final = _DAILY_ROWS.validate_python(
         await table.group_by(
             by=["date", "model_group", "model", "custom_llm_provider"],
@@ -139,7 +151,7 @@ async def get_model_insights(
             where=selected_window,
             order={"date": "asc"},
         )
-        if selected_models
+        if model_rows
         else []
     )
     task_rows: Final = _TASK_ROWS.validate_python(
@@ -149,7 +161,7 @@ async def get_model_insights(
             where=selected_window,
             order={"_sum": {"completion_tokens": "desc"}},
         )
-        if selected_models
+        if model_rows
         else []
     )
     return ModelInsightsResponse(
