@@ -12755,6 +12755,10 @@ def _make_regenerate_mock_prisma():
         return_value=None
     )
     mock_prisma_client.jsonify_object = MagicMock(side_effect=lambda data: data)
+    mock_prisma_client.tx = MagicMock()
+    mock_prisma_client.tx.return_value.__aenter__.return_value = mock_prisma_client.db
+    mock_prisma_client.db.litellm_scimsource.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=_make_regenerate_existing_key())
     return mock_prisma_client
 
 
@@ -14823,6 +14827,11 @@ async def test_execute_virtual_key_regeneration_cache_invalidation_with_token_ha
         return_value=None
     )
     mock_prisma_client.jsonify_object = MagicMock(side_effect=lambda data: data)
+    mock_prisma_client.tx = MagicMock()
+    mock_prisma_client.tx.return_value.__aenter__.return_value = mock_prisma_client.db
+    mock_prisma_client.db.litellm_scimsource.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key)
+
 
     mock_user_api_key_cache = MagicMock()
     mock_proxy_logging_obj = MagicMock()
@@ -21154,3 +21163,79 @@ async def test_unbound_scim_key_can_still_regenerate():
             )
     assert result.key is not None
     client.db.litellm_verificationtoken.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("routes", [None, [], ["/*"], ["/scim/*", "/key/info"]])
+async def test_key_update_endpoint_preserves_source_token_restriction(monkeypatch, routes):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    key = _make_regenerate_existing_key().model_copy(update={"allowed_routes": ["/scim/*"]})
+    _wire_update_key_fn(monkeypatch, key)
+    client = proxy_server.prisma_client
+    client.writer_db.litellm_scimsource.find_unique = AsyncMock(return_value=SimpleNamespace(source_id="source"))
+    request = MagicMock()
+    request.query_params = {}
+    with pytest.raises(ProxyException) as denied:
+        await update_key_fn(
+            request=request, data=UpdateKeyRequest(key=key.token, allowed_routes=routes),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(), litellm_changed_by=None,
+        )
+    assert str(denied.value.code) == "409"
+    client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_regeneration_rechecks_source_binding_before_transaction_writes():
+    from types import SimpleNamespace
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import _execute_virtual_key_regeneration
+
+    client = _make_regenerate_mock_prisma()
+    client.writer_db.litellm_scimsource.find_unique = AsyncMock(return_value=None)
+    tx = AsyncMock()
+    client.tx = MagicMock()
+    client.tx.return_value.__aenter__.return_value = tx
+    tx.litellm_scimsource.find_unique.return_value = SimpleNamespace(source_id="concurrent-source")
+    key = _make_regenerate_existing_key().model_copy(update={"allowed_routes": ["/scim/*"]})
+    tx.litellm_verificationtoken.find_unique.return_value = key
+    with _patch_regenerate_side_effects():
+        with pytest.raises(HTTPException) as denied:
+            await _execute_virtual_key_regeneration(
+                prisma_client=client, key_in_db=key, hashed_api_key=key.token, key="sk-original", data=None,
+                user_api_key_dict=_make_regenerate_user_api_key_dict(), litellm_changed_by=None,
+                user_api_key_cache=MagicMock(), proxy_logging_obj=MagicMock(),
+            )
+    assert denied.value.status_code == 409
+    tx.litellm_verificationtoken.update.assert_not_awaited()
+    tx.litellm_deletedverificationtoken.create_many.assert_not_awaited()
+    client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound,routes,missing,expected", [(True, ["/*"], False, 409), (True, ["/scim/*"], False, None), (False, [], False, None), (False, [], True, 409)])
+async def test_route_write_rechecks_binding_and_preserves_supported_updates(bound, routes, missing, expected):
+    from types import SimpleNamespace
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import _update_key_row_with_soft_budget
+
+    client = _make_regenerate_mock_prisma()
+    key = _make_regenerate_existing_key().model_copy(update={"allowed_routes": ["/scim/*"]})
+    tx = client.db
+    tx.litellm_scimsource.find_unique.return_value = SimpleNamespace(source_id="source") if bound else None
+    tx.litellm_verificationtoken.find_unique.return_value = None if missing else key
+    tx.litellm_verificationtoken.update.return_value = key.model_copy(update={"allowed_routes": routes})
+    request = UpdateKeyRequest(key=key.token, allowed_routes=routes)
+    write = _update_key_row_with_soft_budget(client, key.token, request, {"allowed_routes": routes}, key, "admin")
+    if expected:
+        with pytest.raises(HTTPException) as denied:
+            await write
+        assert denied.value.status_code == expected
+        tx.litellm_verificationtoken.update.assert_not_awaited()
+    else:
+        response = await write
+        assert response["data"]["allowed_routes"] == routes
+    tx.litellm_budgettable.update.assert_not_awaited()

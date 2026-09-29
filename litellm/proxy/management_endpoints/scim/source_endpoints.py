@@ -4,7 +4,7 @@ from typing import Annotated, Final
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from prisma import Json
+from prisma import Json, Prisma
 from prisma.types import (
     LiteLLM_SCIMSourceCreateInput,
     LiteLLM_SCIMSourceOrderByInput,
@@ -62,6 +62,10 @@ async def list_sources(auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth
     return tuple(source_response(source) for source in sources)
 
 
+async def lock_provisioning_token(tx: Prisma, token_hash: str) -> None:
+    await tx.execute_raw('SELECT 1 FROM "LiteLLM_VerificationToken" WHERE token = $1 FOR UPDATE', token_hash)
+
+
 @router.post("", response_model=SCIMSourceResponse, status_code=201)
 async def create_source(
     data: SCIMSourceCreate, auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
@@ -71,6 +75,7 @@ async def create_source(
     token_hash: Final = hash_token(data.provisioning_token.get_secret_value())
     source_filter: Final[LiteLLM_SCIMSourceWhereUniqueInput] = {"key_hash": token_hash}
     async with client.tx() as tx:
+        await lock_provisioning_token(tx, token_hash)
         key: Final = await VerificationTokenRepository(SimpleNamespace(db=tx)).table.find_unique(
             where=LiteLLM_VerificationTokenWhereUniqueInput(token=token_hash)
         )
