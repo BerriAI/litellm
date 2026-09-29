@@ -3682,31 +3682,70 @@ def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_r
         ) == pytest.approx(expected)
 
 
-def test_completion_cost_mantle_native_messages_prices_haiku_from_the_mantle_row(_local_model_cost_map):
-    """Mantle serves Anthropic's un-versioned haiku id, which has no bare Bedrock row (Bedrock's carries
-    the -20251001-v1:0 suffix), and Claude Code sends every small-fast-model call to it. Both the plain
-    and the region-prefixed deployment names must price from bedrock_mantle/anthropic.claude-haiku-4-5
-    instead of billing $0."""
+@pytest.mark.parametrize(
+    "response_model,mantle_row,deployment_models",
+    [
+        (
+            "claude-haiku-4-5",
+            "bedrock_mantle/anthropic.claude-haiku-4-5",
+            (
+                "bedrock_mantle/anthropic.claude-haiku-4-5",
+                "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
+            ),
+        ),
+        (
+            "claude-opus-5-5",
+            "bedrock_mantle/anthropic.claude-opus-5-5",
+            ("bedrock_mantle/anthropic.claude-opus-5-5",),
+        ),
+        (
+            "claude-sonnet-5-5",
+            "bedrock_mantle/anthropic.claude-sonnet-5-5",
+            ("bedrock_mantle/anthropic.claude-sonnet-5-5",),
+        ),
+    ],
+)
+def test_completion_cost_mantle_native_messages_prices_unversioned_claude_from_the_mantle_row(
+    _local_model_cost_map, response_model, mantle_row, deployment_models
+):
+    """Mantle serves Anthropic's un-versioned Claude ids; the plain and region-prefixed deployment
+    names must price from the model's own bedrock_mantle/ row instead of billing $0."""
 
     response = litellm.ModelResponse(
         id="msg_x",
         choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="claude-haiku-4-5",
+        model=response_model,
         usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
     )
-    row = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]
+    row = litellm.model_cost[mantle_row]
     expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
     assert expected > 0
 
-    for model in (
-        "bedrock_mantle/anthropic.claude-haiku-4-5",
-        "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
-    ):
+    for model in deployment_models:
         assert litellm.completion_cost(
             completion_response=response,
             model=model,
             custom_llm_provider="bedrock_mantle",
         ) == pytest.approx(expected), model
+
+
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
+def test_cost_per_token_gov_region_prices_mantle_claude_on_the_gov_row(_local_model_cost_map, model):
+    """A bedrock_mantle/ deployment in us-gov-west-1 must price from the
+    bedrock_mantle/us-gov-west-1/<model> row."""
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=f"bedrock_mantle/{model}",
+        prompt_tokens=38,
+        completion_tokens=20,
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+    gov = litellm.model_cost[f"bedrock_mantle/us-gov-west-1/{model}"]
+
+    assert prompt_cost + completion_cost == pytest.approx(
+        38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    )
 
 
 def test_completion_cost_legacy_mantle_route_prices_after_router_registration(local_model_cost_map):
