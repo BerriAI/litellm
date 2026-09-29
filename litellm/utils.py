@@ -4857,7 +4857,7 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
     elif custom_llm_provider == "bedrock_mantle":
-        optional_params = litellm.BedrockMantleChatConfig().map_openai_params(
+        optional_params = ProviderConfigManager._get_bedrock_mantle_config(model).map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -8425,8 +8425,8 @@ class ProviderConfigManager:
             LlmProviders.TENCENT: (lambda: litellm.TencentChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
             LlmProviders.BEDROCK_MANTLE: (
-                lambda: litellm.BedrockMantleChatConfig(),
-                False,
+                lambda model: ProviderConfigManager._get_bedrock_mantle_config(model),
+                True,
             ),
             LlmProviders.A2A: (lambda: litellm.A2AConfig(), False),
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
@@ -8614,6 +8614,12 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_bedrock_mantle_config(model: str) -> BaseConfig:
+        from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
+
+        return bedrock_mantle_chat_config(model)
 
     @staticmethod
     def _get_cohere_config(model: str) -> BaseConfig:

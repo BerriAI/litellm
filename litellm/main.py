@@ -117,6 +117,7 @@ from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -2188,7 +2189,7 @@ def _complete_bedrock_mantle(
     api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
     api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
     headers = headers or litellm.headers
-    config: Final = litellm.BedrockMantleChatConfig.get_config()
+    config: Final = bedrock_mantle_chat_config(model).get_config()
     for k, v in _provider_config_items(config):
         if k not in optional_params:
             optional_params[k] = v

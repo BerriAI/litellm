@@ -818,6 +818,145 @@ class TestBedrockMantleProviderResolution:
         )
 
 
+def _anthropic_message(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        json={
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        },
+        request=request,
+    )
+
+
+def _anthropic_event_stream(request: httpx.Request) -> httpx.Response:
+    events = (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "anthropic.claude-opus-5-5",
+                    "content": [],
+                    "usage": {"input_tokens": 10, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "streamed"}},
+        ),
+        (
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+    body = "".join(f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events)
+    return httpx.Response(
+        status_code=200, content=body.encode(), headers={"content-type": "text/event-stream"}, request=request
+    )
+
+
+class TestBedrockMantleClaudeChatRoute:
+    def test_claude_completion_uses_native_messages_endpoint(self, monkeypatch, local_cost_map):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "mantle-key")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        handler = Mock(side_effect=_anthropic_message)
+
+        response = litellm.completion(
+            model="bedrock_mantle/anthropic.claude-opus-5-5",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=64,
+            aws_region_name="us-east-2",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        sent = handler.call_args.args[0]
+        opus = litellm.model_cost["anthropic.claude-opus-5-5"]
+        assert str(sent.url) == "https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages"
+        assert sent.headers["Authorization"] == "Bearer mantle-key"
+        assert json.loads(sent.content) == {
+            "model": "anthropic.claude-opus-5-5",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+            "max_tokens": 64,
+            "anthropic_version": "bedrock-2023-05-31",
+        }
+        assert response.choices[0].message.content == "ok"
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            10 * opus["input_cost_per_token"] + 5 * opus["output_cost_per_token"]
+        )
+
+    def test_claude_streaming_completion_uses_native_messages_endpoint(self, monkeypatch, local_cost_map):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "mantle-key")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        handler = Mock(side_effect=_anthropic_event_stream)
+
+        stream = litellm.completion(
+            model="bedrock_mantle/anthropic.claude-opus-5-5",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=64,
+            stream=True,
+            aws_region_name="us-east-2",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+        text = "".join(chunk.choices[0].delta.content or "" for chunk in stream)
+
+        sent = handler.call_args.args[0]
+        assert str(sent.url) == "https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages"
+        assert json.loads(sent.content)["stream"] is True
+        assert text == "streamed"
+
+    def test_non_claude_completion_stays_on_chat_completions(self, monkeypatch, local_cost_map):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "mantle-key")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        handler = Mock(
+            side_effect=lambda request: httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "openai.gpt-oss-120b",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+                request=request,
+            )
+        )
+
+        response = litellm.completion(
+            model="bedrock_mantle/openai.gpt-oss-120b",
+            messages=[{"role": "user", "content": "hello"}],
+            aws_region_name="us-east-2",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        sent = handler.call_args.args[0]
+        assert str(sent.url) == "https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions"
+        assert response.choices[0].message.content == "ok"
+
+
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
 
