@@ -1123,3 +1123,37 @@ def test_initialize_guardrail_sets_hook_timeout_without_touching_provider_timeou
         assert stored.timeout == 10.0
     finally:
         registry_module.guardrail_initializer_registry.pop("hook_timeout_test", None)
+
+
+class _SelfBoundedGuardrail(CustomGuardrail):
+    enforces_own_timeout = True
+
+
+def test_initialize_guardrail_leaves_hook_timeout_unset_for_a_self_bounded_guardrail():
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return _SelfBoundedGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    registry_module.guardrail_initializer_registry["self_bounded_test"] = _initializer
+    try:
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "self-bounded",
+                "litellm_params": {"guardrail": "self_bounded_test", "mode": "pre_call", "timeout": 2},
+            },
+        )
+
+        assert handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]].hook_timeout is None
+    finally:
+        registry_module.guardrail_initializer_registry.pop("self_bounded_test", None)
+
+
+def test_custom_code_guardrail_enforces_its_own_timeout():
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeGuardrail
+
+    assert CustomCodeGuardrail.enforces_own_timeout is True

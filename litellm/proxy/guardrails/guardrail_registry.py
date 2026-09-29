@@ -459,7 +459,9 @@ def _configure_callback_scoping(
             "scanning, so no request content would ever be scanned. Remove one of the two."
         )
     _apply_configured_bool_overrides(custom_guardrail_callback, litellm_params)
-    custom_guardrail_callback.hook_timeout = litellm_params.timeout
+    custom_guardrail_callback.hook_timeout = (
+        None if custom_guardrail_callback.enforces_own_timeout else litellm_params.timeout
+    )
     custom_guardrail_callback.hook_timeout_fallback = litellm_params.unreachable_fallback
 
 

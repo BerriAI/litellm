@@ -41,7 +41,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
 from pydantic import Field
@@ -137,6 +137,8 @@ class CustomCodeGuardrail(CustomGuardrail):
                     return block("Sensitive content detected")
             return allow()
     """
+
+    enforces_own_timeout: ClassVar[bool] = True
 
     def __init__(
         self,

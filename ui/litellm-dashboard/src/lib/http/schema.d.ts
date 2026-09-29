@@ -25495,7 +25495,7 @@ export interface components {
             template_id?: string | null;
             /**
              * Timeout
-             * @description Maximum seconds one non-streaming guardrail check may take, covering every call it makes. On expiry the check fails with a 408 timeout, or is skipped when unreachable_fallback='fail_open'. Streaming response hooks are not bounded by it. Some handlers also apply it to their provider HTTP call. Accepts int, float, or numeric string; coerced to float on load. Unset means no proxy-side limit; provider HTTP client defaults still apply.
+             * @description Maximum seconds one non-streaming guardrail check may take, covering every call it makes. On expiry the check fails with a 408 timeout, or is skipped when unreachable_fallback='fail_open'. Streaming response hooks are not bounded by it. Some handlers also apply it to their provider HTTP call; custom_code applies it as its own execution timeout instead. Accepts int, float, or numeric string; coerced to float on load. Unset means no proxy-side limit; provider HTTP client defaults still apply.
              */
             timeout?: number | null;
             /**
@@ -34707,7 +34707,7 @@ export interface components {
             tenant_id?: string | null;
             /**
              * Timeout
-             * @description Maximum seconds one non-streaming guardrail check may take, covering every call it makes. On expiry the check fails with a 408 timeout, or is skipped when unreachable_fallback='fail_open'. Streaming response hooks are not bounded by it. Some handlers also apply it to their provider HTTP call. Accepts int, float, or numeric string; coerced to float on load. Unset means no proxy-side limit; provider HTTP client defaults still apply.
+             * @description Maximum seconds one non-streaming guardrail check may take, covering every call it makes. On expiry the check fails with a 408 timeout, or is skipped when unreachable_fallback='fail_open'. Streaming response hooks are not bounded by it. Some handlers also apply it to their provider HTTP call; custom_code applies it as its own execution timeout instead. Accepts int, float, or numeric string; coerced to float on load. Unset means no proxy-side limit; provider HTTP client defaults still apply.
              */
             timeout?: number | null;
             /**

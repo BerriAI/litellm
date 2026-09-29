@@ -233,6 +233,9 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
+    # If True, this guardrail bounds itself by litellm_params.timeout, so the proxy sets no hook_timeout for it.
+    enforces_own_timeout: ClassVar[bool] = False
+
     hook_timeout: float | None = None
     hook_timeout_fallback: Literal["fail_closed", "fail_open"] = "fail_closed"
 
