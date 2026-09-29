@@ -35,9 +35,15 @@ def _matching_llm_spans(
 
 def _arize_config(tmp_path: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["litellm_settings"]["callbacks"] = ["arize"]
+    arize_config: Final = {
+        **config,
+        "litellm_settings": {
+            **config["litellm_settings"],
+            "callbacks": ["arize"],
+        },
+    }
     config_path: Final = tmp_path / "arize-otel-v2.yaml"
-    config_path.write_text(yaml.safe_dump(config))
+    config_path.write_text(yaml.safe_dump(arize_config))
     return config_path
 
 
@@ -74,13 +80,11 @@ def _matching_span(
     marker: str,
     marker_key: str = "gen_ai.response.id",
 ) -> dict[str, str]:
-    batches: Final[list[Request]] = []
-
-    def matching_spans() -> tuple[dict[str, str], ...]:
-        batches.extend(destination.drain())
-        return tuple(_matching_llm_spans(tuple(batches), marker, marker_key))
-
-    return eventually(matching_spans, lambda spans: len(spans) == 1, seconds=30)[0]
+    return eventually(
+        lambda: tuple(_matching_llm_spans(destination.drain(), marker, marker_key)),
+        lambda spans: len(spans) == 1,
+        seconds=30,
+    )[0]
 
 
 def _assert_tool_call_span(span_attributes: dict[str, str], marker: str) -> None:
