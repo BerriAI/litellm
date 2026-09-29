@@ -967,19 +967,24 @@ class TestLoggingOnlyScopeValidation:
         scope: LoggingOnlyScope | None,
         callback_type: type[CustomGuardrail] = _LoggingOnlyScopeSupportedGuardrail,
     ) -> CustomGuardrail:
+        import litellm
         from litellm.proxy.guardrails import guardrail_registry as registry_module
 
         guardrail_type: Final = "logging_only_scope_test"
+        created_callbacks: Final[list[CustomGuardrail]] = []
 
         def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
             supported_event_hooks: Final = (
                 [GuardrailEventHooks.logging_only] if callback_type.use_native_lifecycle_hooks else None
             )
-            return callback_type(
+            callback: Final = callback_type(
                 guardrail_name=guardrail["guardrail_name"],
                 event_hook=litellm_params.mode,
                 supported_event_hooks=supported_event_hooks,
             )
+            litellm.logging_callback_manager.add_litellm_callback(callback)
+            created_callbacks.append(callback)
+            return callback
 
         registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
         lists: Final = _all_callback_lists()
@@ -1000,6 +1005,10 @@ class TestLoggingOnlyScopeValidation:
             callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
             assert callback is not None
             return callback
+        except ValueError:
+            callback: Final = created_callbacks[0]
+            assert all(callback not in callback_list for callback_list in lists)
+            raise
         finally:
             for callback_list, snapshot in zip(lists, snapshots):
                 callback_list[:] = snapshot

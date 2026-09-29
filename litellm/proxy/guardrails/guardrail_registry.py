@@ -558,8 +558,13 @@ class InMemoryGuardrailHandler:
             config_file_path=config_file_path,
             llm_router=llm_router,
         )
-        for custom_guardrail_callback in created_callbacks:
-            _configure_callback_scoping(custom_guardrail_callback, guardrail["guardrail_name"], litellm_params)
+        try:
+            for custom_guardrail_callback in created_callbacks:
+                _configure_callback_scoping(custom_guardrail_callback, guardrail["guardrail_name"], litellm_params)
+        except Exception:
+            for custom_guardrail_callback in created_callbacks:
+                litellm.logging_callback_manager.remove_callback_from_all_lists(custom_guardrail_callback)
+            raise
 
         parsed_guardrail: Final = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),

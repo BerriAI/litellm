@@ -1391,3 +1391,62 @@ def test_logging_only_scope_observes_only_the_configured_direction_without_block
                 return_last_on_timeout=True,
             )
             assert detail["requestsEvaluated"] == len(scanned_directions), detail
+
+
+def test_logging_only_scope_without_logging_only_mode_is_skipped_at_load_and_never_blocks(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    prompt: Final = "synthetic invalid-scope prompt " + identity
+    reply: Final = "synthetic invalid-scope reply " + identity
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api"
+        return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": "synthetic policy denial"}).encode())
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions"
+        assert json.loads(request.body)["messages"] == [{"role": "user", "content": prompt}]
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": identity,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "mode": "pre_call",
+                    "logging_only_scope": "input",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-guardrail-key",
+                },
+            }
+        ]
+        path: Final = tmp_path / "invalid-scope-pre-call.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1")
+            response: Final = candidate.request(
+                "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["choices"][0]["message"]["content"] == reply, response.text
+            assert len(policy.drain()) == 0
+            assert len(upstream.drain()) == 1
+            guardrails: Final = candidate.get("/v2/guardrails/list")["guardrails"]
+            assert all(object_value(row)["guardrail_name"] != identity for row in guardrails), guardrails
