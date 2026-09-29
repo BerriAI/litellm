@@ -472,6 +472,10 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
     )
 
 
+def is_router_resolved_model_cost_zero(model: str | list[str] | None, llm_router: Router | None) -> bool:
+    return _is_model_cost_zero(model=model, llm_router=llm_router)
+
+
 def is_requested_model_cost_zero(model: str | list[str] | None, llm_router: Router | None) -> bool:
     if llm_router is None:
         return False

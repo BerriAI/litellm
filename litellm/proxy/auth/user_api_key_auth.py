@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_dispatched_model_cost_zero,
     is_requested_model_cost_zero,
+    is_router_resolved_model_cost_zero,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
     key_model_aliases_for_auth_check,
@@ -3160,6 +3161,8 @@ async def _is_dispatched_model_cost_zero(
     request: Request | None,
     route: str,
 ) -> bool:
+    if route in LiteLLMRoutes.litellm_native_routes.value:
+        return is_router_resolved_model_cost_zero(model=model, llm_router=llm_router)
     if not RouteChecks.is_unified_llm_api_route(route):
         return is_requested_model_cost_zero(model=model, llm_router=llm_router)
 

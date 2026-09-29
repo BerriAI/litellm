@@ -1881,10 +1881,14 @@ async def test_budget_skip_judges_the_model_the_key_aliases_dispatch_to(
         ("/anthropic/v1/messages", "my-alias", {"my-alias": "free-model"}, None, False),
         ("/anthropic/v1/messages", "rs-alias", {}, {"model_group_alias": {"rs-alias": "free-model"}}, False),
         ("/anthropic/v1/messages", "free-model", {"free-model": "paid-model"}, None, True),
-        ("/rag/query", "free-alias", {}, None, False),
+        ("/rag/query", "free-alias", {}, None, True),
+        ("/v1/rag/query", "free-alias", {}, None, True),
+        ("/rag/query", "my-alias", {"my-alias": "free-model"}, None, False),
+        ("/rag/query", "rs-alias", {}, {"model_group_alias": {"rs-alias": "free-model"}}, False),
+        ("/rag/query", "free-model", {"free-model": "paid-model"}, None, True),
     ],
 )
-async def test_budget_skip_prices_the_requested_name_on_routes_that_forward_it_unaliased(
+async def test_budget_skip_off_the_unified_routes_prices_the_model_each_route_dispatches(
     route: str,
     model: str,
     key_aliases: dict[str, str],
