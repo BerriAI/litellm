@@ -67,7 +67,9 @@ class AccessControlClient:
     proxy: ProxyClient
 
     def llm_only_key(self) -> str:
-        return self.proxy.generate_key(KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"]))
+        return self.proxy.generate_key(
+            KeyGenerateBody(models=[], allowed_routes=["llm_api_routes"])
+        )
 
     def delete_key(self, key: str) -> None:
         self.proxy.delete_key(key)
