@@ -658,7 +658,6 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.LlamafileChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "llmman":
-        # llmman is OpenAI compatible.
         (
             api_base,
             dynamic_api_key,
