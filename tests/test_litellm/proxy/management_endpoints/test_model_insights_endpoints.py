@@ -113,7 +113,7 @@ def test_model_insights_ranks_top_models_by_selected_metric() -> None:
     assert by_tokens["top_models"][0]["model_group"] == "big"
 
 
-def test_model_insights_filters_detail_queries_to_ranked_deployments() -> None:
+def test_model_insights_scopes_daily_to_ranked_deployments_but_tasks_to_all_usage() -> None:
     ranked = _grouped_row(model_group="shared", model="m1", custom_llm_provider="openai")
     table = MagicMock()
     table.group_by = AsyncMock(side_effect=[[ranked], [], []])
@@ -122,10 +122,23 @@ def test_model_insights_filters_detail_queries_to_ranked_deployments() -> None:
 
     daily_where = table.group_by.await_args_list[1].kwargs["where"]
     task_where = table.group_by.await_args_list[2].kwargs["where"]
-    expected = [{"model_group": "shared", "model": "m1", "custom_llm_provider": "openai"}]
-    assert daily_where["OR"] == expected
-    assert task_where["OR"] == expected
+    assert daily_where["OR"] == [{"model_group": "shared", "model": "m1", "custom_llm_provider": "openai"}]
     assert "model_group" not in daily_where
+    assert "OR" not in task_where
+    assert task_where["date"] == daily_where["date"]
+
+
+def test_model_insights_task_breakdown_does_not_change_with_the_chart_metric() -> None:
+    def rows() -> list[list[dict[str, object]]]:
+        a = _grouped_row(model_group="a", model="m1", custom_llm_provider="openai")
+        b = _grouped_row(model_group="b", model="m2", custom_llm_provider="openai")
+        task = _grouped_row(task_type="debugging", model_group="b", model="m2", custom_llm_provider="openai")
+        return [[a, b], [], [task]]
+
+    by_tokens = _call(MagicMock(group_by=AsyncMock(side_effect=rows())), "metric=tokens").json()
+    by_requests = _call(MagicMock(group_by=AsyncMock(side_effect=rows())), "metric=requests").json()
+
+    assert by_tokens["by_task"] == by_requests["by_task"]
 
 
 def test_model_insights_rejects_unknown_metric() -> None:
@@ -150,7 +163,7 @@ class _InMemoryUsageTable:
         for row in self.rows.values():
             if not where["date"]["gte"] <= row["date"] <= where["date"]["lte"]:
                 continue
-            if "OR" in where and not any(all(row[k] == v for k, v in option.items()) for option in where["OR"]):
+            if where.get("OR") and not any(all(row[k] == v for k, v in option.items()) for option in where["OR"]):
                 continue
             bucket = grouped.setdefault(tuple(row[k] for k in by), {**{k: row[k] for k in by}, "_sum": {}})
             for field in sum:
