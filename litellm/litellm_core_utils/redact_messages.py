@@ -233,9 +233,7 @@ def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
         else next(
             (
                 slot["turn_off_message_logging"]
-                for _, slot in iter_client_callback_metadata_dicts(
-                    cast(dict[str, Any], request_data)  # cast-ok: the helper only reads mapping keys
-                )
+                for _, slot in iter_client_callback_metadata_dicts(dict(request_data))
                 if "turn_off_message_logging" in slot
             ),
             None,
