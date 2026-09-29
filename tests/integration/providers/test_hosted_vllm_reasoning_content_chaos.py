@@ -8,7 +8,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
+from types import MappingProxyType
 from typing import Final, Literal
+from urllib.parse import urlsplit
 
 import httpx
 import psutil
@@ -330,6 +332,15 @@ def _chaos_config(wire: Wire, tmp_path: Path) -> Path:
     return path
 
 
+def _open_upstream_connections(pid: int, upstream: str) -> int:
+    port: Final = urlsplit(upstream).port
+    return sum(
+        1
+        for connection in psutil.Process(pid).net_connections(kind="tcp")
+        if connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == port
+    )
+
+
 @pytest.mark.timeout(180)
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_forwarding_reasoning(
     gateway: Gateway, tmp_path: Path
@@ -360,11 +371,16 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_forwarding_reasoning(
                 )
             )
             await asyncio.to_thread(eventually, held_markers.qsize, lambda size: size == 20, 60)
-            victim: Final = psutil.Process(workers[0])
+            held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
+            assert sum(held_by.values()) == 20, held_by
+            victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
+            victim: Final = psutil.Process(victim_pid)
             victim.suspend()
             victim.send_signal(signal.SIGKILL)
             release.set()
             served: Final = await burst
+            assert held_by[survivor_pid] >= 10, held_by
+            assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for item in served:
                 _assert_answered_with_its_own_marker(item)
             follow_up: Final = _Call(endpoint="chat", stream=False, marker=uuid.uuid4().hex)
