@@ -236,6 +236,9 @@ fn notification_result(
 
 fn retain_event(py: Python<'_>, event: PythonCallEvent<'_>) -> OwnedEvent {
     match event {
+        CallEvent::Execution(ExecutionEvent::ResultReady { facts }) => {
+            CallEvent::Execution(ExecutionEvent::ResultReady { facts })
+        }
         CallEvent::Started { start_time } => CallEvent::Started { start_time },
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
             CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw: raw.clone() })
@@ -263,6 +266,12 @@ fn dispatch(
     event: &OwnedEvent,
 ) -> PyResult<ChainStep<()>> {
     match event {
+        CallEvent::Execution(ExecutionEvent::ResultReady { facts }) => hooks.on_event(
+            py,
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: facts.clone(),
+            }),
+        ),
         CallEvent::Started { start_time } => hooks.on_event(
             py,
             CallEvent::Started {
@@ -350,10 +359,10 @@ impl CallHooks<PythonRuntime> for HookChain {
         Ok(HookStep::Ready(()))
     }
 
-    fn on_stream_open(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn on_stream_open(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
         self.hooks
             .iter_mut()
-            .try_for_each(|hooks| hooks.on_stream_open(py))
+            .try_for_each(|hooks| hooks.on_stream_open(py, head))
     }
 
     fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {

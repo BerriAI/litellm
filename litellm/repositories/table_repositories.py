@@ -212,6 +212,10 @@ class DailyToolSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_Dail
     table_name = "litellm_dailytoolspend"
 
 
+class DailyModelUsageRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyModelUsage"]):
+    table_name = "litellm_dailymodelusage"
+
+
 class SpendLogGuardrailIndexRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogGuardrailIndex"]):
     table_name = "litellm_spendlogguardrailindex"
 

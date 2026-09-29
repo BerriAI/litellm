@@ -20,7 +20,7 @@ fn run_public(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     use super::inference::InferenceHost;
-    use litellm_types::Operation;
+    use litellm_callbacks_legacy_python::LoggingOperation;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.responses.route_host",
@@ -63,9 +63,15 @@ fn run_public(
             "native Python responses streaming",
         ));
     }
+    let cache_call_type = if asynchronous {
+        "aresponses"
+    } else {
+        "responses"
+    };
+    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        Operation::Responses,
+        LoggingOperation::Responses,
         &request,
         &args,
         &kwargs,
@@ -81,7 +87,16 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            Ok(route.machine(request, None))
+            let (cache, cache_options) =
+                crate::cache::configured_native(py, arguments, cache_call_type)?;
+            let route = match cache {
+                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                    cache,
+                    litellm_cache_response::CacheScope::Shared,
+                )),
+                None => route,
+            };
+            Ok(route.machine(request, cache_options))
         },
         host::ResponsesPythonHost(host),
         hooks,

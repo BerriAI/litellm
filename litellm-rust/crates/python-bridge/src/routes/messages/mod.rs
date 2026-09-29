@@ -1,7 +1,7 @@
 mod host;
 
 use host::MessagesPythonHost;
-use litellm_types::Operation;
+use litellm_callbacks_legacy_python::LoggingOperation;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -16,7 +16,7 @@ fn run_messages(
 ) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        Operation::Messages,
+        LoggingOperation::Messages,
         &request,
         &args,
         &kwargs,
@@ -26,15 +26,40 @@ fn run_messages(
         py,
         arguments,
         move |py, arguments, request| {
-            let route = litellm_core::messages::MessagesRoute::new(
-                crate::http::provider_client(py, arguments, asynchronous)?
-                    .map_err(crate::http::client_error)?,
-                crate::http::resources().auth.clone(),
-                crate::secrets::source(py)?,
-            );
-            Ok(route.machine(request, None))
+            let builder = litellm_core::messages::MessagesRoute::builder()
+                .with_http(
+                    crate::http::provider_client(py, arguments, asynchronous)?
+                        .map_err(crate::http::client_error)?,
+                )
+                .with_auth(crate::http::resources().auth.clone())
+                .with_secrets(crate::secrets::source(py)?);
+            let route = builder.build();
+            Ok(litellm_host::call::hosted_call(
+                request,
+                None,
+                move |(call, selection): (_, crate::cache::Selection),
+                      services,
+                      interceptors,
+                      observers| async move {
+                    let (cache, options) = selection.attach(services);
+                    let route = match cache {
+                        Some(cache) => route.with_cache(cache),
+                        None => route,
+                    };
+                    route
+                        .execute(
+                            call,
+                            &interceptors,
+                            litellm_core::CallOptions {
+                                cache: Some(options),
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
         },
-        MessagesPythonHost::new(request.unbind()),
+        MessagesPythonHost::new(request.unbind(), asynchronous),
         hooks,
         asynchronous,
     )
