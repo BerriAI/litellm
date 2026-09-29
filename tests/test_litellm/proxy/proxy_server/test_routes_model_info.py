@@ -802,6 +802,122 @@ def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(clie
     assert len(payload["data"]) == 1
 
 
+# ---------------------------------------------------------------------------
+# GET /v2/model/info?blocked / ?sortBy=blocked
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def routing_status_router(monkeypatch):
+    """Router with one paused (blocked) deployment and two active ones."""
+    model_list = [
+        {
+            "model_name": "paused-model",
+            "litellm_params": {"model": "openai/paused-model"},
+            "model_info": {"id": "paused-1", "db_model": True, "blocked": True},
+        },
+        {
+            "model_name": "active-model",
+            "litellm_params": {"model": "openai/active-model"},
+            "model_info": {"id": "active-1", "db_model": True, "blocked": False},
+        },
+        {
+            "model_name": "another-active",
+            "litellm_params": {"model": "openai/another-active"},
+            "model_info": {"id": "active-2", "db_model": True, "blocked": False},
+        },
+    ]
+    from unittest.mock import AsyncMock
+
+    router = MagicMock()
+    router.model_list = model_list
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        proxy_server,
+        "_apply_search_filter_to_models",
+        AsyncMock(side_effect=lambda all_models, **kw: (all_models, len(all_models))),
+    )
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+    yield router
+
+
+def test_v2_model_info_blocked_filter_returns_only_paused(client, auth_as, routing_status_router):
+    """`?blocked=true` keeps just the paused deployments."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"blocked": "true"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert _model_names(payload) == ["paused-model"]
+    assert payload["total_count"] == 1
+
+
+def test_v2_model_info_blocked_filter_returns_only_active(client, auth_as, routing_status_router):
+    """`?blocked=false` keeps just the active deployments."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"blocked": "false"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert _model_names(payload) == ["active-model", "another-active"]
+    assert payload["total_count"] == 2
+
+
+def test_v2_model_info_sort_by_blocked_puts_active_first(client, auth_as, routing_status_router):
+    """`sortBy=blocked&sortOrder=asc` surfaces the active deployments first."""
+    with auth_as():
+        response = client.get("/v2/model/info", params={"sortBy": "blocked", "sortOrder": "asc"})
+    assert response.status_code == 200
+    assert _model_names(response.json()) == ["active-model", "another-active", "paused-model"]
+
+
+def test_v2_model_info_search_matches_litellm_model_name(client, auth_as, monkeypatch):
+    """`search` also hits the underlying LiteLLM model name (e.g. a provider
+    prefix), not just the public model name."""
+    model_list = [
+        {
+            "model_name": "paused-model",
+            "litellm_params": {"model": "openai/paused-model"},
+            "model_info": {"id": "paused-1", "db_model": True, "blocked": True},
+        },
+        {
+            "model_name": "active-model",
+            "litellm_params": {"model": "openai/active-model"},
+            "model_info": {"id": "active-1", "db_model": True, "blocked": False},
+        },
+    ]
+    from unittest.mock import AsyncMock
+
+    router = MagicMock()
+    router.model_list = model_list
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    async def fake_fetch_db_models_for_search(**kwargs):
+        return [], 0
+
+    monkeypatch.setattr(proxy_server, "_fetch_db_models_for_search", fake_fetch_db_models_for_search)
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", lambda model, **kw: model)
+
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(mlh, "append_agents_to_model_info", AsyncMock(side_effect=lambda models, **kw: models))
+
+    with auth_as():
+        response = client.get("/v2/model/info", params={"search": "openai/paused"})
+    assert response.status_code == 200
+    assert _model_names(response.json()) == ["paused-model"]
+
+
 @pytest.mark.asyncio
 async def test_model_info_v2_query_sentinel_does_not_filter(monkeypatch, mixed_auto_router_router):
     """Called directly (not through FastAPI) the default arrives as a truthy Query object.

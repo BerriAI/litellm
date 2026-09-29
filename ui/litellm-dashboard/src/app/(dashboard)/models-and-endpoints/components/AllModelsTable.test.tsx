@@ -76,13 +76,14 @@ const row = (modelId: string): HTMLElement => {
 };
 
 describe("AllModelsTable", () => {
-  it("renders the nine design columns and hides Source behind the Columns menu", async () => {
+  it("renders the ten design columns and hides Source behind the Columns menu", async () => {
     const user = userEvent.setup();
     render(<AllModelsTable {...baseProps} />);
 
     for (const header of [
       "Model ID",
       "Model Information",
+      "Status",
       "Credentials",
       "Created By",
       "Updated At",
@@ -95,15 +96,28 @@ describe("AllModelsTable", () => {
     }
 
     expect(screen.queryByRole("columnheader", { name: /^source$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("columnheader", { name: /^status$/i })).not.toBeInTheDocument();
     expect(screen.queryByText("DB Model")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /columns/i }));
-    expect(screen.queryByRole("menuitemcheckbox", { name: /status/i })).not.toBeInTheDocument();
     await user.click(await screen.findByRole("menuitemcheckbox", { name: /^source$/i }));
 
     expect(await screen.findByRole("columnheader", { name: /^source$/i })).toBeInTheDocument();
     expect(await screen.findByText("DB Model")).toBeInTheDocument();
+  });
+
+  it("reports the routing status picked in the Filters drawer", async () => {
+    const user = userEvent.setup();
+    const onColumnFiltersChange = vi.fn();
+    render(<AllModelsTable {...baseProps} onColumnFiltersChange={onColumnFiltersChange} />);
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(screen.getByRole("combobox", { name: /filter by status/i }));
+    await user.click(await screen.findByRole("option", { name: "Paused" }));
+    await user.click(screen.getByTestId("filter-drawer-apply"));
+
+    const updater = onColumnFiltersChange.mock.calls.at(-1)?.[0];
+    const next = typeof updater === "function" ? updater([]) : updater;
+    expect(next).toEqual([{ id: "model_info_blocked", value: "paused" }]);
   });
 
   it("opens the model detail from the model ID cell", async () => {

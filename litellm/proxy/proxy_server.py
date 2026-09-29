@@ -14691,11 +14691,24 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    db_where_condition: Final[dict[str, Any]] = {
-        "model_name": {"contains": search_lower, "mode": "insensitive"} if model_name is None else model_name
-    }
-    if db_model_ids_in_router:
-        db_where_condition["model_id"] = {"not": {"in": list(db_model_ids_in_router)}}
+    db_where_condition: Final[dict[str, Any]] = (
+        {
+            "AND": [
+                {
+                    "OR": [
+                        {"model_name": {"contains": search_lower, "mode": "insensitive"}},
+                        # JSON string_contains is case-sensitive on Postgres (see
+                        # note above); router-side matching below covers the
+                        # case-insensitive path for rows already in the router.
+                        {"litellm_params": {"path": ["model"], "string_contains": search_lower}},
+                    ]
+                },
+                *( [{"model_id": {"not": {"in": list(db_model_ids_in_router)}}}] if db_model_ids_in_router else [] ),
+            ]
+        }
+        if model_name is None
+        else {"model_name": model_name}
+    )
 
     # Unsorted searches only need enough DB rows to fill the current
     # page after counting router-side matches. Sorted searches need
@@ -14791,7 +14804,13 @@ async def _apply_search_filter_to_models(
         if search_lower in (m.get("model_name") or "").lower():
             return True
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
-        return search_lower in team_public_model_name.lower()
+        if search_lower in team_public_model_name.lower():
+            return True
+        # Also match the underlying LiteLLM model name (e.g.
+        # "openrouter/deepseek/deepseek-chat"), so users can find
+        # deployments by typing the provider or the upstream model id.
+        litellm_model: Final = (m.get("litellm_params") or {}).get("model") or ""
+        return search_lower in litellm_model.lower()
 
     # Filter models in router by search term, dropping BYOK rows that
     # belong to teams the caller is not a member of so search can't leak
@@ -14912,6 +14931,7 @@ def _sort_models(
         "updated_at",
         "costs",
         "status",
+        "blocked",
     ]:
         return all_models
 
@@ -14969,6 +14989,11 @@ def _sort_models(
             db_model: Final = model_info.get("db_model", False)
             return db_model
 
+        elif sort_by == "blocked":
+            # Routing status: False (active) comes before True (paused) for asc,
+            # so `sortBy=blocked&sortOrder=asc` surfaces the active deployments.
+            return bool(model_info.get("blocked", False))
+
         return None
 
     try:
@@ -15008,11 +15033,20 @@ def _matches_model_info_filters(
     exclude_auto_routers: bool | None,
     access_group: str | None,
     wildcard_only: bool | None,
+    blocked: bool | None = None,
 ) -> bool:
     if exclude_auto_routers is True and _is_auto_router_model(model):
         return False
     if isinstance(access_group, str) and not _model_in_access_group(model, access_group):
         return False
+    # Routing-status filter. Guarded on `is True` / `is False` because direct
+    # calls that bypass FastAPI pass the truthy Query sentinel as the default,
+    # which must not filter (same pattern as `exclude_auto_routers`). Entries
+    # without a `blocked` flag (e.g. A2A agents) are neither active nor paused,
+    # so they drop out of both filtered views.
+    if blocked is True or blocked is False:
+        if (model.get("model_info") or {}).get("blocked") is not blocked:
+            return False
     return wildcard_only is not True or "*" in str(model.get("model_name") or "")
 
 
@@ -15311,11 +15345,18 @@ async def model_info_v2(
     ),
     sortBy: str | None = fastapi.Query(
         None,
-        description="Field to sort by. Options: model_name, created_at, updated_at, costs, status",
+        description="Field to sort by. Options: model_name, created_at, updated_at, costs, status, blocked",
     ),
     sortOrder: str | None = fastapi.Query(
         "asc",
         description="Sort order. Options: asc, desc",
+    ),
+    blocked: bool | None = fastapi.Query(
+        None,
+        description=(
+            "Filter by routing status: false = active deployments, true = paused (blocked) "
+            "deployments. Omit to return both."
+        ),
     ),
     exclude_auto_routers: bool | None = fastapi.Query(
         False,
@@ -15350,7 +15391,8 @@ async def model_info_v2(
         search: Case-insensitive partial match on model name or team public name.
         modelId: Return a single deployment by LiteLLM model id.
         teamId: Filter to models with direct access or team membership for this team id.
-        sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+        sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, status, or blocked.
+        blocked: Filter by routing status (false = active, true = paused).
         access_group: Only return deployments in this model access group.
         wildcard_only: Only return deployments whose `model_name` contains `*`.
 
@@ -15507,7 +15549,8 @@ async def model_info_v2(
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
     # truthy sentinel object rather than False.
     all_models = [
-        m for m in all_models if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only)
+        m for m in all_models
+        if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only, blocked)
     ]
 
     # Update total count to include agents
