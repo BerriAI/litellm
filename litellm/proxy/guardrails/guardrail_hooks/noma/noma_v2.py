@@ -70,7 +70,9 @@ class NomaV2Guardrail(CustomGuardrail):
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
         self.api_base = (api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
         self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
-        self.gateway_name = self._get_non_empty_str(gateway_name or os.environ.get("NOMA_GATEWAY_NAME"))
+        self.gateway_name = self._get_non_empty_str(gateway_name) or self._get_non_empty_str(
+            os.environ.get("NOMA_GATEWAY_NAME")
+        )
         if monitor_mode is None:
             self.monitor_mode = os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
         else:
