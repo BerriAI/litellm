@@ -15,6 +15,8 @@ from .destinations import FocusTimeWindow
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
     from .export_engine import FocusExportEngine
 else:
     AsyncIOScheduler = Any
@@ -102,7 +104,7 @@ class FocusLogger(CustomLogger):
             # No time bounds → export all available data
             await self._export_all(limit=limit)
 
-    async def dry_run_export_usage_data(self, limit: int | None = DEFAULT_DRY_RUN_LIMIT) -> dict[str, Any]:
+    async def dry_run_export_usage_data(self, limit: int | None = DEFAULT_DRY_RUN_LIMIT) -> dict[str, object]:
         """Return transformed data without uploading."""
         engine: Final = self._ensure_engine()
         return await engine.dry_run_export_usage_data(limit=limit)
@@ -111,7 +113,7 @@ class FocusLogger(CustomLogger):
         """Entry point for scheduler jobs to run export cycle with locking."""
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        pod_lock_manager = None
+        pod_lock_manager: PodLockManager | None = None
         if proxy_logging_obj is not None:
             writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
             if writer is not None:
@@ -153,7 +155,7 @@ class FocusLogger(CustomLogger):
             **trigger_kwargs,
         )
 
-    def _build_scheduler_trigger(self) -> dict[str, Any]:
+    def _build_scheduler_trigger(self) -> dict[str, str | int]:
         """Return scheduler configuration for the selected frequency."""
         if self.frequency == "interval":
             seconds: Final = self.interval_seconds or 60

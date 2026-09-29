@@ -1,11 +1,9 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
+from typing import Final
 from unittest.mock import MagicMock
 
 from fastapi import HTTPException
@@ -169,7 +167,7 @@ async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_wi
         )
     )
 
-    with pytest.raises(litellm.BadRequestError, match="multiple teams"):
+    async def _route_and_await():
         ambiguous_call = await route_request(
             data=data,
             llm_router=router,
@@ -178,6 +176,9 @@ async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_wi
             user_api_key_dict=admin_auth,
         )
         await ambiguous_call
+
+    with pytest.raises(litellm.BadRequestError, match="multiple teams"):
+        await _route_and_await()
 
     router.add_deployment(
         Deployment(
@@ -1042,6 +1043,7 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
     [
         ("acompletion", "messages", "/chat/completions"),
         ("aembedding", "input", "/embeddings"),
+        ("aresponses", "input", "/responses"),
         ("acreate_batch", "input_file_id", "/batches"),
     ],
 )
@@ -1089,6 +1091,8 @@ def test_raise_if_required_body_param_missing_names_first_missing_batch_param(da
         ("acompletion", {"model": "gpt-4o", "messages": []}),
         ("atext_completion", {"model": "gpt-4o"}),
         ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
+        ("aresponses", {"model": "gpt-4o", "input": "hi"}),
+        ("aresponses", {"model": "gpt-4o", "input": []}),
         ("arerank", {"model": "rerank-model"}),
         ("aimage_generation", {"model": "dall-e-3"}),
         (
@@ -1120,6 +1124,140 @@ async def test_route_request_rejects_chat_completion_without_messages():
 
 
 @pytest.mark.asyncio
+async def test_route_request_rejects_responses_without_input():
+    from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
+
+    llm_router = MagicMock()
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        await route_request({"model": "gpt-4o"}, llm_router, None, "aresponses")
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "input"
+    llm_router.aresponses.assert_not_called()
+
+
+class FakeProxyModelTable:
+    def __init__(self, rows):
+        self.rows = rows
+        self.find_many_wheres = []
+
+    async def find_many(self, where=None, **kwargs):
+        self.find_many_wheres.append(where)
+        return list(self.rows)
+
+
+def _fake_prisma_client_with_models(rows):
+    from types import SimpleNamespace
+
+    table = FakeProxyModelTable(rows)
+    return SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table)), table
+
+
+def _db_model_row(model_name: str, mock_response: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        model_id=f"{model_name}-id",
+        model_name=model_name,
+        litellm_params={"model": "openai/gpt-4o", "api_key": "fake", "mock_response": mock_response},
+        model_info={},
+        blocked=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_request_read_through_recovers_model_created_on_sibling_replica(monkeypatch):
+    """Regression: a model written to the DB by another replica must be served on
+    first request instead of 400ing until the periodic config reload."""
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name = "e2e-sibling-replica-model"
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    fake_prisma, table = _fake_prisma_client_with_models([_db_model_row(model_name, "hello-from-db")])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    llm_call = await route_request(
+        data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+        llm_router=router,
+        user_model=None,
+        route_type="acompletion",
+    )
+    response = await llm_call
+
+    assert response.choices[0].message.content == "hello-from-db"
+    assert len(table.find_many_wheres) == 1
+    assert table.find_many_wheres[0] == {"model_name": model_name}
+
+
+@pytest.mark.asyncio
+async def test_route_request_unknown_model_raises_and_hits_db_once_within_ttl(monkeypatch):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name = "e2e-model-nobody-created"
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    fake_prisma, table = _fake_prisma_client_with_models([])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    data = {"model": model_name, "messages": [{"role": "user", "content": "hi"}]}
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(data=data, llm_router=router, user_model=None, route_type="acompletion")
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(data=data, llm_router=router, user_model=None, route_type="acompletion")
+
+    assert table.find_many_wheres == [{"model_name": model_name}, {"model_id": model_name}]
+
+
+@pytest.mark.asyncio
+async def test_route_request_read_through_disabled_without_store_model_in_db(monkeypatch):
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name = "e2e-config-only-proxy-model"
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    fake_prisma, table = _fake_prisma_client_with_models([_db_model_row(model_name, "should-not-load")])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", False)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+
+    assert table.find_many_wheres == []
+
+@pytest.mark.asyncio
 async def test_route_request_routing_group_name_passes_model_gate():
     from unittest.mock import AsyncMock, patch
 
@@ -1141,3 +1279,49 @@ async def test_route_request_routing_group_name_passes_model_gate():
 
     assert response == "group_response"
     spy.assert_called_once_with(**data)
+
+
+@pytest.mark.asyncio
+async def test_route_request_a2a_agent_miss_does_not_consume_model_read_through(fresh_agent_read_through, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_name = "a2a/agent-nobody-created"
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    fake_prisma, model_table = _fake_prisma_client_with_models([])
+    agents_find_unique = AsyncMock(return_value=None)
+    fake_prisma.db.litellm_agentstable = SimpleNamespace(find_unique=agents_find_unique)
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            data={"model": model_name, "messages": [{"role": "user", "content": "hi"}]},
+            llm_router=router,
+            user_model=None,
+            route_type="acompletion",
+        )
+
+    assert agents_find_unique.await_count == 2
+    assert model_table.find_many_wheres == []
+
+
+def test_proxy_model_not_found_error_keeps_the_raw_model_only_in_the_client_response():
+    raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+
+    error: Final = ProxyModelNotFoundError(route="/chat/completions", model_name=raw_model)
+
+    assert raw_model in error.detail["error"]
+    assert raw_model not in error.spend_log_error_message
+    assert error.spend_log_error_message.startswith("/chat/completions: Invalid model name passed in")

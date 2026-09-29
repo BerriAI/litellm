@@ -80,7 +80,9 @@ def resolve_pr_gate_version(
 
     "Newest" means newest by **publish time**, not semver string order —
     if a patch lands on an older major after a newer release, the
-    patched line is the eligible one.
+    patched line is the eligible one. A version npm has unpublished keeps
+    its ``time`` entry but drops out of ``versions``, so only versions
+    still present in ``versions`` are candidates.
 
     Args:
         metadata: Pre-fetched npm packument (skips the HTTP call). Useful
@@ -101,6 +103,7 @@ def resolve_pr_gate_version(
         metadata = fetch(package_name)
 
     times = metadata.get("time") or {}
+    versions = metadata.get("versions") or {}
     if as_of is None:
         as_of = datetime.now(timezone.utc)
     cutoff = as_of - min_age
@@ -108,6 +111,8 @@ def resolve_pr_gate_version(
     eligible: list[tuple[datetime, str]] = []
     for version, raw_ts in times.items():
         if version in _TIME_META_KEYS:
+            continue
+        if version not in versions:
             continue
         if not isinstance(raw_ts, str):
             continue

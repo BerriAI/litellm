@@ -23,6 +23,8 @@ interface LogsTableToolbarProps {
   onSelectedTimeIntervalChange: (value: { value: number; unit: string }) => void;
   isLiveTail: boolean;
   onIsLiveTailChange: (value: boolean) => void;
+  excludeInternalHealthChecks: boolean;
+  onExcludeInternalHealthChecksChange: (value: boolean) => void;
   onResetToFirstPage: () => void;
   onResetFilters: () => void;
 }
@@ -38,6 +40,8 @@ export function LogsTableToolbar({
   onSelectedTimeIntervalChange,
   isLiveTail,
   onIsLiveTailChange,
+  excludeInternalHealthChecks,
+  onExcludeInternalHealthChecksChange,
   onResetToFirstPage,
   onResetFilters,
 }: LogsTableToolbarProps) {
@@ -88,7 +92,10 @@ export function LogsTableToolbar({
             <Button
               variant="ghost"
               className="w-full justify-start font-normal"
-              onClick={() => onIsCustomDateChange(!isCustomDate)}
+              onClick={() => {
+                onIsCustomDateChange(!isCustomDate);
+                onResetToFirstPage();
+              }}
             >
               Custom Range
             </Button>
@@ -125,6 +132,15 @@ export function LogsTableToolbar({
         <Switch checked={isLiveTail} onCheckedChange={onIsLiveTailChange} aria-label="Live Tail" />
       </div>
 
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium">Hide Health Checks</span>
+        <Switch
+          checked={excludeInternalHealthChecks}
+          onCheckedChange={onExcludeInternalHealthChecksChange}
+          aria-label="Hide Health Checks"
+        />
+      </div>
+
       <Button variant="outline" size="sm" onClick={onResetFilters}>
         Reset Filters
       </Button>
@@ -134,9 +150,9 @@ export function LogsTableToolbar({
 
 export function LiveTailBanner({ onStop }: { onStop: () => void }) {
   return (
-    <div className="mb-4 flex items-center justify-between rounded-md border border-green-200 bg-green-50 px-4 py-2">
-      <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
-      <button type="button" onClick={onStop} className="text-sm text-green-600 hover:text-green-800">
+    <div className="mb-4 flex items-center justify-between rounded-md border border-success/20 bg-success/10 px-4 py-2">
+      <span className="text-sm text-success">Auto-refreshing every 15 seconds</span>
+      <button type="button" onClick={onStop} className="text-sm text-success hover:text-success/80">
         Stop
       </button>
     </div>

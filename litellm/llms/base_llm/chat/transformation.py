@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -22,6 +22,7 @@ from litellm.types.llms.openai import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.types.utils import ModelResponse
 
 from ..base_utils import (
@@ -46,8 +47,10 @@ class BaseLLMException(Exception):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         body: dict | None = None,
+        status_code_is_synthesized: bool = False,
     ):
         self.status_code = status_code
+        self.status_code_is_synthesized = status_code_is_synthesized
         self.message: str = message
         self.headers = headers
         if request:
@@ -252,6 +255,15 @@ class BaseConfig(ABC):
     ) -> dict:
         pass
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
+
     def sign_request(
         self,
         headers: dict,
@@ -340,7 +352,7 @@ class BaseConfig(ABC):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":
@@ -381,6 +393,8 @@ class BaseConfig(ABC):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
@@ -396,6 +410,8 @@ class BaseConfig(ABC):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
@@ -405,6 +421,10 @@ class BaseConfig(ABC):
 
     @property
     def has_custom_stream_wrapper(self) -> bool:
+        return False
+
+    @property
+    def uses_async_transform_request(self) -> bool:
         return False
 
     @property

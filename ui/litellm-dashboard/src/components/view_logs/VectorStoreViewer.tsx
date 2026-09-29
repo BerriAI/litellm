@@ -58,21 +58,21 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
+    <div className="bg-card rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="flex w-full items-center gap-3 px-4 py-3 text-left">
           {open ? (
-            <ChevronDown className="size-3.5 shrink-0 text-gray-500" />
+            <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
           ) : (
-            <ChevronRight className="size-3.5 shrink-0 text-gray-500" />
+            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
           )}
-          <h3 className="text-lg font-medium text-gray-900">Vector Store Requests</h3>
+          <h3 className="text-lg font-medium text-foreground">Vector Store Requests</h3>
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="p-4">
             {data.map((request, index) => (
               <div key={index} className="mb-6 last:mb-0">
-                <div className="bg-white rounded-lg border p-4 mb-4">
+                <div className="bg-card rounded-lg border p-4 mb-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <div className="flex">
@@ -123,7 +123,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                     return (
                       <div key={resultIndex} className="border rounded-lg overflow-hidden">
                         <div
-                          className="flex items-center p-3 bg-gray-50 cursor-pointer"
+                          className="flex items-center p-3 bg-muted cursor-pointer"
                           onClick={() => toggleResult(index, resultIndex)}
                         >
                           <svg
@@ -136,18 +136,18 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                           </svg>
                           <div className="flex items-center">
                             <span className="font-medium mr-2">Result {resultIndex + 1}</span>
-                            <span className="text-gray-500 text-sm">
+                            <span className="text-muted-foreground text-sm">
                               Score: <span className="font-mono">{result.score.toFixed(4)}</span>
                             </span>
                           </div>
                         </div>
 
                         {isExpanded && (
-                          <div className="p-3 border-t bg-white">
+                          <div className="p-3 border-t bg-card">
                             {result.content.map((content, contentIndex) => (
                               <div key={contentIndex} className="mb-2 last:mb-0">
-                                <div className="text-xs text-gray-500 mb-1">{content.type}</div>
-                                <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-gray-50 p-2 rounded-sm">
+                                <div className="text-xs text-muted-foreground mb-1">{content.type}</div>
+                                <pre className="text-xs font-mono whitespace-pre-wrap break-all bg-muted p-2 rounded-sm">
                                   {content.text}
                                 </pre>
                               </div>

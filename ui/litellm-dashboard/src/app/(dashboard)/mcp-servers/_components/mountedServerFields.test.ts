@@ -262,7 +262,14 @@ describe("edit root: exact mounted set per auth configuration", () => {
           ...PERMS,
           "delegate_auth_to_upstream",
         ],
-        credentials: ["client_id", "client_secret", "token_endpoint_auth_method", "scopes", "upstream_resource"],
+        credentials: [
+          "client_id",
+          "client_secret",
+          "token_endpoint_auth_method",
+          "scopes",
+          "upstream_resource",
+          "upstream_token_header",
+        ],
       },
     );
   });
@@ -286,7 +293,14 @@ describe("edit root: exact mounted set per auth configuration", () => {
           ...PERMS,
           "delegate_auth_to_upstream",
         ],
-        credentials: ["client_id", "client_secret", "scopes", "upstream_resource", "token_endpoint_auth_method"],
+        credentials: [
+          "client_id",
+          "client_secret",
+          "scopes",
+          "upstream_resource",
+          "token_endpoint_auth_method",
+          "upstream_token_header",
+        ],
       },
     );
   });
@@ -306,7 +320,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "env_vars",
           ...PERMS,
         ],
-        credentials: ["client_id", "client_secret", "scopes"],
+        credentials: ["client_id", "client_secret", "scopes", "upstream_token_header"],
       },
     );
   });
@@ -324,7 +338,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           "env_vars",
           ...PERMS,
         ],
-        credentials: ["client_id", "client_secret", "scopes"],
+        credentials: ["client_id", "client_secret", "scopes", "upstream_token_header"],
       },
     );
   });
@@ -344,6 +358,7 @@ describe("edit root: exact mounted set per auth configuration", () => {
           ...PERMS,
         ],
         credentials: [
+          "upstream_token_header",
           "id_jag_resource_token_endpoint",
           "client_id",
           "client_secret",
@@ -434,7 +449,14 @@ describe("create root: exact mounted set per configuration", () => {
           ...PERMS,
           "delegate_auth_to_upstream",
         ],
-        credentials: ["client_id", "client_secret", "scopes", "upstream_resource", "token_endpoint_auth_method"],
+        credentials: [
+          "client_id",
+          "client_secret",
+          "scopes",
+          "upstream_resource",
+          "token_endpoint_auth_method",
+          "upstream_token_header",
+        ],
       },
     );
   });
@@ -482,7 +504,7 @@ describe("projection shape", () => {
     expect(projected.command).toBe("npx");
   });
 
-  it("passes Form.List rows through whole, since antd does not project a row to its mounted sub-fields", () => {
+  it("passes list rows through whole, since a list field is projected as one key and not per mounted sub-field", () => {
     const row = { name: "N", value: "V", scope: "user", description: "D" };
     const projected = projectMountedEditValues({ ...HTTP_NONE, env_vars: [row] });
     expect(projected.env_vars).toStrictEqual([row]);

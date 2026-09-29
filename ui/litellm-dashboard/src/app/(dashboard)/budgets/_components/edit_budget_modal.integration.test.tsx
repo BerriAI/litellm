@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "@/lib/http/schema";
 
 import EditBudgetModal from "./edit_budget_modal";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
 
@@ -49,7 +50,7 @@ describe("EditBudgetModal", () => {
     renderModal();
 
     await user.clear(screen.getByLabelText("Max Tokens per minute"));
-    await user.type(screen.getByLabelText("Max Tokens per minute"), "500.567");
+    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
     await save(user);
 
     await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
@@ -65,16 +66,15 @@ describe("EditBudgetModal", () => {
     renderModal();
 
     await user.clear(screen.getByLabelText("Max Tokens per minute"));
-    await user.type(screen.getByLabelText("Max Tokens per minute"), "500.567");
+    fireEvent.change(screen.getByLabelText("Max Tokens per minute"), { target: { value: "500.567" } });
     await user.clear(screen.getByLabelText("Max Requests per minute"));
-    await user.type(screen.getByLabelText("Max Requests per minute"), "7");
+    fireEvent.change(screen.getByLabelText("Max Requests per minute"), { target: { value: "7" } });
 
     await openOptionalSettings(user);
     await user.clear(screen.getByLabelText("Max Budget (USD)"));
-    await user.type(screen.getByLabelText("Max Budget (USD)"), "42.567");
+    fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "42.567" } });
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("monthly"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "monthly");
 
     await save(user);
 
@@ -97,7 +97,7 @@ describe("EditBudgetModal", () => {
     await openOptionalSettings(user);
     const maxBudget = screen.getByLabelText("Max Budget (USD)");
     await user.clear(maxBudget);
-    await user.type(maxBudget, "99.25");
+    fireEvent.change(maxBudget, { target: { value: "99.25" } });
 
     await user.click(screen.getByText("Optional Settings"));
     await user.click(screen.getByText("Optional Settings"));

@@ -52,7 +52,7 @@ export const NotificationsBell: React.FC = () => {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className="flex! h-9! w-9! items-center justify-center rounded-md! text-gray-600 transition-colors hover:bg-gray-100! hover:text-gray-900!"
+        className="flex! h-9! w-9! items-center justify-center rounded-md! text-muted-foreground transition-colors hover:bg-accent! hover:text-foreground!"
         aria-label="Notifications"
       >
         <span className="relative inline-flex">

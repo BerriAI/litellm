@@ -79,7 +79,7 @@ describe("UserDropdown", () => {
     render(<UserDropdown onChange={vi.fn()} />);
 
     await user.click(combobox());
-    await user.type(combobox(), "alice");
+    fireEvent.change(combobox(), { target: { value: "alice" } });
 
     await waitFor(() => expect(mockUseInfiniteUsers).toHaveBeenCalledWith(50, "alice"));
     expect(screen.getByText("bob@example.com (user-2)")).toBeInTheDocument();

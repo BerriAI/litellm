@@ -4,6 +4,8 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+    is_non_conversational_call_type,
+    is_string_batch_input,
     iter_message_text,
     walk_user_text,
 )
@@ -147,6 +149,22 @@ def test_iter_message_text_responses_api_tool_call_taxonomy():
         ]
     }
     assert list(iter_message_text(data)) == ["hello", "sunny"]
+
+
+def test_iter_message_text_inspects_reasoning_content_and_summary():
+    """VERIA: reasoning items forwarded as ``reasoning_content`` must be
+    inspected, including ``summary`` blocks the bridge reads as a fallback."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "content secret"}],
+                "summary": [{"type": "summary_text", "text": "summary secret"}],
+            }
+        ]
+    }
+    assert list(iter_message_text(data)) == ["content secret", "summary secret"]
 
 
 # ── walk_user_text ────────────────────────────────────────────────────────────
@@ -308,6 +326,27 @@ def test_walk_user_text_redacts_mixed_list_input():
     assert data["input"][2] == {"type": "image_url", "image_url": {"url": "..."}}
 
 
+def test_walk_user_text_redacts_reasoning_content_and_summary():
+    """VERIA: in-place redaction must cover both plaintext shapes the bridge
+    forwards from a reasoning item."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "AKIAEXAMPLE content"}],
+                "summary": [{"type": "summary_text", "text": "AKIAEXAMPLE summary"}],
+            }
+        ]
+    }
+    visited = walk_user_text(data, lambda s: s.replace("AKIAEXAMPLE", "[REDACTED]"))
+    assert visited == 2
+    item = data["input"][0]
+    assert item["content"][0]["text"] == "[REDACTED] content"
+    assert item["summary"][0]["text"] == "[REDACTED] summary"
+    assert item["id"] == "rs_1"
+
+
 # ── build_inspection_messages ─────────────────────────────────────────────────
 
 
@@ -462,6 +501,23 @@ def test_build_inspection_messages_empty_data():
     assert build_inspection_messages({"input": ""}) == []
 
 
+def test_build_inspection_messages_includes_reasoning_summary():
+    """VERIA: remote guardrail APIs must see reasoning summaries even when
+    the reasoning item has no ``content`` field."""
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"type": "summary_text", "text": "secret summary"}],
+            }
+        ]
+    }
+    assert build_inspection_messages(data) == [
+        {"role": "assistant", "content": "secret summary"}
+    ]
+
+
 # ── has_non_string_content ────────────────────────────────────────────────────
 
 
@@ -526,6 +582,95 @@ def test_apply_redacted_messages_back_skips_input_when_not_string():
     assert data["input"] == [{"type": "text", "text": "leak"}]
 
 
+def test_apply_redacted_messages_back_rewrites_string_batches():
+    """An /embeddings batch is a list of plain strings; each is rewritten in place
+    from the matching redacted message so no element reaches the LLM unredacted."""
+    data = {"input": ["first SSN", "second SSN"]}
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": "first [REDACTED]"},
+            {"role": "user", "content": "second [REDACTED]"},
+        ],
+    )
+    assert data["input"] == ["first [REDACTED]", "second [REDACTED]"]
+
+
+def test_apply_redacted_messages_back_keeps_batch_elements_aligned():
+    """A guardrail that redacts a whole element away returns it as empty text.
+    Each element still has to take its own redaction, never the next one's."""
+    data = {"input": ["all secret", "second doc", "third doc"]}
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": ""},
+            {"role": "user", "content": "second doc"},
+            {"role": "user", "content": "third doc"},
+        ],
+    )
+    assert data["input"] == ["", "second doc", "third doc"]
+
+
+def test_apply_redacted_messages_back_skips_empty_batch_elements():
+    """Empty elements are never sent to the guardrail, so the redactions line up
+    with the elements that were."""
+    data = {"input": ["", "secret doc"]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED] doc"}]) is True
+    assert data["input"] == ["", "[REDACTED] doc"]
+
+
+def test_apply_redacted_messages_back_rejects_short_batch_response():
+    """A guardrail that returns fewer messages than were inspected cannot be
+    applied element-wise: writing the prefix would forward the rest of the batch
+    unredacted, so nothing is written and the caller has to block."""
+    data = {"input": ["first SSN", "second SSN", "third SSN"]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "first [REDACTED]"}]) is False
+    assert data["input"] == ["first SSN", "second SSN", "third SSN"]
+
+
+def test_apply_redacted_messages_back_rejects_long_batch_response():
+    """More redactions than inspected elements means the alignment is unknown."""
+    data = {"input": ["only SSN"]}
+    assert (
+        apply_redacted_messages_back(
+            data,
+            [
+                {"role": "user", "content": "only [REDACTED]"},
+                {"role": "user", "content": "spurious"},
+            ],
+        )
+        is False
+    )
+    assert data["input"] == ["only SSN"]
+
+
+def test_apply_redacted_messages_back_rejects_batch_content_missing():
+    """A message without content cannot safely replace the original batch element."""
+    data = {"input": ["secret doc"]}
+    assert apply_redacted_messages_back(data, [{"role": "user"}]) is False
+    assert data["input"] == ["secret doc"]
+
+
+def test_apply_redacted_messages_back_returns_true_for_non_batch_shapes():
+    data = {"messages": [{"role": "user", "content": "secret"}]}
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is True
+
+
+# ── is_string_batch_input ─────────────────────────────────────────────────────
+
+
+def test_is_string_batch_input_embeddings_batch():
+    assert is_string_batch_input({"input": ["a", "b"]}) is True
+
+
+def test_is_string_batch_input_rejects_other_shapes():
+    assert is_string_batch_input({"input": "a"}) is False
+    assert is_string_batch_input({"input": []}) is False
+    assert is_string_batch_input({"input": [1, 2]}) is False
+    assert is_string_batch_input({"input": ["a", {"type": "text", "text": "b"}]}) is False
+    assert is_string_batch_input({"messages": [], "input": ["a"]}) is False
+
+
 # -------------------------------------------------------------------
 # LIT-4302: custom_tool_call_output walking
 # -------------------------------------------------------------------
@@ -563,3 +708,36 @@ def test_build_inspection_messages_custom_tool_call_output():
     }
     msgs = build_inspection_messages(data)
     assert any("custom-tool-leak" in m["content"] for m in msgs)
+
+
+# ── is_non_conversational_call_type ──────────────────────────────────────────────
+
+
+def test_is_non_conversational_call_type_flags_embeddings():
+    """An /embeddings body carries documents being indexed, not a prompt."""
+    assert is_non_conversational_call_type("embedding") is True
+    assert is_non_conversational_call_type("aembedding") is True
+
+
+def test_is_non_conversational_call_type_passes_every_conversational_call_type():
+    """Deliberately a deny-list: ``anthropic_messages``, ``responses`` and
+    ``call_mcp_tool`` carry conversations but are absent from
+    ``TEXT_CONTENT_CALL_TYPES``, so a guardrail gating on that allow-list would
+    stop inspecting them."""
+    for call_type in (
+        "completion",
+        "acompletion",
+        "text_completion",
+        "responses",
+        "aresponses",
+        "anthropic_messages",
+        "aanthropic_messages",
+        "call_mcp_tool",
+    ):
+        assert is_non_conversational_call_type(call_type) is False
+
+
+def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_types():
+    """A call type this module has never heard of must still be inspected —
+    failing closed is the point of the deny-list."""
+    assert is_non_conversational_call_type("some_future_call_type") is False

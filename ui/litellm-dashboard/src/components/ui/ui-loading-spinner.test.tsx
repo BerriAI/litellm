@@ -9,9 +9,9 @@ describe("UiLoadingSpinner", () => {
   });
 
   it("should apply custom className alongside default classes", () => {
-    render(<UiLoadingSpinner data-testid="spinner" className="text-red-500" />);
+    render(<UiLoadingSpinner data-testid="spinner" className="text-destructive" />);
     const svg = screen.getByTestId("spinner");
-    expect(svg).toHaveClass("text-red-500");
+    expect(svg).toHaveClass("text-destructive");
     expect(svg).toHaveClass("animate-spin");
   });
 

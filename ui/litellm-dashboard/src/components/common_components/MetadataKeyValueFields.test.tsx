@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -139,8 +139,8 @@ describe("MetadataKeyValueFields", () => {
     render(<Harness onFinish={onFinish} />);
 
     await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
-    await user.type(screen.getByPlaceholderText("Key"), "cost_center");
-    await user.type(screen.getByPlaceholderText("Value"), "eng-1");
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "cost_center" } });
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "eng-1" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -196,7 +196,7 @@ describe("MetadataKeyValueFields", () => {
     render(<Harness onFinish={onFinish} />);
 
     await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
-    await user.type(screen.getByPlaceholderText("Value"), "orphan");
+    fireEvent.change(screen.getByPlaceholderText("Value"), { target: { value: "orphan" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
@@ -230,7 +230,7 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     const onFinish = vi.fn();
     render(<Harness onFinish={onFinish} schemaFields={[{ key: "cost_center", label: "Cost Center" }]} />);
 
-    await user.type(await screen.findByPlaceholderText("Value"), "CC-1001");
+    fireEvent.change(await screen.findByPlaceholderText("Value"), { target: { value: "CC-1001" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {

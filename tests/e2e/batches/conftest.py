@@ -12,13 +12,14 @@ the proxy config.
 
 from __future__ import annotations
 
-from typing import Iterator
+from typing import Final, Iterator
 
 import pytest
 
 from batch_client import BatchClient, build_client
 from capabilities import PROVIDERS
 from e2e_http import NoBody
+from lifecycle import ResourceManager
 from proxy_client import ProxyClient
 
 
@@ -32,6 +33,13 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def client(proxy: ProxyClient) -> BatchClient:
     return build_client(proxy)
+
+
+@pytest.fixture
+def resources(client: BatchClient) -> Iterator[ResourceManager]:
+    manager: Final = ResourceManager(client=client.proxy, strict_cleanup=True)
+    yield manager
+    manager.teardown()
 
 
 @pytest.fixture(scope="session")

@@ -511,10 +511,10 @@ async def test_team_update_sc_2():
         print(f"team_data: {team_data}")
         ## assert rest of object is the same
         for k, v in new_team_data["data"].items():
-            if (
-                k == "members_with_roles"
-            ):  # assert 1 more member (role: "user", user_email: $user_email)
-                len(new_team_data["data"][k]) == len(team_data[k]) + 1
+            if k == "members_with_roles":
+                assert len(new_team_data["data"][k]) == len(
+                    team_info["team_info"]["members_with_roles"]
+                )
             elif (
                 k == "created_at"
                 or k == "updated_at"

@@ -2,14 +2,10 @@ import asyncio
 import httpx
 import json
 import pytest
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, Mock, patch
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm import embedding
 from litellm.exceptions import BadRequestError
@@ -20,15 +16,12 @@ from litellm.utils import (
     get_optional_params,
     get_optional_params_embeddings,
 )
-import requests
 import base64
+from pathlib import Path
 
-# test_example.py
 from abc import ABC, abstractmethod
 
-url = "https://dummyimage.com/100/100/fff&text=Test+image"
-response = requests.get(url)
-file_data = response.content
+file_data = (Path(__file__).parent.parent / "white_100x100.png").read_bytes()
 
 encoded_file = base64.b64encode(file_data).decode("utf-8")
 base64_image = f"data:image/png;base64,{encoded_file}"

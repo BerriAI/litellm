@@ -5,8 +5,6 @@ This test verifies that the fix for handling None metadata in batch requests wor
 """
 
 import asyncio
-import os
-import sys
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -16,9 +14,6 @@ import litellm
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy._types import UserAPIKeyAuth
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def test_add_key_level_controls_with_none_metadata():

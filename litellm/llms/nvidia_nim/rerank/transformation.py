@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 import httpx
@@ -152,6 +153,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Validate that the Nvidia NIM API key is present.
@@ -213,7 +215,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             elif isinstance(doc, dict):
                 # Preserve only the structured passage fields supported by the
                 # selected rerank route.
-                supported_fields: NvidiaNimPassageObject = {}  # mutable-ok: assembling a request TypedDict
+                supported_fields: NvidiaNimPassageObject = {}
                 if "text" in self.SUPPORTED_PASSAGE_FIELDS and "text" in doc:
                     supported_fields["text"] = doc["text"]
                 if "image" in self.SUPPORTED_PASSAGE_FIELDS and "image" in doc:

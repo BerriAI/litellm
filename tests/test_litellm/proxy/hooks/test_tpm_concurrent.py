@@ -25,6 +25,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
+    RateLimitedModel,
     _AUDIO_BYTES_PER_TOKEN,
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
@@ -150,7 +151,7 @@ async def test_no_leak_on_over_limit_rejection(rate_limiter):
         f"estimated={estimated}, limit={user_api_key_dict.tpm_limit}"
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Limit type: tokens\\. Current limit') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -308,7 +309,7 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
 
     stash = get_or_create_request_stash()
     stash.reserved_tokens = 100
-    stash.reserved_model = reserved_model
+    stash.reserved_model = RateLimitedModel(requested=reserved_model, group=reserved_model)
     stash.reserved_scopes = frozenset({("model_per_team", f"{team_id}:{reserved_model}")})
 
     mock_kwargs = {
@@ -685,7 +686,7 @@ async def test_contentless_request_reserves_minimum(rate_limiter):
         f"counter should be 2, got {counter_after_two}"
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Limit type: tokens\\. Current limit') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1319,7 +1320,7 @@ async def test_project_otpm_rejects_multiple_completion_candidates(rate_limiter)
         "n": 10,
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1347,7 +1348,7 @@ async def test_project_otpm_reserves_largest_conflicting_output_cap(rate_limiter
         "max_completion_tokens": 100,
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1377,7 +1378,7 @@ async def test_project_otpm_rejects_google_genai_native_output_cap(
         project_metadata={"model_otpm_limit": {model: 50}},
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1411,7 +1412,7 @@ async def test_project_otpm_rejects_google_genai_native_candidate_count(
         project_metadata={"model_otpm_limit": {model: 150}},
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -1500,7 +1501,7 @@ async def test_project_otpm_over_limit_rolls_back_itpm_reservation(rate_limiter)
         "max_tokens": 500,  # blows past the 10-token OTPM limit
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2003,7 +2004,7 @@ async def test_otpm_rejection_does_not_double_refund_combined_tpm(rate_limiter):
         rate_limit_type="tokens",
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2060,7 +2061,7 @@ async def test_project_itpm_rejects_pretokenized_embedding_input(
         "input": embedding_input,
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2250,7 +2251,7 @@ async def test_itpm_reservation_accounts_for_audio_content_not_just_text(rate_li
         ],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2361,7 +2362,7 @@ async def test_itpm_rejects_large_audio_payload_that_would_pass_flat_estimate(
         ],
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2622,7 +2623,7 @@ async def test_explicit_zero_output_responses_call_reserves_effective_provider_m
         },
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -2850,7 +2851,7 @@ async def test_otpm_rejection_releases_stashed_parallel_slot(rate_limiter):
         "rate_limit": {"tokens_per_unit": 5, "window_size": 60},
     }
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_otpm') as exc_info:
         await handler._reserve_project_io_tokens_or_raise(
             descriptors=[otpm_descriptor],
             data=data,
@@ -3296,7 +3297,7 @@ async def test_rerank_query_and_documents_enforce_project_itpm(
         project_metadata={"model_itpm_limit": {"rerank-model": 100}},
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Rate limit exceeded for model_per_project_itpm') as exc_info:
         await handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=cache,
@@ -3668,6 +3669,43 @@ async def test_post_call_success_hook_contains_header_merge_failures(
         user_api_key_dict=UserAPIKeyAuth(),
         response=response,
     )
+
+
+@pytest.mark.asyncio
+async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loop(rate_limiter):
+    from tests.large_text import text
+    from tests.unit.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    handler, _cache = rate_limiter
+    stash = get_or_create_request_stash()
+    warm_tokenizer("claude-fable-5")
+    data: dict[str, object] = {
+        "model": "claude-fable-5",
+        "messages": [{"role": "user", "content": text * 100}],
+    }
+    itpm_descriptor = {
+        "key": PROJECT_ITPM_DESCRIPTOR_KEY,
+        "value": "proj-loop:claude-fable-5",
+        "rate_limit": {"tokens_per_unit": 10_000_000, "window_size": 60},
+    }
+
+    _, took, lags = await timed_with_loop_lags(
+        lambda: handler._reserve_project_io_tokens_or_raise(
+            descriptors=[itpm_descriptor],
+            data=data,
+            requested_model="claude-fable-5",
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-itpm-loop"), project_id="proj-loop"),
+            tpm_reservation_scopes=[],
+            tpm_reservation_amount=0,
+        )
+    )
+
+    assert stash.rate_limit_response is not None
+    assert_loop_stayed_free(took, lags)
 
 
 if __name__ == "__main__":

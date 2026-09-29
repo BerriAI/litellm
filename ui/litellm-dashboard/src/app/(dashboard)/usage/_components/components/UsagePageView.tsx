@@ -6,12 +6,13 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { ChevronDown, ChevronRight, Download, ExternalLink, Info, Loader2, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Info, Sparkles, X } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BarChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Button } from "@/components/ui/button";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -29,6 +30,8 @@ import { ActivityMetrics, processActivityData } from "@/components/activity_metr
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
+import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -43,7 +46,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
+import { DailyData, MetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import {
   fetchedRangeKey,
@@ -59,7 +62,8 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
-import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 
@@ -95,8 +99,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     to: initialToDate,
   });
 
-  const [allTags, setAllTags] = useState<EntityList[]>([]);
-  const { data: customers = [] } = useCustomers();
+  const [fetchedTags, setFetchedTags] = useState<FetchedForRange<EntityList[]> | null>(null);
+  // No [] default: an unresolved query must stay undefined so the customer
+  // filter reads as loading rather than as a range with no customers.
+  const { data: customers } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
@@ -137,6 +143,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
 
+  // Stamped and selected during render like the request tiles below: the tag
+  // filter reads "no tags" from an empty list, so a list left over from the
+  // previous range would state that about a range nobody has measured yet.
+  const currentTagRangeKey = fetchedRangeKey(startTime, endTime);
+  const allTags = selectForRange(fetchedTags, currentTagRangeKey);
+
   useEffect(() => {
     if (!accessToken) return;
     let cancelled = false;
@@ -144,12 +156,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       try {
         const tags = await tagListCall(accessToken, startTime, endTime);
         if (cancelled) return;
-        setAllTags(
-          Object.values(tags).map((tag: Tag) => ({
+        setFetchedTags({
+          rangeKey: currentTagRangeKey,
+          value: Object.values(tags).map((tag: Tag) => ({
             label: tag.name,
             value: tag.name,
           })),
-        );
+        });
       } catch (e) {
         if (!cancelled) {
           console.error("Failed to fetch tag list", e);
@@ -159,7 +172,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, startTime, endTime]);
+  }, [accessToken, startTime, endTime, currentTagRangeKey]);
 
   // Everything the request tiles read is stamped with the range it answers and
   // selected during render, rather than cleared in an effect. An effect runs
@@ -236,6 +249,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [activeAggregated, aggregatedFailed, paginatedResult.data]);
 
   const loading = aggregatedLoading || paginatedResult.loading;
+
+  // Read through the same range stamp as the tiles, so the export is blocked from the first
+  // render of a new range rather than from whenever the fetch effect gets around to running.
+  const spendFetchState = {
+    coversRange: activeAggregated !== null || paginatedResult.coversRange,
+    cancelled: paginatedResult.cancelled,
+    failed: paginatedResult.failed,
+  };
+  const exportBlockedReason = getExportBlockedReason(spendFetchState);
 
   // Clear isDateChanging when paginated data starts arriving
   useEffect(() => {
@@ -396,52 +418,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [userSpendData.results]);
 
   // Calculate top API keys from the breakdown data
-  const topKeys = useMemo(() => {
-    const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
-        if (!keySpend[key]) {
-          keySpend[key] = {
-            metrics: {
-              spend: 0,
-              prompt_tokens: 0,
-              completion_tokens: 0,
-              total_tokens: 0,
-              api_requests: 0,
-              successful_requests: 0,
-              failed_requests: 0,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 0,
-            },
-            metadata: {
-              key_alias: metrics.metadata.key_alias,
-              team_id: null,
-              tags: metrics.metadata.tags || [],
-            },
-          };
-        }
-        keySpend[key].metrics.spend += metrics.metrics.spend;
-        keySpend[key].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        keySpend[key].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        keySpend[key].metrics.total_tokens += metrics.metrics.total_tokens;
-        keySpend[key].metrics.api_requests += metrics.metrics.api_requests;
-        keySpend[key].metrics.successful_requests += metrics.metrics.successful_requests;
-        keySpend[key].metrics.failed_requests += metrics.metrics.failed_requests;
-        keySpend[key].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        keySpend[key].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
-      });
-    });
-
-    return Object.entries(keySpend)
-      .map(([api_key, metrics]) => ({
-        api_key,
-        key_alias: metrics.metadata.key_alias || "-",
-        tags: metrics.metadata.tags || [],
-        spend: metrics.metrics.spend,
-      }))
-      .sort((a, b) => b.spend - a.spend)
-      .slice(0, topKeysLimit);
-  }, [userSpendData.results, topKeysLimit]);
+  const topKeys = useMemo<TopKeyItem[]>(
+    () => getGlobalTopKeys(userSpendData.results, topKeysLimit),
+    [userSpendData.results, topKeysLimit],
+  );
 
   const sortedDailyResults = useMemo(
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
@@ -473,33 +453,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
-          {paginatedResult.isFetchingMore && (
-            <Alert variant="warning" className="mb-2">
-              <AlertDescription className="flex items-center justify-between text-inherit">
-                <span>
-                  <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
-                  Currently fetching spend data: fetched {paginatedResult.progress.currentPage} /{" "}
-                  {paginatedResult.progress.totalPages} pages. Charts will update periodically as data loads. Moving off
-                  of this page will stop and reset this. To continue using the UI in the meantime,{" "}
-                  <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                    open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
-                  </a>
-                  .
-                </span>
-                <Button variant="destructive" onClick={paginatedResult.cancel}>
-                  Stop
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-          {paginatedResult.cancelled && (
-            <Alert variant="info" className="mb-2">
-              <AlertDescription className="text-inherit">
-                Showing partial data ({paginatedResult.progress.currentPage}/{paginatedResult.progress.totalPages} pages
-                loaded)
-              </AlertDescription>
-            </Alert>
-          )}
+          <PaginationStatusAlerts
+            isFetchingMore={paginatedResult.isFetchingMore}
+            cancelled={paginatedResult.cancelled}
+            failed={paginatedResult.failed}
+            progress={paginatedResult.progress}
+            cancel={paginatedResult.cancel}
+          />
           {/* Your Usage / Global Usage Panel */}
           {(usageView === "global" || usageView === "my-usage") && (
             <>
@@ -533,10 +493,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Sparkles />
                       Ask AI
                     </Button>
-                    <Button variant="outline" onClick={() => setIsGlobalExportModalOpen(true)}>
-                      <Download />
-                      Export Data
-                    </Button>
+                    <span title={exportBlockedReason}>
+                      <Button
+                        variant="outline"
+                        disabled={exportBlockedReason !== undefined}
+                        onClick={() => setIsGlobalExportModalOpen(true)}
+                      >
+                        <Download />
+                        Export Data
+                      </Button>
+                    </span>
                   </div>
                 </div>
                 {/* Cost Panel */}
@@ -582,7 +548,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <CardContent>
                                 <h3 className="text-lg font-medium text-foreground">Total Requests</h3>
                                 <p className="text-2xl font-bold mt-2">
-                                  {userSpendData.metadata?.total_api_requests?.toLocaleString() || 0}
+                                  {(gatewayActivity
+                                    ? gatewayActivity.total_successful_requests + gatewayActivity.total_failed_requests
+                                    : userSpendData.metadata?.total_api_requests
+                                  )?.toLocaleString() || 0}
                                 </p>
                               </CardContent>
                             </ShadcnCard>
@@ -593,7 +562,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   {gatewayActivity && (
                                     <Tooltip>
                                       <TooltipTrigger
-                                        render={<Info className="size-4 text-gray-400 hover:text-gray-600" />}
+                                        render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
                                       />
                                       <TooltipContent>
                                         Counted by the gateway when it answers a request, independent of spend logging.
@@ -608,7 +577,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   today: a non-admin (who may not read deployment-wide counts)
                                   and an admin on a proxy whose table is still backfilling.
                                 */}
-                                <p className="text-2xl font-bold mt-2 text-green-600">
+                                <p className="text-2xl font-bold mt-2 text-success">
                                   {(
                                     gatewayActivity?.total_successful_requests ??
                                     userSpendData.metadata?.total_successful_requests
@@ -622,7 +591,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                   <h3 className="text-lg font-medium text-foreground">Failed Requests</h3>
                                   <Tooltip>
                                     <TooltipTrigger
-                                      render={<Info className="size-4 text-gray-400 hover:text-gray-600" />}
+                                      render={<Info className="size-4 text-muted-foreground hover:text-foreground" />}
                                     />
                                     <TooltipContent>
                                       {gatewayActivity
@@ -633,7 +602,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 </div>
                                 {/* Same source as Successful Requests: the two must agree, or the
                                     tile disagrees with the endpoint breakdown chart below it. */}
-                                <p className="text-2xl font-bold mt-2 text-red-600">
+                                <p className="text-2xl font-bold mt-2 text-destructive">
                                   {(
                                     gatewayActivity?.total_failed_requests ??
                                     userSpendData.metadata?.total_failed_requests
@@ -654,16 +623,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               </CardContent>
                             </ShadcnCard>
                             <ShadcnCard
-                              className="cursor-pointer hover:bg-gray-50 transition-colors"
+                              className="cursor-pointer hover:bg-accent transition-colors"
                               onClick={() => setShowTokenBreakdown(!showTokenBreakdown)}
                             >
                               <CardContent>
                                 <div className="flex items-center gap-2">
                                   <h3 className="text-lg font-medium text-foreground">Total Tokens</h3>
                                   {showTokenBreakdown ? (
-                                    <ChevronDown className="size-3 text-gray-400" />
+                                    <ChevronDown className="size-3 text-muted-foreground" />
                                   ) : (
-                                    <ChevronRight className="size-3 text-gray-400" />
+                                    <ChevronRight className="size-3 text-muted-foreground" />
                                   )}
                                 </div>
                                 <p className="text-2xl font-bold mt-2">
@@ -677,7 +646,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <ShadcnCard>
                                 <CardContent>
                                   <h3 className="text-lg font-medium text-foreground">Input Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-blue-600">
+                                  <p className="text-2xl font-bold mt-2 text-info">
                                     {(userSpendData.metadata?.total_prompt_tokens || 0).toLocaleString()}
                                   </p>
                                 </CardContent>
@@ -685,7 +654,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <ShadcnCard>
                                 <CardContent>
                                   <h3 className="text-lg font-medium text-foreground">Output Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-cyan-600">
+                                  <p className="text-2xl font-bold mt-2 text-info">
                                     {userSpendData.metadata?.total_completion_tokens?.toLocaleString() || 0}
                                   </p>
                                 </CardContent>
@@ -693,7 +662,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <ShadcnCard>
                                 <CardContent>
                                   <h3 className="text-lg font-medium text-foreground">Cache Read Tokens</h3>
-                                  <p className="text-2xl font-bold mt-2 text-green-600">
+                                  <p className="text-2xl font-bold mt-2 text-success">
                                     {userSpendData.metadata?.total_cache_read_input_tokens?.toLocaleString() || 0}
                                   </p>
                                 </CardContent>
@@ -734,15 +703,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 if (!active || !payload?.[0]) return null;
                                 const data = payload[0].payload;
                                 return (
-                                  <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                  <div className="bg-card p-4 shadow-lg rounded-lg border">
                                     <p className="font-bold">{data.date}</p>
-                                    <p className="text-cyan-500">
-                                      Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                    <p className="text-info">Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                                    <p className="text-muted-foreground">Requests: {data.metrics.api_requests}</p>
+                                    <p className="text-muted-foreground">
+                                      Successful: {data.metrics.successful_requests}
                                     </p>
-                                    <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                    <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                    <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                    <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                                    <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
+                                    <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens}</p>
                                   </div>
                                 );
                               }}
@@ -760,7 +729,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               Gateway Requests by Endpoint
                               <Tooltip>
                                 <TooltipTrigger
-                                  render={<Info className="ml-2 inline size-4 text-gray-400 hover:text-gray-600" />}
+                                  render={
+                                    <Info className="ml-2 inline size-4 text-muted-foreground hover:text-foreground" />
+                                  }
                                 />
                                 <TooltipContent>
                                   Counted by the gateway middleware as each request is answered. Covers LLM, MCP and A2A
@@ -842,21 +813,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                       if (!active || !payload?.[0]) return null;
                                       const data = payload[0].payload;
                                       return (
-                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                        <div className="bg-card p-4 shadow-lg rounded-lg border">
                                           <p className="font-bold">{data.key}</p>
-                                          <p className="text-cyan-500">
-                                            Spend: ${formatNumberWithCommas(data.spend, 2)}
-                                          </p>
-                                          <p className="text-gray-600">
+                                          <p className="text-info">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
+                                          <p className="text-muted-foreground">
                                             Total Requests: {data.requests.toLocaleString()}
                                           </p>
-                                          <p className="text-green-600">
+                                          <p className="text-success">
                                             Successful: {data.successful_requests.toLocaleString()}
                                           </p>
-                                          <p className="text-red-600">
+                                          <p className="text-destructive">
                                             Failed: {data.failed_requests.toLocaleString()}
                                           </p>
-                                          <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+                                          <p className="text-muted-foreground">
+                                            Tokens: {data.tokens.toLocaleString()}
+                                          </p>
                                         </div>
                                       );
                                     }}
@@ -890,7 +861,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <ActivityMetrics modelMetrics={modelMetrics} />
                 </TabsContent>
                 <TabsContent value="keys" keepMounted>
-                  <ActivityMetrics modelMetrics={keyMetrics} />
+                  <KeyActivityPanel keyMetrics={keyMetrics} />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />

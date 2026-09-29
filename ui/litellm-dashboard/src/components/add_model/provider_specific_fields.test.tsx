@@ -1,7 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { useFormContext } from "react-hook-form";
 import { Providers } from "../provider_info_helpers";
+import type { MountedFormValues } from "../common_components/MountedFormField";
 import { MountedFormHost } from "../../../tests/mounted-form-host";
 import ProviderSpecificFields from "./provider_specific_fields";
 
@@ -35,6 +37,19 @@ vi.mock("../networking", async () => {
             label: "OpenAI API Key",
             field_type: "password",
             required: true,
+          },
+        ],
+      },
+      {
+        provider: "Vertex_AI",
+        provider_display_name: Providers.Vertex_AI,
+        litellm_provider: "vertex_ai",
+        default_model_placeholder: "gemini-pro",
+        credential_fields: [
+          {
+            key: "vertex_credentials",
+            label: "Vertex Credentials",
+            field_type: "upload",
           },
         ],
       },
@@ -124,7 +139,52 @@ const createQueryClient = () =>
     },
   });
 
+const VertexCredentialsProbe = () => {
+  const { watch } = useFormContext<MountedFormValues>();
+  return <output data-testid="vertex-credentials">{String(watch("vertex_credentials") ?? "")}</output>;
+};
+
 describe("ProviderSpecificFields", () => {
+  it("reads a picked service-account file into the vertex credentials field", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider={"Vertex_AI" as Providers} />
+          <VertexCredentialsProbe />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    const fileInput = await screen.findByLabelText("Vertex Credentials");
+    const serviceAccount = '{"project_id":"example"}';
+    fireEvent.change(fileInput, {
+      target: { files: [new File([serviceAccount], "vertex.json", { type: "application/json" })] },
+    });
+
+    await waitFor(() => expect(screen.getByTestId("vertex-credentials")).toHaveTextContent(serviceAccount));
+  });
+
+  it("ignores a picked file that is not JSON", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MountedFormHost>
+          <ProviderSpecificFields selectedProvider={"Vertex_AI" as Providers} />
+          <VertexCredentialsProbe />
+        </MountedFormHost>
+      </QueryClientProvider>,
+    );
+
+    const fileInput = await screen.findByLabelText("Vertex Credentials");
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["not json"], "vertex.txt", { type: "text/plain" })] },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByTestId("vertex-credentials")).toBeEmptyDOMElement();
+  });
+
   it("should render", async () => {
     const queryClient = createQueryClient();
     render(
@@ -174,8 +234,11 @@ describe("ProviderSpecificFields", () => {
     const apiKeyInput = await screen.findByLabelText("OpenAI API Key");
     expect(apiKeyInput).toHaveAttribute("type", "password");
 
-    fireEvent.click(screen.getByLabelText("eye-invisible"));
+    fireEvent.click(screen.getByRole("button", { name: "Show password" }));
     expect(await screen.findByLabelText("OpenAI API Key")).toHaveAttribute("type", "text");
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(await screen.findByLabelText("OpenAI API Key")).toHaveAttribute("type", "password");
   });
 
   it("should render the provider specific fields for vLLM", async () => {

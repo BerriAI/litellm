@@ -1,0 +1,237 @@
+name: "E2E Record and Replay"
+
+on:
+  schedule:
+    - cron: "0 8 * * 6"
+    - cron: "0 8 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "record (hits real providers and publishes a fresh bundle) or replay (bundle only, zero provider egress)"
+        type: choice
+        options:
+          - record
+          - replay
+        default: record
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    name: "Record the e2e suite against real providers"
+    if: >-
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event.schedule == '0 8 * * 6' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'record'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: llmproxy
+          POSTGRES_PASSWORD: dbpassword9090
+          POSTGRES_DB: litellm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llmproxy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
+      LITELLM_MASTER_KEY: sk-e2e-record-replay
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Start the proxy
+        run: |
+          nohup uv run --no-sync litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
+          for _ in $(seq 1 90); do
+            if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "proxy never became live"
+          tail -n 100 proxy.log
+          exit 1
+
+      - name: Record the replayable e2e lane
+        env:
+          E2E_FIXTURE_MODE: record
+        run: |
+          uv run --no-sync pytest tests/e2e -m replayable --reruns 0 -v --tb=short -rA
+
+      - name: Pack the fixture bundle
+        run: |
+          .github/scripts/e2e_pack_fixture_bundle.sh tests/e2e/.fixtures "${RUNNER_TEMP}/bundle/e2e-fixtures.tar.gz"
+
+      - name: Publish the fixture bundle
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: e2e-fixtures-bundle
+          path: |
+            ${{ runner.temp }}/bundle/e2e-fixtures.tar.gz
+            ${{ runner.temp }}/bundle/e2e-fixtures.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Show proxy log on failure
+        if: failure()
+        run: tail -n 300 proxy.log
+
+  replay:
+    name: "Replay the e2e suite from the pinned bundle with zero egress"
+    if: >-
+      (github.event_name != 'schedule' || github.repository == 'BerriAI/litellm') &&
+      (github.event.schedule == '0 8 * * 1-5' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'replay'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    services:
+      postgres:
+        image: postgres:16.6
+        env:
+          POSTGRES_USER: llmproxy
+          POSTGRES_PASSWORD: dbpassword9090
+          POSTGRES_DB: litellm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llmproxy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
+      LITELLM_MASTER_KEY: sk-e2e-record-replay
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      GH_TOKEN: ${{ github.token }}
+      OPENAI_API_KEY: sk-replay-must-never-reach-a-provider
+      ANTHROPIC_API_KEY: sk-ant-replay-must-never-reach-a-provider
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Fetch the pinned fixture bundle by digest
+        env:
+          BASE_BRANCH: ${{ github.ref_name }}
+        run: |
+          .github/scripts/e2e_fetch_fixture_bundle.sh \
+            "${GITHUB_REPOSITORY}" \
+            e2e-fixtures-bundle \
+            "${BASE_BRANCH}" \
+            tests/e2e/.fixtures
+
+      - name: Start the proxy
+        run: |
+          nohup uv run --no-sync litellm --config tests/e2e/gateway/record_replay_ci_config.yml --port 4000 > proxy.log 2>&1 &
+          for _ in $(seq 1 90); do
+            if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "proxy never became live"
+          tail -n 100 proxy.log
+          exit 1
+
+      - name: Start the egress sentinel
+        run: |
+          # shellcheck disable=SC2024  # the log redirect is deliberately the runner user's, so a later non-sudo cat can read it
+          sudo python3 .github/scripts/e2e_egress_sentinel.py serve \
+            --host api.openai.com \
+            --host api.anthropic.com \
+            --hits-file "${RUNNER_TEMP}/egress-hits.jsonl" \
+            --ready-file "${RUNNER_TEMP}/egress-ready" \
+            --pid-file "${RUNNER_TEMP}/egress.pid" \
+            > "${RUNNER_TEMP}/egress-sentinel.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            if [[ -f "${RUNNER_TEMP}/egress-ready" ]]; then
+              cat "${RUNNER_TEMP}/egress-sentinel.log"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "egress sentinel never became ready"
+          cat "${RUNNER_TEMP}/egress-sentinel.log"
+          exit 1
+
+      - name: Replay the replayable e2e lane
+        env:
+          E2E_FIXTURE_MODE: replay
+        run: |
+          uv run --no-sync pytest tests/e2e -m replayable --reruns 0 -v --tb=short -rA
+
+      - name: Stop the egress sentinel and assert zero provider egress
+        if: always()
+        run: |
+          if [[ -f "${RUNNER_TEMP}/egress.pid" ]]; then
+            sudo kill -TERM "$(cat "${RUNNER_TEMP}/egress.pid")" 2>/dev/null || true
+            sleep 2
+          fi
+          python3 .github/scripts/e2e_egress_sentinel.py assert-empty --hits-file "${RUNNER_TEMP}/egress-hits.jsonl"
+
+      - name: Show proxy log on failure
+        if: failure()
+        run: tail -n 300 proxy.log
