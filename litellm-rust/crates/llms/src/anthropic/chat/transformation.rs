@@ -154,6 +154,7 @@ impl BaseConfig for AnthropicConfig {
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
+                    tool_calls: None,
                 },
                 finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
                     .to_string(),

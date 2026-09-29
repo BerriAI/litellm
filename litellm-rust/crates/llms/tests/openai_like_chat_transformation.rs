@@ -251,27 +251,35 @@ fn null_token_fields_in_usage_become_zero() {
 }
 
 #[rstest]
-fn a_tool_call_response_declines_instead_of_dropping_the_calls() {
-    // The `json_mode` rewrite needs a request flag the route does not carry, so
-    // a tool-call answer falls back to Python rather than losing the calls.
-    assert_eq!(
-        transform_response(json!({
-            "model": "m",
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "f", "arguments": "{}"},
-                    }],
-                },
-                "finish_reason": "tool_calls",
-            }],
-        })),
-        Err(Error::Unsupported("tool call response"))
-    );
+fn a_tool_call_response_retains_its_identity_and_arguments() {
+    let response = transform_response(json!({
+        "model": "m",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "f", "arguments": "{}"},
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }],
+    }))
+    .expect("tool response normalizes");
+    let choice = &response.choices[0];
+    let calls = choice
+        .message
+        .tool_calls
+        .as_ref()
+        .expect("tool calls retained");
+    assert_eq!(choice.finish_reason, "tool_calls");
+    assert_eq!(choice.message.content, None);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "call_1");
+    assert_eq!(calls[0].function.name, "f");
+    assert_eq!(calls[0].function.arguments, "{}");
 }
 
 #[rstest]
@@ -330,14 +338,22 @@ fn accepts_standard_openai_params() {
 }
 
 #[rstest]
-fn tool_parameters_decline_before_the_call() {
-    // A `tools` request would come back with tool calls this port cannot
-    // normalize, so it declines at the gate instead of after the call.
+fn a_tool_result_round_trip_passes_the_terminal_gate() {
+    let messages = json!([
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": null, "tool_calls": [{
+            "id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}
+        }]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+    ]);
+    let options = json!({"tools": [{"type": "function", "function": {"name": "weather"}}]});
+    assert_eq!(reason(messages.clone(), options.clone()), None);
+    let sent = transform("m", messages, options.clone());
+    assert_eq!(sent["messages"][1]["tool_calls"][0]["id"], "call_1");
+    assert_eq!(sent["messages"][2]["tool_call_id"], "call_1");
+    assert_eq!(sent["messages"][2]["content"], "sunny");
     assert_eq!(
-        reason(
-            json!([{"role": "user", "content": "hi"}]),
-            json!({"tools": [{"type": "function", "function": {"name": "f"}}]}),
-        ),
-        Some(Unsupported("unrecognized request parameter"))
+        transform("m", json!([{"role": "user", "content": "hi"}]), options)["tools"],
+        json!([{"type": "function", "function": {"name": "weather"}}])
     );
 }

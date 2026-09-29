@@ -7,8 +7,9 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::core_helpers::unix_now;
 use litellm_llms_types::formats::chat_completions::{
-    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, PromptTokensDetails,
+    ChatCompletionToolCall, ChatCompletionsChoice, ChatCompletionsChoiceMessage,
+    ChatCompletionsResponse, ChatCompletionsUsage, ChatMessage, ChatMessageContent,
+    PromptTokensDetails,
 };
 use serde_json::{Map, Value, json};
 
@@ -16,19 +17,15 @@ use crate::{
     Error,
     base_llm::{
         auth::AuthScheme,
+        chat::streaming::{ChatStream, StreamShape, openai_chat_stream},
         chat::transformation::{
-            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment,
+            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData, Unsupported,
+            ValidatedEnvironment, unsupported_message, unsupported_param,
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
 };
 
-/// OpenAI parameter names the Rust path can place verbatim in the request body.
-/// Tool parameters are absent on purpose: the message gate already declines
-/// tool-call content, and a `tools` request that did get through would produce
-/// a tool-call response this port cannot normalize yet, so it declines before
-/// the call instead of after it.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("frequency_penalty", "frequency_penalty"),
     ("logit_bias", "logit_bias"),
@@ -53,6 +50,8 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("prompt_cache_retention", "prompt_cache_retention"),
     ("store", "store"),
     ("response_format", "response_format"),
+    ("tools", "tools"),
+    ("tool_choice", "tool_choice"),
 ];
 
 /// Call configuration the caller may pass that never enters the request body.
@@ -213,6 +212,45 @@ impl BaseConfig for OpenAILikeChatConfig {
     fn config_params(&self) -> &'static [&'static str] {
         CONFIG_PARAMS
     }
+
+    fn model_response_iterator(&self, _shape: StreamShape) -> Option<ChatStream> {
+        Some(openai_chat_stream())
+    }
+
+    fn unsupported_reason(
+        &self,
+        messages: &[ChatMessage],
+        optional_params: &Map<String, Value>,
+    ) -> Option<Unsupported> {
+        unsupported_param(SUPPORTED_PARAMS, CONFIG_PARAMS, optional_params)
+            .or_else(|| messages.iter().find_map(unsupported_openai_like_message))
+    }
+}
+
+fn unsupported_openai_like_message(message: &ChatMessage) -> Option<Unsupported> {
+    match message.role.as_str() {
+        "tool"
+            if matches!(message.content, Some(ChatMessageContent::Text(_)))
+                && message.extra.len() == 1
+                && message
+                    .extra
+                    .get("tool_call_id")
+                    .is_some_and(Value::is_string) =>
+        {
+            None
+        }
+        "assistant" if message.extra.contains_key("tool_calls") => {
+            let calls: Option<Vec<ChatCompletionToolCall>> = message
+                .extra
+                .get("tool_calls")
+                .and_then(|value| serde_json::from_value(value.clone()).ok());
+            (calls.is_none()
+                || message.extra.len() != 1
+                || !matches!(message.content, None | Some(ChatMessageContent::Text(_))))
+            .then_some(Unsupported("assistant tool calls"))
+        }
+        _ => unsupported_message(message),
+    }
 }
 
 /// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
@@ -233,18 +271,15 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
         .get("message")
         .and_then(Value::as_object)
         .ok_or(Error::MissingField("message"))?;
-    if message
+    let tool_calls: Option<Vec<ChatCompletionToolCall>> = message
         .get("tool_calls")
-        .and_then(Value::as_array)
-        .is_some_and(|calls| !calls.is_empty())
-    {
-        // Python rewrites the lone tool call into content only under
-        // `json_mode`, a request flag `transform_response` cannot see, and the
-        // normalized type cannot carry tool calls at all. Declining is
-        // terminal at this point, but passing back an empty assistant turn
-        // would fabricate the reply.
-        return Err(Error::Unsupported("tool call response"));
-    }
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|error| {
+                Error::InvalidResponse(crate::ErrorDetail::invalid("tool calls", error))
+            })
+        })
+        .transpose()?;
     if message.get("refusal").is_some_and(|value| !value.is_null()) {
         return Err(Error::Unsupported("refusal response"));
     }
@@ -264,6 +299,7 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
                 .unwrap_or("assistant")
                 .to_string(),
             content: content.and_then(Value::as_str).map(str::to_string),
+            tool_calls,
         },
         finish_reason: choice
             .get("finish_reason")

@@ -60,6 +60,7 @@ pub struct ChatMessage {
 pub struct ChatCompletionToolCallFunctionChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default)]
     pub arguments: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_specific_fields: Option<Map<String, Value>>,
@@ -69,8 +70,8 @@ pub struct ChatCompletionToolCallFunctionChunk {
 pub struct ChatCompletionToolCallChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    #[serde(rename = "type")]
-    pub tool_type: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub tool_type: Option<String>,
     pub function: ChatCompletionToolCallFunctionChunk,
     pub index: i64,
 }
@@ -116,11 +117,23 @@ pub struct ChatCompletionsUsage {
 #[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionsChoiceMessage {
     pub role: String,
-    // Whether an empty turn is `None` or `""` is the provider's choice, not a
-    // shared invariant: Anthropic's transform ends on `merged_text or None`
-    // while Converse assigns the joined string unconditionally. Each config
-    // mirrors its own, so keep this optional and serialize it even when None.
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ChatCompletionToolCall>>,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+pub struct ChatCompletionToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: ChatCompletionToolCallFunction,
+}
+
+#[macro_rules_attribute::apply(wire_type)]
+pub struct ChatCompletionToolCallFunction {
+    pub name: String,
+    pub arguments: String,
 }
 
 #[macro_rules_attribute::apply(wire_type)]
