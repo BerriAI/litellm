@@ -10,6 +10,7 @@ import litellm
 from litellm._internal_context import in_post_response_phase
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.pass_through.messages import handler
 from litellm.llms.anthropic.pass_through.messages.response_cache import (
     AnthropicMessagesStreamCacheWriter,
@@ -61,6 +62,12 @@ async def _byte_stream(chunks: List[bytes]) -> AsyncIterator[bytes]:
 
 async def _collect(stream: AsyncIterator[bytes]) -> List[bytes]:
     return [chunk async for chunk in stream]
+
+
+@pytest.fixture(autouse=True)
+async def _drain_logging_worker():
+    yield
+    await GLOBAL_LOGGING_WORKER.flush()
 
 
 @pytest.fixture
@@ -280,6 +287,40 @@ class _HeldBackStream:
 
     async def __anext__(self) -> bytes:
         raise StopAsyncIteration
+
+
+class _AttributedStream:
+    """Stream stub carrying the billing attributes the disconnect helper reads."""
+
+    def __init__(self, chunks: list) -> None:
+        self.chunks = [object()]
+        self.messages = [{"role": "user", "content": "hi"}]
+        self.model = "gpt-4o-mini"
+        self._pending = list(chunks)
+
+    def __aiter__(self) -> "_AttributedStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self._pending:
+            raise StopAsyncIteration
+        return self._pending.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_cache_writer_exposes_inner_stream_billing_attributes(request_kwargs):
+    caching_handler = LLMCachingHandler(
+        original_function=handler.anthropic_messages,
+        request_kwargs=dict(request_kwargs),
+        start_time=datetime.datetime.now(),
+    )
+    inner = _AttributedStream(STREAM_EVENTS)
+    writer = AnthropicMessagesStreamCacheWriter(stream=inner, caching_handler=caching_handler)
+
+    assert writer.chunks is inner.chunks
+    assert writer.messages is inner.messages
+    assert writer.model == "gpt-4o-mini"
+    assert await _collect(writer) == STREAM_EVENTS
 
 
 @pytest.mark.asyncio
