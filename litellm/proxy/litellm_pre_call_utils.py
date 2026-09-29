@@ -186,7 +186,6 @@ def _sanitize_for_log(value: object) -> str:
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
-from litellm.types.llms.bedrock import AWS_CREDENTIAL_VALUE_PARAM_KEYS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -1965,7 +1964,6 @@ def refresh_proxy_server_request_body_snapshot(
         frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"})
         | _TRANSPORT_ONLY_CREDENTIAL_KEYS
         | _CALLBACK_CREDENTIAL_KEYS
-        | AWS_CREDENTIAL_VALUE_PARAM_KEYS
     )
     body: Final = {  # mutable-ok: audit JSON serialization requires a dict with shared nested messages
         k: v for k, v in data.items() if k not in _body_snapshot_exclude

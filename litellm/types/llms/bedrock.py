@@ -1132,9 +1132,6 @@ class AwsAuthParams(BaseModel):
 
 
 AWS_AUTH_PARAM_KEYS: Final[tuple[str, ...]] = tuple(AwsAuthParams.model_fields)
-AWS_CREDENTIAL_VALUE_PARAM_KEYS: Final = frozenset(
-    {"aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_web_identity_token"}
-)
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):
