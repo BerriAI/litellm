@@ -450,10 +450,6 @@ def _get_router_zero_cost_cache(llm_router: Router) -> dict[str, bool] | None:
     return cache if isinstance(cache, dict) else None
 
 
-def _resolve_cost_model_group(model_name: str, llm_router: Router) -> str:
-    return resolve_model_group_alias(llm_router.model_group_alias, model_name) or model_name
-
-
 def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None) -> bool:
     """
     Check if a model has zero cost (no configured pricing).
@@ -467,7 +463,25 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
     Returns:
         bool: True if all costs for the model are zero, False otherwise
     """
-    if model is None or llm_router is None:
+    if llm_router is None:
+        return False
+    return _is_target_group_cost_zero(
+        model=model,
+        llm_router=llm_router,
+        target_group_of=lambda name: resolve_model_group_alias(llm_router.model_group_alias, name) or name,
+    )
+
+
+def is_requested_model_cost_zero(model: str | list[str] | None, llm_router: Router | None) -> bool:
+    if llm_router is None:
+        return False
+    return _is_target_group_cost_zero(model=model, llm_router=llm_router, target_group_of=lambda name: name)
+
+
+def _is_target_group_cost_zero(
+    model: str | list[str] | None, llm_router: Router, target_group_of: Callable[[str], str]
+) -> bool:
+    if model is None:
         return False
 
     # Handle list of models
@@ -477,7 +491,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
     for model_name in model_list:
         try:
-            target_group = _resolve_cost_model_group(model_name, llm_router)
+            target_group = target_group_of(model_name)
             if zero_cost_cache is not None:
                 cached = zero_cost_cache.get(target_group)
                 if cached is not None:

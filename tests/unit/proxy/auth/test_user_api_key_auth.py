@@ -1796,6 +1796,34 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
     )
 
 
+def _free_and_paid_router() -> litellm.Router:
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {
+                    "model": "ollama/llama2",
+                    "api_base": "http://localhost:11434",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "openai/paid-model",
+                    "api_key": "sk-fake",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+            },
+        ],
+        model_group_alias={"free-alias": "free-model"},
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model, key_aliases, key_router_settings, router_settings_rewritten, expected",
@@ -1819,31 +1847,8 @@ async def test_budget_skip_judges_the_model_the_key_aliases_dispatch_to(
 
     from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
     from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
-    from litellm.router import Router
 
-    router = Router(
-        model_list=[
-            {
-                "model_name": "free-model",
-                "litellm_params": {
-                    "model": "ollama/llama2",
-                    "api_base": "http://localhost:11434",
-                    "input_cost_per_token": 0.0,
-                    "output_cost_per_token": 0.0,
-                },
-            },
-            {
-                "model_name": "paid-model",
-                "litellm_params": {
-                    "model": "openai/paid-model",
-                    "api_key": "sk-fake",
-                    "input_cost_per_token": 1e-06,
-                    "output_cost_per_token": 2e-06,
-                },
-            },
-        ],
-        model_group_alias={"free-alias": "free-model"},
-    )
+    router = _free_and_paid_router()
     skipped = await _should_skip_budget_checks(
         request_data={"model": model},
         route="/chat/completions",
@@ -1861,6 +1866,38 @@ async def test_budget_skip_judges_the_model_the_key_aliases_dispatch_to(
                 }
             )
         ),
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(aliases=key_aliases, router_settings=key_router_settings),
+    )
+    assert skipped is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, model, key_aliases, key_router_settings, expected",
+    [
+        ("/chat/completions", "free-alias", {}, None, True),
+        ("/anthropic/v1/messages", "free-alias", {}, None, False),
+        ("/anthropic/v1/messages", "my-alias", {"my-alias": "free-model"}, None, False),
+        ("/anthropic/v1/messages", "rs-alias", {}, {"model_group_alias": {"rs-alias": "free-model"}}, False),
+        ("/anthropic/v1/messages", "free-model", {"free-model": "paid-model"}, None, True),
+        ("/rag/query", "free-alias", {}, None, False),
+    ],
+)
+async def test_budget_skip_prices_the_requested_name_on_routes_that_forward_it_unaliased(
+    route: str,
+    model: str,
+    key_aliases: dict[str, str],
+    key_router_settings: dict[str, dict[str, str]] | None,
+    expected: bool,
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+    router = _free_and_paid_router()
+    skipped = await _should_skip_budget_checks(
+        request_data={"model": model},
+        route=route,
+        request=None,
         llm_router=router,
         valid_token=UserAPIKeyAuth(aliases=key_aliases, router_settings=key_router_settings),
     )

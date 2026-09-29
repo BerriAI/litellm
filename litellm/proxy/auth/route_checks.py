@@ -395,13 +395,7 @@ class RouteChecks:
         if not isinstance(route, str):
             return False
 
-        if route in LiteLLMRoutes.openai_routes.value:
-            return True
-
-        if route in LiteLLMRoutes.anthropic_routes.value:
-            return True
-
-        if route in LiteLLMRoutes.google_routes.value:
+        if RouteChecks.is_unified_llm_api_route(route):
             return True
 
         if RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value):
@@ -411,6 +405,22 @@ class RouteChecks:
             return True
 
         if route in LiteLLMRoutes.litellm_native_routes.value:
+            return True
+
+        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
+            if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
+                return True
+        return False
+
+    @staticmethod
+    def is_unified_llm_api_route(route: str) -> bool:
+        if route in LiteLLMRoutes.openai_routes.value:
+            return True
+
+        if route in LiteLLMRoutes.anthropic_routes.value:
+            return True
+
+        if route in LiteLLMRoutes.google_routes.value:
             return True
 
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
@@ -438,13 +448,7 @@ class RouteChecks:
                 if RouteChecks._route_matches_pattern(route=route, pattern=anthropic_route):
                     return True
 
-        if RouteChecks._is_azure_openai_route(route=route):
-            return True
-
-        for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if route == _llm_passthrough_route or route.startswith(_llm_passthrough_route + "/"):
-                return True
-        return False
+        return RouteChecks._is_azure_openai_route(route=route)
 
     @staticmethod
     def _is_get_mcp_server_discovery_route(route: str, request: Request | None) -> bool:

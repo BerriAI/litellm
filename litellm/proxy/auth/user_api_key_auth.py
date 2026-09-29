@@ -65,6 +65,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
     is_dispatched_model_cost_zero,
+    is_requested_model_cost_zero,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
     key_model_aliases_for_auth_check,
@@ -1796,7 +1797,7 @@ async def _user_api_key_auth_builder(
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
                         skip_budget_checks = await _is_dispatched_model_cost_zero(
-                            model=model, llm_router=llm_router, valid_token=valid_token, request=request
+                            model=model, llm_router=llm_router, valid_token=valid_token, request=request, route=route
                         )
                         if skip_budget_checks:
                             verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
@@ -2238,7 +2239,7 @@ async def _user_api_key_auth_builder(
             skip_budget_checks = False
             if model is not None and llm_router is not None:
                 skip_budget_checks = await _is_dispatched_model_cost_zero(
-                    model=model, llm_router=llm_router, valid_token=valid_token, request=request
+                    model=model, llm_router=llm_router, valid_token=valid_token, request=request, route=route
                 )
                 if skip_budget_checks:
                     verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
@@ -3147,14 +3148,21 @@ async def _should_skip_budget_checks(
     )
     if model is not None and llm_router is not None:
         return await _is_dispatched_model_cost_zero(
-            model=model, llm_router=llm_router, valid_token=valid_token, request=request
+            model=model, llm_router=llm_router, valid_token=valid_token, request=request, route=route
         )
     return False
 
 
 async def _is_dispatched_model_cost_zero(
-    model: str | list[str], llm_router: litellm.Router, valid_token: UserAPIKeyAuth, request: Request | None
+    model: str | list[str],
+    llm_router: litellm.Router,
+    valid_token: UserAPIKeyAuth,
+    request: Request | None,
+    route: str,
 ) -> bool:
+    if not RouteChecks.is_unified_llm_api_route(route):
+        return is_requested_model_cost_zero(model=model, llm_router=llm_router)
+
     from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
 
     settings: Final = await proxy_config.get_hierarchical_router_settings(
@@ -3736,7 +3744,7 @@ async def _run_post_custom_auth_checks(
     # be refused under custom auth and served under the other two.
     skip_budget_checks: Final = (
         await _is_dispatched_model_cost_zero(
-            model=current_model, llm_router=llm_router, valid_token=valid_token, request=request
+            model=current_model, llm_router=llm_router, valid_token=valid_token, request=request, route=route
         )
         if current_model is not None and llm_router is not None
         else False

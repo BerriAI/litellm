@@ -136,6 +136,28 @@ def test_anthropic_api_routes():
     assert RouteChecks.is_llm_api_route(route="/v1/messages") is True
 
 
+@pytest.mark.parametrize(
+    "route, expected",
+    [
+        ("/v1/chat/completions", True),
+        ("/v1/messages", True),
+        ("/v1/responses", True),
+        ("/v1beta/models/gemini-pro:generateContent", True),
+        ("/engines/gpt-4/chat/completions", True),
+        ("/openai/deployments/gpt-4o/chat/completions", True),
+        ("/openai/deployments/vertex_ai/gemini-1.5-flash/chat/completions", True),
+        ("/openai/v1/chat/completions", False),
+        ("/anthropic/v1/messages", False),
+        ("/bedrock/model/cohere.command-r-v1:0/converse", False),
+        ("/rag/query", False),
+        ("/mcp/tools/call", False),
+    ],
+)
+def test_unified_llm_api_route_excludes_routes_that_forward_the_model_name_as_sent(route: str, expected: bool):
+    assert RouteChecks.is_unified_llm_api_route(route) is expected
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
 def create_request(path: str, base_url: str = "http://testserver") -> Request:
     return Request(
         {

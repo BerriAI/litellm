@@ -26,6 +26,7 @@ from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     _is_model_cost_zero,
     is_dispatched_model_cost_zero,
+    is_requested_model_cost_zero,
     _virtual_key_soft_budget_check,
     _team_soft_budget_check,
 )
@@ -1558,6 +1559,23 @@ def test_zero_cost_check_prices_an_alias_as_its_target_group(
 ) -> None:
     router: Final = _alias_router(_aliases_to(target))
     assert _is_model_cost_zero(model=model, llm_router=router) is expected
+
+
+@pytest.mark.parametrize(
+    "target, model, expected",
+    [
+        ("free-model", "visible", False),
+        ("free-model", "hidden", False),
+        ("free-model", "free-model", True),
+        ("paid-model", "paid-model", False),
+    ],
+)
+def test_requested_name_zero_cost_check_prices_the_name_without_the_global_alias(
+    target: str, model: str, expected: bool
+) -> None:
+    router: Final = _alias_router(_aliases_to(target))
+    assert _is_model_cost_zero(model=model, llm_router=router) is (target == "free-model")
+    assert is_requested_model_cost_zero(model=model, llm_router=router) is expected
 
 
 @pytest.mark.parametrize(
