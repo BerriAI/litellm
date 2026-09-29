@@ -295,6 +295,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     assert embeddings_endpoint.api_key_breakdown["key-2"].metrics.spend == 3.0
     assert mock_prisma.db.query_raw.await_count == 2
 
+
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_returns_active_key_metadata():
     """Test that get_api_key_metadata should return metadata for active keys."""
@@ -2676,6 +2677,35 @@ async def test_get_api_key_metadata_recovers_legacy_hashed_jwt_owner_from_daily_
     assert result.get(api_key, {}).get("user_id") == user_id
     assert result.get(api_key, {}).get("user_email") == "legacy-owner@example.com"
     spend_log_query_raw.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_preserves_deleted_key_metadata_when_recovering_daily_spend_owner():
+    api_key: Final = f"hashed-jwt-{hash_token('legacy-cli-session-daily-spend-metadata')}"
+    user_id: Final = "legacy-owner"
+    mock_prisma: Final = MagicMock()
+    deleted_key: Final = MagicMock()
+    deleted_key.token = api_key
+    deleted_key.key_alias = "legacy-cli-key"
+    deleted_key.team_id = "team-legacy"
+    deleted_key.user_id = None
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[deleted_key])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id=user_id, user_email="legacy-owner@example.com", teams=[])]
+    )
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[{"api_key": api_key, "first_owner": user_id, "last_owner": user_id}]
+    )
+
+    result: Final = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={api_key})
+
+    recovered_metadata: Final = result[api_key]
+    assert recovered_metadata.get("key_alias") == "legacy-cli-key"
+    assert recovered_metadata.get("team_id") == "team-legacy"
+    assert recovered_metadata.get("user_id") == user_id
+    assert recovered_metadata.get("user_email") == "legacy-owner@example.com"
+    mock_prisma.db.query_raw.assert_awaited_once()
 
 
 @pytest.mark.asyncio
