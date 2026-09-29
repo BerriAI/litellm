@@ -2,16 +2,20 @@ import asyncio
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Final
 
 import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from integration._support.client import Gateway, Scenario, eventually
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
+from openai.types.chat.completion_create_params import ResponseFormat
+from openai.types.shared_params.response_format_json_schema import ResponseFormatJSONSchema
 from pydantic import JsonValue, TypeAdapter
 
 _PROJECT: Final = "scripted-project"
@@ -19,10 +23,25 @@ _LOCATION: Final = "global"
 _SONNET_5_5: Final = "claude-sonnet-5-5"
 _SONNET_4_6: Final = "claude-sonnet-4-6"
 _FORCED_TOOL_CHOICE_ERROR: Final = 'tool_choice: type "tool" and "any" are not supported for this model.'
-_JSON_TOOL_INPUT: Final = {"name": "Paris", "country": "France"}
-_RESPONSE_FORMAT: Final = {
+_JSON_TOOL_INPUT: Final[dict[str, JsonValue]] = {"name": "Paris", "country": "France"}
+_CITY_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "country": {"type": "string"}},
+    "required": ["name", "country"],
+    "additionalProperties": False,
+}
+_RESPONSE_FORMAT: Final[dict[str, JsonValue]] = {
     "type": "json_schema",
     "json_schema": {
+        "name": "city",
+        "strict": True,
+        "schema": _CITY_SCHEMA,
+    },
+}
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_SDK_RESPONSE_FORMAT: Final[ResponseFormat] = ResponseFormatJSONSchema(
+    type="json_schema",
+    json_schema={
         "name": "city",
         "strict": True,
         "schema": {
@@ -32,8 +51,9 @@ _RESPONSE_FORMAT: Final = {
             "additionalProperties": False,
         },
     },
-}
-_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+)
+_JSON_LIST: Final = TypeAdapter(list[dict[str, JsonValue]])
+_JSON_TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 def _prompt() -> str:
@@ -69,7 +89,7 @@ def _model_path(model: str) -> str:
 
 
 def _anthropic_tool_use_message(model: str) -> dict[str, JsonValue]:
-    return {
+    message: Final[dict[str, JsonValue]] = {
         "id": f"msg_{uuid.uuid4().hex[:12]}",
         "type": "message",
         "role": "assistant",
@@ -78,18 +98,51 @@ def _anthropic_tool_use_message(model: str) -> dict[str, JsonValue]:
         "stop_reason": "tool_use",
         "usage": {"input_tokens": 11, "output_tokens": 7},
     }
+    return message
+
+
+def _delete_model(gateway: Gateway, identity: str) -> None:
+    gateway.post("/model/delete", {"id": identity})
 
 
 def _model(gateway: Gateway, scenario: Scenario, wire_url: str, backend: str, **extra: JsonValue) -> str:
-    return scenario.model(
-        model=f"vertex_ai/{backend}",
-        api_base=wire_url,
-        api_key=None,
-        vertex_project=_PROJECT,
-        vertex_location=_LOCATION,
-        vertex_credentials=_service_account_json(gateway.upstream_url.rstrip("/")),
-        **extra,
+    name: Final = f"integration-{uuid.uuid4().hex}"
+    created: Final = gateway.post(
+        "/model/new",
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"vertex_ai/{backend}",
+                "api_base": wire_url,
+                "api_key": None,
+                "vertex_project": _PROJECT,
+                "vertex_location": _LOCATION,
+                "vertex_credentials": _service_account_json(gateway.upstream_url.rstrip("/")),
+                **extra,
+            },
+            "model_info": {},
+        },
     )
+    identity: Final = string_value(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(_delete_model, gateway, identity)
+    return name
+
+
+def _json_body(response: httpx.Response) -> dict[str, JsonValue]:
+    return _JSON_OBJECT.validate_json(response.content)
+
+
+def _chat_content(payload: dict[str, JsonValue]) -> JsonValue:
+    choice: Final = _JSON_LIST.validate_python(payload["choices"])[0]
+    return object_value(choice["message"])["content"]
+
+
+def _chat_id(payload: dict[str, JsonValue]) -> str:
+    return string_value(payload["id"])
+
+
+def _tool_names(body: dict[str, JsonValue]) -> list[JsonValue]:
+    return [tool["name"] for tool in _JSON_TOOLS.validate_python(body["tools"])]
 
 
 def _request(gateway: Gateway, model: str) -> tuple[int, dict[str, JsonValue], str]:
@@ -103,7 +156,7 @@ def _request(gateway: Gateway, model: str) -> tuple[int, dict[str, JsonValue], s
         headers={"Authorization": f"Bearer {gateway.key}"},
         timeout=30,
     )
-    return response.status_code, response.json(), response.text
+    return response.status_code, _json_body(response), response.text
 
 
 def test_vertex_sonnet_5_5_response_format_sends_json_tool_without_forced_tool_choice(
@@ -116,11 +169,11 @@ def test_vertex_sonnet_5_5_response_format_sends_json_tool_without_forced_tool_c
         model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5)
         status, payload, text = _request(gateway, model)
         assert status == 200, text
-        assert json.loads(str(payload["choices"][0]["message"]["content"])) == _JSON_TOOL_INPUT
+        assert json.loads(str(_chat_content(payload))) == _JSON_TOOL_INPUT
         received: Final = wire.drain()
         assert len(received) == 1
         upstream_body: Final = _JSON_OBJECT.validate_json(received[0].body)
-        assert [tool["name"] for tool in upstream_body["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream_body) == ["json_tool_call"]
         assert "tool_choice" not in upstream_body
 
 
@@ -133,17 +186,17 @@ def test_vertex_sonnet_4_6_response_format_still_forces_json_tool_call(gateway: 
         model: Final = _model(gateway, scenario, wire.url, _SONNET_4_6)
         status, payload, text = _request(gateway, model)
         assert status == 200, text
-        assert json.loads(str(payload["choices"][0]["message"]["content"])) == _JSON_TOOL_INPUT
+        assert json.loads(str(_chat_content(payload))) == _JSON_TOOL_INPUT
         received: Final = wire.drain()
         assert len(received) == 1
         upstream_body: Final = _JSON_OBJECT.validate_json(received[0].body)
         assert upstream_body["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
-        assert [tool["name"] for tool in upstream_body["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream_body) == ["json_tool_call"]
 
 
 _OPUS_5_5: Final = "claude-opus-5-5"
 _SONNET_5_5_DEFAULT: Final = "claude-sonnet-5-5@default"
-_GET_WEATHER: Final = {
+_GET_WEATHER: Final[dict[str, JsonValue]] = {
     "type": "function",
     "function": {
         "name": "get_weather",
@@ -193,7 +246,7 @@ def _responses(gateway: Gateway, model: str, **extra: JsonValue) -> httpx.Respon
                     "type": "json_schema",
                     "name": "city",
                     "strict": True,
-                    "schema": _RESPONSE_FORMAT["json_schema"]["schema"],
+                    "schema": _CITY_SCHEMA,
                 }
             },
             **extra,
@@ -329,7 +382,7 @@ def _upstream_bodies(wire: Wire) -> tuple[dict[str, JsonValue], ...]:
 
 
 def _output_text(payload: dict[str, JsonValue]) -> str:
-    texts: Final = []
+    texts: Final[list[JsonValue]] = []
 
     def walk(node: JsonValue) -> None:
         if isinstance(node, dict):
@@ -358,13 +411,13 @@ def test_vertex_sonnet_5_5_response_format_json_tool_unforced_openai_sdk_sync(ga
             model=model,
             messages=[{"role": "user", "content": _prompt()}],
             max_tokens=1024,
-            response_format=_RESPONSE_FORMAT,
+            response_format=_SDK_RESPONSE_FORMAT,
         )
         completion: Final = raw.parse()
         assert json.loads(str(completion.choices[0].message.content)) == _JSON_TOOL_INPUT
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
         assert _spend_count(completion.id) == 1
 
@@ -386,7 +439,7 @@ def test_vertex_sonnet_5_5_response_format_json_tool_unforced_openai_sdk_async(g
                 model=model,
                 messages=[{"role": "user", "content": _prompt()}],
                 max_tokens=1024,
-                response_format=_RESPONSE_FORMAT,
+                response_format=_SDK_RESPONSE_FORMAT,
             )
 
         raw: Final = asyncio.run(call())
@@ -394,7 +447,7 @@ def test_vertex_sonnet_5_5_response_format_json_tool_unforced_openai_sdk_async(g
         assert json.loads(str(completion.choices[0].message.content)) == _JSON_TOOL_INPUT
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
         assert _spend_count(completion.id) == 1
 
@@ -416,7 +469,7 @@ def test_vertex_sonnet_5_5_response_format_json_tool_unforced_stream(gateway: Ga
             model=model,
             messages=[{"role": "user", "content": _prompt()}],
             max_tokens=1024,
-            response_format=_RESPONSE_FORMAT,
+            response_format=_SDK_RESPONSE_FORMAT,
             stream=True,
         )
         chunks: Final = list(raw_stream.parse())
@@ -426,7 +479,7 @@ def test_vertex_sonnet_5_5_response_format_json_tool_unforced_stream(gateway: Ga
         assert json.loads(joined) == _JSON_TOOL_INPUT, joined
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
         assert _spend_count(chunks[0].id) == 1
 
@@ -439,11 +492,11 @@ def test_vertex_sonnet_5_5_responses_text_format_sends_json_tool_unforced(gatewa
         model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5)
         response: Final = _responses(gateway, model)
         assert response.status_code == 200, response.text
-        payload: Final = response.json()
+        payload: Final = _json_body(response)
         assert json.loads(_output_text(payload)) == _JSON_TOOL_INPUT, response.text
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
         assert _spend_count_by_call_id(response.headers["x-litellm-call-id"]) == 1
 
@@ -471,7 +524,7 @@ def test_vertex_sonnet_5_5_responses_stream_sends_json_tool_unforced(gateway: Ga
                         "type": "json_schema",
                         "name": "city",
                         "strict": True,
-                        "schema": _RESPONSE_FORMAT["json_schema"]["schema"],
+                        "schema": _CITY_SCHEMA,
                     }
                 },
             },
@@ -506,7 +559,7 @@ def test_vertex_sonnet_5_5_response_format_with_user_tool_sends_both_tools_unfor
         assert response.status_code == 200, response.text
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call", "get_weather"]
+        assert _tool_names(upstream[0]) == ["json_tool_call", "get_weather"]
         assert "tool_choice" not in upstream[0]
 
 
@@ -520,7 +573,7 @@ def test_vertex_sonnet_5_5_response_format_drop_params_drops_temperature(gateway
         assert response.status_code == 200, response.text
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
         assert "temperature" not in upstream[0]
 
@@ -537,7 +590,7 @@ def test_vertex_sonnet_5_5_response_format_drop_params_downgrades_required_tool_
         assert response.status_code == 200, response.text
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call", "get_weather"]
+        assert _tool_names(upstream[0]) == ["json_tool_call", "get_weather"]
         assert upstream[0]["tool_choice"] == {"type": "auto"}
 
 
@@ -580,7 +633,7 @@ def test_vertex_sonnet_4_6_response_format_reasoning_effort_maps_to_real_model(g
         assert len(upstream) == 1
         assert upstream[0]["thinking"] == {"type": "adaptive", "display": "summarized"}
         assert upstream[0]["output_config"] == {"effort": "low"}
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
 
 
@@ -597,7 +650,7 @@ def test_vertex_sonnet_4_6_response_format_adaptive_thinking_is_forwarded(gatewa
         assert len(upstream) == 1
         assert upstream[0]["thinking"] == {"type": "adaptive"}
         assert upstream[0]["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
 
 
 def test_vertex_opus_5_5_response_format_uses_native_output_format(gateway: Gateway) -> None:
@@ -613,7 +666,7 @@ def test_vertex_opus_5_5_response_format_uses_native_output_format(gateway: Gate
         assert len(upstream) == 1
         assert upstream[0]["output_format"] == {
             "type": "json_schema",
-            "schema": _RESPONSE_FORMAT["json_schema"]["schema"],
+            "schema": _CITY_SCHEMA,
         }
         assert "tools" not in upstream[0]
         assert "tool_choice" not in upstream[0]
@@ -688,7 +741,7 @@ def test_vertex_sonnet_5_5_messages_endpoint_forwards_tool_choice_auto(gateway: 
         assert response.status_code == 200, response.text
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["get_weather"]
+        assert _tool_names(upstream[0]) == ["get_weather"]
         assert upstream[0]["tool_choice"] == {"type": "auto"}
 
 
@@ -729,7 +782,7 @@ def test_vertex_sonnet_5_5_response_format_returns_plain_text_verbatim(gateway: 
         model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5)
         response: Final = _chat(gateway, model, response_format=_RESPONSE_FORMAT)
         assert response.status_code == 200, response.text
-        assert response.json()["choices"][0]["message"]["content"] == peer_text
+        assert _chat_content(_json_body(response)) == peer_text
 
 
 def test_vertex_sonnet_5_5_response_format_missing_schema_returns_500(gateway: Gateway) -> None:
@@ -759,7 +812,7 @@ def test_vertex_sonnet_5_5_response_format_string_value_is_rejected(gateway: Gat
         assert "Unsupported response_format type" in bad.text
         good: Final = _chat(gateway, model, response_format=_RESPONSE_FORMAT)
         assert good.status_code == 200, good.text
-        assert json.loads(str(good.json()["choices"][0]["message"]["content"])) == _JSON_TOOL_INPUT
+        assert json.loads(str(_chat_content(_json_body(good)))) == _JSON_TOOL_INPUT
 
 
 def test_vertex_sonnet_5_5_response_format_requires_auth(gateway: Gateway) -> None:
@@ -788,11 +841,12 @@ def test_vertex_sonnet_5_5_response_format_repeated_requests_get_own_spend_rows(
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5)
-        ids: Final = []
+        ids: Final[list[str]] = []
         for _ in range(3):
-            response: Final = _chat(gateway, model, response_format=_RESPONSE_FORMAT)
-            assert response.status_code == 200, response.text
-            ids.append(str(response.json()["id"]))
+            assert (response := _chat(gateway, model, response_format=_RESPONSE_FORMAT)).status_code == 200, (
+                response.text
+            )
+            ids.append(_chat_id(_json_body(response)))
         assert len(set(ids)) == 3, ids
         for request_id in ids:
             assert _spend_count(request_id) == 1, request_id
@@ -807,10 +861,10 @@ def test_vertex_sonnet_5_5_default_alias_response_format_sends_json_tool_unforce
         model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5_DEFAULT)
         response: Final = _chat(gateway, model, response_format=_RESPONSE_FORMAT)
         assert response.status_code == 200, response.text
-        assert json.loads(str(response.json()["choices"][0]["message"]["content"])) == _JSON_TOOL_INPUT
+        assert json.loads(str(_chat_content(_json_body(response)))) == _JSON_TOOL_INPUT
         upstream: Final = _upstream_bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        assert _tool_names(upstream[0]) == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
 
 
@@ -858,7 +912,10 @@ def test_vertex_sonnet_5_5_response_format_outage_burst_recovers(gateway: Gatewa
         if stream and response.status_code == 200:
             events: Final = _sse_events(response.read())
             joined: Final = "".join(
-                "".join(str(choice.get("delta", {}).get("content") or "") for choice in event.get("choices", ()))
+                "".join(
+                    str(object_value(choice["delta"]).get("content") or "")
+                    for choice in _JSON_LIST.validate_python(event["choices"])
+                )
                 for event in events
             )
             identity: Final = next((str(event["id"]) for event in events if isinstance(event.get("id"), str)), "")
@@ -867,26 +924,30 @@ def test_vertex_sonnet_5_5_response_format_outage_burst_recovers(gateway: Gatewa
             return response.status_code, response.text, ""
         return (
             response.status_code,
-            str(response.json()["choices"][0]["message"]["content"]),
-            str(response.json()["id"]),
+            str(_chat_content(_json_body(response))),
+            _chat_id(_json_body(response)),
         )
 
     def send_responses(model: str) -> tuple[int, str, str]:
         response: Final = _responses(gateway, model)
         if response.status_code != 200:
             return response.status_code, response.text, ""
-        payload: Final = response.json()
+        payload: Final = _json_body(response)
         return response.status_code, _output_text(payload), "call:" + str(response.headers["x-litellm-call-id"])
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5, num_retries=0)
-        calls: Final = (
-            [(send_chat, (model, False)) for _ in range(8)]
-            + [(send_chat, (model, True)) for _ in range(8)]
-            + [(send_responses, (model,)) for _ in range(8)]
+        calls: Final = tuple(
+            [partial(send_chat, model, False) for _ in range(8)]
+            + [partial(send_chat, model, True) for _ in range(8)]
+            + [partial(send_responses, model) for _ in range(8)]
         )
+
+        def _invoke(call: Callable[[], tuple[int, str, str]]) -> tuple[int, str, str]:
+            return call()
+
         with ThreadPoolExecutor(max_workers=24) as pool:
-            outcomes: Final = list(pool.map(lambda call: call[0](*call[1]), calls))
+            outcomes: Final = list(pool.map(_invoke, calls))
         failures: Final = [outcome for outcome in outcomes if outcome[0] != 200]
         successes: Final = [outcome for outcome in outcomes if outcome[0] == 200]
         assert len(failures) == 8, [outcome[0] for outcome in outcomes]
