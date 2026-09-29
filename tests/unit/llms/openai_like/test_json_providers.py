@@ -315,3 +315,84 @@ class TestDarkbloom:
 
         assert config is not None
         assert config.custom_llm_provider == "darkbloom"
+
+
+class TestBourse:
+    def test_bourse_json_config_exists(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        bourse = JSONProviderRegistry.get("bourse")
+        assert bourse is not None
+        assert bourse.base_url == "https://api.bourse.run/v1"
+        assert bourse.api_key_env == "BOURSE_API_KEY"
+        assert bourse.api_base_env == "BOURSE_API_BASE"
+        assert bourse.param_mappings.get("max_completion_tokens") == "max_tokens"
+
+    def test_bourse_provider_resolution(self):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        model, provider, api_key, api_base = get_llm_provider(
+            model="bourse/claude-opus-5",
+            custom_llm_provider=None,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert model == "claude-opus-5"
+        assert provider == "bourse"
+        assert api_base == "https://api.bourse.run/v1"
+
+    def test_bourse_dynamic_config(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("bourse")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        assert api_base == "https://api.bourse.run/v1"
+
+        api_base, api_key = config._get_openai_compatible_provider_info(
+            "https://custom.bourse.run/v1", "test-key"
+        )
+        assert api_base == "https://custom.bourse.run/v1"
+        assert api_key == "test-key"
+
+    def test_bourse_complete_url_appends_endpoint(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("bourse")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        url = config.get_complete_url(
+            api_base="https://api.bourse.run/v1",
+            api_key="test-key",
+            model="bourse/claude-opus-5",
+            optional_params={},
+            litellm_params={},
+            stream=True,
+        )
+
+        assert url == "https://api.bourse.run/v1/chat/completions"
+
+    def test_bourse_parameter_mapping(self):
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("bourse")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        optional_params = {}
+        non_default_params = {"max_completion_tokens": 100, "temperature": 0.7}
+        result = config.map_openai_params(
+            non_default_params, optional_params, "claude-opus-5", False
+        )
+
+        assert "max_tokens" in result
+        assert result["max_tokens"] == 100
+        assert "max_completion_tokens" not in result
+        assert result["temperature"] == 0.7
