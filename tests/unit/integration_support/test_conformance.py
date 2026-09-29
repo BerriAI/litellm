@@ -53,16 +53,19 @@ async def test_negotiation_records_preserve_the_peer_call_contract(monkeypatch: 
 
 
 @pytest.mark.parametrize("covered", (False, True))
+@pytest.mark.parametrize("has_data_file", (False, True))
 def test_stdio_coverage_preserves_default_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, covered: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, covered: bool, has_data_file: bool
 ) -> None:
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
     from integration._support.mcp import STDIO_PEER, stdio_peer
 
     monkeypatch.delenv("COVERAGE_PROCESS_CONFIG", raising=False)
+    monkeypatch.delenv("COVERAGE_FILE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-peer")
-    coverage_file: Final = tmp_path / "coverage"
-    monkeypatch.setenv("COVERAGE_FILE", str(coverage_file))
+    coverage_file: Final = tmp_path / "coverage data"
+    if has_data_file:
+        monkeypatch.setenv("COVERAGE_FILE", str(coverage_file))
     if covered:
         monkeypatch.setenv("COVERAGE_PROCESS_CONFIG", "coverage-config")
     with stdio_peer(tmp_path) as peer:
@@ -72,13 +75,15 @@ def test_stdio_coverage_preserves_default_environment(
             "args": [
                 *(
                     [
-                        "-m",
-                        "coverage",
+                        "-c",
+                        "import mcp.server.mcpserver, runpy, sys; "
+                        "sys.argv = ['coverage', *sys.argv[1:]]; "
+                        "runpy.run_module('coverage', run_name='__main__')",
                         "run",
                         f"--rcfile={STDIO_PEER.parent.parent / 'conformance_coverage.toml'}",
                         f"--data-file={coverage_file}",
                     ]
-                    if covered
+                    if covered and has_data_file
                     else []
                 ),
                 str(STDIO_PEER),
@@ -96,7 +101,11 @@ def test_peer_drain_preserves_received_requests(
     from integration._support.mcp import McpPeer
 
     request: Final = {"body": {"method": "tools/call"}, "headers": {"authorization": "synthetic"}}
-    negotiation: Final = {"body": {}, "headers": {}, "negotiation": {"requested": "2025-03-26", "returned": "2025-03-26"}}
+    negotiation: Final = {
+        "body": {},
+        "headers": {},
+        "negotiation": {"requested": "2025-03-26", "returned": "2025-03-26"},
+    }
     records: Final = (request, negotiation)
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
     path: Final = tmp_path / "peer.jsonl" if file_backed else None

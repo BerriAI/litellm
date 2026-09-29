@@ -18,7 +18,7 @@ from integration._support.mcp import (
 from integration._support.process import owned_proxy
 
 from litellm.models.user import LiteLLM_UserTable
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.proxy_server import ExperimentalUIJWTToken
 
 ADD: Final = {"a": 4, "b": 5}
 
