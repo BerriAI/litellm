@@ -2881,6 +2881,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         agent_id: str,
         data: dict,
+        policy: "AgentResponse | None" = None,
     ) -> list[RateLimitDescriptor]:
         """
         Create rate limit descriptors for agent-level and session-level limits.
@@ -2890,7 +2891,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         descriptors: Final[list[RateLimitDescriptor]] = []
 
-        agent: Final = self._get_agent_from_registry(agent_id)
+        agent: Final = policy if policy is not None else self._get_agent_from_registry(agent_id)
         if agent is None:
             return descriptors
 
@@ -3085,14 +3086,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        # Agent-level and session-level rate limits
         resolved_agent_id: Final = self._get_resolved_agent_id(user_api_key_dict, data)
-
-        if resolved_agent_id:
+        for agent_id in dict.fromkeys((resolved_agent_id, user_api_key_dict.invoked_agent_id)):
+            if agent_id is None:
+                continue
             descriptors.extend(
                 self._create_agent_rate_limit_descriptors(
-                    agent_id=resolved_agent_id,
+                    agent_id=agent_id,
                     data=data,
+                    policy=(
+                        user_api_key_dict.managed_agent_policy
+                        if agent_id == user_api_key_dict.agent_id
+                        else user_api_key_dict.invoked_agent_policy
+                    ),
                 )
             )
 
@@ -4748,6 +4754,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             kwargs=kwargs,
             tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
             model_group=reconcile_model.group if reconcile_model is not None else None,
+        )
+        targets.extend(
+            scope
+            for scope in sorted(reserved_scopes)
+            if scope[0] in ("agent", "agent_session") and scope not in targets
         )
         charged_targets: Final = (
             [target for target in targets if target[0] != "model_per_team"]
