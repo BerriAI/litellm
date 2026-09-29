@@ -14691,24 +14691,24 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    db_where_condition: Final[dict[str, Any]] = (
-        {
-            "AND": [
-                {
-                    "OR": [
-                        {"model_name": {"contains": search_lower, "mode": "insensitive"}},
-                        # JSON string_contains is case-sensitive on Postgres (see
-                        # note above); router-side matching below covers the
-                        # case-insensitive path for rows already in the router.
-                        {"litellm_params": {"path": ["model"], "string_contains": search_lower}},
-                    ]
-                },
-                *( [{"model_id": {"not": {"in": list(db_model_ids_in_router)}}}] if db_model_ids_in_router else [] ),
-            ]
-        }
+    match_conditions: list[dict[str, Any]] = (
+        [
+            {
+                "OR": [
+                    {"model_name": {"contains": search_lower, "mode": "insensitive"}},
+                    # JSON string_contains is case-sensitive on Postgres (see
+                    # note above); router-side matching below covers the
+                    # case-insensitive path for rows already in the router.
+                    {"litellm_params": {"path": ["model"], "string_contains": search_lower}},
+                ]
+            }
+        ]
         if model_name is None
-        else {"model_name": model_name}
+        else [{"model_name": model_name}]
     )
+    if db_model_ids_in_router:
+        match_conditions.append({"model_id": {"not": {"in": list(db_model_ids_in_router)}}})
+    db_where_condition: Final[dict[str, Any]] = {"AND": match_conditions}
 
     # Unsorted searches only need enough DB rows to fill the current
     # page after counting router-side matches. Sorted searches need
@@ -15549,7 +15549,8 @@ async def model_info_v2(
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
     # truthy sentinel object rather than False.
     all_models = [
-        m for m in all_models
+        m
+        for m in all_models
         if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only, blocked)
     ]
 
