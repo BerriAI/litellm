@@ -1810,6 +1810,7 @@ class Logging(LiteLLMLoggingBaseClass):
         cache_hit: bool | None = None,
         litellm_model_name: str | None = None,
         router_model_id: str | None = None,
+        ignore_stamped_cost: bool = False,
     ) -> float | None:
         """
         Calculate response cost using result + logging object variables.
@@ -1844,7 +1845,9 @@ class Logging(LiteLLMLoggingBaseClass):
         ):
             hidden_params: Final = result_hidden_params
             if (
-                "response_cost" in hidden_params and hidden_params["response_cost"] is not None
+                not ignore_stamped_cost
+                and "response_cost" in hidden_params
+                and hidden_params["response_cost"] is not None
             ):  # use cost if already calculated
                 self._record_zero_cost_diagnostic(
                     priced_result,
@@ -1949,6 +1952,44 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
         return None
+
+    def _uncached_response_cost(
+        self,
+        result: Union[
+            ModelResponse,
+            ModelResponseStream,
+            EmbeddingResponse,
+            ImageResponse,
+            TranscriptionResponse,
+            TextCompletionResponse,
+            HttpxBinaryResponseContent,
+            RerankResponse,
+            Batch,
+            FineTuningJob,
+            ResponsesAPIResponse,
+            ResponseCompletedEvent,
+            OpenAIFileObject,
+            LiteLLMRealtimeStreamLoggingObject,
+            OpenAIModerationResponse,
+            "SearchResponse",
+            dict,
+            list,
+        ],
+    ) -> float | None:
+        previous_cost_breakdown: Final = self.cost_breakdown
+        previous_billed_token_rates: Final = self.billed_token_rates
+        debug_key: Final = "response_cost_failure_debug_information"
+        debug_missing: Final = object()
+        debug_before: Final = self.model_call_details.get(debug_key, debug_missing)
+        try:
+            return self._response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
+        finally:
+            self.cost_breakdown = previous_cost_breakdown
+            self.billed_token_rates = previous_billed_token_rates
+            if debug_before is debug_missing:
+                self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = debug_before
 
     def _record_zero_cost_diagnostic(
         self,
@@ -6521,13 +6562,7 @@ def get_standard_logging_object_payload(
         saved_cache_cost: float = 0.0
         if cache_hit is True:
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
-            saved_cache_cost = (
-                logging_obj._response_cost_calculator(
-                    result=init_response_obj,
-                    cache_hit=False,
-                )
-                or 0.0
-            )
+            saved_cache_cost = logging_obj._uncached_response_cost(result=init_response_obj) or 0.0
 
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
