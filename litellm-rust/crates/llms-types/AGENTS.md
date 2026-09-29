@@ -5,9 +5,18 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Being public, serializable, or used by several crates is not sufficient
   - These are intended boundaries, not a claim that every existing item follows them
 
-- Organize public contracts by API format: `messages`, `chat_completions`, `responses`, `ocr`, `audio_transcription`, and `batches`
-  - Use names such as `litellm_llms_types::messages::MessagesRequest`, without an Anthropic prefix solely because Anthropic designed Messages
+- Organize public API contracts under `formats`: `messages`, `chat_completions`, `responses`, `ocr`, `audio_transcription`, and `batches`
+  - Use names such as `litellm_llms_types::formats::messages::MessagesRequest`, without an Anthropic prefix solely because Anthropic designed Messages
   - Keep one canonical definition and import path when moving a contract, updating consumers together instead of adding duplicate models or compatibility re-exports
+
+- Keep shared provider-specific wire types and extensions under `providers`
+  - Provider types may reuse format types; format types must not depend on provider types
+  - A field belonging to an API format stays under `formats` even when provider support varies. Including it in a type does not promise provider support
+  - Add a typed provider extension when a consumer needs to interpret or construct it. Keep adapter-only projections in `llms` until a shared public data contract is needed
+  - Keep one authoritative representation of each field, preserving unknown fields without duplicating typed values in an extension map
+  - Provider capability checks, defaults, authentication, header selection, and transformations remain in `llms`
+
+- Keep format-independent data helpers such as `headers`, `recognized`, and `serde_compat` at the crate root
 
 - Shared request/response bodies, message and content-block enums, usage records, tool-call chunks, stream-event payloads, and protocol error bodies belong here
   - This includes LiteLLM's normalized response contracts and extensions, not just exact upstream schemas

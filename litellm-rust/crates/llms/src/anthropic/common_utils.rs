@@ -5,7 +5,7 @@ use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
 };
 use litellm_llms_types::{
-    messages::{
+    formats::messages::{
         ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},

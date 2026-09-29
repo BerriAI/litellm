@@ -1,4 +1,4 @@
-use litellm_llms_types::messages::{MessagesRequest, MessagesResponse};
+use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
 
 use super::context::MessagesTransformContext;
 

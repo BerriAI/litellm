@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use litellm_host::interceptors::Interceptors;
 use litellm_llms::base_llm::ocr::{error::Error, handler::OcrClient};
-use litellm_llms_types::ocr::LiteLLMOcrResponse;
+use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
 use super::{
     handler::perform_ocr_request,

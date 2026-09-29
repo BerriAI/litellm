@@ -4,8 +4,8 @@ use bytes::Bytes;
 use litellm_host::call::CallOutput;
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_llms_types::{
+    formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
-    messages::{MessagesRequest, MessagesResponse},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

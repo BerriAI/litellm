@@ -12,7 +12,7 @@ use crate::{
     },
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 pub const AZURE_AI_OCR_PATH: [&str; 4] = ["providers", "mistral", "azure", "ocr"];
 

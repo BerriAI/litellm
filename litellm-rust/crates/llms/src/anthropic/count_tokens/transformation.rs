@@ -1,4 +1,4 @@
-use litellm_llms_types::messages::{Message, SystemPrompt};
+use litellm_llms_types::formats::messages::{Message, SystemPrompt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -92,7 +92,7 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms_types::messages::MessageContent;
+    use litellm_llms_types::formats::messages::MessageContent;
     use serde_json::{Map, json};
 
     use super::*;

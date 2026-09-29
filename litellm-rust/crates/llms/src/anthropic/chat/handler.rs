@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use litellm_llms_types::{
+use litellm_llms_types::formats::{
     chat_completions::{
         ChatCompletionChunk, ChatCompletionThinkingBlock, ChatCompletionToolCallChunk,
         ChatCompletionsUsage,

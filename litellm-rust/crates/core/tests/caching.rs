@@ -411,7 +411,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
     #[case] poisoned: Value,
 ) {
     use litellm_core::responses::route::Responses;
-    use litellm_llms_types::responses::ResponsesApiResponse;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
         ResponseCache::new(Arc::new(InMemoryCache::default())),
@@ -461,7 +461,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
     #[case] changed: Value,
 ) {
     use litellm_core::messages::route::Messages;
-    use litellm_llms_types::messages::MessagesResponse;
+    use litellm_llms_types::formats::messages::MessagesResponse;
 
     let calls = AtomicUsize::new(0);
     for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
@@ -843,7 +843,7 @@ async fn responses_cache_only_reuses_completed_responses(
     #[case] expected_calls: usize,
 ) {
     use litellm_core::responses::route::Responses;
-    use litellm_llms_types::responses::ResponsesApiResponse;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let calls = AtomicUsize::new(0);
     for _ in 0..2 {

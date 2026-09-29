@@ -2,7 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use litellm_llms_types::chat_completions::{ChatCompletionsUsage, PromptTokensDetails};
+use litellm_llms_types::formats::chat_completions::{ChatCompletionsUsage, PromptTokensDetails};
 
 /// OpenAI finish reasons, mirroring Python's `_FINISH_REASON_MAP` for the
 /// reasons the providers on this route can emit. Python warns and falls back to

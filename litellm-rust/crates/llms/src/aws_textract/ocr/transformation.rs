@@ -13,7 +13,7 @@ use crate::base_llm::ocr::{
         BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DetectDocumentTextRequest {

@@ -1,4 +1,4 @@
-use litellm_llms_types::messages::{ContentBlock, ContentBlockType};
+use litellm_llms_types::formats::messages::{ContentBlock, ContentBlockType};
 use rstest::rstest;
 use serde_json::{Value, json};
 

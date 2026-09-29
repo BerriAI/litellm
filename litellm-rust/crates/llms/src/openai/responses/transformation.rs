@@ -1,4 +1,6 @@
-use litellm_llms_types::responses::{ResponsesApiResponse, streaming_websocket::ResponsesWsEvent};
+use litellm_llms_types::formats::responses::{
+    ResponsesApiResponse, streaming_websocket::ResponsesWsEvent,
+};
 use serde_json::{Map, Value};
 
 use litellm_auth::{CredentialPlacement, SecretValue};

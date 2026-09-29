@@ -16,7 +16,7 @@ use crate::base_llm::ocr::{
         decode_and_normalize_response, decode_response_value,
     },
 };
-use litellm_llms_types::ocr::{
+use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageImage, OcrResponseFormat, OcrUsageInfo,
 };
 
@@ -563,10 +563,10 @@ mod tests {
     #[rstest]
     fn response_types_documented_block_variants(
         #[values(
-            litellm_llms_types::ocr::OcrResponseFormat::Litellm,
-            litellm_llms_types::ocr::OcrResponseFormat::Native
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Litellm,
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Native
         )]
-        response_format: litellm_llms_types::ocr::OcrResponseFormat,
+        response_format: litellm_llms_types::formats::ocr::OcrResponseFormat,
     ) {
         let payload = json!({
             "pages": [{
@@ -636,10 +636,10 @@ mod tests {
             Some(1)
         );
         match response_format {
-            litellm_llms_types::ocr::OcrResponseFormat::Litellm => {
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Litellm => {
                 assert!(normalized.provider_native_response.is_none());
             }
-            litellm_llms_types::ocr::OcrResponseFormat::Native => {
+            litellm_llms_types::formats::ocr::OcrResponseFormat::Native => {
                 assert_eq!(
                     normalized.provider_native_response.as_ref(),
                     payload.as_object()

@@ -12,7 +12,7 @@ use crate::base_llm::ocr::{
         decode_response_value,
     },
 };
-use litellm_llms_types::ocr::{
+use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrResponseFormat,
     OcrUsageInfo,
 };
@@ -428,7 +428,7 @@ mod tests {
         provider_model,
     };
     use crate::base_llm::ocr::transformation::BaseOcrConfig;
-    use litellm_llms_types::ocr::OcrDocument;
+    use litellm_llms_types::formats::ocr::OcrDocument;
 
     fn document() -> OcrDocument {
         serde_json::from_value(json!({"type":"image_url","image_url":"gs://bucket/a.png"})).unwrap()

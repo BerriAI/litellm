@@ -9,7 +9,7 @@ use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
-use litellm_llms_types::messages::MessagesRequest;
+use litellm_llms_types::formats::messages::MessagesRequest;
 use litellm_secrets::source::SecretSource;
 
 use super::{

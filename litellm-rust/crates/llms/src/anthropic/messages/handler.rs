@@ -1,5 +1,5 @@
 use litellm_llms_types::{
-    messages::{
+    formats::messages::{
         AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
         ThinkingConfig, ThinkingDisplay,
     },

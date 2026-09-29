@@ -3,7 +3,7 @@ mod support;
 use axum::{body::Body, http::Request};
 use litellm_gateway_inference::Error;
 use litellm_llms::base_llm::ocr::{error::Error as OcrError, transformation::decode_request_value};
-use litellm_llms_types::ocr::OcrDocument;
+use litellm_llms_types::formats::ocr::OcrDocument;
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;

@@ -9,7 +9,7 @@ use crate::base_llm::ocr::{
     error::Error,
     transformation::{OcrEnvironment, OcrRequestContext, PreparedOcrRequest},
 };
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage, OcrUsageInfo};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage, OcrUsageInfo};
 
 const TEXTRACT_SERVICE: &str = "textract";
 const AWS_JSON_CONTENT_TYPE: &str = "application/x-amz-json-1.1";

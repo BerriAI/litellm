@@ -14,7 +14,7 @@ use litellm_auth_aws::{
     },
     resolve_bedrock_region,
 };
-use litellm_llms_types::messages::{
+use litellm_llms_types::formats::messages::{
     MessagesRequest,
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };

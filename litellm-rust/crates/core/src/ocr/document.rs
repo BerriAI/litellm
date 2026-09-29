@@ -2,7 +2,7 @@ use std::{collections::BTreeMap as Map, io::Read, path::Path};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_llms::base_llm::ocr::{error::Error, transformation::OCR_INLINE_MAX_BYTES};
-use litellm_llms_types::ocr::OcrDocument;
+use litellm_llms_types::formats::ocr::OcrDocument;
 
 use crate::ocr::types::OcrDocumentInput;
 

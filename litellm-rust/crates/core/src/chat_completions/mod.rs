@@ -5,7 +5,7 @@ pub use crate::error::RouteError as Error;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
-use litellm_llms_types::chat_completions::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use prepare::{prepare_provider_request, resolve_request};
 
 use crate::chat_completions::types::ChatCompletionsRequest;

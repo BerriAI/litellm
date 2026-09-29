@@ -14,7 +14,7 @@ use crate::{
     },
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 const DEFAULT_LOCATION: &str = "us-central1";
 

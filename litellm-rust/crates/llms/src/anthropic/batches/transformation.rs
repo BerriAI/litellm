@@ -1,5 +1,5 @@
-use litellm_llms_types::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
-use litellm_llms_types::messages::MessagesResponse;
+use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
+use litellm_llms_types::formats::messages::MessagesResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;

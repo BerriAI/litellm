@@ -5,7 +5,7 @@ use litellm_host::call::CallOutput;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, responses::transformation::BaseResponsesApiConfig,
 };
-use litellm_llms_types::responses::ResponsesApiResponse;
+use litellm_llms_types::formats::responses::ResponsesApiResponse;
 use serde_json::{Map, Value};
 
 use super::Error;

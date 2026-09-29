@@ -22,7 +22,7 @@ use crate::base_llm::ocr::{
         ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
     },
 };
-use litellm_llms_types::ocr::{
+use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrResponseFormat, OcrUsageInfo,
 };
 

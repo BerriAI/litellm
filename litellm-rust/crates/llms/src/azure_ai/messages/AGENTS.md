@@ -1,3 +1,3 @@
-This directory owns Azure's Messages adapter: its endpoints, authentication policy, headers, and transformations. Implement the shared adapter contract from `base_llm/messages`, consume API data contracts from `litellm-llms-types::messages`, and leave call orchestration to `core/src/messages`
+This directory owns Azure's Messages adapter: its endpoints, authentication policy, headers, and transformations. Implement the shared adapter contract from `base_llm/messages`, consume API data contracts from `litellm-llms-types::formats::messages`, and leave call orchestration to `core/src/messages`
 
 The Claude adapter may explicitly reuse payload policy from `anthropic/messages` when it applies to Azure's Claude backend. Keep Azure-specific differences here. Sharing that helper does not make Anthropic policy a format-wide default or justify a dependency from `base_llm/messages` on provider implementations

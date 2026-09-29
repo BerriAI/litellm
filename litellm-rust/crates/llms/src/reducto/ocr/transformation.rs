@@ -18,7 +18,7 @@ use crate::base_llm::ocr::{
         decode_and_normalize_response,
     },
 };
-use litellm_llms_types::ocr::{
+use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
 };
 

@@ -1,5 +1,5 @@
 use litellm_llms::base_llm::messages::normalization::fold_system_role_messages;
-use litellm_llms_types::messages::MessagesRequest;
+use litellm_llms_types::formats::messages::MessagesRequest;
 use rstest::rstest;
 use serde_json::{Value, json};
 

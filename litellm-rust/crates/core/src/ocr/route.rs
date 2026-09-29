@@ -7,7 +7,7 @@ use litellm_host::{
     protocol::Reply,
 };
 use litellm_llms::base_llm::ocr::error::Error;
-use litellm_llms_types::ocr::LiteLLMOcrResponse;
+use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
 use crate::ocr::types::{LiteLLMOcrRequest, OcrDocumentInput};
 

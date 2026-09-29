@@ -7,7 +7,7 @@ use litellm_llms::base_llm::ocr::{
     error::Error,
     transformation::{OcrCredentialInputs, OcrTransportConfig, response_format},
 };
-use litellm_llms_types::ocr::{OcrDocument, OcrResponseFormat};
+use litellm_llms_types::formats::ocr::{OcrDocument, OcrResponseFormat};
 use serde_json::{Map, Value};
 
 use super::provider_config::{OcrConfigKind, resolve_provider_config};

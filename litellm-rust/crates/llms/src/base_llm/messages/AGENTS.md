@@ -1,4 +1,4 @@
-This directory owns the shared Messages provider adapter contract, its execution inputs such as `MessagesTransformContext`, and provider-independent transformation machinery. Public request, response, content-block, and event schemas belong in `litellm-llms-types::messages`. Call orchestration belongs in `core/src/messages`, and provider implementations belong in `llms/src/<provider>/messages`
+This directory owns the shared Messages provider adapter contract, its execution inputs such as `MessagesTransformContext`, and provider-independent transformation machinery. Public request, response, content-block, and event schemas belong in `litellm-llms-types::formats::messages`. Call orchestration belongs in `core/src/messages`, and provider implementations belong in `llms/src/<provider>/messages`
 
 Do not import provider implementations or embed their policy in shared trait defaults, normalization, or context defaults. A context carries inputs the shared adapter contract needs, not every provider's settings. Thinking-budget choices and model-specific restrictions do not become format rules merely because several providers host Claude
 

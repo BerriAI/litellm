@@ -7,7 +7,7 @@ use litellm_llms::{
     },
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
 };
-use litellm_llms_types::chat_completions::{ChatCompletionsResponse, ChatMessage};
+use litellm_llms_types::formats::chat_completions::{ChatCompletionsResponse, ChatMessage};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 

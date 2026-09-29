@@ -6,7 +6,7 @@ use litellm_llms::base_llm::ocr::{
     handler::{CallHooks, OcrClient},
     transformation::PreparedOcrRequest,
 };
-use litellm_llms_types::ocr::LiteLLMOcrResponse;
+use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 use serde_json::Value;
 
 use super::{arguments::is_secret_param, prepare::prepare_request, provider_config::OcrConfigKind};

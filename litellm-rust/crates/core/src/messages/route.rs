@@ -5,7 +5,7 @@ use litellm_host::{
     call::{HostedCompletion, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_llms_types::messages::MessagesResponse;
+use litellm_llms_types::formats::messages::MessagesResponse;
 
 use super::{Error, MessagesCall};
 

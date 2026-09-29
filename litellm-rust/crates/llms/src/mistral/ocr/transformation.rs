@@ -9,7 +9,7 @@ use crate::base_llm::ocr::{
         BaseOcrConfig, OcrConnection, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
-use litellm_llms_types::ocr::{
+use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
 };
 
@@ -328,7 +328,7 @@ mod tests {
             .transform_ocr_response(
                 "model",
                 raw,
-                litellm_llms_types::ocr::OcrResponseFormat::Native,
+                litellm_llms_types::formats::ocr::OcrResponseFormat::Native,
             )
             .unwrap();
         assert_eq!(response.pages[0].index, 2);
