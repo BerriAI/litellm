@@ -127,24 +127,22 @@ def test_gchunk_fields_is_frozenset():
 
 
 def test_generic_chunk_has_all_required_fields_uses_module_constant(monkeypatch):
-    """generic_chunk_has_all_required_fields must use _GCHUNK_FIELDS, not __annotations__.
+    """generic_chunk_has_all_required_fields must use _GCHUNK_REQUIRED_FIELDS.
 
-    The check semantics: every key in `chunk` must be a known GChunk field.
-    This identifies GChunk-shaped dicts (all keys are valid GChunk fields).
+    The check semantics: every required GChunk field must be present in `chunk`.
+    A chunk missing a required field is not a usable generic chunk.
     """
     valid_chunk = _make_generic_chunk("hello")
     assert generic_chunk_has_all_required_fields(valid_chunk) is True
 
-    # A dict with an extra unknown key should return False — the unknown key
-    # is not a GChunk field, so the chunk is not a pure GChunk.
+    # Extra unknown keys don't matter, only that all required fields are present.
     extra_key_chunk = dict(valid_chunk)
     extra_key_chunk["unknown_extra_key"] = "value"
-    assert generic_chunk_has_all_required_fields(extra_key_chunk) is False
+    assert generic_chunk_has_all_required_fields(extra_key_chunk) is True
 
-    # A dict with only known GChunk fields but fewer keys still passes because
-    # all its keys are valid (subset of GChunk fields).
+    # A dict missing required fields is rejected, even if every key it has is valid.
     partial_chunk = {"text": "hi", "is_finished": False}
-    assert generic_chunk_has_all_required_fields(partial_chunk) is True
+    assert generic_chunk_has_all_required_fields(partial_chunk) is False
 
 
 # ---------------------------------------------------------------------------
