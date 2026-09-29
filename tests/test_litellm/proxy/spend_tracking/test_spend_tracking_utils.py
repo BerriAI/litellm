@@ -2728,6 +2728,69 @@ def test_proxy_server_request_payload_strips_nested_aws_credentials(mock_should_
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
+def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_store: MagicMock) -> None:
+    mock_should_store.return_value = True
+    credentials: Final = {
+        "azure_password": "canary-azure-password",
+        "client_secret": "canary-client-secret",
+        "azure_ad_token": "canary-azure-ad-token",
+        "vertex_credentials": "canary-vertex-credentials",
+        "s3_secret_access_key": "canary-s3-secret",
+        "token": "canary-watsonx-token",
+        "apikey": "canary-watsonx-apikey",
+        "zen_api_key": "canary-zen-api-key",
+        "gemini_api_key": "canary-gemini-api-key",
+        "gigachat_access_token": "canary-gigachat-token",
+        "oci_key": "canary-oci-key",
+    }
+    identity_metadata: Final = {
+        "user_api_key": "hashed-key",
+        "user_api_key_alias": "team-a-key",
+        "user_api_key_team_id": "team-a",
+        "user_api_key_user_id": "user-a",
+    }
+    tool_parameters: Final = {"type": "object", "properties": {"client_secret": {"type": "string"}}}
+    litellm_params: Final = {
+        "proxy_server_request": {
+            "body": {
+                "model": "azure-gpt",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 10,
+                "vertex_credentials": {"private_key": "canary-private-key", "client_email": "sa@example.com"},
+                "extra_headers": {"Authorization": "Bearer canary-extra-header"},
+                "tools": [
+                    {"type": "function", "function": {"name": "f", "parameters": tool_parameters}},
+                    {"type": "mcp", "server_url": "https://mcp.example.com", "headers": {"Authorization": "canary-mcp"}},
+                ],
+                "fallbacks": [{"model": "azure-b", **credentials}],
+                "metadata": identity_metadata,
+                **credentials,
+            }
+        }
+    }
+
+    parsed: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(metadata={}, litellm_params=litellm_params, kwargs={})
+    )
+
+    assert "canary" not in json.dumps(parsed)
+    assert {name: parsed[name] for name in credentials} == dict.fromkeys(credentials, REDACTED_BY_LITELM_STRING)
+    assert parsed["vertex_credentials"] == REDACTED_BY_LITELM_STRING
+    assert parsed["extra_headers"] == {"Authorization": REDACTED_BY_LITELM_STRING}
+    assert parsed["tools"][0]["function"]["parameters"] == tool_parameters
+    assert parsed["tools"][1]["server_url"] == "https://mcp.example.com"
+    assert parsed["metadata"] == identity_metadata
+    assert parsed["max_tokens"] == 10
+    assert parsed["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_sanitize_request_body_keeps_credential_named_fields_by_default() -> None:
+    response: Final = {"system_fingerprint": "fp_123", "usage": {"prompt_tokens": 1}}
+
+    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {"response": response}
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     """
     End-to-end test: when the proxy_server_request body contains

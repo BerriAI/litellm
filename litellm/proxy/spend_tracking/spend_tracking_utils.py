@@ -44,11 +44,11 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
-from litellm.types.llms.bedrock import AWS_CREDENTIAL_VALUE_PARAM_KEYS
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -61,6 +61,7 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
+    StandardLoggingUserAPIKeyMetadata,
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
 )
@@ -1084,20 +1085,32 @@ def _get_messages_for_spend_logs_payload(
 
 
 _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
+_REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
+_PROXY_KEY_IDENTITY_FIELDS: Final = frozenset(StandardLoggingUserAPIKeyMetadata.__annotations__) | {"user_api_key"}
+
+
+def _is_request_body_credential(key: str, value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and key not in _PROXY_KEY_IDENTITY_FIELDS
+        and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
+    )
 
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
+    redact_credentials: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
 
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
-    which holds raw HTTP headers including Authorization tokens) and masks string values of AWS
-    credential keys with REDACTED_BY_LITELM_STRING.
+    which holds raw HTTP headers including Authorization tokens). With ``redact_credentials``, string
+    values under keys SensitiveDataMasker classifies as credentials are replaced with
+    REDACTED_BY_LITELM_STRING.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1117,7 +1130,9 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     def _sanitize_value(value: object) -> object:
         if isinstance(value, Mapping):
-            return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
+            return _sanitize_request_body_for_spend_logs_payload(
+                value, visited, max_string_length_prompt_in_db, redact_credentials
+            )
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
@@ -1155,9 +1170,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         return value
 
     return {
-        k: REDACTED_BY_LITELM_STRING
-        if k in AWS_CREDENTIAL_VALUE_PARAM_KEYS and isinstance(v, str)
-        else _sanitize_value(v)
+        k: REDACTED_BY_LITELM_STRING if redact_credentials and _is_request_body_credential(k, v) else _sanitize_value(v)
         for k, v in request_body.items()
         if k not in _SENSITIVE_REQUEST_BODY_KEYS
     }
@@ -1575,7 +1588,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body, redact_credentials=True)
             _request_body_json_str: Final = safe_dumps(_request_body)
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(
