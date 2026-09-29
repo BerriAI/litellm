@@ -1,0 +1,6 @@
+# Code owners for LiteLLM repository
+# These owners will be requested for review when someone opens a pull request
+
+# UI and frontend code
+/ui/ @ishaan-berri
+/litellm/proxy/_experimental/ @ishaan-berri
