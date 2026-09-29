@@ -52,6 +52,26 @@ async def test_negotiation_records_preserve_the_peer_call_contract(monkeypatch: 
     assert records[0]["negotiation"] == {"requested": "2025-03-26", "returned": "2025-03-26"}
 
 
+@pytest.mark.parametrize("covered", (False, True))
+def test_stdio_registration_forwards_only_explicit_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, covered: bool
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.mcp import stdio_peer
+
+    monkeypatch.delenv("COVERAGE_PROCESS_CONFIG", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-peer")
+    if covered:
+        monkeypatch.setenv("COVERAGE_PROCESS_CONFIG", "coverage-config")
+    with stdio_peer(tmp_path) as peer:
+        assert peer.registration() == {
+            "transport": "stdio",
+            "command": peer.command,
+            "args": list(peer.args),
+            **({"env": {"COVERAGE_PROCESS_CONFIG": "coverage-config"}} if covered else {}),
+        }
+
+
 @pytest.mark.parametrize("file_backed", (False, True))
 def test_peer_drain_preserves_received_requests(
     tmp_path: Path, file_backed: bool, monkeypatch: pytest.MonkeyPatch
