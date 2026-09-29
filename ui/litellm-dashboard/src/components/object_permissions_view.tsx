@@ -4,6 +4,8 @@ import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
 import type { ObjectPermission } from "./object_permission_types";
 import type { InheritedGrant } from "./permissions/inheritedGrants";
+import { searchToolPermissionCopy } from "./search_tools/searchToolPermissionCopy";
+import { useDefaultSearchListDeny } from "@/app/(dashboard)/hooks/uiSettings/useDefaultSearchListDeny";
 
 interface ObjectPermissionsViewProps {
   objectPermission?: ObjectPermission | null;
@@ -31,6 +33,7 @@ export function ObjectPermissionsView({
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
   const searchTools = objectPermission?.search_tools || [];
   const skills = objectPermission?.skills || [];
+  const searchToolCopy = searchToolPermissionCopy(useDefaultSearchListDeny());
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>
@@ -52,9 +55,7 @@ export function ObjectPermissionsView({
       <div className="min-w-0 rounded-md border border-border p-4">
         <p className="text-sm font-medium text-foreground">Search tools</p>
         {searchTools.length === 0 ? (
-          <p className="mt-1 block text-xs text-muted-foreground">
-            No restriction — all configured search tools are allowed for this team.
-          </p>
+          <p className="mt-1 block text-xs text-muted-foreground">{searchToolCopy.emptyState}</p>
         ) : (
           <p className="mt-1 block text-xs break-words text-foreground">{searchTools.join(", ")}</p>
         )}

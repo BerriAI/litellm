@@ -28157,6 +28157,11 @@ export interface components {
              */
             database_url?: string | null;
             /**
+             * Default Search List Deny
+             * @description If True, a key, team or user with no search tool grants is denied every search tool instead of being allowed all of them. A team key uses its team's grants, a personal key uses its user's grants, and any other non-empty key or user allowlist only narrows that. Proxy admins are exempt. Defaults to False, where an empty search tool list allows every search tool.
+             */
+            default_search_list_deny?: boolean | null;
+            /**
              * Disable Auto Add Proxy Admin To Teams
              * @description By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.
              */

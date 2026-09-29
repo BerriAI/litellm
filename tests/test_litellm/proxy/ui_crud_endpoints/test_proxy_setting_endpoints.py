@@ -3766,6 +3766,38 @@ class TestApplyUserBudgetToTeamKeysUISetting:
         assert "apply_user_budget_to_team_keys" not in ALLOWED_UI_SETTINGS_FIELDS
 
 
+class TestDefaultSearchListDenyUISetting:
+    """``default_search_list_deny`` mirrors general_settings so the dashboard can explain empty search grants."""
+
+    @pytest.mark.parametrize(
+        "general_settings, expected",
+        [
+            ({}, False),
+            ({"default_search_list_deny": False}, False),
+            ({"default_search_list_deny": "true"}, False),
+            ({"default_search_list_deny": True}, True),
+            ({"role_permissions": [object()], "default_search_list_deny": True}, True),
+        ],
+    )
+    def test_reported_from_general_settings(self, mock_auth, monkeypatch, general_settings, expected):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        TestApplyUserBudgetToTeamKeysUISetting._mock_prisma(monkeypatch)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["default_search_list_deny"] is expected
+
+    def test_a_persisted_true_cannot_forge_the_derived_value(self, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        TestApplyUserBudgetToTeamKeysUISetting._mock_prisma(monkeypatch, stored={"default_search_list_deny": True})
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        assert response.json()["values"]["default_search_list_deny"] is False
+
+
 class TestTeamAdminEditableTeamFieldsSetting:
     """team_admin_editable_team_fields: the proxy-wide allow-list update_team applies to team admins."""
 

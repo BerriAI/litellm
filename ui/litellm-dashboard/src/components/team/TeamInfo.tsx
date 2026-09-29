@@ -105,6 +105,8 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "../search_tools/SearchToolSelector";
+import { searchToolPermissionCopy } from "../search_tools/searchToolPermissionCopy";
+import { useDefaultSearchListDeny } from "@/app/(dashboard)/hooks/uiSettings/useDefaultSearchListDeny";
 import SkillSelector from "../skills/SkillSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
@@ -577,6 +579,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   premiumUser = false,
   onUpdate,
 }) => {
+  const searchToolCopy = searchToolPermissionCopy(useDefaultSearchListDeny());
   const teamUpdateSchema = useMemo(
     () =>
       teamUpdateFieldsSchema.superRefine((values, ctx) => {
@@ -2086,17 +2089,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       <FormField
                         control={form.control}
                         name="object_permission_search_tools"
-                        label={labelWithHint(
-                          "Allowed Search Tools",
-                          "Select which search tools this team can access. Leave empty to allow all search tools.",
-                        )}
+                        label={labelWithHint("Allowed Search Tools", searchToolCopy.hint)}
                       >
                         {({ value, onChange }) => (
                           <SearchToolSelector
                             onChange={onChange}
                             value={value}
                             accessToken={accessToken || ""}
-                            placeholder="Select search tools (optional, empty = all allowed)"
+                            placeholder={searchToolCopy.placeholder}
                           />
                         )}
                       </FormField>

@@ -367,17 +367,26 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
 APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: Final = "apply_user_budget_to_team_keys"
+DEFAULT_SEARCH_LIST_DENY_UI_SETTING: Final = "default_search_list_deny"
 
 # UI settings derived from the deployment environment. Deliberately kept out of
 # ALLOWED_UI_SETTINGS_FIELDS: they are read-only, never persisted, and PATCH
 # rejects them so an admin cannot flip an env-gated feature at runtime.
 _DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset(
-    {ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING, APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING}
+    {
+        ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING,
+        APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING,
+        DEFAULT_SEARCH_LIST_DENY_UI_SETTING,
+    }
 )
 
 
 def _apply_user_budget_to_team_keys_enabled(settings: Mapping[str, object]) -> bool:
     return settings.get(APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING) is True
+
+
+def _default_search_list_deny_enabled(settings: Mapping[str, object]) -> bool:
+    return settings.get(DEFAULT_SEARCH_LIST_DENY_UI_SETTING) is True
 
 
 def _derived_ui_setting_value(key: str) -> object:
@@ -394,6 +403,12 @@ def _derived_ui_setting_value(key: str) -> object:
         from litellm.proxy.proxy_server import general_settings
 
         return _apply_user_budget_to_team_keys_enabled(
+            cast(Mapping[str, object], general_settings)  # cast-ok: proxy_server declares general_settings as bare dict
+        )
+    if key == DEFAULT_SEARCH_LIST_DENY_UI_SETTING:
+        from litellm.proxy.proxy_server import general_settings
+
+        return _default_search_list_deny_enabled(
             cast(Mapping[str, object], general_settings)  # cast-ok: proxy_server declares general_settings as bare dict
         )
     return None
@@ -792,7 +807,7 @@ def _ui_setting_source(
     if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
         configured_value: Final = get_secret(PTU_COST_ATTRIBUTION_ENV_VAR, None)
         return "config" if configured_value is not None or value is True else "default"
-    if key == APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING:
+    if key in (APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING, DEFAULT_SEARCH_LIST_DENY_UI_SETTING):
         return "config" if value is True else "default"
     return source_for(settings, key, _model_field_default(settings_class, key))
 
@@ -1803,6 +1818,7 @@ async def get_ui_settings():
             APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING: _derived_ui_setting_value(
                 APPLY_USER_BUDGET_TO_TEAM_KEYS_UI_SETTING
             ),
+            DEFAULT_SEARCH_LIST_DENY_UI_SETTING: _derived_ui_setting_value(DEFAULT_SEARCH_LIST_DENY_UI_SETTING),
         }
     )
     source: Final[Mapping[str, FieldSource]] = MappingProxyType(

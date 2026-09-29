@@ -7961,6 +7961,20 @@ async def test_update_general_settings_propagates_apply_user_budget_to_team_keys
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_propagates_default_search_list_deny():
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        await proxy_config._update_general_settings(db_general_settings={"default_search_list_deny": "true"})
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.general_settings["default_search_list_deny"] is True
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_propagates_spend_log_cleanup_bounds():
     """The dashboard writes the cleanup bounds straight to the DB config, so
     without runtime propagation the scheduled job never sees them and the knobs
@@ -11593,6 +11607,33 @@ def test_get_config_list_includes_apply_user_budget_to_team_keys(monkeypatch):
         fields = {item["field_name"]: item for item in resp.json()}
         assert "apply_user_budget_to_team_keys" in fields
         assert fields["apply_user_budget_to_team_keys"]["field_type"] == "Boolean"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_get_config_list_includes_default_search_list_deny(monkeypatch):
+    import types
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app
+
+    mock_prisma = MagicMock()
+    mock_config_table = MagicMock()
+    mock_config_table.find_first = AsyncMock(return_value=None)
+    mock_prisma.db = types.SimpleNamespace(litellm_config=mock_config_table)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        resp = TestClient(app).get("/config/list", params={"config_type": "general_settings"})
+        assert resp.status_code == 200, resp.text
+        fields = {item["field_name"]: item for item in resp.json()}
+        assert fields["default_search_list_deny"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
 
