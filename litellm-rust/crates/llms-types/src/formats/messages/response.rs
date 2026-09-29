@@ -1,7 +1,6 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct MessagesResponse {
     pub id: String,
     #[serde(rename = "type")]

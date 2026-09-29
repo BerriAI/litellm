@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
 use crate::serde_compat::{FiniteF64, LaxI64};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type")]
 pub enum OcrDocument {
     #[serde(rename = "document_url")]
@@ -50,7 +49,8 @@ impl OcrDocument {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, Default, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum OcrResponseFormat {
     #[default]
@@ -59,7 +59,8 @@ pub enum OcrResponseFormat {
 }
 
 #[serde_as]
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct OcrPageDimensions {
     #[serde_as(deserialize_as = "Option<LaxI64>")]
     pub dpi: Option<i64>,
@@ -69,7 +70,8 @@ pub struct OcrPageDimensions {
     pub width: Option<i64>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct OcrPageImage {
     pub image_base64: Option<String>,
     pub bbox: Option<Map<String, Value>>,
@@ -78,7 +80,8 @@ pub struct OcrPageImage {
 }
 
 #[serde_as]
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct OcrPage {
     #[serde_as(deserialize_as = "LaxI64")]
     pub index: i64,
@@ -90,7 +93,8 @@ pub struct OcrPage {
 }
 
 #[serde_as]
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct OcrUsageInfo {
     #[serde_as(deserialize_as = "Option<LaxI64>")]
     pub pages_processed: Option<i64>,
@@ -104,7 +108,7 @@ pub struct OcrUsageInfo {
     pub extra_fields: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct LiteLLMOcrResponse {
     pub pages: Vec<OcrPage>,
     pub model: String,

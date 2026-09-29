@@ -4017,6 +4017,7 @@ dependencies = [
 name = "litellm-llms-types"
 version = "0.1.0"
 dependencies = [
+ "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
  "serde",

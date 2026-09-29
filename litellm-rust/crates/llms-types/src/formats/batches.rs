@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchStatus {
     InProgress,
@@ -8,14 +7,16 @@ pub enum BatchStatus {
     Completed,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Eq)]
 pub struct BatchRequestCounts {
     pub total: u64,
     pub completed: u64,
     pub failed: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Eq)]
 pub struct BatchResponse {
     pub id: String,
     pub object: String,
