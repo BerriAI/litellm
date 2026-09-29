@@ -105,7 +105,7 @@ def encrypt_bearer_token(value: str, prefix: str) -> str:
     """AES-256-GCM as unpadded base64url behind ``prefix``, which is also the AAD so a token can't change kind."""
     salt_key: Final = _get_salt_key()
     if not isinstance(salt_key, str):
-        raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")
+        raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")  # noqa: TRY004  # missing config, not a bad argument type
     sealed: Final = _seal_aes_gcm(value=value, signing_key=salt_key, aad=prefix.encode("utf-8"))
     return prefix + base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
 
