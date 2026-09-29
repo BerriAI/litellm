@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -122,6 +122,72 @@ def _chat_response(service_tier: str | None, prompt_tokens: int) -> JsonResponse
     )
 
 
+def _responses_response(service_tier: str | None, prompt_tokens: int) -> JsonResponse:
+    return JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$UNIQUE_ID",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "integration-ultrafast-long-context",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_$UNIQUE_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "long context answer", "annotations": []}],
+                }
+            ],
+            "usage": {
+                "input_tokens": prompt_tokens,
+                "output_tokens": COMPLETION_TOKENS,
+                "total_tokens": prompt_tokens + COMPLETION_TOKENS,
+                "input_tokens_details": {"cached_tokens": CACHED_TOKENS},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+            **({} if service_tier is None else {"service_tier": service_tier}),
+        },
+    )
+
+
+def _surface_response(
+    surface: Literal["chat", "responses"], service_tier: str | None, prompt_tokens: int
+) -> JsonResponse:
+    match surface:
+        case "chat":
+            return _chat_response(service_tier, prompt_tokens)
+        case "responses":
+            return _responses_response(service_tier, prompt_tokens)
+
+
+def _surface_request(
+    surface: Literal["chat", "responses"], scenario_id: str, model: str, service_tier: str | None
+) -> tuple[str, dict[str, JsonValue], str]:
+    match surface:
+        case "chat":
+            return (
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": "long context ultrafast control"}],
+                    **({} if service_tier is None else {"service_tier": service_tier}),
+                },
+                f"/{scenario_id}/chat/completions",
+            )
+        case "responses":
+            return (
+                "/v1/responses",
+                {
+                    "model": model,
+                    "input": "long context ultrafast control",
+                    **({} if service_tier is None else {"service_tier": service_tier}),
+                },
+                f"/{scenario_id}/responses",
+            )
+
+
 @pytest.mark.parametrize(
     ("service_tier", "prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
     (
@@ -131,8 +197,10 @@ def _chat_response(service_tier: str | None, prompt_tokens: int) -> JsonResponse
     ),
     ids=("ultrafast_above_272k", "ultrafast_below_272k", "standard_above_272k"),
 )
+@pytest.mark.parametrize("surface", ("chat", "responses"), ids=("chat", "responses"))
 def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
     gateway: Gateway,
+    surface: Literal["chat", "responses"],
     service_tier: str | None,
     prompt_tokens: int,
     input_rate: float,
@@ -141,7 +209,9 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
 ) -> None:
     with gateway.scenario() as scenario:
         scenario_id: Final = f"ultrafast-long-context-{uuid.uuid4().hex}"
-        handle: Final = register_scenario(scenario_id, _chat_response(service_tier, prompt_tokens))
+        handle: Final = register_scenario(
+            scenario_id, _surface_response(surface, service_tier, prompt_tokens)
+        )
         scenario.cleanups.callback(delete_scenario, handle)
         key: Final = scenario.key()
         model: Final = scenario.model(
@@ -150,16 +220,13 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
             api_base=handle.api_base(),
             **LONG_CONTEXT_PRICING,
         )
+        request_path, request_body, expected_upstream_path = _surface_request(surface, scenario_id, model, service_tier)
         with httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
             upstream.get("/__observations").raise_for_status()
             response: Final = gateway.request(
                 "POST",
-                "/v1/chat/completions",
-                {
-                    "model": model,
-                    "messages": [{"role": "user", "content": "long context ultrafast control"}],
-                    **({} if service_tier is None else {"service_tier": service_tier}),
-                },
+                request_path,
+                request_body,
                 key=key,
             )
             observations: Final = JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
@@ -187,6 +254,9 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
         assert float(breakdown["output_cost"]) == pytest.approx(expected_output, rel=1e-6)
         assert isinstance(observations, list)
         assert len(observations) == 1
-        body: Final = object_value(object_value(observations[0])["body"])
+        observation: Final = object_value(observations[0])
+        upstream_path: Final = string_value(observation["path"])
+        assert upstream_path == expected_upstream_path, upstream_path
+        body: Final = object_value(observation["body"])
         assert body.get("service_tier") == service_tier, body
         assert not set(LONG_CONTEXT_PRICING).intersection(body), body
