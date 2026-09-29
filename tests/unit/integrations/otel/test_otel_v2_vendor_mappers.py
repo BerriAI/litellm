@@ -300,6 +300,39 @@ def test_openinference_output_tool_calls_do_not_shed_input_roles_under_budget():
     }
 
 
+def test_openinference_budget_sheds_trailing_output_tool_calls_before_the_message():
+    tool_calls: Final = tuple(
+        {
+            "id": f"call_{index}",
+            "type": "function",
+            "function": {
+                "name": "lookup_weather",
+                "arguments": f'{{"city": "C{index}"}}',
+            },
+        }
+        for index in range(60)
+    )
+    data: Final = _llm_call(
+        choices_out=(
+            {
+                "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": None, "tool_calls": tool_calls},
+            },
+        )
+    )
+    mapped: Final = OpenInferenceMapper().map(data)
+    attrs: Final = fit_indexed_messages(mapped, len(mapped) - 34)
+    retained_tool_call_keys: Final = tuple(key for key in attrs if ".tool_calls." in key)
+    retained_tool_call_indices: Final = frozenset(int(key.split(".")[5]) for key in retained_tool_call_keys)
+
+    assert retained_tool_call_indices == frozenset(range(50))
+    assert len(retained_tool_call_keys) == 150
+    assert attrs["llm.output_messages.0.message.role"] == "assistant"
+    assert not any(key.startswith("llm.input_messages.0.") for key in attrs)
+    assert len(attrs) == len(mapped) - 34
+    assert json.loads(attrs["output.value"]) == [{"role": "assistant", "content": None, "tool_calls": list(tool_calls)}]
+
+
 def test_openinference_plain_output_messages_keep_the_existing_value_shape():
     attrs: Final = OpenInferenceMapper().map(_llm_call())
     assert all(".tool_calls." not in key for key in attrs)
