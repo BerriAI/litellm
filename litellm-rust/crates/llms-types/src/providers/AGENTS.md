@@ -1,25 +1,15 @@
-# Provider wire contracts
+# Provider data ownership
 
-This directory owns shared provider-specific wire data and extensions: request and response envelopes, header values, invocation metrics, and protocol status values. Organize them by provider, adding format submodules when needed to keep distinct API contracts readable
+This directory owns shared provider-specific wire contracts and extensions, grouped by provider. Add format submodules when needed to separate distinct API contracts
 
-## Placement
+Place a type here when its meaning belongs to the provider's protocol. Place it in `formats` when it belongs to the API format, even if only one provider supports it. A provider originating a format does not make that format's types provider-specific
 
-Use a provider-specific type when it represents that provider's protocol rather than a shared API format. `AnthropicBeta` describes the `anthropic-beta` header, and `BedrockInvocationMetrics` describes Bedrock invocation metadata. Messages content blocks belong in `formats::messages`, even if only one provider currently supports a variant
+Provider envelopes may reuse format contracts where their semantics match. Dependencies point from `providers` to `formats`, never the reverse. Do not copy a format model to add a provider field
 
-Reuse format contracts inside provider envelopes where their semantics match. Dependency direction is `providers` importing `formats`, never the reverse. Keep one authoritative type and import path. Do not copy a shared format model to add a provider field
+A shared wire contract may live here independently of its current caller count. A decoding or rendering projection tailored to one transformation stays in `llms`. Serializability alone does not justify promoting adapter state or projections into public schemas
 
-A wire contract may live here independently of how many callers currently use it. A decoding or rendering projection tailored to one transformation stays in `llms`, such as `InvokeChunkPayload` or `ReplayedWebSearchResult`. Do not promote every adapter struct unchanged into a public schema
+Parsing, formatting, shape validation, deduplication, and value semantics belong with the data. Authentication, required headers or betas, OAuth companions, header precedence, runtime defaults, capability checks, polling, retries, and normalization belong in provider adapters or the auth crates
 
-## Data and policy
+An operation-status value belongs here. The decision to poll again belongs in the adapter. A provider header value belongs here. The decision to send it belongs in provider policy. Recognizing a wire value does not establish model support or equivalent behavior across providers
 
-Parsing, formatting, deduplication, shape validation, and value equality belong with the represented data. Wire-equivalent header values must agree on equality, ordering, and hashing, including a known variant and an opaque value with the same wire string
-
-Provider capability checks, runtime defaults, authentication, OAuth companions, required betas, header precedence, parameter mapping, response normalization, polling, and retry decisions belong in `llms` or the auth crates. An operation-status enum belongs here. Deciding whether to poll again does not
-
-Recognizing a wire value does not establish model support, a runtime default, or equivalent behavior across providers
-
-Preserve existing extension fields, unknown values, missing fields, explicit nulls, and numeric coercion when adding typed fields. Use `Recognized<T>` only for established permissive contracts. Do not duplicate typed fields in flattened maps or silently discard unknown data
-
-## Verification
-
-Test wire serialization, parsing, malformed-input handling, extension preservation, presence semantics, and value semantics here. Test authentication, header selection, response normalization, and provider execution in their owning crates. Fixtures verify LiteLLM's supported contract rather than asserting that an external provider's schema never changes
+Follow the parent crate's contract-preservation rules. Test wire and value semantics here, including equality, ordering, and hashing for wire-equivalent header values. Test header selection, authentication, normalization, and execution in their owning crates
