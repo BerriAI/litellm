@@ -816,7 +816,7 @@ class CustomStreamWrapper:
         self,
         completion_obj: dict[str, Any],
         model_response: ModelResponseStream,
-        response_obj: dict[str, Any],
+        response_obj: Mapping[str, object],
     ) -> bool:
         if (
             "content" in completion_obj

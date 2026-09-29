@@ -474,7 +474,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return "\n".join(text_parts) or None
 
     @staticmethod
-    def _extract_choice_content(choice: Any) -> Any:
+    def _extract_choice_content(choice: Any) -> object:
         if hasattr(choice, "message"):
             message = choice.message
         elif isinstance(choice, dict):
