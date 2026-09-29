@@ -39,10 +39,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="custom-model", llm_router=router)
-        assert result is False, (
-            "Unmapped model should enforce budget (return False), "
-            "not bypass it (return True)"
-        )
+        assert result is False, "Unmapped model should enforce budget (return False), not bypass it (return True)"
 
     def test_explicitly_free_model_bypasses_budget(self):
         """A model with explicit cost=0 in model_info should bypass budget."""
@@ -65,9 +62,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="free-model", llm_router=router)
-        assert (
-            result is True
-        ), "Explicitly free model should bypass budget (return True)"
+        assert result is True, "Explicitly free model should bypass budget (return True)"
 
     def test_known_paid_model_enforces_budget(self):
         """A model in the cost map with non-zero costs should enforce budget."""
@@ -101,9 +96,7 @@ class TestUnmappedModelBudgetEnforcement:
             ]
         )
         result = _is_model_cost_zero(model="free-via-params", llm_router=router)
-        assert (
-            result is True
-        ), "Model with explicit cost=0 in litellm_params should bypass budget"
+        assert result is True, "Model with explicit cost=0 in litellm_params should bypass budget"
 
     def test_cache_invalidates_on_in_place_pricing_update(self):
         """
@@ -343,6 +336,33 @@ class TestUnmappedModelBudgetEnforcement:
         )
 
         assert _is_model_cost_zero(model="dangling-alias", llm_router=router) is False
+
+    def test_repointed_hidden_alias_does_not_reuse_cached_free_result(self):
+        """Repointing a hidden alias from a free group to a paid group re-evaluates the cost."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-fake"},
+                    "model_info": {"id": "paid-model-id"},
+                },
+            ],
+            model_group_alias={"hidden-alias": {"model": "free-model", "hidden": True}},
+        )
+
+        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is True
+        router.model_group_alias["hidden-alias"] = {"model": "paid-model", "hidden": True}
+        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is False
 
     def test_handles_router_without_zero_cost_cache_attribute(self):
         """Tolerate router-like objects (e.g. ``MagicMock`` stand-ins) that
