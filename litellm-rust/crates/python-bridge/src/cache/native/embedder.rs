@@ -11,7 +11,7 @@ tokio::task_local! {
 
 /// Runs `future` with the vector the Python embedder already produced, so the backend's
 /// `async_embed` never has to call back into Python from the runtime.
-pub(super) fn with_prepared_embedding<F: Future>(
+pub(in crate::cache) fn with_prepared_embedding<F: Future>(
     vector: Result<Vec<f32>, Error>,
     future: F,
 ) -> impl Future<Output = F::Output> {
@@ -19,7 +19,7 @@ pub(super) fn with_prepared_embedding<F: Future>(
 }
 
 /// The Python object that owns embedding for a semantic backend.
-pub(super) struct PythonEmbedder(Py<PyAny>);
+pub(in crate::cache) struct PythonEmbedder(Py<PyAny>);
 
 impl Clone for PythonEmbedder {
     fn clone(&self) -> Self {
@@ -28,15 +28,15 @@ impl Clone for PythonEmbedder {
 }
 
 impl PythonEmbedder {
-    pub(super) fn new(object: Py<PyAny>) -> Self {
+    pub(in crate::cache) fn new(object: Py<PyAny>) -> Self {
         Self(object)
     }
 
-    pub(super) fn object(&self) -> &Py<PyAny> {
+    pub(in crate::cache) fn object(&self) -> &Py<PyAny> {
         &self.0
     }
 
-    pub(super) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+    pub(in crate::cache) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.0)
     }
 
@@ -50,7 +50,7 @@ impl PythonEmbedder {
     }
 
     /// The awaitable of `_get_async_embedding(prompt, metadata=...)`, to run in the caller's loop.
-    pub(super) fn async_embedding(
+    pub(in crate::cache) fn async_embedding(
         &self,
         py: Python<'_>,
         prompt: &str,
@@ -63,7 +63,7 @@ impl PythonEmbedder {
             .map(Bound::unbind)
     }
 
-    pub(super) fn extract(vector: Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
+    pub(in crate::cache) fn extract(vector: Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
         Ok(vector
             .extract::<Vec<f64>>()?
             .into_iter()

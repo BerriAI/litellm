@@ -11,8 +11,9 @@ import pytest
 
 from litellm.caching.caching import Cache
 from litellm.caching.s3_cache import S3Cache
+from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
-from tests.test_litellm_rust.support.cache import CacheTestHandle, CacheTestResolver, request
+from tests.test_litellm_rust.support.cache import CacheTestResolver, activate_native, native_runtime, request
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.s3_stub import S3Stub
 
@@ -21,6 +22,18 @@ pytestmark: Final = pytest.mark.requires_rust_extension
 
 def python_s3(url: str) -> S3Cache:
     return S3Cache(
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+
+
+def s3_facade(url: str) -> Cache:
+    return Cache(
+        type=LiteLLMCacheType.S3,
         s3_bucket_name="cache-bucket",
         s3_region_name="us-east-1",
         s3_endpoint_url=url,
@@ -41,18 +54,7 @@ async def test_s3_reads_python_entries_and_writes_with_python_metadata(s3_stub: 
         json.dumps({"timestamp": time.time(), "response": response}).encode(),
         {"expires": "Thu, 01 Jan 1970 00:00:00 GMT"},
     )
-    binding: Final = CacheTestResolver(
-        SimpleNamespace(
-            cache=CacheTestHandle.s3(
-                "cache-bucket",
-                region="us-east-1",
-                endpoint_url=s3_stub.url,
-                key_prefix="team/",
-                access_key_id="key",
-                secret_access_key="secret",
-            )
-        )
-    ).resolve()
+    binding: Final = native_runtime(s3_facade(s3_stub.url))
 
     assert binding.lookup(request("sync:key")) == response
     assert await binding.async_lookup(request("plain")) == response
@@ -79,7 +81,7 @@ async def test_s3_reads_python_entries_and_writes_with_python_metadata(s3_stub: 
     assert partial == {"values": [response, None, None], "missing_indices": [1, 2]}
 
 
-def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_stub: S3Stub) -> None:
+def test_selected_s3_runtime_declines_backend_mutation(s3_stub: S3Stub) -> None:
     facade: Final = Cache(
         type=LiteLLMCacheType.S3,
         s3_bucket_name="cache-bucket",
@@ -89,21 +91,7 @@ def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_
         s3_aws_secret_access_key="secret",
         s3_path="team",
     )
-    handle: Final = CacheTestHandle.s3(
-        "cache-bucket",
-        region="us-east-1",
-        endpoint_url=s3_stub.url,
-        key_prefix="team/",
-        access_key_id="key",
-        secret_access_key="secret",
-    )
-    with pytest.raises(TypeError, match="buckets must match"):
-        CacheTestHandle.s3("other", region="us-east-1", endpoint_url=s3_stub.url)._bind_facade(facade)
-    with pytest.raises(TypeError, match="key prefixes must match"):
-        CacheTestHandle.s3(
-            "cache-bucket", region="us-east-1", endpoint_url=s3_stub.url, key_prefix="other/"
-        )._bind_facade(facade)
-    handle._bind_facade(facade)
+    activate_native(facade)
     resolver: Final = CacheTestResolver(SimpleNamespace(cache=facade))
     binding: Final = resolver.resolve()
     assert binding.kind == "native"
@@ -116,7 +104,8 @@ def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_
     assert "team/native" in s3_stub.objects
 
     with rebound(facade.cache, "bucket_name", "other"):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
     other_client: Final = boto3.client(
         "s3",
         region_name="us-east-1",
@@ -125,7 +114,8 @@ def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_
         aws_secret_access_key="secret",
     )
     with rebound(facade.cache, "s3_client", other_client):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
 
     class CustomS3Cache(S3Cache):
         pass
@@ -147,20 +137,10 @@ def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_
         s3_aws_secret_access_key="secret",
         s3_path="team",
     )
-    with pytest.raises(TypeError):
-        handle._bind_facade(subclassed)
     assert CacheTestResolver(SimpleNamespace(cache=subclassed)).resolve().kind == "python_callback"
 
 
 def test_s3_facade_rejects_configurations_that_require_python(s3_stub: S3Stub) -> None:
-    handle: Final = CacheTestHandle.s3(
-        "cache-bucket",
-        region="us-east-1",
-        endpoint_url=s3_stub.url,
-        key_prefix="team/",
-        access_key_id="key",
-        secret_access_key="secret",
-    )
     unverified: Final = Cache(
         type=LiteLLMCacheType.S3,
         s3_bucket_name="cache-bucket",
@@ -171,8 +151,8 @@ def test_s3_facade_rejects_configurations_that_require_python(s3_stub: S3Stub) -
         s3_path="team",
         s3_verify=False,
     )
-    with pytest.raises(TypeError, match="requires Python"):
-        handle._bind_facade(unverified)
+    with pytest.raises(_native.RustBridgeDeclined, match="requires Python"):
+        native_runtime(unverified)
     proxied: Final = Cache(
         type=LiteLLMCacheType.S3,
         s3_bucket_name="cache-bucket",
@@ -183,5 +163,5 @@ def test_s3_facade_rejects_configurations_that_require_python(s3_stub: S3Stub) -
         s3_path="team",
         s3_config=botocore.config.Config(proxies={"https": "http://proxy.test"}),
     )
-    with pytest.raises(TypeError, match="requires Python"):
-        handle._bind_facade(proxied)
+    with pytest.raises(_native.RustBridgeDeclined, match="requires Python"):
+        native_runtime(proxied)

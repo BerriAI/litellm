@@ -11,11 +11,15 @@ import litellm
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.rust_bridge import _native
-from litellm.rust_bridge.catalog import CacheRule, Route, RouteRule, SecretManagerRule
-from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.response_cache import ResponseCacheRuntime, resolve_response_cache
+from litellm.rust_bridge.response_cache import ResponseCacheRuntime
 from litellm.types.caching import LiteLLMCacheType
-from tests.test_litellm_rust.support.cache import CacheLookup, CacheTestHandle, CacheTestResolver, request
+from tests.test_litellm_rust.support.cache import (
+    CacheLookup,
+    CacheTestResolver,
+    activate_native,
+    native_runtime,
+    request,
+)
 from tests.test_litellm_rust.support.isolation import rebound
 
 pytestmark: Final = pytest.mark.requires_rust_extension
@@ -24,8 +28,6 @@ pytestmark: Final = pytest.mark.requires_rust_extension
 def test_existing_constructor_and_global_are_unchanged() -> None:
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
     assert type(facade.cache) is InMemoryCache
-    assert "_native_cache_handle" not in vars(facade)
-    assert resolve_response_cache(facade) is None
     with rebound(litellm, "cache", facade):
         resolver: Final = CacheTestResolver(litellm)
         assert resolver.resolve().kind == "python_callback"
@@ -33,14 +35,9 @@ def test_existing_constructor_and_global_are_unchanged() -> None:
         assert cast(CacheLookup, facade).get_cache(cache_key="key") == {"answer": 7}
 
 
-async def test_catalog_constructs_native_runtime_from_public_cache_configuration() -> None:
-    rules: Final = (
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
-        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
-    )
+async def test_explicit_selection_constructs_native_runtime_from_public_cache_configuration() -> None:
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    runtime: Final = resolve_response_cache(facade, rules)
+    runtime: Final = ResponseCacheRuntime(_native._ResponseCacheRuntime.from_cache(facade))
     assert isinstance(runtime, ResponseCacheRuntime)
     assert runtime.kind == "native"
 
@@ -70,17 +67,12 @@ async def test_catalog_constructs_native_runtime_from_public_cache_configuration
 
 
 async def test_inference_resolver_uses_the_configured_native_cache_directly() -> None:
-    rules: Final = (
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
-        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
-    )
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    runtime: Final = resolve_response_cache(facade, rules)
+    runtime: Final = ResponseCacheRuntime(_native._ResponseCacheRuntime.from_cache(facade))
     assert isinstance(runtime, ResponseCacheRuntime)
     facade._native_cache = runtime
 
-    selected: Final = _native._CacheResolver(SimpleNamespace(cache=facade)).resolve()
+    selected: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     assert selected.kind == "native"
     request: Final = runtime.request(facade, {"cache_key": "inference-native"})
     assert request is not None
@@ -90,7 +82,7 @@ async def test_inference_resolver_uses_the_configured_native_cache_directly() ->
     assert facade.cache.get_cache("inference-native") is None
 
     facade._native_cache = None
-    fallback: Final = _native._CacheResolver(SimpleNamespace(cache=facade)).resolve()
+    fallback: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     assert fallback.kind == "python_callback"
     await fallback.async_store(None, {"answer": 7}, callback_kwargs={"cache_key": "inference-python"})
     assert facade.get_cache(cache_key="inference-python") == {"answer": 7}
@@ -98,13 +90,8 @@ async def test_inference_resolver_uses_the_configured_native_cache_directly() ->
 
 
 async def test_inference_resolver_declines_a_native_runtime_whose_facade_changed() -> None:
-    rules: Final = (
-        RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
-        SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({"local"})),
-        CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({"local"})),
-    )
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    runtime: Final = resolve_response_cache(facade, rules)
+    runtime: Final = ResponseCacheRuntime(_native._ResponseCacheRuntime.from_cache(facade))
     assert isinstance(runtime, ResponseCacheRuntime)
     facade._native_cache = runtime
     stale_request: Final = runtime.request(facade, {"cache_key": "stale-only"})
@@ -114,7 +101,7 @@ async def test_inference_resolver_declines_a_native_runtime_whose_facade_changed
     replacement: Final = InMemoryCache()
     facade.cache = replacement
     with pytest.raises(_native.RustBridgeDeclined):
-        _native._CacheResolver(SimpleNamespace(cache=facade)).resolve()
+        CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     assert await runtime.async_lookup(stale_request) == {"answer": "stale"}
     assert replacement.get_cache("stale-only") is None
     assert replacement.get_cache("swapped-backend") is None
@@ -144,13 +131,13 @@ def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> Non
 
 
 async def test_native_bindings_survive_replacement_and_capture_writes_before_dispatch() -> None:
-    namespace: Final = SimpleNamespace(cache=CacheTestHandle.memory())
+    namespace: Final = SimpleNamespace(cache=activate_native(Cache(type=LiteLLMCacheType.LOCAL)))
     resolver: Final = CacheTestResolver(namespace)
     selected: Final = resolver.resolve()
     assert selected.kind == "native"
     selected.store(request(), {"answer": 1})
     assert await selected.async_lookup(request()) == {"answer": 1}
-    with rebound(namespace, "cache", CacheTestHandle.memory()):
+    with rebound(namespace, "cache", activate_native(Cache(type=LiteLLMCacheType.LOCAL))):
         replacement: Final = resolver.resolve()
         await selected.async_store(request(), {"answer": 2})
         assert replacement.lookup(request()) is None
@@ -217,62 +204,30 @@ async def test_callback_cancellation_stays_in_the_callers_task() -> None:
     assert finished.is_set()
 
 
-def test_registered_facade_uses_native_and_instance_overrides_fall_back() -> None:
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    handle: Final = CacheTestHandle.memory()
-    handle._bind_facade(facade)
-    resolver: Final = CacheTestResolver(SimpleNamespace(cache=facade))
-    native: Final = resolver.resolve()
-    assert native.kind == "native"
+@pytest.mark.parametrize("method", ("get_cache", "get_cache_key", "async_get_cache"))
+def test_selected_native_runtime_declines_instance_overrides(method: str) -> None:
+    facade: Final = activate_native(Cache(type=LiteLLMCacheType.LOCAL))
+    selected: Final = CacheTestResolver(SimpleNamespace(cache=facade))
+    native: Final = selected.resolve()
     native.store(request(), {"source": "native"})
+
+    def override(**_kwargs: object) -> None:
+        return None
+
+    with rebound(facade, method, override):
+        with pytest.raises(_native.RustBridgeDeclined):
+            selected.resolve()
     assert native.lookup(request()) == {"source": "native"}
-    assert cast(CacheLookup, facade).get_cache(cache_key="key") is None
-    sentinel: Final = object()
-
-    def outer_override(**_kwargs: object) -> object:
-        return sentinel
-
-    def backend_override(*_args: object, **_kwargs: object) -> dict[str, str]:
-        return {"source": "override"}
-
-    with rebound(facade, "get_cache", outer_override):
-        fallback: Final = resolver.resolve()
-        assert fallback.kind == "python_callback"
-        assert fallback.lookup(None, callback_kwargs={"cache_key": "key"}) is sentinel
-    assert resolver.resolve().kind == "python_callback"
-    delattr(facade, "get_cache")
-    assert resolver.resolve().kind == "native"
-    with rebound(facade.cache, "get_cache", backend_override):
-        backend_fallback: Final = resolver.resolve()
-        assert backend_fallback.kind == "python_callback"
-        assert backend_fallback.lookup(None, callback_kwargs={"cache_key": "key"}) == {"source": "override"}
 
 
-def test_facade_subclasses_backend_replacement_and_configuration_changes_are_not_bypassed() -> None:
-    class CustomCache(Cache):
-        pass
-
-    handle: Final = CacheTestHandle.memory()
-    with pytest.raises(TypeError):
-        handle._bind_facade(CustomCache(type=LiteLLMCacheType.LOCAL))
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    handle._bind_facade(facade)
-    resolver: Final = CacheTestResolver(SimpleNamespace(cache=facade))
-    with rebound(facade, "cache", InMemoryCache()):
-        assert resolver.resolve().kind == "python_callback"
-    with rebound(facade, "ttl", 12):
-        assert resolver.resolve().kind == "python_callback"
-    with rebound(facade, "semantic_cache_scope", "end_user"):
-        assert resolver.resolve().kind == "python_callback"
-
-    def custom_key(**_kwargs: object) -> str:
-        return "custom"
-
-    with rebound(facade, "get_cache_key", custom_key):
-        assert resolver.resolve().kind == "python_callback"
-    assert resolver.resolve().kind == "python_callback"
-    delattr(facade, "get_cache_key")
-    assert resolver.resolve().kind == "native"
+@pytest.mark.parametrize(("attribute", "value"), (("ttl", 12), ("semantic_cache_scope", "end_user")))
+def test_selected_native_runtime_declines_policy_changes(attribute: str, value: object) -> None:
+    facade: Final = activate_native(Cache(type=LiteLLMCacheType.LOCAL))
+    selected: Final = CacheTestResolver(SimpleNamespace(cache=facade))
+    with rebound(facade, attribute, value):
+        with pytest.raises(_native.RustBridgeDeclined):
+            selected.resolve()
+    assert selected.resolve().kind == "native"
 
 
 def test_resolver_and_callback_cycles_can_be_collected() -> None:
@@ -292,31 +247,41 @@ def test_resolver_and_callback_cycles_can_be_collected() -> None:
 
 
 def test_invalid_duration_and_request_shape_fail_before_storage() -> None:
-    binding: Final = CacheTestResolver(SimpleNamespace(cache=CacheTestHandle.memory())).resolve()
+    binding: Final = CacheTestResolver(
+        SimpleNamespace(cache=activate_native(Cache(type=LiteLLMCacheType.LOCAL)))
+    ).resolve()
     for seconds in (-1.0, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="cache durations must be finite and nonnegative"):
             binding.store({**request(), "ttl_seconds": seconds}, {"answer": 1})
     assert binding.lookup(request()) is None
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    facade.cache = InMemoryCache(default_ttl=-1)
     with pytest.raises(ValueError, match="cache durations must be finite and nonnegative"):
-        CacheTestHandle.memory(ttl_seconds=-1)
+        native_runtime(facade)
 
 
 async def test_memory_size_policy_is_applied_by_the_native_host() -> None:
-    handle: Final = CacheTestHandle.memory(capacity=2, max_entry_bytes=128)
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    facade.cache = InMemoryCache(max_size_in_memory=2, max_size_per_item=1)
+    handle: Final = activate_native(facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
     small: Final = {"answer": "ok"}
     binding.store(request("small"), small)
     assert await binding.async_lookup(request("small")) == small
-    await binding.async_store(request("large"), {"answer": "x" * 256})
+    await binding.async_store(request("large"), {"answer": "x" * 2048})
     assert binding.lookup(request("large")) is None
     assert binding.lookup(request("small")) == small
-    disabled: Final = CacheTestResolver(SimpleNamespace(cache=CacheTestHandle.memory(capacity=0))).resolve()
+    disabled_facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    disabled_facade.cache = InMemoryCache(max_size_in_memory=0)
+    disabled: Final = native_runtime(disabled_facade)
     await disabled.async_store(request(), small)
     assert await disabled.async_lookup(request()) is None
 
 
 async def test_native_batch_lookup_and_store_report_partial_hits() -> None:
-    binding: Final = CacheTestResolver(SimpleNamespace(cache=CacheTestHandle.memory())).resolve()
+    binding: Final = CacheTestResolver(
+        SimpleNamespace(cache=activate_native(Cache(type=LiteLLMCacheType.LOCAL)))
+    ).resolve()
     requests: Final = [request("hit"), request("miss"), request("disabled")]
     requests[2]["controls"] = {
         "supported_call_type": True,
@@ -389,9 +354,3 @@ async def test_unmodified_builtin_cache_callbacks_can_ping_and_flush() -> None:
     assert await binding.ping() == "pong"
     await binding.async_flush()
     assert cache.cache.get_cache("key") is None
-
-
-def test_facade_registration_rejects_mismatched_capacity() -> None:
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    with pytest.raises(TypeError, match="capacities must match"):
-        CacheTestHandle.memory(capacity=7)._bind_facade(facade)

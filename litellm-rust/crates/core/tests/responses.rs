@@ -1,3 +1,7 @@
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use std::sync::Arc;
 
 use futures_util::TryStreamExt;
@@ -70,7 +74,13 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         &host.events.0.lock().unwrap()[..],
         [
             CallEvent::Started { .. },
-            CallEvent::Execution(_),
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
             CallEvent::Succeeded { .. }
         ]
     ));
@@ -97,7 +107,8 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     let (headers, bytes) = if hosted {
         assert_eq!(
             litellm_host_native::in_process::run_hosted(
-                responses_route(no_secrets()).machine(host.request().unwrap(), None,),
+                responses_route(no_secrets())
+                    .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
                 host.runtime(),
             )
             .await
@@ -117,7 +128,18 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         else {
             panic!()
         };
-        assert_eq!(host.events.0.lock().unwrap().len(), 1);
+        assert!(matches!(
+            &host.events.0.lock().unwrap()[..],
+            [
+                CallEvent::Started { .. },
+                CallEvent::Execution(ExecutionEvent::ResultReady {
+                    facts: ExecutionFacts {
+                        source: ResultSource::Provider,
+                        ..
+                    }
+                }),
+            ]
+        ));
         (
             head.headers,
             chunks.try_collect::<Vec<_>>().await.unwrap().concat(),
@@ -127,7 +149,16 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     assert_eq!(bytes, body.as_bytes());
     assert!(matches!(
         &host.events.0.lock().unwrap()[..],
-        [CallEvent::Started { .. }, CallEvent::Succeeded { .. }]
+        [
+            CallEvent::Started { .. },
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
+            CallEvent::Succeeded { .. }
+        ]
     ));
 }
 

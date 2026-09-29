@@ -1,19 +1,28 @@
-from typing import Final, Protocol
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Final, Protocol, TypeAlias
 from uuid import uuid4
 
-import pytest
-
 from litellm.caching.caching import Cache
-from litellm.rust_bridge import _native, catalog
-from litellm.rust_bridge.catalog import CacheRule
-from litellm.rust_bridge.configuration import Rollout
+from litellm.rust_bridge import _native
 from litellm.rust_bridge.response_cache import ResponseCacheRuntime
-from litellm.types.caching import LiteLLMCacheType
-
-CacheTestHandle: Final = _native._CacheTestHandle  # pyright: ignore[reportPrivateUsage]  # test-only handle has no public module name
 
 
-CacheTestResolver: Final = _native._CacheTestResolver  # pyright: ignore[reportPrivateUsage]  # test-only resolver has no public module name
+CacheRuntime: TypeAlias = _native._ResponseCacheRuntime  # pyright: ignore[reportPrivateUsage]  # private runtime under test
+
+
+class CacheNamespace(Protocol):
+    @property
+    def cache(self) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CacheTestResolver:
+    namespace: CacheNamespace
+
+    def resolve(self) -> CacheRuntime:
+        return CacheRuntime.from_selected(self.namespace.cache)
 
 
 class CacheLookup(Protocol):
@@ -25,8 +34,13 @@ def request(key: str = "key") -> dict[str, object]:
     return {"key": {"preset": key}}
 
 
-def require_rust(monkeypatch: pytest.MonkeyPatch, backend: LiteLLMCacheType) -> None:
-    monkeypatch.setattr(catalog, "RULES", (CacheRule(Rollout.RUST_REQUIRED, backends=frozenset({backend})),))
+def native_runtime(facade: Cache) -> CacheRuntime:
+    return CacheRuntime.from_cache(facade)
+
+
+def activate_native(facade: Cache) -> Cache:
+    facade._native_cache = ResponseCacheRuntime(_native._ResponseCacheRuntime.from_cache(facade))  # pyright: ignore[reportPrivateUsage]  # explicitly select the runtime under test
+    return facade
 
 
 def assert_native_runtime(facade: Cache) -> ResponseCacheRuntime:

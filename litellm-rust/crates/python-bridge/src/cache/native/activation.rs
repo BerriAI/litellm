@@ -1,3 +1,4 @@
+use crate::cache::cache_error;
 use crate::logger::run_sync_value;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 use litellm_cache_redis_semantic::RedisSemanticConfig;
@@ -6,10 +7,9 @@ use litellm_http::ClientVariant;
 use pyo3::prelude::*;
 
 use super::{
-    cache_error,
+    backend::NativeResponseCache,
     config::{CacheBackendConfig, NativeCacheConfig, UnsupportedCacheConfig},
     embedder::PythonEmbedder,
-    native::NativeResponseCache,
 };
 use crate::errors::RustBridgeDeclined;
 use crate::http::host_client;
@@ -20,7 +20,7 @@ fn declined(reason: UnsupportedCacheConfig) -> PyErr {
 
 /// Builds the native backend a `Cache` facade's projected configuration describes. `backend` is
 /// the facade's `.cache` object, which owns embedding for the Python-embedded semantic caches.
-pub(super) fn activate(
+pub(in crate::cache) fn activate(
     py: Python<'_>,
     backend: &Bound<'_, PyAny>,
     config: NativeCacheConfig,

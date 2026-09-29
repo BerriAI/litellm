@@ -30,7 +30,29 @@ pub struct RawResponse {
     pub body: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderIdentity {
+    pub model: String,
+    pub provider: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResultSource {
+    Provider,
+    Cache { key: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionFacts {
+    pub provider: ProviderIdentity,
+    pub source: ResultSource,
+}
+
 pub trait Interceptors<E>: Send + Sync {
+    fn result_ready(&self, _facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
+        async { Ok(()) }
+    }
+
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -44,6 +66,10 @@ pub trait Interceptors<E>: Send + Sync {
 }
 
 impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
+    fn result_ready(&self, facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
+        (**self).result_ready(facts)
+    }
+
     fn before_provider_request(
         &self,
         wire: WireRequest,

@@ -229,8 +229,15 @@ async def test_python_fallback_does_not_claim_rust_execution(missing: bool) -> N
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shape", ("model", "dict"))
 @pytest.mark.parametrize("asynchronous", (False, True))
-async def test_native_response_marker_reaches_caller_with_existing_metadata(shape: str, asynchronous: bool) -> None:
-    hidden: Final = {"additional_headers": {"x-request-id": "upstream"}, "response_cost": 0.01}
+@pytest.mark.parametrize("cache_key", (None, "test-cache-key"))
+async def test_native_response_marker_reaches_caller_with_existing_metadata(
+    shape: str, asynchronous: bool, cache_key: str | None
+) -> None:
+    hidden: Final = {
+        "additional_headers": {"x-request-id": "upstream"},
+        "response_cost": 0.01,
+        **({"cache_key": cache_key} if cache_key is not None else {}),
+    }
     response: Final[OCRResponse | dict[str, object]] = (
         OCRResponse(pages=[], model="native") if shape == "model" else {"content": "native", "_hidden_params": hidden}
     )
@@ -258,7 +265,12 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(shap
     assert result is response
     assert get_hidden_params_dict(result) == {
         "response_cost": 0.01,
-        "additional_headers": {"x-request-id": "upstream", "x-litellm-rust": "true"},
+        "additional_headers": {
+            "x-request-id": "upstream",
+            "x-litellm-rust": "true",
+            **({"x-litellm-cache-key": cache_key} if cache_key is not None else {}),
+        },
+        **({"cache_key": cache_key} if cache_key is not None else {}),
     }
 
 

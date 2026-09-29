@@ -66,6 +66,11 @@ where
                 MachineStep::Suspended(request) => request,
             };
             let answered = match request {
+                HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => self
+                    .interceptors
+                    .result_ready(facts)
+                    .await
+                    .map(|()| reply.send(())),
                 HostRequest::HostCall(call) => self.services.handle_host_call(call).await,
                 HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                     wire,

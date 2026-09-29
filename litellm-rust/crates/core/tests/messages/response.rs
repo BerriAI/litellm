@@ -1,4 +1,8 @@
 use litellm_core::messages::{MessagesResponse, messages_body};
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use litellm_http::transport::Error as TransportError;
 use rstest::rstest;
 
@@ -60,7 +64,13 @@ async fn calls_defer_execution_until_polled(
                 true,
                 [
                     CallEvent::Started { .. },
-                    CallEvent::Execution(_),
+                    CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+                    CallEvent::Execution(ExecutionEvent::ResultReady {
+                        facts: ExecutionFacts {
+                            source: ResultSource::Provider,
+                            ..
+                        }
+                    }),
                     CallEvent::Succeeded { .. }
                 ]
             )
@@ -69,7 +79,13 @@ async fn calls_defer_execution_until_polled(
                 true,
                 [
                     CallEvent::Started { .. },
-                    CallEvent::Execution(_),
+                    CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+                    CallEvent::Execution(ExecutionEvent::ResultReady {
+                        facts: ExecutionFacts {
+                            source: ResultSource::Provider,
+                            ..
+                        }
+                    }),
                     CallEvent::Succeeded { .. }
                 ]
             )
@@ -253,22 +269,25 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     };
 
     let resources = support::resources();
-    let response = litellm_core::messages::MessagesRoute::new(
-        provider_http(&resources, &Resolution::from(&settings).config),
-        resources.auth,
-        no_secrets(),
-    )
-    .execute(
-        MessagesCall {
-            api_key: Some("sk-ant".into()),
-            api_base: Some(base),
-            ..call
-        },
-        &(),
-        None,
-    )
-    .await
-    .expect("messages request succeeds");
+    let response = litellm_core::messages::MessagesRoute::builder()
+        .with_http(provider_http(
+            &resources,
+            &Resolution::from(&settings).config,
+        ))
+        .with_auth(resources.auth)
+        .with_secrets(no_secrets())
+        .build()
+        .execute(
+            MessagesCall {
+                api_key: Some("sk-ant".into()),
+                api_base: Some(base),
+                ..call
+            },
+            &(),
+            None,
+        )
+        .await
+        .expect("messages request succeeds");
 
     let MessagesResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
@@ -320,4 +339,57 @@ async fn message_route_summary_excludes_payload_diagnostics(
     assert_eq!(summaries[0]["stream"], false);
     assert!(summaries[0].get("body").is_none());
     assert!(!format!("{:?}", traces.records()).contains("private-key-sentinel"));
+}
+
+#[rstest]
+#[case::uncached(false, 2)]
+#[case::cached(true, 1)]
+#[tokio::test]
+async fn builder_preserves_dependencies_and_optional_cache(
+    #[case] caching: bool,
+    #[case] expected_requests: usize,
+) {
+    use litellm_cache_memory::InMemoryCache;
+    use litellm_cache_response::{CacheScope, ResponseCache, ScopedCache};
+    use litellm_core::messages::MessagesRoute;
+
+    let upstream = upstream([message_response(), message_response()]).await;
+    let resources = resources();
+    let builder = MessagesRoute::builder();
+    let builder = if caching {
+        builder.with_cache(ScopedCache::new(
+            Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+                Some(100),
+                Some(Duration::from_secs(60)),
+            )))),
+            CacheScope::Shared,
+        ))
+    } else {
+        builder
+    };
+    let route = builder
+        .with_secrets(Arc::new(RecordingSecrets::new([(
+            "ANTHROPIC_API_KEY",
+            "builder-key",
+        )])))
+        .with_auth(resources.auth.clone())
+        .with_http(provider_http(&resources, &http_config()))
+        .build();
+    for _ in 0..2 {
+        let request = MessagesCall {
+            api_base: Some(upstream.uri()),
+            ..super::call()
+        };
+        let MessagesResponse::Complete(response) = route.execute(request, &(), None).await.unwrap()
+        else {
+            panic!("expected a completed message");
+        };
+        assert_eq!(
+            response.content,
+            message_body()["content"].as_array().unwrap().as_slice()
+        );
+    }
+    let requests = received(&upstream).await;
+    assert_eq!(requests.len(), expected_requests);
+    assert_eq!(requests[0].header("x-api-key"), Some("builder-key"));
 }

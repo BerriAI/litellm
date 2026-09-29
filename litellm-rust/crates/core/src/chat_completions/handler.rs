@@ -22,6 +22,8 @@ pub(super) async fn execute(
     http: &Client,
     auth: &AuthServices,
     request: ProviderChatCompletionsRequest,
+    cache: Option<litellm_cache_response::ScopedCache>,
+    cache_options: Option<litellm_cache_response::CacheOptions>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
@@ -45,6 +47,10 @@ pub(super) async fn execute(
         api_key,
     };
     let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
+    let identity = litellm_host::interceptors::ProviderIdentity {
+        model: context.model.clone(),
+        provider: context.custom_llm_provider.clone(),
+    };
     let wire = interceptors
         .before_provider_request(
             WireRequest {
@@ -55,59 +61,72 @@ pub(super) async fn execute(
             context,
         )
         .await?;
-    let outbound = outbound_request(
-        Authenticated {
-            headers: wire.headers,
-            signer: authenticated.signer,
+    let cache = cache.filter(|_| authenticated.signer.is_none());
+    let cache_request =
+        crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
+    crate::caching::execute_unary::<super::route::ChatCompletions, _, _>(
+        cache_request,
+        cache.as_ref().map(|cache| cache.service.clone()),
+        cache.as_ref().map(|cache| cache.options(cache_options)),
+        interceptors,
+        observers,
+        || async move {
+            let outbound = outbound_request(
+                Authenticated {
+                    headers: wire.headers,
+                    signer: authenticated.signer,
+                },
+                wire.url,
+                &wire.body,
+                timeout,
+            )?;
+
+            let response = crate::outbound::send(outbound, http).await.map_err(|err| {
+                // Failing to establish the connection means the request never went out,
+                // so the host can still serve it. Everything else here, a timeout
+                // above all, may have reached the provider and been answered.
+                if err.is_connect() || err.is_builder() {
+                    Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
+                } else {
+                    Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
+                }
+            })?;
+
+            let status = response.status();
+            let text = response.text().await.map_err(|err| {
+                Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
+            })?;
+
+            if !status.is_success() {
+                return Err(Error::Transport(litellm_http::transport::Error::Http {
+                    status: status.as_u16(),
+                    body: truncate_error_body(&text),
+                }));
+            }
+            let raw = RawResponse { body: text.clone() };
+            if let Some(observers) = observers {
+                observers.emit(litellm_host::lifecycle::CallEvent::Execution(
+                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+                ));
+            }
+            interceptors
+                .after_provider_response(raw)
+                .await
+                .map_err(Error::post_call)?;
+
+            let body: Value = serde_json::from_str(&text).map_err(|err| {
+                Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+                    "chat completions response JSON",
+                    err,
+                ))
+            })?;
+            config
+                .transform_response(&model, ProviderChatResponseData { body })
+                .map_err(Error::from)
+                .map_err(as_response_error)
         },
-        wire.url,
-        &wire.body,
-        timeout,
-    )?;
-
-    let response = crate::outbound::send(outbound, http).await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
-        if err.is_connect() || err.is_builder() {
-            Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
-        } else {
-            Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-        }
-    })?;
-
-    let status = response.status();
-    let text = response.text().await.map_err(|err| {
-        Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-    })?;
-
-    if !status.is_success() {
-        return Err(Error::Transport(litellm_http::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        }));
-    }
-    let raw = RawResponse { body: text.clone() };
-    if let Some(observers) = observers {
-        observers.emit(litellm_host::lifecycle::CallEvent::Execution(
-            ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-        ));
-    }
-    interceptors
-        .after_provider_response(raw)
-        .await
-        .map_err(Error::post_call)?;
-
-    let body: Value = serde_json::from_str(&text).map_err(|err| {
-        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
-            "chat completions response JSON",
-            err,
-        ))
-    })?;
-    config
-        .transform_response(&model, ProviderChatResponseData { body })
-        .map_err(Error::from)
-        .map_err(as_response_error)
+    )
+    .await
 }
 
 /// Re-tag an error raised while normalizing a response the provider already
@@ -232,6 +251,8 @@ mod tests {
             &Client::plain_for_test(),
             &AuthServices::default(),
             prepared(&upstream.uri()),
+            None,
+            None,
             &interceptors,
             None,
         )
@@ -271,6 +292,8 @@ mod tests {
             &Client::plain_for_test(),
             &AuthServices::default(),
             prepared(&upstream.uri()),
+            None,
+            None,
             &interceptors,
             None,
         )

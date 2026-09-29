@@ -42,9 +42,20 @@ async fn handle(
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
+    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    let route = gateway.chat_completions.clone();
+    let route = match &gateway.cache {
+        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+            cache.clone(),
+            cache_options.scope.clone(),
+        )),
+        None => route,
+    };
+
     let messages = body.get("messages").cloned().unwrap_or_default();
+    let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve_unary(
-        gateway.chat_completions.clone().machine(
+        route.machine(
             ChatCompletionsCall {
                 model: deployment.model.clone(),
                 messages,
@@ -58,13 +69,13 @@ async fn handle(
                 extra_headers: None,
                 timeout: deployment.timeout,
             },
-            None,
+            cache_options,
         ),
         (),
-        (),
+        headers.clone(),
         litellm_host_http::Unary::new(Json),
         None,
     )
     .await?;
-    Ok(response)
+    Ok(headers.apply(response))
 }

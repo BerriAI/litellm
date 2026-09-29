@@ -158,7 +158,7 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
         }
     }
 
-    fn on_stream_open(&mut self, py: Python<'_>) -> PyResult<()> {
+    fn on_stream_open(&mut self, py: Python<'_>, _head: &Py<PyAny>) -> PyResult<()> {
         self.object.call_method1(py, "stream", (py.None(),))?;
         Ok(())
     }
@@ -307,7 +307,7 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
             )
             .unwrap();
         finish(py, &mut hooks, step).unwrap();
-        hooks.on_stream_open(py).unwrap();
+        hooks.on_stream_open(py, &py.None()).unwrap();
         hooks.on_stream_chunk(py, &response).unwrap();
         let locals = scripts.bind(py);
         locals.set_item("arguments", arguments).unwrap();

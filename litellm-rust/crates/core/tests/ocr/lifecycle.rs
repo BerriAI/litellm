@@ -19,6 +19,7 @@ use super::*;
 
 pub(crate) fn event_name(event: &CallEvent) -> &'static str {
     match event {
+        CallEvent::Execution(ExecutionEvent::ResultReady { .. }) => "result_ready",
         CallEvent::Started { .. } => "started",
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }) => "response",
         CallEvent::Succeeded { .. } => "success",

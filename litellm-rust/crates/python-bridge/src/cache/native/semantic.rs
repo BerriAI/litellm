@@ -1,3 +1,4 @@
+use crate::cache::cache_error;
 use crate::logger::run_async;
 use std::{collections::VecDeque, time::Duration};
 
@@ -11,9 +12,8 @@ use pyo3::{
 use serde_json::Value;
 
 use super::{
-    cache_error,
+    backend::{NativeResponseCache, SemanticReply},
     embedder::{PythonEmbedder, with_prepared_embedding},
-    native::{NativeResponseCache, SemanticReply},
     request::{NativeRequest, now},
 };
 

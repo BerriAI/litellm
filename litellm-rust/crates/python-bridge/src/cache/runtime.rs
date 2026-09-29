@@ -10,13 +10,13 @@ use pyo3::{
 use serde_json::Value;
 
 use super::{
-    activation::activate,
     cache_error,
-    callback::PythonCallback,
-    config::{CacheConfigProjection, NativeCacheConfig},
     future::{ready_none, ready_value},
-    native::{NativeResponseCache, SemanticReply},
-    request::{now, request, requests},
+    native::activation::activate,
+    native::backend::{NativeResponseCache, SemanticReply},
+    native::config::{CacheConfigProjection, NativeCacheConfig},
+    native::request::{now, request, requests},
+    python::PythonCallback,
 };
 use crate::errors::RustBridgeDeclined;
 
@@ -29,7 +29,7 @@ pub(super) enum CacheBinding {
 #[pyclass(frozen, name = "_ResponseCacheRuntime")]
 pub(crate) struct ResolvedCache {
     binding: CacheBinding,
-    guard: Option<super::facade::FacadeGuard>,
+    guard: Option<super::native::facade::FacadeGuard>,
     pid: u32,
 }
 
@@ -42,7 +42,7 @@ impl ResolvedCache {
         }
     }
 
-    pub(super) fn with_guard(mut self, guard: super::facade::FacadeGuard) -> Self {
+    pub(super) fn with_guard(mut self, guard: super::native::facade::FacadeGuard) -> Self {
         self.guard = Some(guard);
         self
     }
@@ -90,10 +90,6 @@ impl ResolvedCache {
         let py = cache.py();
         let binding = if cache.is_none() {
             CacheBinding::Disabled
-        } else if let Ok(handle) = cache.extract::<PyRef<'_, super::handle::CacheTestHandle>>() {
-            CacheBinding::Native(handle.service()?)
-        } else if let Some(service) = super::facade::resolve(py, cache)? {
-            CacheBinding::Native(service)
         } else if let Some(runtime) = cache
             .getattr_opt("_native_cache")?
             .filter(|value| !value.is_none())
@@ -134,7 +130,7 @@ impl ResolvedCache {
         let service = activate(cache.py(), &backend, config)?;
         let resolved = Self::new(CacheBinding::Native(service.clone()));
         Ok(
-            match super::facade::FacadeGuard::capture(cache.py(), cache, &service) {
+            match super::native::facade::FacadeGuard::capture(cache.py(), cache, &service) {
                 Ok(guard) => resolved.with_guard(guard),
                 Err(_) => resolved,
             },

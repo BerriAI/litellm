@@ -1,3 +1,4 @@
+use crate::cache::cache_error;
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{CacheCodec, CacheConnectionResult, Error, semantic::SemanticLookup};
@@ -14,7 +15,7 @@ use litellm_cache_response::{
 };
 use litellm_cache_s3::{S3Cache, S3CacheConfig};
 use litellm_cache_valkey_semantic::{ValkeySemanticCache, ValkeySemanticConfig};
-use pyo3::{PyTraverseError, PyVisit, prelude::*};
+use pyo3::prelude::*;
 use serde_json::Value;
 
 use super::{
@@ -26,13 +27,13 @@ use super::{
 };
 
 /// What the Python embedder receives for one semantic request.
-pub(super) struct EmbeddingInput {
-    pub(super) prompt: String,
-    pub(super) metadata: Option<Value>,
+pub(in crate::cache) struct EmbeddingInput {
+    pub(in crate::cache) prompt: String,
+    pub(in crate::cache) metadata: Option<Value>,
 }
 
 /// An exact-match backend behind one pointer, with the identity its facade must reproduce.
-pub(super) struct ExactService {
+pub(in crate::cache) struct ExactService {
     cache: Arc<dyn ExactResponseCache>,
     probe: Option<Arc<dyn ConnectionProbe>>,
     buffer: Option<WriteBuffer>,
@@ -40,7 +41,7 @@ pub(super) struct ExactService {
 }
 
 #[derive(Clone)]
-pub(super) enum NativeResponseCache {
+pub(in crate::cache) enum NativeResponseCache {
     Exact(Arc<ExactService>),
     ValkeySemantic {
         cache: Arc<ResponseCache<ValkeySemanticCache<PythonEmbedder, ResponseCacheCodec>>>,
@@ -240,7 +241,7 @@ impl NativeResponseCache {
         })
     }
 
-    pub async fn qdrant_semantic(
+    pub(super) async fn qdrant_semantic(
         config: QdrantSemanticCacheConfig,
         client: litellm_http::Client,
         runtime: tokio::runtime::Handle,
@@ -285,10 +286,6 @@ impl NativeResponseCache {
         }
     }
 
-    pub fn kind(&self) -> &'static str {
-        self.identity().kind()
-    }
-
     pub fn with_redis_flush_size(self, flush_size: Option<usize>) -> Self {
         match self {
             Self::Exact(service) if matches!(service.identity, BackendIdentity::Redis { .. }) => {
@@ -324,7 +321,10 @@ impl NativeResponseCache {
     }
 
     /// The prompt and metadata this backend would embed for `request`, if it has a prompt.
-    pub(super) fn embedding_input(&self, request: &NativeRequest) -> Option<EmbeddingInput> {
+    pub(in crate::cache) fn embedding_input(
+        &self,
+        request: &NativeRequest,
+    ) -> Option<EmbeddingInput> {
         let context = match self {
             Self::ValkeySemantic { scope, .. } => request.scoped_semantic(scope).context,
             Self::RedisSemantic { .. } => request.semantic().context,
@@ -462,7 +462,7 @@ impl NativeResponseCache {
         }
     }
 
-    pub(super) fn async_lookup_semantic_py<'py>(
+    pub(in crate::cache) fn async_lookup_semantic_py<'py>(
         &self,
         py: Python<'py>,
         request: NativeRequest,
@@ -478,7 +478,7 @@ impl NativeResponseCache {
                             .await
                             .map(SemanticReply::from)
                     },
-                    super::cache_error,
+                    cache_error,
                 )
             }
             Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
@@ -487,7 +487,7 @@ impl NativeResponseCache {
         }
     }
 
-    pub(super) fn async_lookup_py<'py>(
+    pub(in crate::cache) fn async_lookup_py<'py>(
         &self,
         py: Python<'py>,
         request: NativeRequest,
@@ -498,7 +498,7 @@ impl NativeResponseCache {
                 crate::logger::run_async(
                     py,
                     async move { service.async_lookup(&request, now()).await },
-                    super::cache_error,
+                    cache_error,
                 )
             }
             Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
@@ -541,7 +541,7 @@ impl NativeResponseCache {
         }
     }
 
-    pub(super) fn async_store_py<'py>(
+    pub(in crate::cache) fn async_store_py<'py>(
         &self,
         py: Python<'py>,
         request: NativeRequest,
@@ -553,7 +553,7 @@ impl NativeResponseCache {
                 crate::logger::run_async(
                     py,
                     async move { service.async_store(&request, response, now()).await },
-                    super::cache_error,
+                    cache_error,
                 )
             }
             Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
@@ -611,7 +611,7 @@ impl NativeResponseCache {
         }
     }
 
-    pub(super) fn async_store_batch_py<'py>(
+    pub(in crate::cache) fn async_store_batch_py<'py>(
         &self,
         py: Python<'py>,
         entries: Vec<(NativeRequest, Value)>,
@@ -622,7 +622,7 @@ impl NativeResponseCache {
                 crate::logger::run_async(
                     py,
                     async move { service.async_store_batch(entries, now()).await },
-                    super::cache_error,
+                    cache_error,
                 )
             }
             Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } => {
@@ -656,15 +656,6 @@ impl NativeResponseCache {
             }
         }
     }
-
-    pub(super) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        match self {
-            Self::ValkeySemantic { embedder, .. } | Self::RedisSemantic { embedder, .. } => {
-                embedder.traverse(visit)
-            }
-            Self::Exact(_) | Self::QdrantSemantic(_) => Ok(()),
-        }
-    }
 }
 
 fn exact_requests(requests: &[NativeRequest]) -> Vec<litellm_cache_response::ResponseCacheRequest> {
@@ -673,7 +664,10 @@ fn exact_requests(requests: &[NativeRequest]) -> Vec<litellm_cache_response::Res
 
 /// What `lookup_semantic` hands Python: the response and the similarity to stamp, if any.
 #[derive(serde::Serialize)]
-pub(super) struct SemanticReply(pub(super) Option<Value>, pub(super) Option<f64>);
+pub(in crate::cache) struct SemanticReply(
+    pub(in crate::cache) Option<Value>,
+    pub(in crate::cache) Option<f64>,
+);
 
 impl From<SemanticLookup<Value>> for SemanticReply {
     fn from(lookup: SemanticLookup<Value>) -> Self {
