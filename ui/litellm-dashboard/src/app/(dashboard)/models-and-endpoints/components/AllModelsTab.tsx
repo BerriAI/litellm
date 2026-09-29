@@ -17,6 +17,7 @@ import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQ
 import { useCallback, useMemo, useState } from "react";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
+import { routingStatusToBlocked } from "../utils/routingStatus";
 import { transformModelData } from "../utils/modelDataTransformer";
 import {
   ALL_MODEL_GROUPS_VALUE,
@@ -92,8 +93,7 @@ const AllModelsTab = ({
   const selectedModelAccessGroupFilter = tableState.access_group || null;
   const routingStatusFilter =
     tableState.status === "active" || tableState.status === "paused" ? tableState.status : null;
-  const blockedForQuery: boolean | undefined =
-    routingStatusFilter === null ? undefined : routingStatusFilter === "active";
+  const blockedForQuery: boolean | undefined = routingStatusToBlocked(routingStatusFilter);
   const pagination = useMemo<PaginationState>(
     () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
     [tableState.page, tableState.page_size],

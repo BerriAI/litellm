@@ -461,8 +461,8 @@ export const getModelsTableColumns = ({
     meta: { title: "Status", skeleton: "badge" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Status" />,
     enableSorting: true,
-    size: 110,
-    minSize: 90,
+    size: 90,
+    minSize: 70,
     cell: ({ row }) => <RoutingStatusCell blocked={row.original.model_info?.blocked} />,
   },
   {
