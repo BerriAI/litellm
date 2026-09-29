@@ -1,7 +1,7 @@
 from typing import Final
 
 import click
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
 class CliContextValues(TypedDict):
@@ -9,6 +9,7 @@ class CliContextValues(TypedDict):
 
     base_url: ReadOnly[str]
     api_key: ReadOnly[str | None]
+    api_key_from_token_file: ReadOnly[NotRequired[bool]]
 
 
 _UNSET_CLI_CONTEXT: Final[CliContextValues] = {"base_url": "", "api_key": None}

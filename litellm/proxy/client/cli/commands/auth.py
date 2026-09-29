@@ -634,7 +634,7 @@ def match_requested_team(teams: Sequence[CliTeam], requested_team: str | None) -
 
 
 def _poll_for_authentication(
-    base_url: str, key_id: str, poll_secret: str, team: str | None = None
+    base_url: str, key_id: str, poll_secret: str, team: str | None = None, required_team_id: str | None = None
 ) -> CliAuthResult | None:
     """
     Poll the server for authentication completion and handle team selection.
@@ -655,6 +655,11 @@ def _poll_for_authentication(
         team_details: Final = data.get("team_details")
         user_id = data.get("user_id")
         normalized_teams: Final[list[CliTeam]] = _normalize_teams(teams, team_details)
+        if (
+            required_team_id is not None
+            and match_requested_team(normalized_teams, required_team_id) != required_team_id
+        ):
+            raise click.ClickException("The requested team is not available for this login")
         if not normalized_teams:
             click.echo("Warning: No teams available for selection.")
             return None
@@ -674,7 +679,7 @@ def _poll_for_authentication(
                 "api_key": jwt_with_team,
                 "user_id": user_id,
                 "teams": teams,
-                "team_id": None,  # Set by server in JWT
+                "team_id": match_requested_team(normalized_teams, team),
             }
 
         click.echo("Team selection cancelled or JWT generation failed.")
@@ -852,7 +857,17 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     show_commands()
 
 
-def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
+def _replace_stored_token(
+    record: CliTokenData, http: Http, vault: SecretVault, required_team_id: str | None = None
+) -> SecretSave:
+    if required_team_id is not None and record.get("team_id") != required_team_id:
+        refused_revocation: Final = revoke_stored_credential(record, http)
+        if refused_revocation is not None:
+            click.echo(
+                f"Could not revoke the rejected login's refresh token on the proxy ({refused_revocation.reason}); "
+                "it expires on its own."
+            )
+        raise click.ClickException("The login did not select the requested team; your saved login has not changed")
     previous: Final = load_token(vault=vault)
     stored: Final = save_token(record, vault=vault)
     if previous is None or isinstance(stored, CredentialNotSaved):
@@ -866,14 +881,17 @@ def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) 
     return stored
 
 
-def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: str | None) -> None:
+def _pkce_login(
+    base_url: str, config_claude: bool, vault: SecretVault, team: str | None, required_team_id: str | None = None
+) -> bool:
     http: Final = requests.Session()
     credential: Final = run_pkce_login(base_url, http, echo=click.echo, team=team)
     if isinstance(credential, PkceFailure):
         click.echo(f"Authentication failed: {credential.reason}")
-        return
-    stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
+        return False
+    stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault, required_team_id)
     _finish_login(base_url, credential.access_token, config_claude, stored)
+    return not isinstance(stored, (CredentialNotSaved, CredentialNotRecorded))
 
 
 @click.command(name="login")
@@ -911,6 +929,12 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: st
 @click.pass_context
 def login(ctx: click.Context, config_claude: bool, pkce: bool, team: str | None) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
+    login_to_proxy(ctx, config_claude, pkce, team)
+
+
+def login_to_proxy(
+    ctx: click.Context, config_claude: bool, pkce: bool, team: str | None, required_team_id: str | None = None
+) -> bool:
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
     ctx_obj: Final[CliContextObj] = ctx.obj
@@ -924,8 +948,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool, team: str | None)
 
     try:
         if pkce:
-            _pkce_login(base_url, config_claude, context_secret_vault(ctx), team)
-            return
+            return _pkce_login(base_url, config_claude, context_secret_vault(ctx), team, required_team_id)
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
         key_id: Final = cli_sso_flow["login_id"]
         poll_secret: Final = cli_sso_flow["poll_secret"]
@@ -955,8 +978,12 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool, team: str | None)
         # Poll for authentication completion
         click.echo("Waiting for authentication...")
 
-        auth_result: Final = _poll_for_authentication(
-            base_url=base_url, key_id=key_id, poll_secret=poll_secret, team=team
+        auth_result: Final = (
+            _poll_for_authentication(
+                base_url=base_url, key_id=key_id, poll_secret=poll_secret, team=team, required_team_id=required_team_id
+            )
+            if required_team_id is not None
+            else _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret, team=team)
         )
 
         if auth_result:
@@ -975,31 +1002,33 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool, team: str | None)
                     "auth_header_name": "Authorization",
                     "jwt_token": "",
                     "timestamp": time.time(),
+                    "team_id": auth_result["team_id"],
                 },
                 requests.Session(),
                 context_secret_vault(ctx),
+                required_team_id,
             )
 
             _finish_login(base_url, api_key, config_claude, stored)
-            return
+            return not isinstance(stored, (CredentialNotSaved, CredentialNotRecorded))
         else:
             click.echo("Authentication timed out. Please try again.")
             click.echo(
                 "The proxy never reported the browser sign-in as finished. If you did complete it, "
                 "check the proxy logs for /sso/callback errors and confirm SSO is configured on the proxy."
             )
-            return
+            return False
 
     except KeyboardInterrupt:
         click.echo("\nAuthentication cancelled by user.")
-        return
+        return False
     except click.ClickException:
         # Login itself already succeeded; only the post-login step failed, so this
         # must not be relabelled as an authentication failure by the handler below.
         raise
     except Exception as e:
         click.echo(f"Authentication failed: {e}")
-        return
+        return False
 
 
 @click.command(name="logout")
