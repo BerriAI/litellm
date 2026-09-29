@@ -635,3 +635,12 @@ serviceMonitor:
   namespaceSelector:
     matchNames: []
     # - test-namespace
+
+# Optional runtime AI inventory (k8s-aibom). When enabled, an unprivileged
+# controller generates a CycloneDX 1.6 ML-BOM for AI workloads in namespaces
+# labeled aibom.k8saibom.dev/enabled=true — including the LiteLLM proxy
+# this chart deploys (detected as the `litellm` runtime). Disabled by
+# default; nothing is inventoried without both this flag and the namespace
+# opt-in label.
+k8s-aibom:
+  enabled: false

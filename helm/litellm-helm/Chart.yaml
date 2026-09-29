@@ -39,3 +39,7 @@ dependencies:
     version: "18.19.1"
     repository: oci://registry-1.docker.io/bitnamicharts
     condition: redis.enabled
+  - name: k8s-aibom
+    version: "1.5.1"
+    repository: oci://ghcr.io/googlecloudplatform/charts
+    condition: k8s-aibom.enabled
