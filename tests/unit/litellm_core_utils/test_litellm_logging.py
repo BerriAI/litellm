@@ -495,7 +495,7 @@ class TestZeroCostDiagnostic:
     DEPLOYMENT_ID: Final = "lit7898-query-only-priced-deployment"
     MODEL_GROUP: Final = "query-only-priced-chat"
     QUERY_ONLY_PRICING: Final = {"input_cost_per_query": 0.00042}
-    PER_SECOND_PRICING: Final = {"input_cost_per_second": 0.00042, "output_cost_per_second": 0.00042}
+    PER_SECOND_PRICING: Final = {"cost_per_second": 0.00042}
     FREE_PRICING: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
 
     @pytest.fixture(params=["query_only", "free"])
@@ -845,7 +845,7 @@ class TestZeroCostDiagnostic:
             response: Final = self._response(usage)
             response._response_ms = 1000.0
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00084)
+                assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.00042)
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
             assert self._zero_cost_warnings(caplog) == []

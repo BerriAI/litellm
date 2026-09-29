@@ -351,19 +351,27 @@ def _per_second_pricing_cost(
         return None
     if _has_token_or_tiered_pricing(model_info) or not _bills_wall_clock_seconds(model_info):
         return None
+    cost_per_second: Final = model_info.get("cost_per_second")
     input_cost_per_second: Final = model_info.get("input_cost_per_second")
     output_cost_per_second: Final = model_info.get("output_cost_per_second")
-    if input_cost_per_second is None and output_cost_per_second is None:
+    resolved_cost_per_second: Final = (
+        cost_per_second
+        if cost_per_second is not None
+        else input_cost_per_second
+        if input_cost_per_second is not None
+        else output_cost_per_second
+    )
+    if resolved_cost_per_second is None:
         return None
+
     seconds: Final = (response_time_ms or 0.0) / 1000
     verbose_logger.debug(
-        "For model=%s - input_cost_per_second: %s; output_cost_per_second: %s; response time: %s",
+        "For model=%s - cost_per_second: %s; response time: %s",
         model,
-        input_cost_per_second,
-        output_cost_per_second,
+        resolved_cost_per_second,
         response_time_ms,
     )
-    return (input_cost_per_second or 0.0) * seconds, (output_cost_per_second or 0.0) * seconds
+    return resolved_cost_per_second * seconds, 0.0
 
 
 def cost_per_token(
@@ -790,7 +798,9 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
     return value if isinstance(value, str) and value else None
 
 
-_NON_TOKEN_RATE_FIELDS: Final = frozenset({"input_cost_per_second", "input_cost_per_query", "tiered_pricing"})
+_NON_TOKEN_RATE_FIELDS: Final = frozenset(
+    {"cost_per_second", "input_cost_per_second", "output_cost_per_second", "input_cost_per_query", "tiered_pricing"}
+)
 
 
 def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
