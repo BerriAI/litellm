@@ -704,11 +704,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 summary_texts: Final = [s["text"] for s in reasoning_item["summary"] if s.get("text")]
                 if summary_texts:
                     step_text: Final = " ".join(summary_texts)
-                    reasoning_content = (
-                        f"{reasoning_content} {step_text}".strip()
-                        if reasoning_content
-                        else step_text
-                    )
+                    reasoning_content = f"{reasoning_content} {step_text}".strip() if reasoning_content else step_text
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
