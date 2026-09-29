@@ -100,6 +100,26 @@ describe("TagInfoView save payload", () => {
     expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expected);
   });
 
+  it("should save a tag whose stored description is null", async () => {
+    mockTagInfoCall.mockResolvedValue({ "prod-tag": { ...tag, description: null } });
+    const { user } = await renderEditor();
+
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    const expected = {
+      name: "prod-tag",
+      description: undefined,
+      models: ["model-1", "model-2"],
+      max_budget: undefined,
+      tpm_limit: undefined,
+      rpm_limit: undefined,
+      team_id: null,
+      budget_duration: undefined,
+    };
+
+    expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expected);
+  });
+
   it("should block the save when the tag name is cleared", async () => {
     const { user, nameInput } = await renderEditor();
 

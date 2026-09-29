@@ -1,6 +1,6 @@
 export interface Tag {
   name: string;
-  description?: string;
+  description?: string | null;
   models: string[]; // model IDs
   model_info?: { [key: string]: string }; // maps model_id to model_name
   created_at: string;

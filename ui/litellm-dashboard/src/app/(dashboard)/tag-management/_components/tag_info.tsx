@@ -52,7 +52,7 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
   const form = useZodForm(tagEditSchema, {
     defaultValues: {
       name: tag.name,
-      description: tag.description,
+      description: tag.description ?? undefined,
       models: tag.models,
       team_id: tag.team_id ?? null,
       max_budget: seedBudgetFields ? tag.litellm_budget_table?.max_budget : undefined,
