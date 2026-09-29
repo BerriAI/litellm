@@ -15,9 +15,10 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 
 import litellm
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     CallInfo,
     Litellm_EntityType,
@@ -26,6 +27,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TagTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamMembership,
     LiteLLM_UserTable,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -79,7 +81,7 @@ from litellm.constants import (
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
@@ -8008,9 +8010,11 @@ async def test_check_team_member_budget_fails_closed_when_the_membership_read_hi
         await _check_team_member_budget(user_object=None, **_restricted_member_check_deps())
 
 
-def _unavailable_spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> DualCache:
-    redis_cache: Final = cast(RedisCache, MagicMock())
-    monkeypatch.setattr(redis_cache, "async_get_cache", AsyncMock(side_effect=RuntimeError("redis unavailable")))
+def _unavailable_spend_counter_cache() -> DualCache:
+    redis_cache: Final = cast(
+        RedisCache,
+        MagicMock(async_get_cache=AsyncMock(side_effect=RuntimeError("redis unavailable"))),
+    )
     return DualCache(redis_cache=redis_cache)
 
 
@@ -8024,65 +8028,59 @@ def _prisma_client_with_membership_lookup(find_unique: AsyncMock) -> PrismaClien
 
 
 @pytest.mark.asyncio
-async def test_check_team_member_budget_missing_membership_is_verified_with_unavailable_counters(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from litellm.proxy import proxy_server
-    from litellm.proxy._types import LiteLLM_BudgetTable
-    from litellm.proxy.utils import ProxyLogging
-
-    cache: Final = cast(UserApiKeyCache, MagicMock())
-    monkeypatch.setattr(
-        cache,
-        "async_get_cache",
-        AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="default-budget-100", max_budget=100.0)),
+async def test_check_team_member_budget_missing_membership_is_verified_with_unavailable_counters():
+    cache: Final = cast(
+        UserApiKeyCache,
+        MagicMock(
+            async_get_cache=AsyncMock(
+                return_value=LiteLLM_BudgetTable(budget_id="default-budget-100", max_budget=100.0)
+            )
+        ),
     )
     membership_find_unique: Final = AsyncMock(return_value=None)
     prisma_client: Final = _prisma_client_with_membership_lookup(membership_find_unique)
-    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
-    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", _unavailable_spend_counter_cache(monkeypatch))
 
-    await _check_team_member_budget(
-        team_object=LiteLLM_TeamTable(
-            team_id="test-team",
-            metadata={"team_member_budget_id": "default-budget-100"},
-        ),
-        user_object=None,
-        valid_token=UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team"),
-        prisma_client=prisma_client,
-        user_api_key_cache=cache,
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
-        team_membership=None,
-        team_membership_loaded=True,
-    )
+    with (
+        patch.object(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True}),
+        patch.object(proxy_server, "prisma_client", prisma_client),
+        patch.object(proxy_server, "spend_counter_cache", _unavailable_spend_counter_cache()),
+    ):
+        await _check_team_member_budget(
+            team_object=LiteLLM_TeamTable(
+                team_id="test-team",
+                metadata={"team_member_budget_id": "default-budget-100"},
+            ),
+            user_object=None,
+            valid_token=UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team"),
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            team_membership=None,
+            team_membership_loaded=True,
+        )
 
     membership_find_unique.assert_awaited()
 
 
 @pytest.mark.asyncio
-async def test_check_team_member_budget_existing_membership_still_fails_closed_when_counters_are_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from fastapi import HTTPException
-
-    from litellm.proxy import proxy_server
-    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
-    from litellm.proxy.utils import ProxyLogging
-
-    cache: Final = cast(UserApiKeyCache, MagicMock())
-    monkeypatch.setattr(
-        cache,
-        "async_get_cache",
-        AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="default-budget-100", max_budget=100.0)),
+async def test_check_team_member_budget_existing_membership_still_fails_closed_when_counters_are_unavailable():
+    cache: Final = cast(
+        UserApiKeyCache,
+        MagicMock(
+            async_get_cache=AsyncMock(
+                return_value=LiteLLM_BudgetTable(budget_id="default-budget-100", max_budget=100.0)
+            )
+        ),
     )
     membership_find_unique: Final = AsyncMock(side_effect=RuntimeError("database unavailable"))
     prisma_client: Final = _prisma_client_with_membership_lookup(membership_find_unique)
-    monkeypatch.setattr(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True})
-    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
-    monkeypatch.setattr(proxy_server, "spend_counter_cache", _unavailable_spend_counter_cache(monkeypatch))
 
-    with pytest.raises(HTTPException) as exc_info:
+    with (
+        patch.object(proxy_server, "general_settings", {"fail_closed_budget_enforcement": True}),
+        patch.object(proxy_server, "prisma_client", prisma_client),
+        patch.object(proxy_server, "spend_counter_cache", _unavailable_spend_counter_cache()),
+        pytest.raises(HTTPException) as exc_info,
+    ):
         await _check_team_member_budget(
             team_object=LiteLLM_TeamTable(
                 team_id="test-team",

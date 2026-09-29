@@ -66,6 +66,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "managed_files": MANAGED_FILES_OPT_IN_ENV,
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
+        "fail_closed_budget_stack": "E2E_FAIL_CLOSED_BUDGET_STACK",
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,

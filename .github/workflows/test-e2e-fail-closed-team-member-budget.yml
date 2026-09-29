@@ -1,0 +1,216 @@
+name: "Fail-closed Team Member Budget E2E"
+
+on:
+  pull_request:
+    paths:
+      - litellm/proxy/auth/auth_checks.py
+      - tests/e2e/conftest.py
+      - tests/e2e/pytest.ini
+      - tests/e2e/gateway/fail_closed_team_member_budget_ci_config.yml
+      - tests/e2e/quota_management/budgets/test_team_member_budget_e2e.py
+      - .github/workflows/test-e2e-fail-closed-team-member-budget.yml
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-fail-closed-team-member-budget-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: e2e-changed
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      postgres:
+        image: postgres:16.6@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
+        env:
+          POSTGRES_USER: llmproxy
+          POSTGRES_PASSWORD: dbpassword9090
+          POSTGRES_DB: litellm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llmproxy"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      valkey:
+        image: valkey/valkey:8.1.4@sha256:81db6d39e1bba3b3ff32bd3a1b19a6d69690f94a3954ec131277b9a26b95b3aa
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://llmproxy:dbpassword9090@localhost:5432/litellm
+      LITELLM_MASTER_KEY: sk-fail-closed-budget-e2e
+      LITELLM_LOG: WARNING
+      JSON_LOGS: "true"
+    steps:
+      - name: Validate configuration
+        env:
+          ROLE: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+        run: test -n "${ROLE}" || { echo "::error::Set repo variable E2E_AWS_ROLE_TO_ASSUME to an OIDC role with read access to the e2e secrets"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Install dependencies
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen \
+            --extra proxy --extra proxy-runtime --extra extra_proxy \
+            --extra semantic-router --extra bedrock-realtime \
+            --group ci --group proxy-dev --group e2e-dev
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Configure AWS credentials
+        id: aws
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.E2E_AWS_ROLE_TO_ASSUME }}
+          aws-region: us-east-1
+          role-session-name: litellm-e2e-fail-closed-budget-${{ github.run_id }}
+          role-duration-seconds: 900
+          output-env-credentials: false
+          output-credentials: true
+
+      - name: Fetch provider credentials from AWS Secrets Manager
+        env:
+          AWS_ACCESS_KEY_ID: ${{ steps.aws.outputs.aws-access-key-id }}
+          AWS_SECRET_ACCESS_KEY: ${{ steps.aws.outputs.aws-secret-access-key }}
+          AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          umask 077
+          aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-provider-keys \
+            --query SecretString --output text \
+            | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
+          aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-license \
+            --query SecretString --output text \
+            | jq -R -s '{"LITELLM_LICENSE": .}' \
+            | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
+          printf 'DATABASE_URL=%s\nLITELLM_MASTER_KEY=%s\n' "${DATABASE_URL}" "${LITELLM_MASTER_KEY}" \
+            > "${RUNNER_TEMP}/fail-closed-budget-values.env"
+
+      - name: Start the fail-closed proxy
+        id: proxy
+        run: |
+          umask 077
+          proxy_database_url="${DATABASE_URL}"
+          proxy_master_key="${LITELLM_MASTER_KEY}"
+          set -a
+          source tests/e2e/.env
+          set +a
+          export DATABASE_URL="${proxy_database_url}"
+          export LITELLM_MASTER_KEY="${proxy_master_key}"
+          nohup uv run --no-sync litellm \
+            --config tests/e2e/gateway/fail_closed_team_member_budget_ci_config.yml --port 4000 \
+            > "${RUNNER_TEMP}/fail-closed-budget-proxy.log" 2>&1 &
+          echo "E2E_PROXY_PID=$!" >> "${GITHUB_ENV}"
+          for _ in $(seq 1 90); do
+            if curl -fs http://localhost:4000/health/liveliness > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::fail-closed proxy did not become live"
+          exit 1
+
+      - name: Run the missing-membership e2e regression
+        id: e2e
+        env:
+          E2E_FAIL_CLOSED_BUDGET_STACK: "1"
+          E2E_FIXTURE_MODE: live
+          LITELLM_PROXY_URL: http://localhost:4000
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: "6379"
+        run: |
+          umask 077
+          report="${RUNNER_TEMP}/fail-closed-budget-e2e.xml"
+          log="${RUNNER_TEMP}/fail-closed-budget-e2e.log"
+          set +e
+          uv run --no-sync pytest tests/e2e/quota_management/budgets/test_team_member_budget_e2e.py \
+            -k test_missing_membership_counts_as_verified_zero_spend -v --reruns 0 -p no:cacheprovider \
+            -o junit_family=xunit1 --junitxml="${report}" > "${log}" 2>&1
+          status=$?
+          if [ -f "${report}" ]; then
+            uv run --no-sync python .github/e2e-stack/assert_tests_ran.py \
+              "${report}" tests/e2e/quota_management/budgets/test_team_member_budget_e2e.py
+            verified=$?
+          else
+            verified=1
+          fi
+          set -e
+          grep -E '^(FAILED|ERROR) ' "${log}" || true
+          grep -E '^=+ .* in [0-9.]+s( \([0-9:]+\))? =+$' "${log}" | tail -n 1
+          if [ "${status}" != "0" ] || [ "${verified}" != "0" ]; then
+            echo "::error::fail-closed team-member budget e2e regression failed or did not run"
+            exit 1
+          fi
+
+      - name: Redact e2e and proxy output
+        if: always() && steps.proxy.outcome != 'skipped'
+        run: |
+          umask 077
+          files=()
+          for path in "${RUNNER_TEMP}/fail-closed-budget-e2e.log" \
+            "${RUNNER_TEMP}/fail-closed-budget-e2e.xml" "${RUNNER_TEMP}/fail-closed-budget-proxy.log"; do
+            if [ -f "${path}" ]; then
+              files+=("${path}")
+            fi
+          done
+          if [ "${#files[@]}" = "0" ]; then
+            exit 0
+          fi
+          uv run --no-sync python .github/e2e-stack/redact_output.py \
+            --values tests/e2e/.env --values "${RUNNER_TEMP}/fail-closed-budget-values.env" \
+            --out "${RUNNER_TEMP}/fail-closed-budget-redacted" "${files[@]}"
+
+      - name: Keep redacted e2e output
+        if: always() && steps.proxy.outcome != 'skipped'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: fail-closed-team-member-budget-e2e-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fail-closed-budget-redacted
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Stop proxy and remove credentials
+        if: always()
+        run: |
+          if [ -n "${E2E_PROXY_PID:-}" ]; then
+            kill "${E2E_PROXY_PID}" 2>/dev/null || true
+          fi
+          rm -f tests/e2e/.env "${RUNNER_TEMP}/fail-closed-budget-values.env" \
+            "${RUNNER_TEMP}/fail-closed-budget-e2e.log" "${RUNNER_TEMP}/fail-closed-budget-e2e.xml" \
+            "${RUNNER_TEMP}/fail-closed-budget-proxy.log"
+          rm -rf "${RUNNER_TEMP}/fail-closed-budget-redacted"

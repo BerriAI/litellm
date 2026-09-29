@@ -19,14 +19,14 @@ from dataclasses import dataclass
 import pytest
 
 from budget_client import BudgetClient, is_budget_block
-from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
+from e2e_config import unique_marker
 from e2e_http import Success, require_successful_call
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage
 
 pytestmark = pytest.mark.e2e
 
-MODEL = CHEAP_OPENAI_MODEL
+MODEL = "claude-haiku-4-5"
 TEAM_BUDGET = 100.0
 MEMBER_BUDGET = 3e-6
 BURST = 6
@@ -126,6 +126,7 @@ class TestTeamMemberBudget:
 
 
 class TestFailClosedTeamMemberBudgetWithoutMembership:
+    @pytest.mark.fail_closed_budget_stack
     @pytest.mark.covers("quota_management.budget.team_member.missing_membership_counts_as_verified_zero_spend")
     def test_missing_membership_counts_as_verified_zero_spend(
         self, client: BudgetClient, member_without_membership: _Member
