@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import pytest
 from access_control_client import (
+    ALL_PROXY_MODELS,
     ALL_TEAM_MODELS,
     PROJECT_MODEL_ACCESS_DENIED_MARKER,
+    TEAM_MODEL_ACCESS_DENIED_MARKER,
     AccessControlClient,
 )
 from e2e_config import unique_marker
@@ -22,9 +24,8 @@ from models import ChatResponse
 
 pytestmark = pytest.mark.e2e
 
-TEAM_MODEL = "gpt-5.6-sol"
-OUTSIDE_MODEL = "gpt-5.6-sol-eu"
-ALL_PROXY_MODELS = "all-proxy-models"
+TEAM_MODEL = "gemini-2.5-flash"
+OUTSIDE_MODEL = "gpt-5.5"
 
 
 def _chat_assert_completion(client: AccessControlClient, key: str, model: str) -> None:
@@ -67,9 +68,17 @@ class TestProjectAllTeamModels:
 
         client.set_team_models(team_id, f"e2e-proj-team-{marker}", [TEAM_MODEL])
 
+        _chat_assert_completion(client, key, TEAM_MODEL)
+
         denied = client.chat_status(key, OUTSIDE_MODEL, f"capital of France? {unique_marker()}")
-        assert denied.status_code == 403 and "_model_access_denied" in denied.body, (
+        assert denied.status_code == 403, (
             f"model outside the team's list must be denied 403, got {denied.status_code}: {denied.body[:300]}"
+        )
+        assert PROJECT_MODEL_ACCESS_DENIED_MARKER not in denied.body, (
+            f"the denial must come from the key or team check, not the project check: {denied.body[:300]}"
+        )
+        assert TEAM_MODEL_ACCESS_DENIED_MARKER in denied.body, (
+            f"403 body must be a team model-access denial, got: {denied.body[:300]}"
         )
 
     def test_project_explicit_model_list_calls_model(

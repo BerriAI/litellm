@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
+import warnings
 from dataclasses import dataclass
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, RootModel, ValidationError
 
 from proxy_client import ProxyClient
 from e2e_http import NoBody, StreamingResponse, is_ok, unwrap
@@ -32,6 +33,7 @@ TEAM_MODEL_ACCESS_DENIED_MARKER = "team_model_access_denied"
 PROJECT_MODEL_ACCESS_DENIED_MARKER = "project_model_access_denied"
 ROUTE_NOT_ALLOWED_MARKER = "not allowed to call this route"
 ALL_TEAM_MODELS = "all-team-models"
+ALL_PROXY_MODELS = "all-proxy-models"
 
 
 class ApiErrorDetail(BaseModel):
@@ -121,12 +123,14 @@ class AccessControlClient:
         ).project_id
 
     def delete_project(self, project_id: str) -> None:
-        _ = self.proxy.transport.delete(
+        result = self.proxy.transport.delete(
             "/project/delete",
             headers=self.proxy.transport.master,
             json=ProjectDeleteBody(project_ids=[project_id]),
-            response_type=NoBody,
+            response_type=RootModel[list[ProjectIdentity]],
         )
+        if not is_ok(result):
+            warnings.warn(f"delete_project({project_id!r}) failed: {result}", stacklevel=2)
 
     def project_key(self, team_id: str, project_id: str, models: list[str]) -> str:
         return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, project_id=project_id, models=models))
