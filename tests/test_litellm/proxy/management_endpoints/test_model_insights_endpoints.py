@@ -70,13 +70,13 @@ def test_model_insights_reads_only_bounded_rollup() -> None:
     prisma.db.litellm_spendlogs.find_many.assert_not_awaited()
 
 
-def test_model_insights_rejects_ranges_over_90_days() -> None:
+def test_model_insights_rejects_ranges_over_365_days() -> None:
     prisma = MagicMock()
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = _override_auth
 
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-        response = TestClient(app).get("/model-insights?start_date=2026-01-01&end_date=2026-09-28")
+        response = TestClient(app).get("/model-insights?start_date=2025-09-01&end_date=2026-09-28")
 
     assert response.status_code == 400
