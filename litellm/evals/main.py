@@ -148,7 +148,7 @@ def create_eval(
         _is_async: Final = kwargs.pop("acreate_eval", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -333,7 +333,7 @@ def list_evals(
         _is_async: Final = kwargs.pop("alist_evals", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:

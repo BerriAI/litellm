@@ -1,10 +1,13 @@
 import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Final, cast
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -105,3 +108,47 @@ TIERED_COST_CASES = [
     ("gpt-6-sol", "priority", 8e-06, 3e-05),
     ("gpt-6-luna", "priority", 4e-07, 1.5e-06),
 ]
+
+ULTRAFAST_LONG_CONTEXT_MODELS = sorted(
+    key
+    for key, row in _load(MAIN_PATH).items()
+    if "input_cost_per_token_above_272k_tokens_ultrafast" in row
+)
+
+assert ULTRAFAST_LONG_CONTEXT_MODELS
+
+
+@pytest.mark.parametrize("model", ULTRAFAST_LONG_CONTEXT_MODELS)
+def test_ultrafast_long_context_prompt_bills_the_ultrafast_long_context_rate(model: str) -> None:
+    row: Final = _load(MAIN_PATH)[model]
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model,
+        prompt_tokens=LONG_CONTEXT_PROMPT_TOKENS,
+        completion_tokens=COMPLETION_TOKENS,
+        service_tier="ultrafast",
+    )
+    assert prompt_cost == pytest.approx(
+        LONG_CONTEXT_PROMPT_TOKENS * cast(float, row["input_cost_per_token_above_272k_tokens_ultrafast"])
+    )
+    assert completion_cost == pytest.approx(
+        COMPLETION_TOKENS * cast(float, row["output_cost_per_token_above_272k_tokens_ultrafast"])
+    )
+
+
+def test_ultrafast_long_context_cached_tokens_bill_the_ultrafast_cache_read_rate() -> None:
+    row: Final = _load(MAIN_PATH)["gpt-6-astra"]
+    usage: Final = Usage(
+        prompt_tokens=LONG_CONTEXT_PROMPT_TOKENS,
+        completion_tokens=COMPLETION_TOKENS,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=100_000),
+    )
+    prompt_cost, _ = generic_cost_per_token(
+        model="gpt-6-astra",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="ultrafast",
+    )
+    assert prompt_cost == pytest.approx(
+        200_000 * cast(float, row["input_cost_per_token_above_272k_tokens_ultrafast"])
+        + 100_000 * cast(float, row["cache_read_input_token_cost_above_272k_tokens_ultrafast"])
+    )
