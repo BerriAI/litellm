@@ -91,7 +91,9 @@ def video_id_for_provider(llm_router: Router, video_id: str) -> str:
         model=deployment.litellm_params.model,
         custom_llm_provider=deployment.litellm_params.custom_llm_provider,
     )[0]
-    return encode_video_id_with_provider(video_id=decoded["video_id"], provider=provider, model_id=provider_model)
+    return encode_video_id_with_provider(
+        video_id=decoded.get("video_id", ""), provider=provider, model_id=provider_model
+    )
 
 
 def encode_video_id_in_response(response: object, fallback_model: str | None) -> object:
