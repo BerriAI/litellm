@@ -40,7 +40,7 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
 from litellm.llms.fal_ai.videos.transformation import FalAIVideoConfig
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -953,3 +953,60 @@ async def test_status__without_router_keeps_the_provider_model_in_the_id(harness
         status = await call_status(harness, fal_status_id)
 
     assert status.id == fal_status_id
+
+
+def _access_group_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "sora-2",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "sk-mock-a"},
+                "model_info": {"id": "deployment-a", "access_groups": ["group-a"]},
+            },
+            {
+                "model_name": "sora-2",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "sk-mock-b"},
+                "model_info": {"id": "deployment-b", "access_groups": ["group-b"]},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", sorted(FOLLOW_UP_CALLS))
+async def test_follow_up__id_outside_the_key_access_group_is_rejected(harness, monkeypatch, endpoint):
+    monkeypatch.setitem(globals(), "_user", lambda: UserAPIKeyAuth(api_key="sk-test", models=["group-a"]))
+
+    with patch.object(proxy_server, "llm_router", _access_group_router()):
+        with pytest.raises(ProxyException) as rejected:
+            await FOLLOW_UP_CALLS[endpoint](harness, "deployment-b")
+
+    assert rejected.value.code == "400"
+    assert rejected.value.message == (
+        "litellm.BadRequestError: You passed in model=sora-2. There are no healthy deployments for this model"
+    )
+    assert harness.base_process.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "model_id"),
+    [
+        pytest.param(UserAPIKeyAuth(api_key="sk-test", models=["group-a"]), "deployment-a", id="own_access_group"),
+        pytest.param(UserAPIKeyAuth(api_key="sk-test", models=["group-a", "group-b"]), "deployment-b", id="both_groups"),
+        pytest.param(UserAPIKeyAuth(api_key="sk-test", models=["sora-2"]), "deployment-b", id="group_name"),
+        pytest.param(UserAPIKeyAuth(api_key="sk-test", models=["*"]), "deployment-b", id="wildcard"),
+        pytest.param(UserAPIKeyAuth(api_key="sk-test", models=["all-proxy-models"]), "deployment-b", id="all_proxy"),
+        pytest.param(
+            UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN), "deployment-b", id="admin"
+        ),
+    ],
+)
+async def test_status__id_inside_the_key_access_pins_the_deployment(harness, monkeypatch, key, model_id):
+    monkeypatch.setitem(globals(), "_user", lambda: key)
+    harness.base_process.return_value = b"video-bytes"
+
+    with patch.object(proxy_server, "llm_router", _access_group_router()):
+        await call_status(harness, _video_id(model_id))
+
+    assert harness.processor_data().get("model") == model_id

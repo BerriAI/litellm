@@ -274,7 +274,7 @@ async def video_status(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
+        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
         if resolved_model:
             data["model"] = resolved_model
         data["video_id"] = video_id_for_provider(llm_router, video_id)
@@ -376,7 +376,7 @@ async def video_content(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
+        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
         if resolved_model:
             data["model"] = resolved_model
         data["video_id"] = video_id_for_provider(llm_router, video_id)
@@ -485,7 +485,7 @@ async def video_remix(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
+        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
         if resolved_model:
             data["model"] = resolved_model
         data["video_id"] = video_id_for_provider(llm_router, video_id)
@@ -690,7 +690,7 @@ async def video_get_character(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
+        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
         if resolved_model:
             data["model"] = resolved_model
 
@@ -801,7 +801,7 @@ async def video_edit(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
+        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
         if resolved_model:
             data["model"] = resolved_model
         data["video_id"] = video_id_for_provider(llm_router, data["video_id"])
@@ -900,7 +900,7 @@ async def video_extension(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded)
+        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
         if resolved_model:
             data["model"] = resolved_model
         data["video_id"] = video_id_for_provider(llm_router, data["video_id"])

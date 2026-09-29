@@ -2,9 +2,12 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import orjson
+from fastapi import status
 
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router import Router
+from litellm.types.router import RouterErrors
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_character_id_with_provider,
@@ -75,10 +78,23 @@ def deployment_id_for_encoding(response: object, data: Mapping[str, Any]) -> str
     return _hidden_param(response, "model_id") or model_info.get("id") or data.get("model")
 
 
-def routing_model_for_id(llm_router: Router, model_id: str) -> str | None:
-    if llm_router.has_model_id(model_id):
-        return model_id
-    return llm_router.resolve_model_name_from_model_id(model_id)
+def routing_model_for_id(llm_router: Router, model_id: str, user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    if not llm_router.has_model_id(model_id):
+        return llm_router.resolve_model_name_from_model_id(model_id)
+    deployment: Final = llm_router.get_deployment(model_id=model_id)
+    if deployment is not None and not llm_router._filter_deployments_by_model_access_groups(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the router skips its access-group filter for a deployment id, so reuse that untyped filter here
+        model=deployment.model_name,
+        healthy_deployments=[deployment.model_dump(exclude_none=True)],
+        request_kwargs={"metadata": {"user_api_key_auth": user_api_key_dict}},
+        request_team_id=user_api_key_dict.team_id,
+    ):
+        raise ProxyException(
+            message=f"litellm.BadRequestError: You passed in model={deployment.model_name}. {RouterErrors.no_healthy_deployments.value}",
+            type="invalid_request_error",
+            param=None,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    return model_id
 
 
 def video_id_for_provider(llm_router: Router, video_id: str) -> str:
