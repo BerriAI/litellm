@@ -33,31 +33,33 @@ def test_anthropic_overloaded_primary_falls_back_to_second_deployment(gateway: G
         wire_server(lambda request: _error_529()) as primary,
         wire_server(respond_fallback) as fallback,
     ):
-        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-        config["model_list"] = [
-            {
-                "model_name": "cc-primary",
-                "litellm_params": {
-                    "model": f"anthropic/{cc.SONNET}",
-                    "api_key": cc.ANTHROPIC_API_KEY,
-                    "api_base": primary.url,
-                    "model_info": {"id": "primary-cc"},
+        config: Final = {
+            **yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()),
+            "model_list": [
+                {
+                    "model_name": "cc-primary",
+                    "litellm_params": {
+                        "model": f"anthropic/{cc.SONNET}",
+                        "api_key": cc.ANTHROPIC_API_KEY,
+                        "api_base": primary.url,
+                        "model_info": {"id": "primary-cc"},
+                    },
                 },
-            },
-            {
-                "model_name": "cc-fallback-group",
-                "litellm_params": {
-                    "model": f"anthropic/{cc.SONNET}",
-                    "api_key": cc.ANTHROPIC_API_KEY,
-                    "api_base": fallback.url,
-                    "model_info": {"id": "fallback-cc"},
+                {
+                    "model_name": "cc-fallback-group",
+                    "litellm_params": {
+                        "model": f"anthropic/{cc.SONNET}",
+                        "api_key": cc.ANTHROPIC_API_KEY,
+                        "api_base": fallback.url,
+                        "model_info": {"id": "fallback-cc"},
+                    },
                 },
+            ],
+            "router_settings": {
+                "num_retries": 0,
+                "disable_cooldowns": True,
+                "fallbacks": [{"cc-primary": ["cc-fallback-group"]}],
             },
-        ]
-        config["router_settings"] = {
-            "num_retries": 0,
-            "disable_cooldowns": True,
-            "fallbacks": [{"cc-primary": ["cc-fallback-group"]}],
         }
         path: Final = tmp_path / "fallbacks.yaml"
         path.write_text(yaml.safe_dump(config))

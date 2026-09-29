@@ -43,20 +43,19 @@ def test_claude_code_tool_loop_round_trips_thinking_tool_use_and_tool_result(gat
         ),
         (("toolu_read_1", "1\tPROBE\n2\t"),),
     )
-    seen: list[dict[str, JsonValue]] = []
+    first_expected: Final = {**turn1, "model": cc.FABLE}
+    second_expected: Final = {**turn2, "model": cc.FABLE}
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/messages", request.target
         body: Final = cc.JSON_OBJECT.validate_json(request.body)
-        seen.append(body)
-        expected: Final = {**turn2, "model": cc.FABLE} if len(seen) == 2 else {**turn1, "model": cc.FABLE}
-        assert body == expected, _diff(expected, body)
-        if len(seen) == 1:
+        if body == first_expected:
             return Reply(
                 content_type="text/event-stream",
                 chunks=cc.tool_use_stream(identity1, cc.FABLE, _THINKING, _SIGNATURE, calls, _USAGE),
             )
+        assert body == second_expected, _diff(second_expected, body)
         return Reply(
             content_type="text/event-stream",
             chunks=cc.text_stream(identity2, cc.FABLE, "PROBE", {"input_tokens": 30, "output_tokens": 3}),

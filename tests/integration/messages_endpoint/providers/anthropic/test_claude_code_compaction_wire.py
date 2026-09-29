@@ -67,22 +67,22 @@ def test_compaction_edit_and_applied_edit_block_round_trip_through_anthropic(gat
         ),
         (),
     )
-    seen: list[dict[str, JsonValue]] = []
+    first_expected: Final = {**request_body, "model": cc.FABLE}
+    second_expected: Final = {**turn3, "model": cc.FABLE}
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/messages", request.target
         body: Final = cc.JSON_OBJECT.validate_json(request.body)
-        seen.append(body)
-        expected: Final = {**(turn3 if len(seen) == 2 else request_body), "model": cc.FABLE}
-        assert body == expected, {
-            key: (expected.get(key), body.get(key))
-            for key in expected.keys() | body.keys()
-            if expected.get(key) != body.get(key)
+        if body == first_expected:
+            assert body["context_management"] == _CONTEXT_MANAGEMENT
+            return Reply(content_type="text/event-stream", chunks=_compaction_stream(identity))
+        assert body == second_expected, {
+            key: (second_expected.get(key), body.get(key))
+            for key in second_expected.keys() | body.keys()
+            if second_expected.get(key) != body.get(key)
         }
         assert body["context_management"] == _CONTEXT_MANAGEMENT
-        if len(seen) == 1:
-            return Reply(content_type="text/event-stream", chunks=_compaction_stream(identity))
         return Reply(
             content_type="text/event-stream",
             chunks=cc.text_stream("msg_cm_next", cc.FABLE, "OK", {"input_tokens": 20, "output_tokens": 2}),

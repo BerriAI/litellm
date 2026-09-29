@@ -30,15 +30,14 @@ def test_claude_code_mid_loop_model_switch_replays_history_byte_identical(gatewa
         ),
         (("toolu_read_1", "1\tPROBE\n2\t"),),
     )
-    seen: list[dict[str, JsonValue]] = []
+    first_expected: Final = {**turn1, "model": cc.FABLE}
+    second_expected: Final = {**turn2, "model": cc.OPUS}
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/messages", request.target
         body: Final = cc.JSON_OBJECT.validate_json(request.body)
-        seen.append(body)
-        if len(seen) == 1:
-            assert body == {**turn1, "model": cc.FABLE}, body.get("model")
+        if body == first_expected:
             return Reply(
                 content_type="text/event-stream",
                 chunks=cc.tool_use_stream(
@@ -50,11 +49,10 @@ def test_claude_code_mid_loop_model_switch_replays_history_byte_identical(gatewa
                     {"input_tokens": 20, "output_tokens": 10},
                 ),
             )
-        expected: Final = {**turn2, "model": cc.OPUS}
-        assert body == expected, {
-            key: (expected.get(key), body.get(key))
-            for key in expected.keys() | body.keys()
-            if expected.get(key) != body.get(key)
+        assert body == second_expected, {
+            key: (second_expected.get(key), body.get(key))
+            for key in second_expected.keys() | body.keys()
+            if second_expected.get(key) != body.get(key)
         }
         return Reply(
             content_type="text/event-stream",
@@ -74,7 +72,6 @@ def test_claude_code_mid_loop_model_switch_replays_history_byte_identical(gatewa
         )
         assert response2.status_code == 200, response2.text
         assert len(wire.drain()) == 2
-        assert seen[1]["model"] == cc.OPUS
         rows: Final = eventually(
             lambda: read_rows(
                 'SELECT model FROM "LiteLLM_SpendLogs" WHERE request_id=%s',

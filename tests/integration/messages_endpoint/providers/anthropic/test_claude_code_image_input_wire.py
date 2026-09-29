@@ -25,29 +25,27 @@ def test_tool_result_image_block_and_pasted_image_reach_anthropic_identical(gate
         ({"type": "tool_use", "id": "toolu_img", "name": "Read", "input": {"file_path": "/tmp/cc_probe/dot.png"}},),
         (("toolu_img", [dict(_IMAGE_BLOCK)]),),
     )
-    pasted: Final = cc.frontier_request(f"cache-bust-{uuid.uuid4().hex}", "high", 64000)
-    pasted["messages"] = [
-        {
-            "role": "user",
-            "content": [
-                dict(_IMAGE_BLOCK),
-                {"type": "text", "text": f"What colour is this? {uuid.uuid4().hex}"},
-            ],
-        }
-    ]
-    seen: list[dict[str, JsonValue]] = []
+    pasted: Final = {
+        **cc.frontier_request(f"cache-bust-{uuid.uuid4().hex}", "high", 64000),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    dict(_IMAGE_BLOCK),
+                    {"type": "text", "text": f"What colour is this? {uuid.uuid4().hex}"},
+                ],
+            }
+        ],
+    }
+    first_expected: Final = {**with_image_result, "model": cc.FABLE}
+    second_expected: Final = {**pasted, "model": cc.FABLE}
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/messages", request.target
         body: Final = cc.JSON_OBJECT.validate_json(request.body)
-        seen.append(body)
-        expected: Final = {**(pasted if len(seen) == 2 else with_image_result), "model": cc.FABLE}
-        assert body == expected, {
-            key: (expected.get(key), body.get(key))
-            for key in expected.keys() | body.keys()
-            if expected.get(key) != body.get(key)
-        }
+        if body != first_expected:
+            assert body == second_expected, body
         return Reply(
             content_type="text/event-stream",
             chunks=cc.text_stream(

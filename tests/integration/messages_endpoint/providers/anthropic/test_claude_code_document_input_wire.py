@@ -79,16 +79,18 @@ def _cited_stream(identity: str) -> tuple[bytes, ...]:
 
 
 def test_base64_pdf_document_with_citations_reaches_anthropic_identical(gateway: Gateway) -> None:
-    request_body: Final = cc.frontier_request(f"cache-bust-{uuid.uuid4().hex}", "high", 64000)
-    request_body["messages"] = [
-        {
-            "role": "user",
-            "content": [
-                dict(_DOC_BLOCK),
-                {"type": "text", "text": f"What is on page one? {uuid.uuid4().hex}"},
-            ],
-        }
-    ]
+    request_body: Final = {
+        **cc.frontier_request(f"cache-bust-{uuid.uuid4().hex}", "high", 64000),
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    dict(_DOC_BLOCK),
+                    {"type": "text", "text": f"What is on page one? {uuid.uuid4().hex}"},
+                ],
+            }
+        ],
+    }
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"

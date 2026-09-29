@@ -5,24 +5,8 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from integration.messages_endpoint import _claude_code as cc
-from pydantic import JsonValue
 
-WEB_SEARCH_TOOL: Final = {
-    "name": "WebSearch",
-    "description": "Search the web. Returns result blocks with titles and URLs.",
-    "input_schema": cc.schema(
-        {
-            "query": cc.field("The search query to use", type="string", minLength=2),
-            "allowed_domains": cc.field(
-                "Only include search results from these domains", type="array", items={"type": "string"}
-            ),
-            "blocked_domains": cc.field(
-                "Never include search results from these domains", type="array", items={"type": "string"}
-            ),
-        },
-        ("query",),
-    ),
-}
+WEB_SEARCH_TOOL: Final = {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
 
 
 def _web_search_stream(identity: str) -> tuple[bytes, ...]:
@@ -121,15 +105,16 @@ def _web_search_stream(identity: str) -> tuple[bytes, ...]:
 
 def test_claude_code_web_search_tool_passthrough_and_cited_response(gateway: Gateway) -> None:
     identity: Final = f"msg_ws_{uuid.uuid4().hex}"
+    base: Final = cc.frontier_request(
+        f"cache-bust-{uuid.uuid4().hex}",
+        "high",
+        64000,
+        prompt_text="Use web search to find the current LiteLLM version and answer in one word",
+    )
     request_body: Final = {
-        **cc.frontier_request(
-            f"cache-bust-{uuid.uuid4().hex}",
-            "high",
-            64000,
-            prompt_text="Use web search to find the current LiteLLM version and answer in one word",
-        ),
+        **base,
+        "tools": [*base["tools"], WEB_SEARCH_TOOL],
     }
-    request_body["tools"] = [*request_body["tools"], WEB_SEARCH_TOOL]
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -142,6 +127,7 @@ def test_claude_code_web_search_tool_passthrough_and_cited_response(gateway: Gat
             if expected.get(key) != body.get(key)
         }
         assert body["tools"][-1] == WEB_SEARCH_TOOL
+        assert len({tool["name"] for tool in body["tools"]}) == len(body["tools"]), body["tools"]
         return Reply(content_type="text/event-stream", chunks=_web_search_stream(identity))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:

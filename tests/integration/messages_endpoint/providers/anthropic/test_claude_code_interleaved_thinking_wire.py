@@ -129,7 +129,8 @@ def test_interleaved_thinking_text_and_tool_use_history_reaches_anthropic_identi
     )
     turn2: Final = _turn2(turn1)
     turn3: Final = _turn3(turn2)
-    seen: list[dict[str, JsonValue]] = []
+    turn2_expected: Final = {**turn2, "model": cc.FABLE}
+    turn3_expected: Final = {**turn3, "model": cc.FABLE}
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -137,14 +138,12 @@ def test_interleaved_thinking_text_and_tool_use_history_reaches_anthropic_identi
         upstream_beta: Final = request.headers.get("anthropic-beta", "")
         assert upstream_beta.split(",").count("interleaved-thinking-2025-05-14") == 1, upstream_beta
         body: Final = cc.JSON_OBJECT.validate_json(request.body)
-        seen.append(body)
-        expected: Final = {**turn3, "model": cc.FABLE} if len(seen) == 2 else {**turn2, "model": cc.FABLE}
-        assert body == expected, _diff(expected, body)
-        if len(seen) == 1:
+        if body == turn2_expected:
             return Reply(
                 content_type="text/event-stream",
                 chunks=cc.text_stream("msg_il_turn2", cc.FABLE, "got A", {"input_tokens": 20, "output_tokens": 4}),
             )
+        assert body == turn3_expected, _diff(turn3_expected, body)
         return Reply(content_type="text/event-stream", chunks=_interleaved_stream(identity))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:

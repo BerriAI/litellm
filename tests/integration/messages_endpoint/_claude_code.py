@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
@@ -640,10 +641,12 @@ def sse_events(text: str) -> tuple[tuple[str, dict[str, object]], ...]:
     frames: Final = tuple(frame for frame in text.split("\n\n") if frame.strip())
     return tuple(
         (
-            next(line.removeprefix("event: ") for line in frame.splitlines() if line.startswith("event: ")),
+            event,
             json.loads(next(line.removeprefix("data: ") for line in frame.splitlines() if line.startswith("data: "))),
         )
         for frame in frames
+        if (event := next(line.removeprefix("event: ") for line in frame.splitlines() if line.startswith("event: ")))
+        != "ping"
     )
 
 
@@ -690,6 +693,37 @@ def text_stream(identity: str, model: str, text: str, usage: dict[str, int]) -> 
     )
 
 
+def _tool_use_frames(index: int, tool_id: str, name: str, tool_input: JsonValue) -> tuple[bytes, ...]:
+    arguments: Final = json.dumps(tool_input)
+    return (
+        sse_frame(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
+            },
+        ),
+        sse_frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": arguments[: len(arguments) // 2]},
+            },
+        ),
+        sse_frame(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": arguments[len(arguments) // 2 :]},
+            },
+        ),
+        sse_frame("content_block_stop", {"type": "content_block_stop", "index": index}),
+    )
+
+
 def tool_use_stream(
     identity: str,
     model: str,
@@ -698,7 +732,7 @@ def tool_use_stream(
     tool_calls: tuple[tuple[str, str, JsonValue], ...],
     usage: dict[str, int],
 ) -> tuple[bytes, ...]:
-    frames: list[bytes] = [
+    head: Final = (
         sse_frame(
             "message_start",
             {
@@ -728,37 +762,8 @@ def tool_use_stream(
             {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": signature}},
         ),
         sse_frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
-    ]
-    for index, (tool_id, name, tool_input) in enumerate(tool_calls, start=1):
-        arguments: Final = json.dumps(tool_input)
-        frames += [
-            sse_frame(
-                "content_block_start",
-                {
-                    "type": "content_block_start",
-                    "index": index,
-                    "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
-                },
-            ),
-            sse_frame(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "input_json_delta", "partial_json": arguments[: len(arguments) // 2]},
-                },
-            ),
-            sse_frame(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": index,
-                    "delta": {"type": "input_json_delta", "partial_json": arguments[len(arguments) // 2 :]},
-                },
-            ),
-            sse_frame("content_block_stop", {"type": "content_block_stop", "index": index}),
-        ]
-    frames += [
+    )
+    tail: Final = (
         sse_frame(
             "message_delta",
             {
@@ -768,5 +773,13 @@ def tool_use_stream(
             },
         ),
         sse_frame("message_stop", {"type": "message_stop"}),
-    ]
-    return tuple(frames)
+    )
+    frames: Final = (
+        *head,
+        *chain.from_iterable(
+            _tool_use_frames(index, tool_id, name, tool_input)
+            for index, (tool_id, name, tool_input) in enumerate(tool_calls, start=1)
+        ),
+        *tail,
+    )
+    return frames
