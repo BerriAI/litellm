@@ -1,124 +1,138 @@
 "use client";
 
 import React from "react";
-import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
-import { ArrowDownRight, ArrowUpRight, BarChart3, Minus } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, Treemap, XAxis, YAxis } from "recharts";
+import { ArrowDownRight, ArrowUpRight, BarChart3, Layers, Minus } from "lucide-react";
 
 import { apiClient } from "@/components/networking";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  buildTaskTiles,
+  buildWeeklySeries,
+  formatMetric,
+  Metric,
+  ModelInsightsResponse,
+  modelOrder,
+  rankModels,
+  RankedModel,
+  TaskCategory,
+  TaskTile,
+  CATEGORY_ORDER,
+} from "./modelInsightsData";
 
-type Metric = "requests" | "spend" | "tokens";
-type ModelMetric = {
-  model_group: string;
-  model: string;
-  provider: string;
-  spend: number;
-  prompt_tokens: number;
-  completion_tokens: number;
-  requests: number;
-  successful_requests: number;
-  failed_requests: number;
+const PALETTE = [
+  "#ec4899",
+  "#a855f7",
+  "#f59e0b",
+  "#3b82f6",
+  "#10b981",
+  "#ef4444",
+  "#14b8a6",
+  "#84cc16",
+  "#6366f1",
+  "#f97316",
+];
+const CATEGORY_COLORS: Record<TaskCategory, string> = {
+  General: "#ee8650",
+  Agent: "#7666e4",
+  Code: "#5fb074",
+  Data: "#3b82f6",
 };
-type DailyMetric = ModelMetric & { date: string };
-type TaskMetric = ModelMetric & { task_type: string };
-type ModelInsightsResponse = {
-  start_date: string;
-  end_date: string;
-  daily: DailyMetric[];
-  top_models: ModelMetric[];
-  by_task: TaskMetric[];
-};
+const SCALES = ["linear", "log"] as const;
+const METRIC_LABELS: Record<Metric, string> = { requests: "requests", spend: "spend", tokens: "tokens" };
+const RANKING_ROWS = 5;
 
-const COLORS = ["#2563eb", "#7c3aed", "#0d9488", "#ea580c", "#db2777", "#65a30d"];
+type Scale = (typeof SCALES)[number];
 
-const metricValue = (row: ModelMetric, metric: Metric) => {
-  if (metric === "requests") return row.requests;
-  if (metric === "spend") return row.spend;
-  return row.prompt_tokens + row.completion_tokens;
-};
+const formatDelta = (value: number) => `${value > 0 ? "+" : ""}${value.toFixed(1)}`;
 
-const formatMetric = (value: number, metric: Metric) => {
-  if (metric === "spend") return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
-  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
-};
-
-const buildChartData = (rows: DailyMetric[], models: string[], metric: Metric) => {
-  const dates = [...new Set(rows.map((row) => row.date))];
-  return dates.map((date) => ({
-    date,
-    ...Object.fromEntries(
-      models.map((model) => [
-        model,
-        rows
-          .filter((row) => row.date === date && row.model_group === model)
-          .reduce((sum, row) => sum + metricValue(row, metric), 0),
-      ]),
-    ),
-  }));
-};
-
-const topChartModels = (rows: DailyMetric[], models: string[], metric: Metric) => {
-  const totals = Object.fromEntries(
-    models.map((model) => [
-      model,
-      rows.filter((row) => row.model_group === model).reduce((sum, row) => sum + metricValue(row, metric), 0),
-    ]),
-  );
-  return [...models].sort((left, right) => totals[right] - totals[left]).slice(0, 6);
-};
-
-const modelTrend = (rows: DailyMetric[], model: string) => {
-  const dates = [...new Set(rows.map((row) => row.date))];
-  const midpoint = Math.max(1, Math.floor(dates.length / 2));
-  const total = (selected: string[]) =>
-    rows
-      .filter((row) => row.model_group === model && selected.includes(row.date))
-      .reduce((sum, row) => sum + row.prompt_tokens + row.completion_tokens, 0);
-  const previous = total(dates.slice(0, midpoint));
-  const current = total(dates.slice(midpoint));
-  return previous === 0 ? 0 : ((current - previous) / previous) * 100;
-};
-
-const groupTasks = (rows: TaskMetric[]) => {
-  const tasks = [...new Set(rows.map((row) => row.task_type))];
-  return tasks.map((task) => [task, rows.filter((row) => row.task_type === task)] as const);
-};
-
-const trendIcon = (value: number) => {
-  if (value > 0.5) return <ArrowUpRight className="size-3.5" />;
-  if (value < -0.5) return <ArrowDownRight className="size-3.5" />;
-  return <Minus className="size-3.5" />;
-};
-
-const trendTone = (value: number) => {
-  if (value > 0.5) return "text-emerald-600";
-  if (value < -0.5) return "text-red-600";
-  return "text-muted-foreground";
-};
-
-const Trend = ({ value }: { value: number }) => {
-  const tone = trendTone(value);
+const DeltaBadge = ({ value }: { value: number }) => {
+  if (Math.abs(value) < 0.05) {
+    return (
+      <span className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+        <Minus className="size-3" /> 0.0
+      </span>
+    );
+  }
+  const up = value > 0;
+  const Icon = up ? ArrowUpRight : ArrowDownRight;
   return (
-    <span className={`flex items-center gap-1 text-xs font-medium ${tone}`}>
-      {trendIcon(value)} {Math.abs(value).toFixed(1)}%
+    <span className={`flex items-center justify-end gap-1 text-xs ${up ? "text-emerald-600" : "text-red-600"}`}>
+      <Icon className="size-3" /> {formatDelta(value)}
     </span>
+  );
+};
+
+const RankingRow = ({ model, rank }: { model: RankedModel; rank: number }) => (
+  <li className="grid grid-cols-[1.5rem_2.5rem_1fr_auto] items-center gap-3 py-2">
+    <span className="text-sm tabular-nums text-muted-foreground">{rank}</span>
+    <ProviderLogo provider={model.provider} className="size-9 rounded-md border p-1" />
+    <div className="min-w-0">
+      <p className="truncate font-medium">{model.model_group}</p>
+      <p className="truncate text-sm text-muted-foreground">by {model.provider}</p>
+    </div>
+    <div className="text-right">
+      <p className="font-medium tabular-nums">{model.share.toFixed(1)}%</p>
+      <DeltaBadge value={model.delta} />
+    </div>
+  </li>
+);
+
+type TileProps = TaskTile & { x: number; y: number; width: number; height: number; index: number };
+
+const TaskTileContent = ({ x, y, width, height, category, label, leader }: TileProps) => {
+  if (width <= 0 || height <= 0) return null;
+  const color = CATEGORY_COLORS[category];
+  const fits = width > 90 && height > 44;
+  return (
+    <g>
+      <rect x={x} y={y} width={width} height={height} fill={color} stroke="#fff" strokeWidth={2} />
+      {fits && (
+        <>
+          <text x={x + 12} y={y + 26} fill="#fff" fontSize={16} fontWeight={500}>
+            {label}
+          </text>
+          <text x={x + 12} y={y + 46} fill="#ffffffcc" fontSize={12}>
+            {leader}
+          </text>
+        </>
+      )}
+    </g>
   );
 };
 
 export default function ModelInsightsView({ accessToken }: { accessToken: string | null }) {
   const [data, setData] = React.useState<ModelInsightsResponse | null>(null);
-  const [metric, setMetric] = React.useState<Metric>("requests");
+  const [metric, setMetric] = React.useState<Metric>("tokens");
+  const [scale, setScale] = React.useState<Scale>("linear");
+  const [taskMetric, setTaskMetric] = React.useState<Metric>("spend");
 
   React.useEffect(() => {
     if (!accessToken) return;
     void apiClient.get<ModelInsightsResponse>("/model-insights", { accessToken }).then(setData);
   }, [accessToken]);
+
+  const models = React.useMemo(() => (data ? modelOrder(data.daily, metric) : []), [data, metric]);
+  const series = React.useMemo(
+    () => (data ? buildWeeklySeries(data.daily, models, metric) : []),
+    [data, models, metric],
+  );
+  const ranking = React.useMemo(() => (data ? rankModels(data.top_models, data.daily, metric) : []), [data, metric]);
+  const tiles = React.useMemo(() => (data ? buildTaskTiles(data.by_task, taskMetric) : []), [data, taskMetric]);
+  const categoryShares = React.useMemo(
+    () =>
+      CATEGORY_ORDER.map((category) => ({
+        category,
+        share: tiles.filter((tile) => tile.category === category).reduce((sum, tile) => sum + tile.share, 0),
+      })).filter(({ share }) => share > 0),
+    [tiles],
+  );
 
   if (!data) {
     return (
@@ -129,12 +143,9 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     );
   }
 
-  const models = topChartModels(data.daily, [...new Set(data.top_models.map((row) => row.model_group))], metric);
-  const chartData = buildChartData(data.daily, models, metric);
   const chartConfig = Object.fromEntries(
-    models.map((model, index) => [model, { label: model, color: COLORS[index % COLORS.length] }]),
+    models.map((model, index) => [model, { label: model, color: PALETTE[index % PALETTE.length] }]),
   ) satisfies ChartConfig;
-  const taskGroups = groupTasks(data.by_task);
 
   return (
     <main className="w-full space-y-6 p-8">
@@ -147,112 +158,118 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
       <Card>
         <CardHeader className="flex-row items-start justify-between space-y-0">
           <div>
-            <CardTitle>Top model usage</CardTitle>
-            <CardDescription>Daily deployment-wide usage, ranked by the metric you select</CardDescription>
+            <CardTitle>Top models</CardTitle>
+            <CardDescription>Weekly {METRIC_LABELS[metric]} across your gateway</CardDescription>
           </div>
-          <div className="flex rounded-lg border bg-muted/40 p-1">
-            {(["requests", "spend", "tokens"] as const).map((value) => (
-              <Button
-                key={value}
-                size="sm"
-                variant={metric === value ? "secondary" : "ghost"}
-                onClick={() => setMetric(value)}
-                className="capitalize"
-              >
-                {value}
-              </Button>
-            ))}
+          <div className="flex items-center gap-3">
+            <Tabs value={metric} onValueChange={(value) => setMetric(value as Metric)}>
+              <TabsList>
+                {(["requests", "spend", "tokens"] as const).map((value) => (
+                  <TabsTrigger key={value} value={value} className="capitalize">
+                    {value}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <Tabs value={scale} onValueChange={(value) => setScale(value as Scale)}>
+              <TabsList>
+                {SCALES.map((value) => (
+                  <TabsTrigger key={value} value={value} className="capitalize">
+                    {value}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
           </div>
         </CardHeader>
         <CardContent>
-          <ChartContainer config={chartConfig} className="h-[360px] w-full aspect-auto">
-            <AreaChart data={chartData} margin={{ left: 8, right: 8 }}>
+          <ChartContainer config={chartConfig} className="h-[380px] w-full aspect-auto">
+            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap={2}>
               <CartesianGrid vertical={false} />
-              <XAxis dataKey="date" tickLine={false} axisLine={false} tickFormatter={(value) => value.slice(5)} />
-              <YAxis tickLine={false} axisLine={false} tickFormatter={(value) => formatMetric(Number(value), metric)} />
+              <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
+              <YAxis
+                scale={scale}
+                domain={scale === "log" ? [1, "auto"] : [0, "auto"]}
+                allowDataOverflow
+                tickLine={false}
+                axisLine={false}
+                tickFormatter={(value) => formatMetric(Number(value), metric)}
+              />
               <ChartTooltip content={<ChartTooltipContent />} />
               {models.map((model, index) => (
-                <Area
+                <Bar
                   key={model}
                   dataKey={model}
-                  type="monotone"
                   stackId="usage"
-                  fill={COLORS[index % COLORS.length]}
-                  stroke={COLORS[index % COLORS.length]}
-                  fillOpacity={0.75}
+                  fill={PALETTE[index % PALETTE.length]}
+                  isAnimationActive={false}
                 />
               ))}
-            </AreaChart>
+            </BarChart>
           </ChartContainer>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Top models</CardTitle>
+          <CardTitle>Leaderboard</CardTitle>
           <CardDescription>
-            Ranked by total tokens, with change between the first and second half of the selected period
+            Share of {METRIC_LABELS[metric]}, with the change between the first and second half of the period
           </CardDescription>
         </CardHeader>
-        <CardContent className="divide-y">
-          {data.top_models.map((row, index) => (
-            <div
-              key={`${row.model_group}-${row.provider}`}
-              className="grid grid-cols-[2rem_1fr_auto_auto] items-center gap-4 py-3"
-            >
-              <span className="text-sm tabular-nums text-muted-foreground">{index + 1}</span>
-              <div className="flex min-w-0 items-center gap-3">
-                <ProviderLogo provider={row.provider} className="size-7" />
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{row.model_group}</p>
-                  <p className="truncate text-xs text-muted-foreground">{row.model}</p>
-                </div>
-              </div>
-              <span className="text-sm font-medium tabular-nums">
-                {formatMetric(row.prompt_tokens + row.completion_tokens, "tokens")} tokens
-              </span>
-              <Trend value={modelTrend(data.daily, row.model_group)} />
-            </div>
-          ))}
+        <CardContent className="grid gap-x-12 md:grid-cols-2">
+          <ol className="divide-y">
+            {ranking.slice(0, RANKING_ROWS).map((model, index) => (
+              <RankingRow key={model.model_group} model={model} rank={index + 1} />
+            ))}
+          </ol>
+          <ol className="divide-y">
+            {ranking.slice(RANKING_ROWS).map((model, index) => (
+              <RankingRow key={model.model_group} model={model} rank={RANKING_ROWS + index + 1} />
+            ))}
+          </ol>
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Top models by task</CardTitle>
-          <CardDescription>
-            Actual gateway usage grouped by API workload, without inspecting prompt content
-          </CardDescription>
+        <CardHeader className="flex-row items-start justify-between space-y-0">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="size-5" /> Top models by task
+            </CardTitle>
+            <CardDescription>
+              Each task&apos;s share of {METRIC_LABELS[taskMetric]}, labelled with its leading model
+            </CardDescription>
+          </div>
+          <Select value={taskMetric} onValueChange={(value) => setTaskMetric(value as Metric)}>
+            <SelectTrigger className="w-44" aria-label="Task metric">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="spend">Share of spend</SelectItem>
+              <SelectItem value="requests">Share of requests</SelectItem>
+              <SelectItem value="tokens">Share of tokens</SelectItem>
+            </SelectContent>
+          </Select>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {taskGroups.map(([task, rows]) => {
-            const ordered = [...rows].sort((a, b) => metricValue(b, "tokens") - metricValue(a, "tokens")).slice(0, 3);
-            return (
-              <div key={task} className="rounded-xl border bg-muted/20 p-4">
-                <div className="mb-4 flex items-center justify-between">
-                  <h3 className="font-semibold capitalize">{task}</h3>
-                  <Badge variant="secondary">
-                    {formatMetric(
-                      ordered.reduce((sum, row) => sum + metricValue(row, "tokens"), 0),
-                      "tokens",
-                    )}{" "}
-                    tokens
-                  </Badge>
-                </div>
-                <div className="space-y-3">
-                  {ordered.map((row) => (
-                    <div key={`${task}-${row.model_group}`} className="flex items-center gap-2">
-                      <ProviderLogo provider={row.provider} className="size-5" />
-                      <span className="min-w-0 flex-1 truncate text-sm">{row.model_group}</span>
-                      <span className="text-xs tabular-nums text-muted-foreground">
-                        {formatMetric(metricValue(row, "tokens"), "tokens")}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+        <CardContent className="space-y-4">
+          <ChartContainer config={{}} className="h-[360px] w-full aspect-auto">
+            <Treemap
+              data={tiles.map((tile) => ({ ...tile, name: tile.task }))}
+              dataKey="value"
+              isAnimationActive={false}
+              content={<TaskTileContent {...({} as TileProps)} />}
+            />
+          </ChartContainer>
+          <ul className="flex flex-wrap gap-x-6 gap-y-2">
+            {categoryShares.map(({ category, share }) => (
+              <li key={category} className="flex items-center gap-2 text-sm">
+                <span className="size-3 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[category] }} />
+                <span className="text-muted-foreground">{category}</span>
+                <span className="font-medium tabular-nums">{share.toFixed(1)}%</span>
+              </li>
+            ))}
+          </ul>
         </CardContent>
       </Card>
 
