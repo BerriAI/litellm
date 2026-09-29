@@ -7,6 +7,7 @@ backends, so one trace lights up every configured destination.
 
 import json
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 
 import pytest
@@ -19,6 +20,7 @@ from litellm.integrations.otel.mappers import (
     WeaveMapper,
     resolve_mappers,
 )
+from litellm.integrations.otel.mappers.openinference import fit_indexed_messages
 from litellm.integrations.otel.model.payloads import (
     EmbeddingOutput,
     LLMCallSpanData,
@@ -29,6 +31,7 @@ from litellm.integrations.otel.model.payloads import (
     ToolDefinition,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls
+from tests.unit.integrations.otel.test_otel_v2_sources_of_truth import _responses_payload
 
 
 def _llm_call(**overrides):
@@ -116,6 +119,199 @@ def test_openinference_multimodal_content_text_only():
     )
     attrs = OpenInferenceMapper().map(data)
     assert attrs["llm.input_messages.0.message.content"] == "hi there"
+
+
+def test_openinference_output_tool_calls_preserve_calls_in_attributes_and_value():
+    tool_calls: Final = [
+        {
+            "id": "call_paris",
+            "type": "function",
+            "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+        },
+        {
+            "id": "call_search",
+            "function": {"name": "search", "arguments": {"q": 1}},
+            "index": 0,
+        },
+        "ignored",
+    ]
+    data: Final = _llm_call(
+        choices_out=(
+            {
+                "finish_reason": "tool_calls",
+                "message": {"role": "assistant", "content": None, "tool_calls": tool_calls},
+            },
+        )
+    )
+    attrs: Final = OpenInferenceMapper().map(data)
+    assert {key: value for key, value in attrs.items() if ".tool_calls." in key} == {
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id": "call_paris",
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "lookup_weather",
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": '{"city": "Paris"}',
+        "llm.output_messages.0.message.tool_calls.1.tool_call.id": "call_search",
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.name": "search",
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.arguments": '{"q": 1}',
+    }
+    assert json.loads(attrs["output.value"]) == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_paris",
+                    "type": "function",
+                    "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+                },
+                {
+                    "id": "call_search",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": '{"q": 1}'},
+                },
+            ],
+        }
+    ]
+
+
+def test_openinference_responses_tool_calls_are_emitted_as_output_attributes():
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload(
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "call_resp",
+                    "name": "lookup_weather",
+                    "arguments": '{"city": "Paris"}',
+                }
+            ]
+        ),
+        capture_content=True,
+    )
+    attrs: Final = OpenInferenceMapper().map(data)
+    tool_call: Final = "llm.output_messages.0.message.tool_calls.0.tool_call."
+
+    assert {key: value for key, value in attrs.items() if ".tool_calls." in key} == {
+        tool_call + "id": "call_resp",
+        tool_call + "function.name": "lookup_weather",
+        tool_call + "function.arguments": '{"city": "Paris"}',
+    }
+    assert json.loads(attrs["output.value"]) == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_resp",
+                    "type": "function",
+                    "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        }
+    ]
+
+
+def test_openinference_input_tool_calls_stay_in_value_only():
+    data: Final = _llm_call(
+        messages_in=(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
+            },
+        )
+    )
+    attrs: Final = OpenInferenceMapper().map(data)
+    assert all(".tool_calls." not in key for key in attrs)
+    assert json.loads(attrs["input.value"]) == [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_weather",
+                    "type": "function",
+                    "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        }
+    ]
+
+
+def test_openinference_output_tool_calls_do_not_shed_input_roles_under_budget():
+    message_groups: Final = tuple(
+        (
+            {"role": "user", "content": f"Question {index}"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": f"call_{index}",
+                        "type": "function",
+                        "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": f"call_{index}", "content": f"Result {index}"},
+        )
+        for index in range(13)
+    )
+    messages_in: Final = tuple(chain.from_iterable(message_groups)) + ({"role": "user", "content": "Final request"},)
+    tools: Final = tuple(
+        ToolDefinition(name=name, description="Tool", parameters_json='{"type":"object"}')
+        for name in ("lookup_weather", "search", "get_location", "convert_units")
+    )
+    data: Final = _llm_call(
+        messages_in=messages_in,
+        tools=tools,
+        choices_out=(
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_output",
+                            "type": "function",
+                            "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+            },
+        ),
+    )
+    attrs: Final = fit_indexed_messages(OpenInferenceMapper().map(data), 128)
+    tool_call: Final = "llm.output_messages.0.message.tool_calls.0.tool_call."
+
+    assert {
+        f"llm.input_messages.{index}.message.role": attrs.get(f"llm.input_messages.{index}.message.role")
+        for index in range(40)
+    } == {f"llm.input_messages.{index}.message.role": message["role"] for index, message in enumerate(messages_in)}
+    assert {key: value for key, value in attrs.items() if ".tool_calls." in key} == {
+        tool_call + "id": "call_output",
+        tool_call + "function.name": "lookup_weather",
+        tool_call + "function.arguments": '{"city": "Paris"}',
+    }
+
+
+def test_openinference_plain_output_messages_keep_the_existing_value_shape():
+    attrs: Final = OpenInferenceMapper().map(_llm_call())
+    assert all(".tool_calls." not in key for key in attrs)
+    assert json.loads(attrs["output.value"]) == [{"role": "assistant", "content": "Sunny."}]
+
+
+def test_openinference_metadata_contains_only_promoted_metadata():
+    attrs: Final = OpenInferenceMapper().map(
+        _llm_call(promoted_metadata={"trace_marker": "m", "user_api_key_alias": "k"})
+    )
+    assert json.loads(attrs["metadata"]) == {"trace_marker": "m", "user_api_key_alias": "k"}
+    assert "metadata" not in OpenInferenceMapper().map(_llm_call())
 
 
 # --------------------------------------------------------------------------- #
