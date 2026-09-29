@@ -21,6 +21,12 @@ class ModelInsightDailyMetric(ModelInsightMetric):
     date: str
 
 
+class ModelInsightTask(BaseModel):
+    task_type: str
+    label: str
+    category: str
+
+
 class ModelInsightTaskMetric(ModelInsightMetric):
     task_type: str
 
@@ -31,3 +37,4 @@ class ModelInsightsResponse(BaseModel):
     daily: list[ModelInsightDailyMetric]
     top_models: list[ModelInsightMetric]
     by_task: list[ModelInsightTaskMetric]
+    tasks: list[ModelInsightTask]
