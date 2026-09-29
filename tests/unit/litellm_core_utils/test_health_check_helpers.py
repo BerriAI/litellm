@@ -553,7 +553,8 @@ def test_ocr_health_check_document_raises_without_the_extension():
 
 def test_wildcard_health_check_models_partial_prefix_substitutes_stripped_id():
     candidates: Final = _wildcard_health_check_models(
-        "databricks/system.ai.*",
+        "system.ai.*",
+        "databricks",
         ["databricks/databricks-gemini-3-1-flash-image", "databricks/databricks-gpt-5"],
     )
     assert candidates == (
@@ -562,15 +563,36 @@ def test_wildcard_health_check_models_partial_prefix_substitutes_stripped_id():
     )
 
 
-def test_wildcard_health_check_models_bare_provider_and_star_wildcard_unchanged():
+def test_wildcard_health_check_models_star_wildcard_unchanged():
     candidates: Final = ("databricks/databricks-gpt-5",)
-    assert _wildcard_health_check_models("databricks/*", candidates) == candidates
-    assert _wildcard_health_check_models("*", candidates) == candidates
+    assert _wildcard_health_check_models("*", "databricks", candidates) == candidates
 
 
 def test_wildcard_health_check_models_partial_prefix_matching_literal_keeps_stripped_id():
-    assert _wildcard_health_check_models("openai/gpt-4*", ["gpt-4o-mini"]) == ("openai/gpt-4o-mini",)
+    assert _wildcard_health_check_models("gpt-4*", "openai", ["gpt-4o-mini"]) == ("openai/gpt-4o-mini",)
 
 
 def test_wildcard_health_check_models_partial_prefix_splices_suffix_around_star():
-    assert _wildcard_health_check_models("openai/ft:*", ["gpt-4o-mini"]) == ("openai/ft:gpt-4o-mini",)
+    assert _wildcard_health_check_models("ft:*", "openai", ["gpt-4o-mini"]) == ("openai/ft:gpt-4o-mini",)
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_partial_prefix_wildcard_probes_spliced_model_id():
+    from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
+
+    cheapest: Final = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider="databricks", n=3)
+    stripped: Final = tuple(model_id.partition("/")[-1] for model_id in cheapest)
+
+    captured: dict[str, object] = {}
+
+    async def _capture(**kwargs):
+        captured.update(kwargs)
+
+    with patch("litellm.acompletion", side_effect=_capture):
+        await ahealth_check(
+            model_params={"model": "databricks/system.ai.*", "api_key": "x", "api_base": "https://example.invalid"},
+            mode="chat",
+        )
+
+    assert captured["model"] == f"databricks/system.ai.{stripped[0]}"
+    assert captured["fallbacks"] == [f"databricks/system.ai.{model_id}" for model_id in stripped[1:]]

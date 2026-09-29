@@ -44,17 +44,18 @@ def _strip_known_provider_prefix(model: str, known_providers: frozenset[str]) ->
     return model_suffix if sep and leading in known_providers else model
 
 
-def _wildcard_health_check_models(wildcard_model: str, cheapest_models: Sequence[str]) -> tuple[str, ...]:
-    provider_prefix, sep, wildcard_suffix = wildcard_model.partition("/")
-    if not sep or wildcard_suffix == "*":
+def _wildcard_health_check_models(
+    wildcard_suffix: str, custom_llm_provider: str, cheapest_models: Sequence[str]
+) -> tuple[str, ...]:
+    if wildcard_suffix == "*":
         return tuple(cheapest_models)
     known_providers: Final = frozenset(provider.value for provider in LlmProviders)
     literal_prefix: Final = wildcard_suffix.replace("*", "")
     stripped_ids: Final = tuple(_strip_known_provider_prefix(model, known_providers) for model in cheapest_models)
     return tuple(
-        f"{provider_prefix}/{stripped}"
+        f"{custom_llm_provider}/{stripped}"
         if stripped.startswith(literal_prefix)
-        else f"{provider_prefix}/{wildcard_suffix.replace('*', stripped, 1)}"
+        else f"{custom_llm_provider}/{wildcard_suffix.replace('*', stripped, 1)}"
         for stripped in stripped_ids
     )
 
@@ -78,7 +79,9 @@ class HealthCheckHelpers:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
             )
-        candidates: Final = _wildcard_health_check_models(wildcard_model=model, cheapest_models=cheapest_models)
+        candidates: Final = _wildcard_health_check_models(
+            wildcard_suffix=model, custom_llm_provider=custom_llm_provider, cheapest_models=cheapest_models
+        )
         fallback_models: Final = list(candidates[1:]) or None
         model_params["model"] = candidates[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
