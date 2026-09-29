@@ -15,15 +15,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  buildTaskTiles,
   buildWeeklySeries,
   formatMetric,
   Metric,
   ModelInsightsResponse,
+  ModelInsightTasksResponse,
+  TaskSummary,
   modelOrder,
   rankModels,
   RankedModel,
-  TaskTile,
 } from "./modelInsightsData";
 
 const PALETTE = [
@@ -85,7 +85,7 @@ const RankingRow = ({ model, rank }: { model: RankedModel; rank: number }) => (
   </li>
 );
 
-type TileProps = TaskTile & { x: number; y: number; width: number; height: number; index: number };
+type TileProps = TaskSummary & { x: number; y: number; width: number; height: number; index: number };
 
 const TaskTileContent = ({ x, y, width, height, category, label, leader }: TileProps) => {
   if (width <= 0 || height <= 0) return null;
@@ -113,6 +113,8 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   const [metric, setMetric] = React.useState<Metric>("tokens");
   const [scale, setScale] = React.useState<Scale>("linear");
   const [taskMetric, setTaskMetric] = React.useState<Metric>("spend");
+  const [taskData, setTaskData] = React.useState<ModelInsightTasksResponse | null>(null);
+  const [taskError, setTaskError] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -133,6 +135,24 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     };
   }, [accessToken, metric]);
 
+  React.useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    apiClient
+      .get<ModelInsightTasksResponse>("/model-insights/tasks", { accessToken, query: { metric: taskMetric } })
+      .then((response) => {
+        if (cancelled) return;
+        setTaskError(null);
+        setTaskData(response);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setTaskError(extractErrorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, taskMetric]);
+
   const data = loaded?.response ?? null;
   const shown = loaded?.metric ?? metric;
   const isStale = loaded !== null && loaded.metric !== metric;
@@ -146,10 +166,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     () => (data ? rankModels(data.top_models, data.daily, shown, range) : []),
     [data, shown, range],
   );
-  const tiles = React.useMemo(
-    () => (data ? buildTaskTiles(data.by_task, data.tasks, taskMetric) : []),
-    [data, taskMetric],
-  );
+  const tiles = React.useMemo(() => taskData?.tasks ?? [], [taskData]);
   const categoryShares = React.useMemo(
     () =>
       [...new Set(tiles.map((tile) => tile.category))].map((category) => ({
@@ -289,9 +306,15 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           </Select>
         </CardHeader>
         <CardContent className="space-y-4">
+          {taskError && (
+            <Alert variant="destructive">
+              <AlertTitle>Could not load tasks</AlertTitle>
+              <AlertDescription>{taskError}</AlertDescription>
+            </Alert>
+          )}
           <ChartContainer config={{}} className="h-[360px] w-full aspect-auto">
             <Treemap
-              data={tiles.map((tile) => ({ ...tile, name: tile.task }))}
+              data={tiles.map((tile) => ({ ...tile, name: tile.task_type }))}
               dataKey="value"
               isAnimationActive={false}
               content={<TaskTileContent {...({} as TileProps)} />}
