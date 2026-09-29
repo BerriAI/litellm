@@ -133,6 +133,8 @@ class AutoRouterBaselineCache(CustomLogger):
             if logging_obj.baseline_cache_context is not None:
                 await invalidate_baseline_cache(logging_obj, "retried_request")
                 return
+            if "_autorouter_baseline_route" not in metadata:
+                return
             request: Final = _Metadata.model_validate(metadata)
             session: Final = kwargs.get("litellm_session_id") or request.session_id or logging_obj.litellm_session_id
             if not isinstance(session, str) or not session or len(session) > 256:
