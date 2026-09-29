@@ -7,7 +7,7 @@ with guardrail transformations.
 
 import copy
 from collections.abc import Callable
-from typing import Any, List, Literal, Optional, Tuple
+from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import logging
@@ -101,18 +101,18 @@ class LastTextDroppingGuardrail(CustomGuardrail):
 class TextsReplacingGuardrail(CustomGuardrail):
     """Answers with the given texts list, or without a texts key at all when given None"""
 
-    def __init__(self, texts: list[str] | None, **kwargs):
-        super().__init__(**kwargs)
-        self.texts = texts
+    def __init__(self, guardrail_name: str, texts: tuple[str, ...] | None):
+        super().__init__(guardrail_name=guardrail_name)
+        self.texts: Final = texts
 
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        answer = {key: value for key, value in inputs.items() if key != "texts"}
+        answer: Final = {key: value for key, value in inputs.items() if key != "texts"}
         return answer if self.texts is None else {**answer, "texts": list(self.texts)}
 
 
@@ -361,7 +361,7 @@ class TestOpenAIResponsesHandlerInputProcessing:
         from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
         handler = OpenAIResponsesHandler()
-        guardrail = TextsReplacingGuardrail(guardrail_name="emptier", texts=[])
+        guardrail = TextsReplacingGuardrail(guardrail_name="emptier", texts=())
         data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
         original = copy.deepcopy(data)
 
