@@ -3587,7 +3587,7 @@ async def get_org_object_by_alias(
         )
 
 
-LITELLM_SESSION_TOKEN_AAD: Final = b"litellm-session-token"
+LITELLM_SESSION_TOKEN_PREFIX: Final = "litellm_login_"
 
 
 class ExperimentalUIJWTToken:
@@ -3622,7 +3622,7 @@ class ExperimentalUIJWTToken:
             user_role=LitellmUserRoles(user_info.user_role),
         )
 
-        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
+        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)
 
     @staticmethod
     def get_cli_jwt_auth_token(
@@ -3691,7 +3691,7 @@ class ExperimentalUIJWTToken:
             is_session_token=True,
         )
 
-        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
+        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)
 
     @staticmethod
     def get_key_object_from_ui_hash_key(
@@ -3704,7 +3704,7 @@ class ExperimentalUIJWTToken:
             decrypt_bearer_token,
         )
 
-        decrypted_token: Final = decrypt_bearer_token(hashed_token, aad=LITELLM_SESSION_TOKEN_AAD)
+        decrypted_token: Final = decrypt_bearer_token(hashed_token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
         if decrypted_token is None:
             return None
         try:

@@ -241,11 +241,13 @@ def test_explicit_key_decrypt_supports_the_empty_master_key():
     assert decrypt_if_encrypted_with(base64.urlsafe_b64encode(written_with_empty_key).decode(), "") == "stored-secret"
 
 
-def test_bearer_token_decrypts_only_with_the_same_aad():
-    token = encrypt_bearer_token("session", aad=b"purpose-a")
+def test_bearer_token_opens_only_under_its_own_prefix():
+    token = encrypt_bearer_token("session", prefix="kind_a_")
+    relabeled = "kind_b_" + token.removeprefix("kind_a_")
 
-    assert decrypt_bearer_token(token, aad=b"purpose-a") == "session"
-    assert decrypt_bearer_token(token, aad=b"purpose-b") is None
+    assert decrypt_bearer_token(token, prefix="kind_a_") == "session"
+    assert decrypt_bearer_token(token, prefix="kind_b_") is None
+    assert decrypt_bearer_token(relabeled, prefix="kind_b_") is None
 
 
 @pytest.mark.parametrize("use_aes", [False, True])
@@ -254,13 +256,13 @@ def test_stored_value_is_not_a_bearer_token_even_when_reshaped(monkeypatch, use_
         _use_aes(monkeypatch)
     stored = encrypt_value_helper("stored-secret")
 
-    for candidate in (stored, stored.removeprefix(_V2_GCM_PREFIX).rstrip("=")):
-        assert decrypt_bearer_token(candidate, aad=b"purpose-a") is None
+    for candidate in (stored, "kind_a_" + stored.removeprefix(_V2_GCM_PREFIX).rstrip("=")):
+        assert decrypt_bearer_token(candidate, prefix="kind_a_") is None
 
 
 @pytest.mark.parametrize("length", range(6))
 def test_bearer_token_uses_only_header_safe_characters(length: int):
-    token = encrypt_bearer_token("x" * length, aad=b"purpose-a")
+    token = encrypt_bearer_token("x" * length, prefix="kind_a_")
 
-    assert re.fullmatch(r"[A-Za-z0-9_-]+", token), token
-    assert decrypt_bearer_token(token, aad=b"purpose-a") == "x" * length
+    assert re.fullmatch(r"kind_a_[A-Za-z0-9_-]+", token), token
+    assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length

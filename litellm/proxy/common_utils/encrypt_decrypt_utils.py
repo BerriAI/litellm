@@ -101,23 +101,24 @@ def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     return _open_aes_gcm(sealed=sealed, signing_key=signing_key, aad=None)
 
 
-def encrypt_bearer_token(value: str, aad: bytes) -> str:
-    """AES-256-GCM bound to ``aad``, encoded as unpadded base64url so it is valid in any auth header."""
+def encrypt_bearer_token(value: str, prefix: str) -> str:
+    """AES-256-GCM as unpadded base64url behind ``prefix``, which is also the AAD so a token can't change kind."""
     salt_key: Final = _get_salt_key()
     if not isinstance(salt_key, str):
         raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")
-    sealed: Final = _seal_aes_gcm(value=value, signing_key=salt_key, aad=aad)
-    return base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
+    sealed: Final = _seal_aes_gcm(value=value, signing_key=salt_key, aad=prefix.encode("utf-8"))
+    return prefix + base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
 
 
-def decrypt_bearer_token(token: str, aad: bytes) -> str | None:
-    """None unless ``token`` came from :func:`encrypt_bearer_token` with the same ``aad``."""
+def decrypt_bearer_token(token: str, prefix: str) -> str | None:
+    """None unless ``token`` came from :func:`encrypt_bearer_token` with the same ``prefix``."""
     salt_key: Final = _get_salt_key()
-    if not isinstance(salt_key, str):
+    if not isinstance(salt_key, str) or not token.startswith(prefix):
         return None
+    encoded: Final = token.removeprefix(prefix)
     try:
-        sealed: Final = base64.b64decode(token + "=" * (-len(token) % 4), altchars=b"-_", validate=True)
-        return _open_aes_gcm(sealed=sealed, signing_key=salt_key, aad=aad)
+        sealed: Final = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        return _open_aes_gcm(sealed=sealed, signing_key=salt_key, aad=prefix.encode("utf-8"))
     except Exception:  # noqa: BLE001  # base64 and AES-GCM each raise their own "not a token" type
         return None
 

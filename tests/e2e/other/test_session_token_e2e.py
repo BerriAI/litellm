@@ -24,7 +24,7 @@ from other_client import OtherClient
 pytestmark = pytest.mark.e2e
 
 SALT_KEY: Final = os.environ.get("LITELLM_SALT_KEY") or MASTER_KEY
-SESSION_TOKEN_AAD: Final = b"litellm-session-token"
+SESSION_TOKEN_PREFIX: Final = "litellm_login_"
 ENCRYPTED_PREFIX: Final = "litellm_enc::"
 
 
@@ -40,9 +40,9 @@ def _admin_session_token(expires_at: datetime) -> str:
     )
     nonce: Final = os.urandom(12)
     sealed: Final = AESGCM(hashlib.sha256(SALT_KEY.encode()).digest()).encrypt(
-        nonce, claims.encode(), SESSION_TOKEN_AAD
+        nonce, claims.encode(), SESSION_TOKEN_PREFIX.encode()
     )
-    return base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
+    return SESSION_TOKEN_PREFIX + base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
 
 
 class TestSessionToken:
