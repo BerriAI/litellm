@@ -151,6 +151,8 @@ def _handle_message_delta(data: dict, response: dict) -> None:
         response["stop_reason"] = delta["stop_reason"]
     if "stop_sequence" in delta:
         response["stop_sequence"] = delta["stop_sequence"]
+    if "stop_details" in delta:
+        response["stop_details"] = delta["stop_details"]
     usage: Final = data.get("usage", {})
     if usage.get("output_tokens") is not None:
         response["usage"]["output_tokens"] = usage["output_tokens"]

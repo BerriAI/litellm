@@ -1046,6 +1046,15 @@ class ModelResponseIterator:
                     if container_id and self.tool_results:
                         self._container_id = container_id
                         provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
+                delta_dict: Final = chunk.get("delta") if isinstance(chunk, dict) else {}
+                if isinstance(delta_dict, dict):
+                    stop_reason: Final = delta_dict.get("stop_reason")
+                    stop_details: Final = delta_dict.get("stop_details")
+                    if stop_reason == "refusal" or stop_details is not None:
+                        if stop_reason is not None:
+                            provider_specific_fields["stop_reason"] = stop_reason
+                        if stop_details is not None:
+                            provider_specific_fields["stop_details"] = stop_details
             elif type_chunk == "message_start":
                 """
                 Anthropic
