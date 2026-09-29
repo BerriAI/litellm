@@ -154,3 +154,17 @@ def test_error_event_keeps_status_of_mapped_litellm_exception():
     assert name == "error"
     assert payload["error"]["type"] == "invalid_request_error"
     assert "prompt is too long" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        litellm.BadRequestError(message="temperature must be in the range [0.0, 2.0]", model="m", llm_provider="gemini"),
+        litellm.AuthenticationError(message="API key not valid", llm_provider="gemini", model="m"),
+        litellm.NotFoundError(message="model is not found", model="m", llm_provider="gemini"),
+    ],
+)
+def test_error_event_reports_other_provider_4xx_as_retriable_500(exc):
+    name, payload = _parse_sse(_mid_stream_error_sse_event(exc))
+    assert name == "error"
+    assert payload["error"]["type"] == "api_error"
