@@ -76,6 +76,7 @@ legacy_paths() {
       echo tests/unit/containers
       echo tests/unit/embeddings
       echo tests/unit/endpoints
+      echo tests/unit/evals
       echo tests/unit/files
       echo tests/unit/images
       echo tests/unit/interactions
