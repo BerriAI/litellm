@@ -7,9 +7,9 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MODEL_INSIGHTS_DEFAULT_TASK,
     MODEL_INSIGHTS_TASK_TAG_PREFIX,
-    MODEL_INSIGHTS_TASK_TYPES,
 )
 from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import DailyModelUsageRepository
 
@@ -25,7 +25,7 @@ def model_usage_task_type(request_tags: str) -> str:
     for tag in tags:
         if isinstance(tag, str) and tag.startswith(MODEL_INSIGHTS_TASK_TAG_PREFIX):
             task = tag.removeprefix(MODEL_INSIGHTS_TASK_TAG_PREFIX)
-            if task in MODEL_INSIGHTS_TASK_TYPES:
+            if task in load_model_insight_tasks():
                 return task
     return MODEL_INSIGHTS_DEFAULT_TASK
 
