@@ -4462,7 +4462,7 @@ class BedrockConverseMessagesProcessor:
                     )
                     if isinstance(message_cache_control, dict) and not has_content_cache_control:
                         _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                            {"cache_control": message_cache_control},
+                            message_block,
                             block_type="content_block",
                             model=model,
                         )
@@ -4848,7 +4848,7 @@ def _bedrock_converse_messages_pt(
                 )
                 if isinstance(message_cache_control, dict) and not has_content_cache_control:
                     _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                        {"cache_control": message_cache_control},
+                        message_block,
                         block_type="content_block",
                         model=model,
                     )
