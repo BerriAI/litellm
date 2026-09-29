@@ -1647,3 +1647,30 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     assert "anthropic_beta" not in captured["body"]
     assert captured["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
     assert response["safeguard_results"] == safeguard_results
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_azure_ai_foundry(
+    local_beta_headers_config,
+):
+    """Foundry 400s on `safeguards` without the dangerous-tool-use beta, so the client's beta must survive the azure_ai filter alongside the field."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    safeguards, safeguard_results = _claude_code_auto_mode_request()
+    captured: dict[str, object] = {}
+
+    response = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="azure_ai/claude-sonnet-5",
+        custom_llm_provider="azure_ai",
+        api_key="test-key",
+        api_base="https://test.services.ai.azure.com/anthropic",
+        client=_upstream_answering_with(safeguard_results, captured),
+        safeguards=safeguards,
+        extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"},
+    )
+
+    assert captured["body"]["safeguards"] == safeguards
+    assert "dangerous-tool-use-2026-09-03" in captured["anthropic-beta"].split(",")
+    assert response["safeguard_results"] == safeguard_results
