@@ -2,7 +2,11 @@ litellm-core owns route orchestration. Messages and HTTP Responses return `litel
 
 Hosts assemble route objects from shared `CoreResources`, HTTP settings, and secret sources. Each route owns its provider client and authentication dependencies. Gateway routes live for the gateway lifetime; Python assembles routes per call from its settings snapshot
 
-Chat Completions, Messages, Responses, and OCR execute through their route objects. Calls pass `Interceptors` and an optional `ObservationSender` separately; use `&()` for no hooks and `None` for no observer. Construction does no work; preparation and lifecycle observation begin when the future is polled. Handlers accept `Interceptors`, never a concrete `ChannelInterceptors`. Native observers receive start and terminal events through the shared call runner; a stream retains its lifecycle until exhaustion, error, or drop. Hosted routes leave terminal observation to their driver
+Chat Completions, Messages, Responses, and OCR execute through their route objects.
+
+Calls pass `Interceptors` separately from call options. Routes accepting `CallOptions` receive cache overrides and observation through those options; other entrypoints accept an optional `ObservationSender` directly. Use `&()` for no hooks and use `None` for no observer where the entrypoint accepts one directly
+
+Construction does no work; preparation and lifecycle observation begin when the future is polled. Handlers accept `Interceptors`, never a concrete `ChannelInterceptors`. Native observers receive start and terminal events through the shared call runner; a stream retains its lifecycle until exhaustion, error, or drop. Hosted routes leave terminal observation to their driver
 
 `route.rs` declares the concrete `Protocol` and implements a route method that accepts a typed request and constructs a `litellm_host::call::HostedMachine` with `hosted_call`. The shared call plumbing owns stream opening, delivery, backpressure, and detachment. Request decoding belongs to the boundary before the machine starts. Route closures only supply execution dependencies and route-specific host capabilities such as an OCR token provider. Use `run_hosted` for a native host so detachment is reported as cancellation. Python uses its own shared driver and preserves caller-task callback execution
 
@@ -10,7 +14,7 @@ Responses WebSocket sessions remain separate from the HTTP call driver because a
 
 ## Crate layering
 
-For Messages, Responses, Chat Completions, OCR, and other API formats, `core/src/<format>/` owns orchestration. Shared API data contracts belong in `litellm-llms-types`, adapter contracts and shared transformation machinery in `llms/src/base_llm/<format>/`, and provider policy in `llms/src/<provider>/<format>/`. A repeated format directory name does not imply interchangeable responsibilities. Select concrete adapters here, then invoke their contracts instead of applying one provider's policy to every call. Route types describe call envelopes and execution state, not duplicate public payload schemas
+For Messages, Responses, Chat Completions, OCR, and other API formats, `core/src/<format>/` owns orchestration. Shared API data contracts belong in `litellm-llms-types`, adapter contracts and shared transformation machinery in `llms/src/base_llm/<format>/`, and provider policy in `llms/src/<provider>/<format>/`. A repeated format directory name does not imply interchangeable responsibilities. Select concrete adapters here, then invoke their contracts instead of applying one provider's policy to every call. Route types describe call envelopes and execution state. Reuse `litellm-llms-types::formats` payloads inside them. Provider-specific wire envelopes belong in `litellm-llms-types::providers` when they are shared data contracts. Core must not become a second home for payload schemas or provider normalization
 
 Crates separate API data, transformations, transport, and orchestration. Python package names identify counterparts, not ownership. Dependencies only point down:
 
@@ -32,7 +36,7 @@ Scope follows the concept, not the first caller. An error type under `litellm-ll
 
 `litellm_llms::Error` (`crates/llms/src/error.rs`) is the one transformation error for every provider and API. `base_llm/ocr/error.rs` is the recorded exception until OCR folds into it
 
-Not here: serving HTTP (axum routes, extractors), config file reading, rollout state, databases, or callback execution of any kind. Core runs each route as a machine that yields host operations and call events; which integrations consume those events is the host's business.
+Keep HTTP serving (axum routes and extractors), config file reading, rollout state, databases, and callback execution in their owning crates. Routes using the shared call machine yield host operations and call events. Hosts choose which integrations consume them
 
 ## Response caching and accounting boundary
 
@@ -45,3 +49,11 @@ Core delivers `ExecutionFacts` through the awaited `ResultReady` host operation 
 Core does not calculate prices, charge budgets, or update rate-limit counters. The legacy Python callback adapter translates execution facts into the existing Python logging contract; Python remains the accounting owner on that path. Native gateway accounting belongs to gateway dependencies, independently of `host-python`. Response-cache services expose no coordination counters or reservation APIs. A shared Redis deployment does not make response storage and accounting coordination the same dependency
 
 Cache lookup follows provider preparation, credential resolution and the request interceptor. Keys describe the effective provider URL, authenticated headers and rewritten body. Signed requests bypass caching until the signing identity has a stable cache representation
+
+## Verification
+
+Follow the workspace test-placement and `rstest` rules. Test observable provider dispatch, credential precedence, interceptor ordering, error propagation, cancellation, and stream lifecycle where affected. For cache changes, cover both provider execution and cache replay through the same route contract, including result-source delivery and stream completion or early drop
+
+Keep payload serialization tests in `llms-types` and provider transformation tests in `llms`. Core integration tests should exercise route behavior with injected dependencies and controlled transport responses. Do not widen private visibility or inspect source structure to test orchestration
+
+Run `cargo test -p litellm-core` from `litellm-rust` for core changes. When changing a shared adapter or payload contract, also check the affected owning crate and host consumers
