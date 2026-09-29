@@ -93,7 +93,7 @@ class AgentRequestHandler:
         if managed_agent_policy(user_api_key_auth) is not None:
             return await _managed_actor_agent_access(user_api_key_auth)
         key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(user_api_key_auth)
-        caller_access: Final = await AgentRequestHandler._agent_caller_access(user_api_key_auth)
+        caller_access: Final = await AgentRequestHandler.agent_caller_access(user_api_key_auth)
         own_access: Final = _intersect_agent_access(key_team_access, caller_access)
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
         if agent_ceiling is None:
@@ -103,7 +103,7 @@ class AgentRequestHandler:
         return RestrictedAgentAccess(own_access.agent_ids & agent_ceiling)
 
     @staticmethod
-    async def _agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None) -> AgentAccess:
+    async def agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None) -> AgentAccess:
         caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
         if caller_auth is None:
             return UnrestrictedAgentAccess()
@@ -182,7 +182,7 @@ class AgentRequestHandler:
 
                 key_hash: Final = user_api_key_auth.api_key or user_api_key_auth.token
                 authority: Final = (
-                    await MCPRequestHandler._reload_admitted_key(key_hash, check_db_only=True)
+                    await MCPRequestHandler._reload_admitted_key(key_hash, check_db_only=True)  # pyright: ignore[reportPrivateUsage]  # the authoritative key reload has no public seam
                     if key_hash
                     and managed_agent_policy(user_api_key_auth) is None
                     and not user_api_key_auth.is_session_token
@@ -651,7 +651,7 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
 
     ceilings: Final = await resolve_managed_agent_ceilings(agent)
     grouped: Final = frozenset(target for target in own if all(target in ceiling.agent_ids for ceiling in ceilings))
-    caller: Final = await AgentRequestHandler._agent_caller_access(auth)
+    caller: Final = await AgentRequestHandler.agent_caller_access(auth)
     capped: Final = grouped if isinstance(caller, UnrestrictedAgentAccess) else grouped & caller.agent_ids
     context: Final = auth.managed_agent_context
     if context is None or context.mode == "autonomous":

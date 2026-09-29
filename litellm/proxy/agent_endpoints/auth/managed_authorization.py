@@ -18,8 +18,8 @@ def managed_agent_policy(auth: "UserAPIKeyAuth | None") -> AgentResponse | None:
 
 
 async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | None) -> None:
-    delegation_verified: Final = auth._managed_delegation_verified
-    auth._managed_delegation_verified = False
+    delegation_verified: Final = auth._managed_delegation_verified  # pyright: ignore[reportPrivateUsage]  # the one-shot delegation marker is a PrivateAttr by design
+    auth._managed_delegation_verified = False  # pyright: ignore[reportPrivateUsage]  # consumed here so a replayed token cannot reuse it
     if auth.agent_id is None:
         return
     if store is None:

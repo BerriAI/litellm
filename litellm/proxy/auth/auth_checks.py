@@ -1060,7 +1060,7 @@ async def common_checks(
                     )
 
     managed_policy: Final = managed_agent_policy(valid_token)
-    if _model and managed_policy is not None:
+    if _model and valid_token is not None and managed_policy is not None:
         managed_models: Final = (managed_policy.object_permission or MappingProxyType({})).get("models", ())
         if not isinstance(managed_models, (list, tuple)) or not managed_models:
             raise HTTPException(403, "This agent has no model grants")
