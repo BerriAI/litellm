@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
+from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity, allowlisted_metadata
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -59,6 +59,8 @@ if TYPE_CHECKING:
         StandardLoggingGuardrailInformation,
         StandardLoggingPayload,
     )
+
+_EMPTY_METADATA: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 # --- typed sub-structures ---------------------------------------------------- #
@@ -430,6 +432,7 @@ class LLMCallSpanData:
     trace: TraceControls = field(default_factory=TraceControls)
     session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
+    promoted_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
 
     @classmethod
     def from_standard_logging_payload(
@@ -440,6 +443,8 @@ class LLMCallSpanData:
         request_route: str | None = None,
         trace: TraceControls | None = None,
         session_id: str | None = None,
+        *,
+        metadata_keys: tuple[str, ...] = (),
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -476,6 +481,7 @@ class LLMCallSpanData:
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
+            promoted_metadata=allowlisted_metadata(context.identity.metadata, metadata_keys),
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
