@@ -502,6 +502,7 @@ async fn completion_preserves_base_query(call: ResponsesCall, #[case] suffix: &s
                 ..call
             },
             &(),
+            None,
         )
         .await
         .unwrap();
@@ -511,20 +512,20 @@ async fn completion_preserves_base_query(call: ResponsesCall, #[case] suffix: &s
 }
 
 struct RewriteUrl(String);
-impl litellm_host::hooks::RouteHooks<litellm_core::responses::Error> for RewriteUrl {
+impl litellm_host::interceptors::Interceptors<litellm_core::responses::Error> for RewriteUrl {
     async fn before_provider_request(
         &self,
-        wire: litellm_host::event::WireRequest,
-        _: litellm_host::event::RequestContext,
-    ) -> Result<litellm_host::event::WireRequest, litellm_core::responses::Error> {
-        Ok(litellm_host::event::WireRequest {
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
+    ) -> Result<litellm_host::interceptors::WireRequest, litellm_core::responses::Error> {
+        Ok(litellm_host::interceptors::WireRequest {
             url: self.0.clone(),
             ..wire
         })
     }
-    async fn on_event(
+    async fn after_provider_response(
         &self,
-        _: litellm_host::event::MachineEvent,
+        _: litellm_host::interceptors::RawResponse,
     ) -> Result<(), litellm_core::responses::Error> {
         Ok(())
     }
@@ -543,6 +544,7 @@ async fn invalid_host_url_fails_before_sending(call: ResponsesCall, #[case] rewr
                 ..call
             },
             &RewriteUrl(rewritten.into()),
+            None,
         )
         .await;
     assert!(result.is_err());
@@ -563,6 +565,7 @@ async fn hook_url_is_the_sent_url(call: ResponsesCall) {
                 ..call
             },
             &RewriteUrl(format!("{}/rewritten?tenant=b#f", upstream.uri())),
+            None,
         )
         .await
         .unwrap();
