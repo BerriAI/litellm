@@ -50,9 +50,9 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
         if isinstance(optional_params, LiteLLM_Params):
             _optional_params = optional_params
         elif "model" in optional_params:
-            _optional_params = LiteLLM_Params(**optional_params)
-        else:  # prevent needing to copy and pop the dict
-            _optional_params = LiteLLM_Params(model=model, **optional_params)  # convert to pydantic object
+            _optional_params = LiteLLM_Params.model_validate(optional_params)
+        else:
+            _optional_params = LiteLLM_Params.model_validate({"model": model, **optional_params})
     except Exception:
         return None
     # get llm provider
