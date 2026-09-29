@@ -75,7 +75,6 @@ PRIORITY_LONG_CONTEXT = {
     },
 }
 
-# Source: https://developers.openai.com/api/docs/pricing (2026-09-29)
 ULTRAFAST_LONG_CONTEXT = {
     "gpt-6-astra": {
         "input_cost_per_token_above_272k_tokens_ultrafast": 0.00012,
@@ -132,7 +131,9 @@ TIERED_COST_CASES = [
 def test_catalogs_contain_expected_tiered_long_context_rates(path: Path) -> None:
     catalog: Final = _load(path)
 
-    assert {model: {key: catalog[model][key] for key in rates} for model, rates in EXPECTED.items()} == EXPECTED
+    assert {model: {key: catalog[model][key] for key in rates} for model, rates in EXPECTED.items()} == EXPECTED, (
+        "gpt-6-astra ultrafast rates per https://developers.openai.com/api/docs/pricing (2026-09-29)"
+    )
 
 
 def test_get_model_info_preserves_expected_tiered_long_context_rates() -> None:
