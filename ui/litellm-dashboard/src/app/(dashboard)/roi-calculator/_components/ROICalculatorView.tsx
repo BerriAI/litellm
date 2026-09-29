@@ -192,6 +192,9 @@ export default function ROICalculatorView({
             {syncedAt && (
               <span className="mt-1 block text-xs text-muted-foreground" role="status">
                 Up to date · Last synced {formatSyncedAt(syncedAt)}
+                {!status.running && status.phase === "complete" && status.reused > 0
+                  ? ` · ${status.reused} of ${status.total} estimates reused`
+                  : ""}
               </span>
             )}
           </>

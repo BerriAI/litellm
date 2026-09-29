@@ -227,7 +227,7 @@ describe("ROICalculatorView", () => {
       stage: "Estimating pull requests",
       total: 1,
     };
-    const completedStatus = { ...idleStatus, phase: "complete", done: 1, total: 1 };
+    const completedStatus = { ...idleStatus, phase: "complete", done: 57, total: 57, reused: 57 };
     vi.mocked(apiClient.get)
       .mockResolvedValueOnce(settings)
       .mockResolvedValueOnce({ report: null })
@@ -247,6 +247,7 @@ describe("ROICalculatorView", () => {
     expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connect GitHub to get started" })).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Up to date · Last synced Sep 30, 2026, 12:00 PM UTC");
+    expect(screen.getByRole("status")).toHaveTextContent("57 of 57 estimates reused");
   });
 
   it("shows the sync error returned by the status endpoint", async () => {
