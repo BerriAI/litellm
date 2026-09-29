@@ -2884,6 +2884,34 @@
     "default_model_placeholder": "prism/deepseek-v4.1-flash"
   },
   {
+    "provider": "BOLDROUTER",
+    "provider_display_name": "BoldRouter",
+    "litellm_provider": "boldrouter",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://boldrouter.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "sk-bold-...",
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "boldrouter/bold/auto"
+  },
+  {
     "provider": "RECRAFT",
     "provider_display_name": "Recraft",
     "litellm_provider": "recraft",
