@@ -45,10 +45,11 @@ import hashlib
 import os
 import re
 import threading
+import time
 from collections import deque
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import islice
 from pathlib import Path
@@ -56,6 +57,7 @@ from types import MappingProxyType
 from typing import Final, Literal, assert_never
 from urllib.parse import parse_qsl, urlsplit
 
+from botocore.eventstream import EventStreamBuffer
 from e2e_http import (
     NetworkError,
     StreamChunk,
@@ -88,22 +90,57 @@ from fixture_canonical import (
 )
 from fixture_mode import (
     FIXTURE_MODES,
+    SESSION_TEST_KEY,
     InvalidFixtureMode,
     ReplayMiss,
     current_test_key,
     parse_fixture_mode,
 )
 from fixture_profile import IneligibleRequest, MatchProfile, match_profile, strict_identity
-from provider_cache import CacheEdge
+from provider_cache import (
+    JSON_VALUE,
+    SIGNATURE_HEADERS,
+    CacheEdge,
+    MountPolicy,
+    RequestSigner,
+    invoke_chunk_value,
+    is_bedrock,
+    scoped_edge_base,
+    split_test_segment,
+)
 from provider_cache_routing import LIVE_PROVIDER_REQUIRED
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
+
+BEDROCK_REGIONS: Final[tuple[str, ...]] = ("us-east-1",)
 
 EDGE_MOUNTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "openai": "https://api.openai.com",
         "anthropic": "https://api.anthropic.com",
+        **{
+            f"bedrock/{region}": f"https://bedrock-runtime.{region}.amazonaws.com"
+            for region in BEDROCK_REGIONS
+        },
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedMount:
+    mount: str
+    upstream_base: str
+    upstream_path: str
+
+
+def resolve_mount(path: str, mounts: Mapping[str, str]) -> ResolvedMount | None:
+    """Longest mount prefix wins, so a region-qualified mount such as
+    ``bedrock/us-east-1`` resolves whole instead of leaving the region as the
+    first segment of the upstream path."""
+    trimmed: Final = path.lstrip("/")
+    for mount in sorted(mounts, key=len, reverse=True):
+        if trimmed == mount or trimmed.startswith(f"{mount}/"):
+            return ResolvedMount(mount, mounts[mount], trimmed[len(mount):].lstrip("/"))
+    return None
 
 REPLAY_MISS_STATUS: Final = 599
 
@@ -505,8 +542,32 @@ class ReplayEdge:
 
 
 @dataclass(frozen=True, slots=True)
+class StreamCut:
+    """Where a live edge hangs up on a streamed upstream body: before its first byte, or with
+    ``after_content`` set, right after the first transfer chunk carrying assistant output (a
+    ``content_block_delta``). That frame is what commits the proxy's mid-stream fallback
+    wrapper to the client: it holds the lifecycle frames before it back and drops them when
+    the transport fails first, so a cut after a fixed number of chunks landed on either side
+    of that commit depending on how the provider batched its frames. With ``mid_chunk`` set
+    the hang-up comes part way through the next ``data:`` line the provider sends after that,
+    so the client is left inside an SSE frame the way a dropped transport leaves it.
+
+    Whatever was relayed sits on the wire for ``_CUT_SETTLE_SECONDS`` before the hang-up, so
+    the client has read it by then instead of receiving the data and the close in one burst,
+    where its reader can surface the close before what it buffered."""
+
+    after_content: bool
+    mid_chunk: bool = False
+
+
+_CUT_SETTLE_SECONDS: Final = 1.0
+
+
+@dataclass(frozen=True, slots=True)
 class LiveEdge:
-    pass
+    observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None
+    sign: RequestSigner | None = None
+    cut: StreamCut | None = None
 
 
 type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge | CacheEdge
@@ -752,20 +813,144 @@ def _handle_record(
             assert_never(head)
 
 
+def _data_line_start(data: bytes) -> int:
+    if data.startswith(b"data:"):
+        return 0
+    at_line_start: Final = data.find(b"\ndata:")
+    return -1 if at_line_start < 0 else at_line_start + 1
+
+
+def _torn_prefix(data: bytes) -> bytes:
+    start: Final = _data_line_start(data)
+    line_end: Final = data.find(b"\n", start)
+    end: Final = len(data) if line_end < 0 else line_end
+    return data[: start + (end - start) // 2]
+
+
+class _DataLineTearer:
+    __slots__ = ("_unfinished_line",)
+
+    _unfinished_line: bytes
+
+    def __init__(self) -> None:
+        self._unfinished_line = b""
+
+    def observe(self, data: bytes) -> None:
+        self._unfinished_line = (self._unfinished_line + data).rsplit(b"\n", 1)[-1]
+
+    def tear(self, data: bytes) -> bytes | None:
+        buffered: Final = self._unfinished_line + data
+        if _data_line_start(buffered) < 0:
+            self.observe(data)
+            return None
+        return _torn_prefix(buffered)[len(self._unfinished_line):]
+
+
+def _is_content_delta(value: JsonValue | None) -> bool:
+    return isinstance(value, dict) and value.get("type") == "content_block_delta"
+
+
+def _sse_data_carries_content(line: bytes) -> bool:
+    if not line.startswith(b"data:"):
+        return False
+    try:
+        return _is_content_delta(JSON_VALUE.validate_json(line[len(b"data:"):].strip()))
+    except ValidationError:
+        return False
+
+
+class _AnthropicContentDetector:
+    __slots__ = ("_unfinished_line",)
+
+    _unfinished_line: bytes
+
+    def __init__(self) -> None:
+        self._unfinished_line = b""
+
+    def __call__(self, data: bytes) -> bool:
+        lines: Final = (self._unfinished_line + data).split(b"\n")
+        self._unfinished_line = lines[-1]
+        return any(_sse_data_carries_content(line.rstrip(b"\r")) for line in lines[:-1])
+
+
+def _invoke_frame_carries_content(payload: bytes) -> bool:
+    try:
+        return _is_content_delta(invoke_chunk_value(JSON_VALUE.validate_json(payload)))
+    except ValidationError:
+        return False
+
+
+def _bedrock_content_detector() -> Callable[[bytes], bool]:
+    """Bedrock's invoke stream wraps each Anthropic event in an eventstream frame that a
+    transfer chunk can split, so the frames are reassembled across chunks before being read."""
+    frames: Final = EventStreamBuffer()
+
+    def carries_content(data: bytes) -> bool:
+        frames.add_data(data)
+        return any(_invoke_frame_carries_content(frame.payload) for frame in frames)
+
+    return carries_content
+
+
+def _content_detector(mount: str) -> Callable[[bytes], bool]:
+    return _bedrock_content_detector() if is_bedrock(mount) else _AnthropicContentDetector()
+
+
+def _cut_steps(
+    steps: Generator[StreamStep, None, None], cut: StreamCut, carries_content: Callable[[bytes], bool]
+) -> Generator[StreamStep, None, None]:
+    with closing(steps) as source:
+        tearer: Final = _DataLineTearer()
+        if cut.after_content:
+            for step in source:
+                yield step
+                if isinstance(step, StreamTruncation):
+                    return
+                tearer.observe(step.data)
+                if carries_content(step.data):
+                    break
+            else:
+                return
+        if cut.mid_chunk:
+            for step in source:
+                if isinstance(step, StreamTruncation):
+                    yield step
+                    return
+                if (torn := tearer.tear(step.data)) is None:
+                    yield step
+                    continue
+                if torn:
+                    yield StreamChunk(data=torn)
+                break
+            else:
+                return
+        if cut.after_content or cut.mid_chunk:
+            time.sleep(_CUT_SETTLE_SECONDS)
+        yield StreamTruncation(reason=f"edge cut the upstream stream: {cut!r}")
+
+
 def _handle_live(
     method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
-    cache: CacheEdge | None = None,
+    cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
+    observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None,
+    sign: RequestSigner | None = None,
+    cut: StreamCut | None = None,
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
     }
+    if observe_request is not None:
+        observe_request(url, forwarded, body)
+    outbound: Final = forwarded if sign is None else sign(method, url, forwarded, body)
     head: Final = (
-        forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
-        if cache is None else cache.forward(method, url, forwarded, body, timeout)
+        forward_stream(method, url, headers=outbound, body=body, timeout=timeout)
+        if cache is None else cache.forward(mount, method, url, forwarded, body, timeout, test_key=test_key)
     )
     match head:
         case NetworkError(message=message):
             return _recorded_outcome(_network_error_response(message))
+        case StreamHead() if cut is not None:
+            return EdgeStream(head.status_code, _filtered_response_headers(head.headers), _cut_steps(head.steps, cut, _content_detector(mount)))
         case StreamHead() if _is_streamed(head.headers):
             return EdgeStream(head.status_code, _filtered_response_headers(head.headers), head.steps)
         case StreamHead():
@@ -796,10 +981,13 @@ def handle_edge_request(
     prefix, then record (forward + persist) or replay (serve from the bundle).
     Socket-free so unit tests exercise every branch without a server."""
     split: Final = urlsplit(raw_path)
-    mount, _, upstream_path = split.path.lstrip("/").partition("/")
-    upstream_base: Final = mounts.get(mount)
-    if upstream_base is None:
-        return _text_reply(404, f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(mounts))}")
+    resolved: Final = resolve_mount(split.path, mounts)
+    if resolved is None:
+        unknown: Final = split.path.lstrip("/").partition("/")[0]
+        return _text_reply(404, f"unknown provider mount {unknown!r}; known mounts: {', '.join(sorted(mounts))}")
+    mount: Final = resolved.mount
+    upstream_base: Final = resolved.upstream_base
+    test_key, upstream_path = split_test_segment(resolved.upstream_path)
     profile: Final = (
         backend.recorder.profile
         if isinstance(backend, RecordEdge)
@@ -830,11 +1018,13 @@ def handle_edge_request(
     match backend:
         case CacheEdge():
             return _handle_live(
-                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout, backend,
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
+                backend, mount, test_key,
             )
-        case LiveEdge():
+        case LiveEdge(observe_request=observe_request, sign=sign, cut=cut):
             return _handle_live(
-                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
+                mount=mount, observe_request=observe_request, sign=sign, cut=cut,
             )
         case RecordEdge():
             return _handle_record(
@@ -891,7 +1081,7 @@ class _EdgeHandler(BaseHTTPRequestHandler):
         )
         if isinstance(edge_server.backend, CacheEdge) and duplicate_headers:
             edge_server.backend.counters.increment("duplicate_header_bypass")
-            if urlsplit(self.path).path.lstrip("/").partition("/")[0] in edge_server.mounts:
+            if resolve_mount(urlsplit(self.path).path, edge_server.mounts) is not None:
                 edge_server.backend.counters.increment("upstream_attempts")
         outcome: Final = handle_edge_request(
             selected_backend,
@@ -1065,20 +1255,29 @@ def provider_edge_api_base(
     bundle_dir: Path,
     bind_host: str,
     advertise_host: str,
+    test_key: str,
     forward_timeout: float = 60.0,
 ) -> str | None:
     """The api_base a suite gives an edge-wired deployment: None in live mode
     (the deployment keeps its real provider api_base) and the process-wide edge
-    server's mount URL in record and replay, booting the server on first use."""
+    server's mount URL in record and replay, booting the server on first use.
+    With the shared cache configured, live mode answers with the cache edge's
+    mount URL scoped to ``test_key``, the node that owns the deployment, and
+    None for a deployment no node owns, since a call nobody can attribute is
+    never cached."""
     mode: Final = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode(value=value):
             raise ValueError(f"E2E_FIXTURE_MODE={value!r} is not one of {', '.join(FIXTURE_MODES)}")
         case "live":
-            if configured_cache_backend() is not None:
-                return _shared_cache_edge(bind_host, advertise_host, forward_timeout).api_base(mount)
-            return None
+            if configured_cache_backend() is None or test_key == SESSION_TEST_KEY:
+                return None
+            return scoped_edge_base(
+                _shared_cache_edge(bind_host, advertise_host, forward_timeout).api_base(mount), test_key
+            )
         case "record" | "replay":
+            if is_bedrock(mount):
+                return None
             if mount not in EDGE_MOUNTS:
                 raise ValueError(f"unknown provider mount {mount!r}; known mounts: {', '.join(sorted(EDGE_MOUNTS))}")
             return _shared_edge(mode, bundle_dir, bind_host, advertise_host, forward_timeout, match_profile()).api_base(
@@ -1108,7 +1307,22 @@ def configured_cache_backend() -> CacheEdge | None:
         return None
     from provider_cache_redis import configured_cache
 
-    return configured_cache()
+    cache: Final = configured_cache()
+    return None if cache is None else replace(cache, policies=bedrock_policies())
+
+
+@functools.lru_cache(maxsize=1)
+def bedrock_policies() -> Mapping[str, MountPolicy]:
+    """One policy per mounted Bedrock region, built lazily so a run that never
+    mounts Bedrock neither imports botocore nor resolves an AWS identity."""
+    from provider_edge_bedrock import bedrock_signer
+
+    return MappingProxyType(
+        {
+            f"bedrock/{region}": MountPolicy(sign=bedrock_signer(region), unkeyed_headers=SIGNATURE_HEADERS)
+            for region in BEDROCK_REGIONS
+        }
+    )
 
 
 @functools.lru_cache(maxsize=8)

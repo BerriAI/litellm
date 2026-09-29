@@ -1,13 +1,16 @@
+import re
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import psycopg
 import pytest
+from psycopg.rows import dict_row
+from pytest_postgresql import factories
 
-from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-
-
+from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
@@ -19,6 +22,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
     update_metrics,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendMetrics,
@@ -474,9 +478,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
         return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com")]
     )
     mock_prisma.db.query_raw = AsyncMock(
-        return_value=[
-            {"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}
-        ]
+        return_value=[{"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}]
     )
 
     result = await get_api_key_metadata(
@@ -625,6 +627,24 @@ def test_key_metadata_includes_recovered_user_email():
     assert meta.key_alias == "batch-worker"
     assert meta.user_id == "alice"
     assert meta.user_email == "alice@example.com"
+
+
+def test_key_metadata_includes_user_id_without_user_email():
+    from litellm.proxy.management_endpoints.common_daily_activity import _key_metadata
+
+    meta = _key_metadata(
+        {
+            "dirty-key": {
+                "key_alias": "batch-worker",
+                "team_id": "team-1",
+                "user_id": "user-123",
+            }
+        },
+        "dirty-key",
+    )
+
+    assert meta.user_id == "user-123"
+    assert meta.user_email is None
 
 
 def test_update_breakdown_metrics_includes_user_email():
@@ -893,6 +913,67 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
     assert key_data.metadata.team_id == "69cd4b77-b095-4489-8c46-4f2f31d840a2"
     assert key_data.metadata.user_id == "deleted-key-owner"
     assert key_data.metrics.spend == 10.0
+
+
+@pytest.mark.asyncio
+async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resolve():
+    """/key/info reads the active key table only, so deleted and never-stored (session) keys must not claim to exist."""
+    mock_prisma = MagicMock()
+    base = {
+        "date": "2024-01-01",
+        "endpoint": "/v1/chat/completions",
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "group_level": 30,
+        "distinct_api_keys": 1,
+        "spend": 1.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
+        "api_requests": 1,
+        "successful_requests": 1,
+        "failed_requests": 0,
+    }
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[{**base, "api_key": key} for key in ("active-key", "deleted-key", "session-key")]
+    )
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="active-key", key_alias="active", team_id=None, user_id="owner")]
+    )
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="deleted-key", key_alias="deleted", team_id=None, user_id="owner")]
+    )
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+    )
+
+    key_breakdown = result.results[0].breakdown.endpoints["/v1/chat/completions"].api_key_breakdown
+    assert {key: data.metadata.key_exists for key, data in key_breakdown.items()} == {
+        "active-key": True,
+        "deleted-key": False,
+        "session-key": False,
+    }
+    assert key_breakdown["deleted-key"].metadata.key_alias == "deleted"
 
 
 def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4"):
@@ -1234,38 +1315,6 @@ class TestBuildAggregatedSqlQuery:
         assert "model = $4" in sql
         assert "api_key = $5" in sql
 
-    def test_model_group_rollups_fall_back_to_model_name(self):
-        """Aggregated model_groups rollups must fall back to model for group-less rows.
-
-        The (date, model_group) grouping level cannot recover the model column
-        after the fact (it is rolled up), so the fallback has to happen in SQL;
-        without it, group-less rows silently vanish from the model_groups
-        breakdown that the usage UI now renders by default. Group-less rows are
-        stored as empty strings, not NULL (spend_tracking_utils defaults
-        model_group to ""), so a plain COALESCE is not enough: the fallback must
-        be NULLIF-wrapped to catch both
-        """
-        sql, _ = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id=None,
-            start_date="2026-07-01",
-            end_date="2026-07-01",
-            model=None,
-            api_key=None,
-        )
-
-        normalized = " ".join(sql.split())
-        fallback = "COALESCE(NULLIF(model_group, ''), model)"
-        assert f"{fallback} AS model_group" in normalized
-        assert (
-            f"GROUPING(date, api_key, model, {fallback}, "
-            "custom_llm_provider, mcp_namespaced_tool_name, endpoint) AS group_level" in normalized
-        )
-        assert f"(date, {fallback}), (date, {fallback}, api_key)," in normalized
-        assert "(date, model_group)" not in normalized
-        assert "COALESCE(model_group, model)" not in normalized
-
 
 class TestAggregatedEmptyEntityFilter:
     _BUILDERS: Final = (_build_aggregated_sql_query, _build_entity_rollup_sql_query)
@@ -1383,6 +1432,246 @@ async def test_get_daily_activity_aggregated_empty_result_set():
     assert result.metadata.total_cache_read_input_tokens == 0
     assert result.metadata.total_cache_creation_input_tokens == 0
     assert result.metadata.total_compression_saved_tokens == 0
+
+
+_aggregated_postgresql_proc: Final = factories.postgresql_proc()
+_aggregated_postgresql: Final = factories.postgresql("_aggregated_postgresql_proc")
+
+_DAILY_USER_SPEND_DDL: Final = """
+    CREATE TABLE "LiteLLM_DailyUserSpend" (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        date TEXT NOT NULL,
+        api_key TEXT NOT NULL,
+        model TEXT,
+        model_group TEXT,
+        custom_llm_provider TEXT,
+        mcp_namespaced_tool_name TEXT,
+        endpoint TEXT,
+        prompt_tokens BIGINT DEFAULT 0,
+        completion_tokens BIGINT DEFAULT 0,
+        cache_read_input_tokens BIGINT DEFAULT 0,
+        cache_creation_input_tokens BIGINT DEFAULT 0,
+        compression_saved_tokens BIGINT DEFAULT 0,
+        compression_savings_spend DOUBLE PRECISION DEFAULT 0,
+        prompt_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+        gateway_injected_caching_savings_spend DOUBLE PRECISION DEFAULT 0,
+        autorouter_savings_spend DOUBLE PRECISION DEFAULT 0,
+        spend DOUBLE PRECISION DEFAULT 0,
+        api_requests BIGINT DEFAULT 0,
+        successful_requests BIGINT DEFAULT 0,
+        failed_requests BIGINT DEFAULT 0,
+        total_response_time_ms BIGINT DEFAULT 0,
+        timed_requests BIGINT DEFAULT 0
+    )
+"""
+
+
+def _seed_daily_user_spend(conn: psycopg.Connection, rows: Sequence[tuple[object, ...]]) -> None:
+    with conn.cursor() as cur:
+        cur.execute(_DAILY_USER_SPEND_DDL)
+        cur.executemany(
+            """
+            INSERT INTO "LiteLLM_DailyUserSpend"
+                (id, user_id, date, api_key, model, model_group, custom_llm_provider,
+                 endpoint, prompt_tokens, spend, api_requests, successful_requests)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            rows,
+        )
+    conn.commit()
+
+
+def _psycopg_query_raw(conn: psycopg.Connection, row_counts: list[int]):
+    """Run the proxy's $N-parameterized SQL through psycopg, recording each result size."""
+
+    async def query_raw(sql: str, *params: str) -> list[dict[str, object]]:
+        converted: Final = re.sub(r"\$(\d+)", r"%(p\1)s", sql)
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                converted,  # pyright: ignore[reportArgumentType]  # psycopg stubs want a literal-typed query
+                {f"p{i}": v for i, v in enumerate(params, start=1)},
+            )
+            rows: Final = cur.fetchall()
+        row_counts.append(len(rows))
+        return rows
+
+    return query_raw
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_returns_every_api_key(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    n_keys: Final = 105
+    key_rows: Final = [
+        (
+            f"row-{i:03d}",
+            f"user-{i:03d}",
+            "2026-06-01",
+            f"key-{i:03d}",
+            "gpt-5",
+            "",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            6.0 if i == 4 else float(i + 1),
+            1,
+            1,
+        )
+        for i in range(n_keys)
+    ]
+    sentinel_row: Final = (
+        "row-ptu",
+        None,
+        "2026-06-01",
+        PTU_SENTINEL_API_KEY,
+        "gpt-5",
+        "",
+        "azure",
+        None,
+        0,
+        1000.0,
+        0,
+        0,
+    )
+    _seed_daily_user_spend(_aggregated_postgresql, [*key_rows, sentinel_row])
+    key_spend: Final = sum(6.0 if i == 4 else float(i + 1) for i in range(n_keys))
+    expected_api_keys: Final = {f"key-{i:03d}" for i in range(n_keys)}
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, [])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        model=None,
+        api_key=None,
+    )
+
+    assert result.metadata.total_spend == pytest.approx(key_spend + 1000.0)
+    assert result.metadata.total_api_requests == 105
+    day: Final = result.results[0]
+    assert day.metrics.spend == pytest.approx(key_spend + 1000.0)
+    assert set(day.breakdown.api_keys) == expected_api_keys
+    assert PTU_SENTINEL_API_KEY not in day.breakdown.api_keys
+    assert day.breakdown.models["gpt-5"].metrics.spend == pytest.approx(key_spend + 1000.0)
+    assert set(day.breakdown.models["gpt-5"].api_key_breakdown) == expected_api_keys
+    assert day.breakdown.providers["openai"].metrics.spend == pytest.approx(key_spend)
+    assert set(day.breakdown.providers["openai"].api_key_breakdown) == expected_api_keys
+    assert day.breakdown.endpoints["/v1/chat/completions"].metrics.api_requests == 105
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_results(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """An explicit api_key filter must scope the results to that key alone."""
+    rows: Final = [
+        (
+            f"row-{i}",
+            f"user-{i}",
+            "2026-06-01",
+            f"key-{i}",
+            "gpt-5",
+            "",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            float(i + 1),
+            1,
+            1,
+        )
+        for i in range(3)
+    ]
+    _seed_daily_user_spend(_aggregated_postgresql, rows)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, [])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        model=None,
+        api_key="key-1",
+    )
+
+    assert result.metadata.total_spend == 2.0
+    day: Final = result.results[0]
+    assert set(day.breakdown.api_keys) == {"key-1"}
+    assert day.breakdown.api_keys["key-1"].metrics.spend == 2.0
+    assert day.breakdown.models["gpt-5"].metrics.spend == 2.0
+    assert set(day.breakdown.models["gpt-5"].api_key_breakdown) == {"key-1"}
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_model_group_rollups_fall_back_to_model_name(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """Rows stored with an empty or NULL model_group must land in the model_groups
+    breakdown under their model name instead of vanishing from the usage UI."""
+    rows: Final = [
+        (
+            "row-0",
+            "user-0",
+            "2026-06-01",
+            "key-0",
+            "gpt-5",
+            "gpt-5-eu",
+            "openai",
+            "/v1/chat/completions",
+            10,
+            7.0,
+            1,
+            1,
+        ),
+        ("row-1", "user-1", "2026-06-01", "key-1", "gpt-5", "", "openai", "/v1/chat/completions", 10, 3.0, 1, 1),
+        ("row-2", "user-2", "2026-06-01", "key-2", "claude-x", None, "anthropic", "/v1/messages", 10, 2.0, 1, 1),
+    ]
+    _seed_daily_user_spend(_aggregated_postgresql, rows)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = _psycopg_query_raw(_aggregated_postgresql, [])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        model=None,
+        api_key=None,
+    )
+
+    breakdown: Final = result.results[0].breakdown
+    assert set(breakdown.model_groups) == {"gpt-5-eu", "gpt-5", "claude-x"}
+    assert breakdown.model_groups["gpt-5-eu"].metrics.spend == 7.0
+    assert breakdown.model_groups["gpt-5"].metrics.spend == 3.0
+    assert breakdown.model_groups["claude-x"].metrics.spend == 2.0
+    assert set(breakdown.model_groups["gpt-5"].api_key_breakdown) == {"key-1"}
+    assert set(breakdown.models) == {"gpt-5", "claude-x"}
+    assert breakdown.models["gpt-5"].metrics.spend == 10.0
 
 
 def _no_spend_record():
@@ -2321,3 +2610,20 @@ def test_spend_logs_window_is_none_when_no_date_parses():
     from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
 
     assert _spend_logs_window({"garbage", ""}) is None
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_resolves_cli_session_keys_from_the_key_itself():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(side_effect=AssertionError("no reverse-hash or spend-log scan expected"))
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com", teams=["team-a"])]
+    )
+
+    result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={"cli-session-alice"})
+
+    assert result["cli-session-alice"]["key_alias"] == "cli-session-alice"
+    assert result["cli-session-alice"]["user_email"] == "alice@example.com"
+    assert result["cli-session-alice"]["team_id"] == "team-a"

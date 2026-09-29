@@ -15,6 +15,7 @@ from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -25,6 +26,7 @@ from litellm.proxy.auth.auth_utils import (
     mark_invalid_virtual_key_error,
     normalize_request_route,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -51,6 +53,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
         )
+    if isinstance(e, ModelAccessDeniedHTTPException):
+        return ModelAccessDeniedProxyException(
+            message=str(e.detail),
+            internal_message=e.internal_message,
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=e.status_code,
+        )
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -61,12 +71,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     if isinstance(e, ProxyException):
         return e
     if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
-        return ProxyException(
-            message=PrismaDBExceptionHandler.database_unavailable_message(e),
-            type=ProxyErrorTypes.no_db_connection,
-            param="None",
-            code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        )
+        return PrismaDBExceptionHandler.service_unavailable_proxy_exception(e)
     return ProxyException(
         message="Authentication Error, " + str(e),
         type=ProxyErrorTypes.auth_error,
@@ -97,6 +102,25 @@ def _with_client_context(
     if not stamped:
         return request_data
     return {**request_data, key: {**base, **stamped}}  # mutable-ok: logging needs dicts
+
+
+def _escape_control_chars(value: str) -> str:
+    return "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode("ascii") for ch in value)
+
+
+def _identity_log_suffix(resolved_identity: UserAPIKeyAuth | None) -> str:
+    """Names the owner of the rejected key so the failure log line alone identifies the caller."""
+    if resolved_identity is None or not litellm.log_auth_failure_key_identity:
+        return ""
+    fields: Final = (
+        ("key_alias", resolved_identity.key_alias),
+        ("user_id", resolved_identity.user_id),
+        ("user_email", resolved_identity.user_email),
+        ("team_id", resolved_identity.team_id),
+        ("team_alias", resolved_identity.team_alias),
+    )
+    known: Final = " ".join(f"{name}={_escape_control_chars(value)}" for name, value in fields if value)
+    return f"\nKey Identity: {known}" if known else ""
 
 
 class UserAPIKeyAuthExceptionHandler:
@@ -171,9 +195,10 @@ class UserAPIKeyAuthExceptionHandler:
             logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
             logger.log(
                 logging.WARNING if is_quiet_log else logging.ERROR,
-                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
+                "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s%s",
                 e,
                 requester_ip,
+                _identity_log_suffix(resolved_identity),
                 exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
                 extra=log_extra,
             )

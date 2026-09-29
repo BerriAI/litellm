@@ -48,6 +48,7 @@ import BudgetDurationDropdown, {
 } from "./common_components/budget_duration_dropdown";
 import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
 import SkillSelector from "./skills/SkillSelector";
@@ -271,6 +272,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
@@ -348,6 +350,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setSearchToolSettingsOpen(false);
     setLoggingSettings([]);
     setModelAliases({});
+    setModelMaxBudget({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
   };
@@ -523,6 +526,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         // Add model_aliases if any are defined
         if (Object.keys(modelAliases).length > 0) {
           formValues.model_aliases = modelAliases;
+        }
+
+        if (Object.keys(modelMaxBudget).length > 0) {
+          formValues.model_max_budget = modelMaxBudget;
         }
 
         // Add router_settings if any are defined
@@ -813,6 +820,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       />
                     )}
                   </FormField>
+                  <ModelMaxBudgetField
+                    key={`model-max-budget-${routerSettingsKey}`}
+                    premiumUser={premiumUser}
+                    value={modelMaxBudget}
+                    onChange={setModelMaxBudget}
+                    availableModels={userModels}
+                    hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
+                  />
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
@@ -968,29 +983,31 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                             />
                           )}
                         </FormField>
-                        <FormField
-                          control={form.control}
-                          name="disable_global_guardrails"
-                          className="mt-4"
-                          label={labelWithHint(
-                            "Disable Global Guardrails",
-                            "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
-                          )}
-                          description={
-                            premiumUser
-                              ? "Bypass global guardrails for this team"
-                              : "Premium feature - Upgrade to disable global guardrails by team"
-                          }
-                        >
-                          {({ id, value, onChange }) => (
-                            <Switch
-                              id={id}
-                              disabled={!premiumUser}
-                              checked={value === true}
-                              onCheckedChange={onChange}
-                            />
-                          )}
-                        </FormField>
+                        {isProxyAdminRole(userRole || "") && (
+                          <FormField
+                            control={form.control}
+                            name="disable_global_guardrails"
+                            className="mt-4"
+                            label={labelWithHint(
+                              "Disable Global Guardrails",
+                              "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
+                            )}
+                            description={
+                              premiumUser
+                                ? "Bypass global guardrails for this team"
+                                : "Premium feature - Upgrade to disable global guardrails by team"
+                            }
+                          >
+                            {({ id, value, onChange }) => (
+                              <Switch
+                                id={id}
+                                disabled={!premiumUser}
+                                checked={value === true}
+                                onCheckedChange={onChange}
+                              />
+                            )}
+                          </FormField>
+                        )}
                         {canViewPolicies && (
                           <FormField
                             control={form.control}

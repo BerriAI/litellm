@@ -12,12 +12,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
-    attach_user_emails,
+    attach_user_details,
+    recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -126,6 +128,7 @@ class _KeyMetadataDict(TypedDict, total=False):
     team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+    key_exists: ReadOnly[bool]
 
 
 def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
@@ -135,6 +138,7 @@ def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str
         team_id=meta.get("team_id"),
         user_id=meta.get("user_id"),
         user_email=meta.get("user_email"),
+        key_exists=meta.get("key_exists", False),
     )
 
 
@@ -483,6 +487,7 @@ async def get_api_key_metadata(
             "key_alias": k.key_alias,
             "team_id": k.team_id,
             "user_id": getattr(k, "user_id", None),
+            "key_exists": True,
         }
         for k in key_records
     }
@@ -512,11 +517,12 @@ async def get_api_key_metadata(
                 e,
             )
 
-    still_missing: Final = api_keys - frozenset(result)
+    from_session_keys: Final = await recover_cli_session_key_metadata(prisma_client, api_keys - frozenset(result))
+    still_missing: Final = api_keys - frozenset(result) - frozenset(from_session_keys)
     from_reverse_hash: Final = (
         await recover_double_hashed_key_metadata(prisma_client, still_missing) if still_missing else _EMPTY_KEY_METADATA
     )
-    after_token_recovery: Final = MappingProxyType({**result, **from_reverse_hash})
+    after_token_recovery: Final = MappingProxyType({**result, **from_session_keys, **from_reverse_hash})
     unresolved: Final = api_keys - frozenset(after_token_recovery)
     from_spend_logs: Final = (
         await recover_key_metadata_from_spend_logs(prisma_client, unresolved, spend_logs_window)
@@ -524,7 +530,7 @@ async def get_api_key_metadata(
         else _EMPTY_KEY_METADATA
     )
     combined: Final = MappingProxyType({**after_token_recovery, **from_spend_logs})
-    return await attach_user_emails(prisma_client, combined)
+    return await attach_user_details(prisma_client, combined)
 
 
 def _adjust_dates_for_timezone(
@@ -1203,8 +1209,10 @@ async def get_daily_activity(
             include_current_utc_day=include_current_utc_day,
         )
 
+        spend_table: Final[TableActions[DailySpendRecord]] = getattr(prisma_client.db, table_name)
+
         # Get total count for pagination
-        total_count: Final[int] = await getattr(prisma_client.db, table_name).count(where=where_conditions)
+        total_count: Final[int] = await spend_table.count(where=where_conditions)
 
         # Fetch paginated results.
         # ``date`` alone is not a unique sort key -- a busy tenant has many
@@ -1216,7 +1224,7 @@ async def get_daily_activity(
         # total. Adding ``id`` (the row's UUID primary key, present on both
         # LiteLLM_DailyUserSpend and LiteLLM_DailyTeamSpend) as a tiebreaker
         # gives every page a stable cursor (#30164).
-        daily_spend_data: Final[Sequence[DailySpendRecord]] = await getattr(prisma_client.db, table_name).find_many(
+        daily_spend_data: Final[Sequence[DailySpendRecord]] = await spend_table.find_many(
             where=where_conditions,
             order=[
                 {"date": "desc"},

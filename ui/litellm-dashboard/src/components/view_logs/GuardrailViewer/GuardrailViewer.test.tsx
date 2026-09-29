@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor, within } from "../../../../tests/test-utils";
 import {
   GuardrailInformation,
   makeBedrockResponse,
@@ -19,6 +19,42 @@ const skippedPreCall: Partial<GuardrailInformation> = {
   guardrail_status: "not_run",
   guardrail_mode: "pre_call",
   guardrail_response: "no scannable content after message scoping",
+  start_time: null,
+  end_time: null,
+  duration: null,
+};
+
+const untimedPreCall: Partial<GuardrailInformation> = {
+  guardrail_name: "conduct",
+  guardrail_status: "success",
+  guardrail_mode: "pre_call",
+  start_time: null,
+  end_time: null,
+  duration: null,
+};
+
+const timedPreCall: Partial<GuardrailInformation> = {
+  guardrail_name: "timed-pre-rail",
+  guardrail_status: "success",
+  guardrail_mode: "pre_call",
+  start_time: 1_700_000_000,
+  end_time: 1_700_000_000.1,
+  duration: 0.1,
+};
+
+const latePreCall: Partial<GuardrailInformation> = {
+  guardrail_name: "late-pre-rail",
+  guardrail_status: "success",
+  guardrail_mode: "pre_call",
+  start_time: 1_700_000_500,
+  end_time: 1_700_000_500.1,
+  duration: 0.1,
+};
+
+const untimedPostCall: Partial<GuardrailInformation> = {
+  guardrail_name: "untimed-post-rail",
+  guardrail_status: "success",
+  guardrail_mode: "post_call",
   start_time: null,
   end_time: null,
   duration: null,
@@ -96,6 +132,67 @@ describe("GuardrailViewer", () => {
     expect(screen.getByText("Response returned").parentElement).toHaveTextContent("T+251ms");
     expect(screen.queryByText(/Pre-call guardrail: skipped-rail/)).not.toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  it("keeps a guardrail that ran without any timing on the lifecycle", () => {
+    renderWithProviders(<GuardrailViewer data={makeGuardrailInformation(untimedPreCall)} />);
+
+    expect(screen.getByText("Request received")).toBeInTheDocument();
+    expect(screen.getByText(/Pre-call guardrail: conduct/)).toBeInTheDocument();
+    expect(screen.getByText("LLM call")).toBeInTheDocument();
+    expect(screen.getByText("Response returned")).toBeInTheDocument();
+    expect(screen.queryByText(/^T\+/)).not.toBeInTheDocument();
+  });
+
+  it("keeps an untimed guardrail ahead of a timed one recorded after it in the same phase", () => {
+    const untimed = makeGuardrailInformation(untimedPreCall);
+    const timedPre = makeGuardrailInformation(timedPreCall);
+    renderWithProviders(<GuardrailViewer data={[untimed, timedPre]} />);
+
+    const rows = screen.getAllByTestId("lifecycle-row");
+    const rowIndex = (label: RegExp): number => rows.findIndex((r) => within(r).queryByText(label) !== null);
+    const untimedIndex = rowIndex(/Pre-call guardrail: conduct/);
+    const timedIndex = rowIndex(/Pre-call guardrail: timed-pre-rail/);
+
+    expect(untimedIndex).toBeGreaterThanOrEqual(0);
+    expect(timedIndex).toBeGreaterThanOrEqual(0);
+    expect(untimedIndex).toBeLessThan(timedIndex);
+  });
+
+  it("orders each phase on its own clock when a later pre-call outlives an earlier post-call", () => {
+    const latePre = makeGuardrailInformation(latePreCall);
+    const untimedPost = makeGuardrailInformation(untimedPostCall);
+    const earlyPost = makeGuardrailInformation(ranPostCall);
+    renderWithProviders(<GuardrailViewer data={[latePre, untimedPost, earlyPost]} />);
+
+    const rows = screen.getAllByTestId("lifecycle-row");
+    const rowIndex = (label: RegExp): number => rows.findIndex((r) => within(r).queryByText(label) !== null);
+    const untimedIndex = rowIndex(/Post-call guardrail: untimed-post-rail/);
+    const earlyIndex = rowIndex(/Post-call guardrail: ran-rail/);
+
+    expect(untimedIndex).toBeGreaterThanOrEqual(0);
+    expect(earlyIndex).toBeGreaterThanOrEqual(0);
+    expect(untimedIndex).toBeLessThan(earlyIndex);
+  });
+
+  it("anchors offsets on the timed entries and gives the untimed one no fabricated offset", () => {
+    const untimed = makeGuardrailInformation(untimedPreCall);
+    const ran = makeGuardrailInformation(ranPostCall);
+    renderWithProviders(<GuardrailViewer data={[untimed, ran]} />);
+
+    const lifecycleRow = (label: string | RegExp): HTMLElement => {
+      const row = screen.getAllByTestId("lifecycle-row").find((r) => within(r).queryByText(label) !== null);
+      if (row === undefined) throw new Error(`no lifecycle row labelled ${label}`);
+      return row;
+    };
+
+    expect(within(lifecycleRow("Request received")).getByText("T+0ms")).toBeInTheDocument();
+    expect(within(lifecycleRow(/Post-call guardrail: ran-rail/)).getByText("T+250ms")).toBeInTheDocument();
+    expect(within(lifecycleRow("Response returned")).getByText("T+251ms")).toBeInTheDocument();
+
+    const untimedRow = within(lifecycleRow(/Pre-call guardrail: conduct/));
+    expect(untimedRow.getByText("—")).toBeInTheDocument();
+    expect(untimedRow.queryByText(/^T\+/)).not.toBeInTheDocument();
   });
 
   it("calculates and displays masked entity totals", async () => {

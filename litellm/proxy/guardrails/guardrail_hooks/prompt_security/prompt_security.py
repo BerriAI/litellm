@@ -38,6 +38,11 @@ class PromptSecurityGuardrailMissingSecrets(Exception):
     pass
 
 
+def _modified_or_original(text: str, verdict: "_ProtectVerdict") -> str:
+    modified_text: Final = verdict.get("modified_text") if verdict.get("action") == "modify" else None
+    return text if modified_text is None else modified_text
+
+
 def _inputs_with_structured_messages(
     inputs: GenericGuardrailAPIInputs, rewritten_messages: Sequence[AllMessageValues] | None
 ) -> GenericGuardrailAPIInputs:
@@ -119,6 +124,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         user: str | None = None,
         system_prompt: str | None = None,
         check_tool_results: bool | None = None,
+        streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         file_sanitization_timeout: float = _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS,
         file_sanitization_fail_open: bool | None = None,
         block_on_file_modify: bool | None = None,
@@ -147,6 +153,10 @@ class PromptSecurityGuardrail(CustomGuardrail):
                 "or pass them as parameters to the guardrail in the config file"
             )
             raise PromptSecurityGuardrailMissingSecrets(msg)
+
+        self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
+            "block_only" if streaming_transform_mode is None else streaming_transform_mode
+        )
 
         # Configuration for file sanitization
         self.max_poll_attempts = 30  # Maximum number of polling attempts
@@ -342,16 +352,46 @@ class PromptSecurityGuardrail(CustomGuardrail):
         texts: list[str],
         user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
-        """Handle response-side guardrail checks."""
+        """Handle response-side guardrail checks, one protect verdict per text.
+
+        Prompt Security rewrites a single string, so texts from several choices must be scanned separately
+        or one ``modified_text`` cannot be mapped back onto the choice it came from. It also returns no span
+        offsets, so on a stream every text is held back in full until the final verdict: a value the vendor
+        redacts later may start anywhere in text that looked clean so far, and streamed bytes cannot be recalled.
+        """
         if not texts:
             return inputs
 
-        # Combine all texts for response checking
-        combined_text: Final = "\n".join(texts)
+        verdicts: Final = await asyncio.gather(
+            *(self._protect_response_text(text, user_api_key_alias) for text in texts)
+        )
+        violations: Final = tuple(
+            violation
+            for verdict in verdicts
+            if verdict.get("action") == "block"
+            for violation in verdict.get("violations", ())
+        )
+        if any(verdict.get("action") == "block" for verdict in verdicts):
+            raise HTTPException(
+                status_code=400,
+                detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
+            )
+        returned_texts: Final = [  # mutable-ok: GenericGuardrailAPIInputs.texts is list[str]
+            _modified_or_original(text, verdict) for text, verdict in zip(texts, verdicts, strict=True)
+        ]
+        patched: Final[GenericGuardrailAPIInputs] = {
+            **inputs,
+            "texts": returned_texts,
+            "stream_holdback_chars": [  # mutable-ok: GenericGuardrailAPIInputs.stream_holdback_chars is list[int]
+                len(text) for text in returned_texts
+            ],
+        }
+        return patched
 
+    async def _protect_response_text(self, text: str, user_api_key_alias: str | None) -> _ProtectVerdict:
         headers: Final = self._build_headers(user_api_key_alias)
         payload: Final = {
-            "response": combined_text,
+            "response": text,
             "user": user_api_key_alias or self.user,
             "system_prompt": self.system_prompt,
         }
@@ -360,7 +400,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             method="POST",
             url=f"{self.api_base}/api/protect",
             headers=headers,
-            payload={"response_length": len(combined_text)},
+            payload={"response_length": len(text)},
         )
 
         response: Final = await self.async_handler.post(
@@ -377,26 +417,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
             payload={"result": res.get("result")},
         )
 
-        result: Final = res.get("result", {}).get("response", {})
-        if result is None:
-            return inputs
-
-        action: Final = result.get("action")
-        violations: Final = result.get("violations", [])
-
-        if action == "block":
-            raise HTTPException(
-                status_code=400,
-                detail="Blocked by Prompt Security, Violations: " + ", ".join(violations),
-            )
-        elif action == "modify":
-            modified_text: Final = result.get("modified_text")
-            if modified_text is not None:
-                # If we combined multiple texts, return the modified version as single text
-                # The framework will handle distributing it back
-                inputs["texts"] = [modified_text]
-
-        return inputs
+        verdict: Final = res.get("result", {}).get("response", {})
+        return {} if verdict is None else verdict
 
     def _extract_texts_from_messages(self, messages: Sequence[Mapping[str, object]]) -> list[str]:
         return [text for message in messages for text in message_slot_texts(message)]

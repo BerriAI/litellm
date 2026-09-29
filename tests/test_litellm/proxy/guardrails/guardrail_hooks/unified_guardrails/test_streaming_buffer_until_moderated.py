@@ -11,7 +11,7 @@ released unchanged after moderation passes.
 """
 
 import json
-from typing import Any, List, Literal, Optional
+from typing import Any, AsyncGenerator, List, Literal, Optional
 
 import pytest
 
@@ -19,14 +19,25 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
+    _is_redundant_scan,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Delta,
+    Function,
+    FunctionCall,
+    GenericGuardrailAPIInputs,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 BLOCK_MESSAGE = "Blocked by policy: this response was withheld."
 ORIGINAL_MARKER = "ORIGINAL-SECRET-ANSWER"
+TOOL_ARGUMENTS_MARKER = "TOOL-ARGS-SECRET"
 
 
 class _BlockingGuardrail(CustomGuardrail):
@@ -57,6 +68,85 @@ class _PassingGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+class _CountingPassingGuardrail(_PassingGuardrail):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.scan_count = 0
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        return inputs
+
+
+class _ToolCallRecordingGuardrail(_CountingPassingGuardrail):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tool_call_scan_indexes: List[int] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        if inputs.get("tool_calls"):
+            self.tool_call_scan_indexes.append(self.scan_count)
+        return inputs
+
+
+class _SecondScanBlockingGuardrail(_CountingPassingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        if self.scan_count == 2:
+            raise ModifyResponseException(
+                message=BLOCK_MESSAGE,
+                model="gpt-4",
+                request_data=request_data,
+                guardrail_name=self.guardrail_name,
+            )
+        return inputs
+
+
+class _MarkerBlockingGuardrail(_CountingPassingGuardrail):
+    """Blocks as soon as the inspected input field (texts or tool_calls) carries the marker."""
+
+    def __init__(self, *args, marker: str, field: Literal["texts", "tool_calls"] = "texts", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.marker = marker
+        self.field = field
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_count += 1
+        if self.marker in json.dumps(inputs.get(self.field, [])):
+            raise ModifyResponseException(
+                message=BLOCK_MESSAGE,
+                model="gpt-4o",
+                request_data=request_data,
+                guardrail_name=self.guardrail_name,
+            )
         return inputs
 
 
@@ -115,6 +205,212 @@ def _decode(chunks: List[Any]) -> str:
     return "".join(c.decode() if isinstance(c, bytes) else str(c) for c in chunks)
 
 
+def _chat_chunk(content: str = "", finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-windowed",
+        created=1724900000,
+        model="gpt-4",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content=content),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def _tool_call_chunk(
+    arguments: str, finish_reason: str | None = None, legacy_function_call: bool = False
+) -> ModelResponseStream:
+    delta = (
+        Delta(role="assistant", content=None, function_call=FunctionCall(name="run_shell", arguments=arguments))
+        if legacy_function_call
+        else Delta(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call_1",
+                    type="function",
+                    index=0,
+                    function=Function(name="run_shell", arguments=arguments),
+                )
+            ],
+        )
+    )
+    return ModelResponseStream(
+        id="chatcmpl-windowed",
+        created=1724900000,
+        model="gpt-4",
+        choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+    )
+
+
+async def _windowed_chat_stream(
+    yielded_count: List[int],
+    collected: List[Any],
+    content_chunks: List[str],
+    tool_argument_chunks: List[str] | None = None,
+    legacy_function_call: bool = False,
+) -> AsyncGenerator[ModelResponseStream, None]:
+    for content in content_chunks:
+        yielded_count.append(len(collected))
+        yield _chat_chunk(content)
+    for arguments in tool_argument_chunks or []:
+        yielded_count.append(len(collected))
+        yield _tool_call_chunk(arguments, legacy_function_call=legacy_function_call)
+    yielded_count.append(len(collected))
+    yield _chat_chunk(finish_reason="tool_calls" if tool_argument_chunks else "stop")
+
+
+def _tool_argument_text(chunks: List[Any]) -> str:
+    return "".join(
+        tool_call.function.arguments or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+        for tool_call in choice.delta.tool_calls or []
+    )
+
+
+def _function_call_argument_text(chunks: list[Any]) -> str:
+    return "".join(
+        choice.delta.function_call.arguments or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+        if choice.delta.function_call is not None
+    )
+
+
+async def _run_windowed(
+    guardrail: CustomGuardrail,
+    content_chunks: List[str],
+    end_of_stream_only: bool = False,
+    tool_argument_chunks: List[str] | None = None,
+    legacy_function_call: bool = False,
+) -> tuple[List[Any], List[int]]:
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_end_of_stream_only = end_of_stream_only
+    guardrail.streaming_sampling_rate = 2
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/chat/completions")
+    request_data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: List[Any] = []
+    yielded_count: List[int] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_windowed_chat_stream(
+            yielded_count, collected, content_chunks, tool_argument_chunks, legacy_function_call
+        ),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    return collected, yielded_count
+
+
+def _responses_message_stream_events(text_chunks: List[str]) -> List[dict]:
+    message = {"type": "message", "id": "msg_1", "status": "completed", "role": "assistant"}
+    content = [{"type": "output_text", "text": "".join(text_chunks), "annotations": []}]
+    return [
+        {"type": "response.output_item.added", "output_index": 0, "item": {**message, "content": []}},
+        *(
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": text,
+            }
+            for text in text_chunks
+        ),
+        {"type": "response.output_item.done", "output_index": 0, "item": {**message, "content": content}},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "model": "gpt-4o",
+                "status": "completed",
+                "output": [{**message, "content": content}],
+            },
+        },
+    ]
+
+
+def _responses_truncated_function_call_events(text: str, argument_chunks: List[str]) -> List[dict]:
+    message = {"type": "message", "id": "msg_1", "status": "completed", "role": "assistant"}
+    content = [{"type": "output_text", "text": text, "annotations": []}]
+    function_call = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "run_shell"}
+    return [
+        {"type": "response.output_item.added", "output_index": 0, "item": {**message, "content": []}},
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        },
+        {"type": "response.output_item.added", "output_index": 1, "item": {**function_call, "arguments": ""}},
+        *(
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": arguments}
+            for arguments in argument_chunks
+        ),
+        {
+            "type": "response.incomplete",
+            "response": {
+                "id": "resp_1",
+                "model": "gpt-4o",
+                "status": "incomplete",
+                "output": [
+                    {**message, "content": content},
+                    {**function_call, "arguments": "".join(argument_chunks), "status": "incomplete"},
+                ],
+            },
+        },
+    ]
+
+
+async def _replay(events: List[dict]) -> AsyncGenerator[dict, None]:
+    for event in events:
+        yield event
+
+
+async def _run_windowed_responses(guardrail: CustomGuardrail, events: List[dict]) -> str:
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_sampling_rate = 2
+    unified = UnifiedLLMGuardrails()
+    user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/responses")
+    request_data = {
+        "input": "hi",
+        "guardrail_to_apply": guardrail,
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
+    }
+    collected: List[Any] = []
+    async for chunk in unified.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_replay(events),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    return json.dumps([chunk if isinstance(chunk, dict) else str(chunk) for chunk in collected])
+
+
+def _chat_text(chunks: List[Any]) -> str:
+    return "".join(
+        choice.delta.content or ""
+        for chunk in chunks
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+    )
+
+
 async def _run(guardrail: CustomGuardrail) -> str:
     # Rubrik's real config: end-of-stream-only moderation. Without buffering
     # this releases every chunk before moderation runs (content leaks on
@@ -157,6 +453,110 @@ async def test_buffered_clean_releases_all_content():
         raw.rstrip().endswith('event: message_stop\ndata: {"type": "message_stop"}'.rstrip()) or "message_stop" in raw
     )
     assert BLOCK_MESSAGE not in raw
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_releases_after_each_passing_scan():
+    guardrail = _CountingPassingGuardrail(guardrail_name="windowed-pass", event_hook="post_call")
+    content_chunks = ["one ", "two ", "three ", "four ", "five ", "six "]
+
+    collected, yielded_count = await _run_windowed(guardrail, content_chunks)
+
+    assert yielded_count[2] >= 2
+    assert yielded_count == [0, 0, 2, 2, 4, 4, 6]
+    assert _chat_text(collected) == "".join(content_chunks)
+    assert guardrail.scan_count > 1
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_drops_blocked_window():
+    guardrail = _SecondScanBlockingGuardrail(guardrail_name="windowed-block", event_hook="post_call")
+    content_chunks = ["one ", "two ", "MARKER ", "four ", "five ", "six "]
+
+    collected, _ = await _run_windowed(guardrail, content_chunks)
+    raw = _decode(collected)
+
+    assert _chat_text(collected) == "one two "
+    assert "MARKER" not in raw
+    assert BLOCK_MESSAGE in raw
+    assert '"error"' not in raw
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_holds_tool_call_windows_until_end_of_stream_scan():
+    guardrail = _ToolCallRecordingGuardrail(guardrail_name="windowed-tools", event_hook="post_call")
+    content_chunks = ["one ", "two ", "three "]
+    tool_argument_chunks = ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}']
+
+    collected, yielded_count = await _run_windowed(guardrail, content_chunks, tool_argument_chunks=tool_argument_chunks)
+
+    assert yielded_count == [0, 0, 2, 2, 2, 2, 2]
+    assert _chat_text(collected) == "".join(content_chunks)
+    assert _tool_argument_text(collected) == "".join(tool_argument_chunks)
+    assert guardrail.tool_call_scan_indexes == [guardrail.scan_count]
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_holds_legacy_function_call_windows_until_end_of_stream():
+    guardrail = _PassingGuardrail(guardrail_name="windowed-functions", event_hook="post_call")
+    content_chunks = ["one ", "two ", "three "]
+    function_argument_chunks = ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}']
+
+    collected, yielded_count = await _run_windowed(
+        guardrail, content_chunks, tool_argument_chunks=function_argument_chunks, legacy_function_call=True
+    )
+
+    assert yielded_count == [0, 0, 2, 2, 2, 2, 2]
+    assert _chat_text(collected) == "".join(content_chunks)
+    assert _function_call_argument_text(collected) == "".join(function_argument_chunks)
+
+
+def test_tool_call_only_scan_key_is_not_skipped_as_empty():
+    assert _is_redundant_scan(StreamingScanKey(texts=("",)), None) is True
+    assert _is_redundant_scan(StreamingScanKey(texts=("",), tool_calls=("run_shell:{}",)), None) is False
+
+
+@pytest.mark.asyncio
+async def test_windowed_responses_output_item_done_round_keeps_text_window_withheld():
+    guardrail = _MarkerBlockingGuardrail(
+        guardrail_name="windowed-responses", event_hook="post_call", marker=ORIGINAL_MARKER
+    )
+    events = _responses_message_stream_events(["one ", f"{ORIGINAL_MARKER} "])
+
+    raw = await _run_windowed_responses(guardrail, events)
+
+    assert ORIGINAL_MARKER not in raw, f"unscanned window leaked: {raw!r}"
+    assert BLOCK_MESSAGE in raw
+    assert guardrail.scan_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_windowed_responses_incomplete_stream_scans_tool_call_before_release():
+    guardrail = _MarkerBlockingGuardrail(
+        guardrail_name="windowed-responses-tools",
+        event_hook="post_call",
+        marker=TOOL_ARGUMENTS_MARKER,
+        field="tool_calls",
+    )
+    events = _responses_truncated_function_call_events("hi ", ['{"cmd": "', TOOL_ARGUMENTS_MARKER, '"}'])
+
+    raw = await _run_windowed_responses(guardrail, events)
+
+    assert '"hi "' in raw
+    assert TOOL_ARGUMENTS_MARKER not in raw, f"unscanned tool call leaked: {raw!r}"
+    assert BLOCK_MESSAGE in raw
+
+
+@pytest.mark.asyncio
+async def test_windowed_buffer_with_explicit_end_of_stream_only_stays_fully_buffered():
+    guardrail = _CountingPassingGuardrail(guardrail_name="windowed-eos", event_hook="post_call")
+    content_chunks = ["one ", "two ", "three ", "four ", "five ", "six "]
+
+    collected, yielded_count = await _run_windowed(guardrail, content_chunks, end_of_stream_only=True)
+
+    assert yielded_count == [0, 0, 0, 0, 0, 0, 0]
+    assert _chat_text(collected) == "".join(content_chunks)
+    assert guardrail.scan_count == 1
 
 
 @pytest.mark.asyncio

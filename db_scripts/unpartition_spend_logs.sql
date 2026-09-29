@@ -40,6 +40,8 @@ ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_end_user_idx"
     RENAME TO "LiteLLM_SpendLogs_partitioned_end_user_idx";
 ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_session_id_idx"
     RENAME TO "LiteLLM_SpendLogs_partitioned_session_id_idx";
+ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
+    RENAME TO "LiteLLM_SpendLogs_partitioned_api_key_startTime_idx";
 
 CREATE TABLE "LiteLLM_SpendLogs" (
     LIKE "LiteLLM_SpendLogs_partitioned" INCLUDING DEFAULTS INCLUDING GENERATED
@@ -59,6 +61,9 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_end_user_idx"
 
 CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx"
     ON "LiteLLM_SpendLogs" ("session_id");
+
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
+    ON "LiteLLM_SpendLogs" ("api_key", "startTime");
 
 INSERT INTO "LiteLLM_SpendLogs"
 SELECT * FROM "LiteLLM_SpendLogs_partitioned"

@@ -1159,7 +1159,7 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
         is True
     )
 
-    with pytest.raises(Exception, match="team not allowed to access model"):
+    with pytest.raises(Exception, match="is not available for this API key"):
         await can_team_access_model(
             model=model,
             team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),
@@ -2726,6 +2726,30 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
             is True
         )
 
+
+class TestIsRequestBodySafeBlocksClaudePlatformWorkspaceOverride:
+    @pytest.mark.parametrize(
+        "alias", ["workspace_id", "aws_workspace_id", "anthropic_workspace_id", "anthropic-workspace-id"]
+    )
+    def test_workspace_alias_in_request_body_is_rejected(self, alias):
+        with pytest.raises(ValueError, match=alias):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", alias: "wrkspc_attacker"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_workspace_id(self):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", "workspace_id": "wrkspc_byok"},
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
 
 class TestIsRequestBodySafeBlocksRustOptIn:
     """``rust`` hands the whole call to the Rust core, which signs and sends
