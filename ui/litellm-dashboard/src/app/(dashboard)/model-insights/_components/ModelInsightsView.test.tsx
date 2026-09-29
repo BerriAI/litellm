@@ -39,6 +39,7 @@ const response = {
   top_models: [metrics],
   daily: [{ ...metrics, date: "2026-09-28" }],
   by_task: [{ ...metrics, task_type: "code_generation" }],
+  tasks: [{ task_type: "code_generation", label: "Code Generation", category: "Code" }],
 };
 
 describe("ModelInsightsView", () => {
