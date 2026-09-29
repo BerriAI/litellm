@@ -7,11 +7,34 @@ from datetime import datetime
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_counts_a_cli_session_under_the_per_user_alias_not_the_login_token():
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        user_id="alice",
+        key_alias="cli-session-alice",
+        is_session_token=True,
+        max_parallel_requests=5,
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=session, cache=DualCache(), data={"model": "gpt-4o-mini"}, call_type="completion"
+    )
+
+    precise_minute = datetime.now().strftime("%Y-%m-%d-%H-%M")
+    counted = await handler.internal_usage_cache.async_get_cache(
+        key=f"cli-session-alice::{precise_minute}::request_count", litellm_parent_otel_span=None
+    )
+    assert counted == {"current_requests": 1, "current_tpm": 0, "current_rpm": 1}, counted
 
 
 @pytest.mark.parametrize(

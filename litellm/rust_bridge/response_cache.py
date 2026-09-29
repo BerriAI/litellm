@@ -5,11 +5,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol, cast
 
-from typing_extensions import ReadOnly, Required, TypedDict, assert_never
-
-from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
-from litellm.rust_bridge.catalog import CacheContext, Rules, decision
-from litellm.rust_bridge.configuration import Decision
+from typing_extensions import ReadOnly, Required, TypedDict
 
 
 class CacheFacade(Protocol):
@@ -46,9 +42,11 @@ class NativeResponseCacheRuntime(Protocol):
     def kind(self) -> str: ...
 
     def lookup(self, request: NativeCacheRequest) -> object: ...
+    def lookup_semantic(self, request: NativeCacheRequest) -> tuple[object, float | None]: ...
     def store(self, request: NativeCacheRequest, response: object) -> None: ...
     def lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> object: ...
     def async_lookup(self, request: NativeCacheRequest) -> Awaitable[object]: ...
+    def async_lookup_semantic(self, request: NativeCacheRequest) -> Awaitable[tuple[object, float | None]]: ...
     def async_store(self, request: NativeCacheRequest, response: object) -> Awaitable[None]: ...
     def async_lookup_batch(self, requests: Sequence[NativeCacheRequest]) -> Awaitable[object]: ...
     def async_store_batch(
@@ -58,18 +56,6 @@ class NativeResponseCacheRuntime(Protocol):
     ) -> Awaitable[object]: ...
     def async_flush(self) -> Awaitable[None]: ...
     def ping(self) -> Awaitable[object]: ...
-
-
-class NativeResponseCacheRuntimeFactory(Protocol):
-    @staticmethod
-    def from_cache(cache: CacheFacade) -> NativeResponseCacheRuntime: ...
-
-
-def _runtime_factory(value: object) -> NativeResponseCacheRuntimeFactory | None:
-    return cast(NativeResponseCacheRuntimeFactory, value) if callable(getattr(value, "from_cache", None)) else None
-
-
-_RUNTIME: Final = NativeBinding("_ResponseCacheRuntime", validate=_runtime_factory)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +94,11 @@ class ResponseCacheRuntime:
     def lookup(self, request: NativeCacheRequest) -> object:
         return self.native.lookup(request)
 
+    def lookup_semantic(self, request: NativeCacheRequest) -> tuple[object, float | None]:
+        """The cached response and the similarity a semantic backend reports, if any."""
+        response, similarity = self.native.lookup_semantic(request)
+        return response, similarity
+
     def store(self, request: NativeCacheRequest, response: object) -> None:
         self.native.store(request, response)
 
@@ -116,6 +107,10 @@ class ResponseCacheRuntime:
 
     async def async_lookup(self, request: NativeCacheRequest) -> object:
         return await self.native.async_lookup(request)
+
+    async def async_lookup_semantic(self, request: NativeCacheRequest) -> tuple[object, float | None]:
+        response, similarity = await self.native.async_lookup_semantic(request)
+        return response, similarity
 
     async def async_store(self, request: NativeCacheRequest, response: object) -> None:
         await self.native.async_store(request, response)
@@ -135,35 +130,6 @@ class ResponseCacheRuntime:
 
     async def async_flush(self) -> None:
         await self.native.async_flush()
-
-
-def resolve_response_cache(
-    cache: CacheFacade,
-    rules: Rules | None = None,
-) -> ResponseCacheRuntime | None:
-    backend_value: Final = cache.type
-    backend: Final = str.__str__(backend_value) if isinstance(backend_value, str) else str(backend_value)
-    selected: Final = decision(CacheContext(backend=backend), rules)
-    match selected:
-        case Decision.PYTHON:
-            return None
-        case Decision.RUST_WITH_FALLBACK | Decision.RUST_REQUIRED:
-            factory: Final = _RUNTIME.load()
-            if factory is None:
-                if selected is Decision.RUST_REQUIRED:
-                    raise RuntimeError("Rust response cache runtime is unavailable")
-                return None
-            try:
-                return ResponseCacheRuntime(factory.from_cache(cache))
-            except Exception as error:
-                exceptions: Final = native_exception_types()
-                if exceptions is None or not isinstance(error, exceptions[0]):
-                    raise
-                if selected is Decision.RUST_REQUIRED:
-                    raise RuntimeError(f"Rust response cache runtime declined the cache: {error}") from error
-                return None
-        case _:
-            assert_never(selected)
 
 
 def _duration(value: object) -> float | None:

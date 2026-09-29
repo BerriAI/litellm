@@ -133,6 +133,62 @@ async def test_proxy_shutdown_event_disconnects_prisma_and_resets(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_every_langfuse_export_channel(monkeypatch):
+    """A generation finished just before a graceful restart is still queued in its batch
+    processor, so shutdown must flush every acquired export channel."""
+    from litellm.integrations.langfuse import langfuse_sdk
+
+    flushed = MagicMock(return_value=True)
+    monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    await proxy_shutdown_event()
+
+    assert flushed.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_timeout(monkeypatch, caplog):
+    """The flush blocks on OTLP exports for up to its deadline, so it must run on a worker thread
+    with the shutdown deadline, and a channel that misses it is reported instead of ignored."""
+    import threading
+
+    from litellm.constants import LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
+    from litellm.integrations.langfuse import langfuse_sdk
+
+    ran_on = MagicMock()
+
+    def flushed(timeout_millis: int) -> bool:
+        ran_on(threading.current_thread(), timeout_millis)
+        return False
+
+    monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        await proxy_shutdown_event()
+
+    (flush_thread, timeout_millis), _ = ran_on.call_args
+    assert flush_thread is not threading.main_thread()
+    assert timeout_millis == LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
+    assert any("Langfuse shutdown flush incomplete" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monkeypatch):
     """
     The gateway request fold lives in memory, so shutdown drains it to the database.
@@ -896,6 +952,49 @@ def test_startup_does_not_warn_without_global_budget(caplog, max_budget):
     assert "litellm.max_budget" not in caplog.text
 
 
+def test_startup_warns_for_fail_closed_rate_limits_without_redis(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
+            fail_closed_rate_limit_enforcement=True, redis_usage_cache=None
+        )
+
+    assert "fail_closed_rate_limit_enforcement" in caplog.text
+    assert "rejects nothing" in caplog.text
+
+
+@pytest.mark.parametrize("fail_closed, redis_usage_cache", [(True, MagicMock()), (False, None)])
+def test_startup_does_not_warn_for_fail_closed_rate_limits_when_nothing_is_lost(caplog, fail_closed, redis_usage_cache):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
+            fail_closed_rate_limit_enforcement=fail_closed, redis_usage_cache=redis_usage_cache
+        )
+
+    assert "fail_closed_rate_limit_enforcement" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_event_warns_for_fail_closed_rate_limits_without_redis(caplog):
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.dict(ps.general_settings, {"fail_closed_rate_limit_enforcement": True}),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                pass
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert "fail_closed_rate_limit_enforcement" in caplog.text
+    assert "rejects nothing" in caplog.text
+
+
 def test_proxy_startup_event_warns_for_global_budget_without_database():
     """Pin the lifespan call that prevents silent DB-less budgets.
 
@@ -920,7 +1019,7 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
 
 
 @pytest.mark.asyncio
-async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+async def test_tuning_baseline_v3_is_created_alongside_the_legacy_row():
     from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
 
     prisma_client = MagicMock()
@@ -935,9 +1034,59 @@ async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
 
     assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
     assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
-        "param_name": "auto_router_tuning_baseline_v2",
+        "param_name": "auto_router_tuning_baseline_v3",
         "param_value": json.dumps(dict(result)),
     }
+
+
+@pytest.mark.asyncio
+async def test_scorer_baseline_upgrade_preserves_existing_routers_and_is_not_refreshed_on_restart():
+    from litellm.router_utils.auto_router_tuning_baseline import mutable_tuned_identities, snapshot_tuning_baselines
+
+    deployments = [
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": name}, "code_keywords": [name]},
+            },
+        }
+        for name in ("a", "b")
+    ]
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(
+        side_effect=lambda where: (
+            MagicMock(param_value='{"legacy-router":"old-combined-hash"}')
+            if where["param_name"] == "auto_router_tuning_baseline_v2"
+            else None
+        )
+    )
+    prisma_client.db.litellm_config.create = AsyncMock()
+
+    baseline = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, deployments)
+
+    assert baseline == snapshot_tuning_baselines(deployments)
+    assert mutable_tuned_identities(deployments, baseline) == frozenset()
+    prisma_client.db.litellm_config.create.assert_awaited_once_with(
+        data={"param_name": "auto_router_tuning_baseline_v3", "param_value": json.dumps(dict(baseline))}
+    )
+    prisma_client.db.litellm_config.find_unique.side_effect = None
+    prisma_client.db.litellm_config.find_unique.return_value = MagicMock(param_value=json.dumps(dict(baseline)))
+    changed = [
+        {
+            "model_name": "a",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "different-model"}, "code_keywords": ["new-rule"]},
+            },
+        }
+    ]
+
+    reloaded = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, changed)
+
+    assert reloaded == baseline
+    assert mutable_tuned_identities(changed, reloaded) == frozenset({'yaml:["a",[]]'})
+    prisma_client.db.litellm_config.create.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1081,57 +1230,6 @@ async def test_spend_report_locks_are_never_released():
     await jobs["monthly_spend_report_job"]()
 
     proxy_logging_obj.db_spend_update_writer.pod_lock_manager.release_lock.assert_not_awaited()
-
-
-def _init_daily_global_spend_reconcile_job() -> tuple[AsyncIOScheduler, MagicMock, MagicMock]:
-    scheduler = AsyncIOScheduler()
-    proxy_logging_obj = MagicMock()
-    proxy_logging_obj.alerting_handler = AsyncMock()
-    prisma_client = MagicMock()
-    ProxyStartupEvent._initialize_daily_global_spend_reconcile_job(
-        scheduler=scheduler,
-        proxy_logging_obj=proxy_logging_obj,
-        prisma_client=prisma_client,
-    )
-    return scheduler, proxy_logging_obj, prisma_client
-
-
-def test_daily_global_spend_reconcile_job_is_scheduled_nightly_with_an_immediate_catch_up_run():
-    """Startup schedules the LiteLLM_DailyGlobalSpend backfill a couple of minutes out, so a
-    fresh deploy switches usage reads to the global table without waiting for the nightly
-    run, and after that it fires once a day at 00:30 UTC, when the previous UTC day is closed."""
-    from datetime import datetime, timedelta, timezone
-
-    from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
-
-    scheduler, _, _ = _init_daily_global_spend_reconcile_job()
-    job = scheduler.get_job(DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID)
-    assert job is not None
-
-    assert timedelta(0) < job.next_run_time - datetime.now(timezone.utc) <= timedelta(minutes=2)
-    after_catch_up = datetime(2026, 9, 16, 12, 0, tzinfo=timezone.utc)
-    assert job.trigger.get_next_fire_time(None, after_catch_up) == datetime(2026, 9, 17, 0, 30, tzinfo=timezone.utc)
-    just_after_a_run = datetime(2026, 9, 17, 0, 30, 1, tzinfo=timezone.utc)
-    assert job.trigger.get_next_fire_time(None, just_after_a_run) == datetime(2026, 9, 18, 0, 30, tzinfo=timezone.utc)
-
-
-@pytest.mark.asyncio
-async def test_daily_global_spend_reconcile_job_runs_under_the_pod_lock_and_alerts_through_the_proxy(monkeypatch):
-    from litellm.constants import DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID
-
-    scheduler, proxy_logging_obj, prisma_client = _init_daily_global_spend_reconcile_job()
-    run = AsyncMock()
-    monkeypatch.setattr(ps, "run_scheduled_daily_global_spend_reconcile", run)
-
-    await scheduler.get_job(DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID).func()
-
-    run.assert_awaited_once()
-    assert run.await_args.args == (prisma_client,)
-    assert run.await_args.kwargs["pod_lock_manager"] is proxy_logging_obj.db_spend_update_writer.pod_lock_manager
-    await run.await_args.kwargs["alert"]("day 2026-09-01 failed")
-    proxy_logging_obj.alerting_handler.assert_awaited_once()
-    assert proxy_logging_obj.alerting_handler.await_args.kwargs["message"] == "day 2026-09-01 failed"
-    assert proxy_logging_obj.alerting_handler.await_args.kwargs["level"] == "High"
 
 
 @pytest.mark.asyncio

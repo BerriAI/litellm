@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - litellm_internal_staging
     paths:
       - "litellm/**"
       - "tests/benchmarks/**"
@@ -17,7 +16,6 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
     paths:
       - "litellm/**"
       - "tests/benchmarks/**"

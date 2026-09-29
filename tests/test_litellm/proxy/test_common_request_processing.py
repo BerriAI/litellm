@@ -3,10 +3,11 @@ import copy
 import datetime
 import json
 from types import MappingProxyType, SimpleNamespace
-from typing import AsyncGenerator, Callable, Final, Iterator, Optional, Sequence
+from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional, Sequence
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
 import httpx
 import pytest
 from fastapi import HTTPException, Request, Response, status
@@ -14,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
@@ -35,10 +37,12 @@ from litellm.proxy.common_request_processing import (
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
+    attach_guardrail_information,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
+    include_guardrail_response_requested,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
@@ -53,12 +57,139 @@ from litellm.proxy.common_request_processing import (
     sse_error_payload,
 )
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+from litellm.proxy.common_utils.sse_keepalive import ANTHROPIC_PING_SSE_CHUNK
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+
+
+def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
+    response = litellm.ModelResponse()
+
+    result = attach_guardrail_information(response=response, request_data={})
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == []
+    assert "guardrail_information" not in response.model_dump()
+
+
+def test_attach_guardrail_information_sets_key_on_dict_response():
+    recorded = [{"guardrail_name": "first", "guardrail_status": "success"}]
+    response = {"id": "x"}
+
+    result = attach_guardrail_information(
+        response=response,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    assert result == {"id": "x", "guardrail_information": recorded}
+    assert response == {"id": "x"}
+
+
+def test_attach_guardrail_information_redacts_matched_content():
+    recorded = [
+        {
+            "guardrail_name": "cf",
+            "guardrail_status": "success",
+            "guardrail_response": [
+                {"type": "blocked_word", "keyword": "secret-word", "action": "MASK"}
+            ],
+            "match_details": [{"snippet": "secret-word", "detection_method": "keyword"}],
+        }
+    ]
+
+    result = attach_guardrail_information(
+        response={"id": "x"},
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    guardrail_information = result["guardrail_information"]
+    assert isinstance(guardrail_information, list)
+    assert guardrail_information[0]["guardrail_response"][0]["keyword"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["snippet"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["detection_method"] == "keyword"
+    assert "secret-word" not in json.dumps(result)
+
+
+def test_attach_guardrail_information_leaves_cached_dict_response_untouched():
+    recorded = [{"guardrail_name": "cf", "guardrail_status": "success"}]
+    cached = {"id": "x", "content": []}
+
+    result = attach_guardrail_information(
+        response=cached,
+        request_data={
+            "metadata": {
+                "include_guardrail_response": True,
+                "standard_logging_guardrail_information": recorded,
+            }
+        },
+    )
+
+    assert "guardrail_information" not in cached
+    assert result is not cached
+    assert isinstance(result, dict)
+    assert result["guardrail_information"] == recorded
+
+    original = litellm.ModelResponse()
+    copied = attach_guardrail_information(
+        response=original,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert "guardrail_information" not in original.model_dump()
+    assert isinstance(copied, litellm.ModelResponse)
+    assert copied.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_reads_flag_from_metadata_when_router_seeded_litellm_metadata():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    request_data = {
+        "metadata": {
+            "include_guardrail_response": True,
+            "standard_logging_guardrail_information": recorded,
+        },
+        "litellm_metadata": {},
+    }
+
+    assert include_guardrail_response_requested(request_data) is True
+
+    response = litellm.ModelResponse()
+    result = attach_guardrail_information(response=response, request_data=request_data)
+
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_is_false_without_exact_true():
+    assert include_guardrail_response_requested(
+        {"metadata": {"include_guardrail_response": "true"}, "litellm_metadata": {}}
+    ) is False
+    assert include_guardrail_response_requested({}) is False
 
 
 class TestProxyBaseLLMRequestProcessing:
@@ -296,7 +427,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -367,60 +498,92 @@ class TestProxyBaseLLMRequestProcessing:
         add_litellm_data_to_request.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("safe_memory_mode", [False, True])
+    @pytest.mark.parametrize(
+        "route_type,input_key,system_key,token_key",
+        [
+            ("acompletion", "messages", "system", "max_tokens"),
+            ("anthropic_messages", "messages", "system", "max_tokens"),
+            ("aresponses", "input", "instructions", "max_output_tokens"),
+        ],
+    )
     async def test_common_processing_pre_call_logic_refreshes_proxy_server_request_body_after_guardrails(
-        self, monkeypatch
-    ):
-        """
-        A guardrail (e.g. Presidio PII masking) mutates data["messages"] in place inside
-        pre_call_hook. The proxy_server_request.body snapshot is taken before that hook
-        runs, so it must be refreshed afterward or SpendLogs (when store_prompts_in_spend_logs
-        is enabled) persists the raw pre-guardrail body, bypassing the masking entirely.
-        """
-        processing_obj = ProxyBaseLLMRequestProcessing(data={})
-        mock_request = MagicMock(spec=Request)
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        safe_memory_mode: bool,
+        route_type: Literal["acompletion", "anthropic_messages", "aresponses"],
+        input_key: str,
+        system_key: str,
+        token_key: str,
+    ) -> None:
+        from litellm.integrations.shadow_eval_logger import request_guardrail_fingerprint
+
+        monkeypatch.setattr(litellm, "safe_memory_mode", safe_memory_mode)
+        processing_obj: Final = ProxyBaseLLMRequestProcessing(data={})
+        mock_request: Final = MagicMock(spec=Request)
         mock_request.headers = {}
+        metadata_key: Final = "metadata" if route_type == "acompletion" else "litellm_metadata"
+        raw_body: Final = {
+            input_key: [{"role": "user", "content": "private input"}],
+            system_key: "private system",
+            "tools": [{"name": "private", "description": "private tool"}],
+            "tool_choice": {"type": "tool", "name": "private"},
+            token_key: 100,
+        }
+        approved_messages: Final = [{"role": "user", "content": "<MASKED>"}]
+        approved_tools: Final = [{"name": "allowed", "description": "<MASKED>"}]
+        approved_body: Final = {input_key: approved_messages, "tools": approved_tools, token_key: 64}
+        recorded: Final = [{"guardrail_name": "mask", "guardrail_mode": "pre_call", "guardrail_status": "success"}]
 
-        raw_messages = [{"role": "user", "content": "my ssn is 123-45-6789"}]
-
-        async def mock_add_litellm_data_to_request(*args, **kwargs):
+        async def mock_pre_call_hook(
+            user_api_key_dict: UserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
+        ) -> dict[str, object]:
+            logging_obj: Final = data["litellm_logging_obj"]
+            assert isinstance(logging_obj, LiteLLMLoggingObj)
+            assert logging_obj.shadow_eval_request_snapshot is None
             return {
-                "messages": raw_messages,
-                "proxy_server_request": {
-                    "url": "http://testserver/chat/completions",
-                    "method": "POST",
-                    "body": {"messages": raw_messages},
-                },
+                **{key: value for key, value in data.items() if key not in (system_key, "tool_choice")},
+                **approved_body,
+                metadata_key: {"standard_logging_guardrail_information": recorded},
             }
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
-            data["messages"] = [{"role": "user", "content": "my ssn is <MASKED>"}]
-            return data
-
-        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj: Final = MagicMock(spec=ProxyLogging)
         mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
         monkeypatch.setattr(
             litellm.proxy.common_request_processing,
             "add_litellm_data_to_request",
-            mock_add_litellm_data_to_request,
+            AsyncMock(return_value={**raw_body, metadata_key: {}, "proxy_server_request": {"body": raw_body}}),
         )
 
-        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+        returned_data, logging_obj = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
             user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=MagicMock(spec=ProxyConfig),
-            route_type="acompletion",
+            route_type=route_type,
         )
 
-        persisted_body = returned_data["proxy_server_request"]["body"]
-        assert persisted_body["messages"] == returned_data["messages"]
-        assert "123-45-6789" not in json.dumps(persisted_body["messages"])
-        # litellm_logging_obj is stamped onto `data` by function_setup between the
-        # initial snapshot and pre_call_hook; it must never leak into the persisted
-        # audit body, which needs to stay plain-JSON-serializable end to end.
+        proxy_request: Final = returned_data["proxy_server_request"]
+        persisted_body: Final = proxy_request["body"]
+        snapshot: Final = logging_obj.shadow_eval_request_snapshot
+        expected_content: Final = copy.deepcopy(approved_body)
+        assert snapshot is not None
+        assert {key: persisted_body[key] for key in raw_body if key in persisted_body} == expected_content
+        assert {key: snapshot.body[key] for key in raw_body if key in snapshot.body} == expected_content
+        assert snapshot.fingerprint == request_guardrail_fingerprint(
+            {"standard_logging_guardrail_information": recorded}
+        )
         assert "litellm_logging_obj" not in persisted_body
-        json.dumps(persisted_body)
+        assert "private" not in json.dumps(persisted_body)
+        approved_messages[0]["content"] = "later input mutation"
+        approved_tools[0]["description"] = "later tool mutation"
+        assert {key: snapshot.body[key] for key in raw_body if key in snapshot.body} == expected_content
+        assert persisted_body[input_key][0]["content"] == "later input mutation"
+        assert persisted_body["tools"][0]["description"] == "later tool mutation"
 
     @staticmethod
     def _guardrail_tag_budget_harness(
@@ -437,7 +600,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return copy.deepcopy(request_body)
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             data.setdefault("metadata", {}).setdefault("tags", []).extend(guardrail_tags)
             return data
 
@@ -617,7 +780,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def retry_add_litellm_data_to_request(*args, **kwargs):
             return first_pass_data
 
-        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type):
+        async def idempotent_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return data
 
         monkeypatch.setattr(
@@ -760,7 +923,7 @@ class TestProxyBaseLLMRequestProcessing:
 
         seen_metadata: dict = {}
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             seen_metadata.update(data.get("metadata") or {})
             return data
 
@@ -831,7 +994,7 @@ class TestProxyBaseLLMRequestProcessing:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return {}
 
-        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type):
+        async def mock_common_processing_pre_call_logic(user_api_key_dict, data, call_type, skip_guardrails=False):
             data_copy = copy.deepcopy(data)
             return data_copy
 
@@ -1832,7 +1995,7 @@ class TestProxyBaseLLMRequestProcessing:
             data["metadata"] = data.get("metadata", {})
             return data
 
-        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -2382,6 +2545,63 @@ class TestCommonRequestProcessingHelpers:
         assert isinstance(response, JSONResponse)
         assert response.headers["x-litellm-call-id"] == "call-8302"
         assert json.loads(response.body) == {"error": {"code": 403, "message": "forbidden"}}
+
+    async def test_a_stream_that_fails_before_its_first_byte_answers_as_an_anthropic_json_error(self):
+        """A /v1/messages stream whose first chunk is already the error frame has nothing
+        streamed yet, so the failure answers as JSON with the status the upstream gave,
+        the shape Anthropic clients raise their status-specific errors on"""
+
+        async def stream():
+            yield anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
+            yield ANTHROPIC_PING_SSE_CHUNK
+
+        generator: Final = stream()
+        response = await create_response(generator, "text/event-stream", {"x-litellm-call-id": "call-8609"})
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 503
+        assert response.headers["content-type"] == "application/json"
+        assert response.headers["x-litellm-call-id"] == "call-8609"
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "api_error", "message": "upstream unavailable"},
+        }
+        assert generator.ag_frame is None
+
+    async def test_a_stream_that_fails_before_its_first_byte_names_the_call_when_opted_in(self):
+        async def stream():
+            yield anthropic_error_sse_frame(status_code=429, raw_message="slow down")
+
+        response = await create_response(
+            stream(),
+            "text/event-stream",
+            {"x-litellm-call-id": "call-8609"},
+            general_settings={"include_call_id_in_error_body": True},
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 429
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "rate_limit_error", "message": "slow down", "litellm_call_id": "call-8609"},
+        }
+
+    async def test_an_error_event_after_a_keepalive_ping_still_streams(self):
+        """Once a keepalive ping went out the headers are committed, so the error frame
+        streams as an event instead of turning into a JSON answer"""
+
+        async def stream():
+            yield ANTHROPIC_PING_SSE_CHUNK
+            yield anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
+
+        response = await create_response(stream(), "text/event-stream", {})
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == 200
+        assert "".join(await self.consume_stream(response)) == (
+            ANTHROPIC_PING_SSE_CHUNK
+            + 'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "upstream unavailable"}}\n\n'
+        )
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
         """Regression for #28384: every StreamingResponse create_response returns
@@ -6784,7 +7004,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         limiter_models: list[str] = []
 
         async def run_limiter(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             limiter_models.append(str(data["model"]))
             await limiter.async_pre_call_hook(
@@ -7004,7 +7227,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         run_limiter = rig[0].pre_call_hook
 
         async def limiter_then_guardrail(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             limited = await run_limiter(user_api_key_dict=user_api_key_dict, data=data, call_type=call_type)
             if guardrail not in (limited["metadata"].get("guardrails") or []):
@@ -7830,7 +8056,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -7879,7 +8105,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -7918,7 +8144,7 @@ class TestPerRequestModelGroupAlias:
         async def mock_add_litellm_data_to_request(*args, **kwargs):
             return kwargs.get("data", {})
 
-        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type):
+        async def passthrough_pre_call_hook(user_api_key_dict, data, call_type, skip_guardrails=False):
             return copy.deepcopy(data)
 
         mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
@@ -9601,7 +9827,10 @@ class TestBackgroundResponseRetrievalGovernance:
             return data
 
         async def decrypting_pre_call_hook(
-            user_api_key_dict: ProxyUserAPIKeyAuth, data: dict[str, object], call_type: str
+            user_api_key_dict: ProxyUserAPIKeyAuth,
+            data: dict[str, object],
+            call_type: str,
+            skip_guardrails: bool = False,
         ) -> dict[str, object]:
             if data.get("response_id") == client_facing_response_id:
                 data["response_id"] = encoded_response_id
@@ -9730,3 +9959,270 @@ class TestErrorLogCarriesCallId:
         record: Final = caplog.records[-1]
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()
+
+
+class TestAnthropicMessagesStreamErrorFrame:
+    """A ``/v1/messages`` stream that fails after the headers are out has to say so with an
+    ``event: error`` frame. Anthropic clients pick events by name, so a bare ``data:`` line is
+    skipped and the request looks like it ended with nothing in it"""
+
+    @staticmethod
+    def _sse_generator_failing_with(failure: Exception) -> AsyncGenerator[str, None]:
+        class FailingUpstream:
+            def __aiter__(self) -> "FailingUpstream":
+                return self
+
+            async def __anext__(self) -> object:
+                raise failure
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "claude-sonnet-4-5"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+        )
+
+    @pytest.mark.parametrize(
+        "status_code, expected_error_type",
+        [
+            (429, "rate_limit_error"),
+            (529, "overloaded_error"),
+            (413, "request_too_large"),
+            (500, "api_error"),
+            (502, "api_error"),
+            (400, "invalid_request_error"),
+        ],
+    )
+    async def test_mid_stream_failure_arrives_as_an_anthropic_error_event(
+        self, status_code: int, expected_error_type: str
+    ) -> None:
+        class UpstreamFailure(Exception):
+            def __init__(self) -> None:
+                super().__init__("upstream stopped sending")
+                self.status_code: Final = status_code
+
+        frames: Final = [frame async for frame in self._sse_generator_failing_with(UpstreamFailure())]
+
+        assert len(frames) == 1
+        event_line, data_line, first_blank, second_blank = frames[0].split("\n")
+        assert isinstance(frames[0], AnthropicErrorSseFrame)
+        assert frames[0].status_code == status_code
+        assert event_line == "event: error"
+        assert (first_blank, second_blank) == ("", "")
+        payload: Final = json.loads(data_line.removeprefix("data: "))
+        assert payload["type"] == "error"
+        assert payload["error"]["type"] == expected_error_type
+        assert "upstream stopped sending" in payload["error"]["message"]
+
+    _CONTENT_DELTA_FRAME: Final = (
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1\\n2\\n3"}}\n\n'
+    )
+    _TORN_DATA_LINE: Final = (
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"4'
+    )
+    _PING: Final = ANTHROPIC_PING_SSE_CHUNK.encode()
+
+    @staticmethod
+    def _upstream_failure(status_code: int) -> Exception:
+        class UpstreamFailure(Exception):
+            def __init__(self) -> None:
+                super().__init__("upstream stopped sending")
+                self.status_code: Final = status_code
+
+        return UpstreamFailure()
+
+    @staticmethod
+    def _sse_generator_cut_after(relayed: Sequence[bytes], failure: Exception) -> AsyncGenerator[str, None]:
+        class CutUpstream:
+            def __init__(self) -> None:
+                self._remaining: Final = iter(relayed)
+
+            def __aiter__(self) -> "CutUpstream":
+                return self
+
+            async def __anext__(self) -> object:
+                chunk: Final = next(self._remaining, None)
+                if chunk is None:
+                    raise failure
+                return chunk
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=CutUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "claude-sonnet-4-5"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+        )
+
+    @staticmethod
+    def _as_bytes(chunk: object) -> bytes:
+        if isinstance(chunk, bytes):
+            return chunk
+        assert isinstance(chunk, str)
+        return chunk.encode()
+
+    async def _wire_bytes(self, relayed: Sequence[bytes]) -> bytes:
+        stream: Final = self._sse_generator_cut_after(relayed, self._upstream_failure(500))
+        return b"".join([self._as_bytes(chunk) async for chunk in stream])
+
+    @staticmethod
+    def _error_frame_after(wire: bytes, relayed: bytes) -> bytes:
+        assert wire.startswith(relayed), f"the wire did not open with {relayed!r}: {wire!r}"
+        return wire.removeprefix(relayed)
+
+    @staticmethod
+    def _assert_error_frame(frame: bytes) -> None:
+        event_line, data_line, first_blank, second_blank = frame.split(b"\n")
+        assert event_line == b"event: error"
+        assert (first_blank, second_blank) == (b"", b"")
+        payload: Final = json.loads(data_line.removeprefix(b"data: "))
+        assert payload["type"] == "error"
+        assert "upstream stopped sending" in payload["error"]["message"]
+
+    @pytest.mark.parametrize(
+        "torn, seal",
+        [
+            (_TORN_DATA_LINE, b"\n" + _PING),
+            (b"event: content_bl", b"\n" + _PING),
+            (b"event: content_block_delta\n", _PING),
+            (b'event: content_block_delta\r\ndata: {"type":"content_block_delta"}\r\n', _PING),
+        ],
+        ids=["mid_data_line", "mid_event_line", "after_a_complete_line", "after_a_crlf_line"],
+    )
+    async def test_a_frame_the_upstream_tore_is_closed_as_a_ping_before_the_error_event(
+        self, torn: bytes, seal: bytes
+    ) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME, torn))
+
+        self._assert_error_frame(self._error_frame_after(wire, self._CONTENT_DELTA_FRAME + torn + seal))
+
+    async def test_a_cut_at_a_frame_boundary_gets_the_error_event_alone(self) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME,))
+
+        self._assert_error_frame(self._error_frame_after(wire, self._CONTENT_DELTA_FRAME))
+
+    async def test_a_torn_frame_still_raises_the_error_in_the_anthropic_sdk(self) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME, self._TORN_DATA_LINE))
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire)
+
+        client: Final = anthropic.Anthropic(
+            api_key="sk-test",
+            base_url="http://proxy.test",
+            http_client=httpx.Client(transport=httpx.MockTransport(serve)),
+            max_retries=0,
+        )
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            for _ in client.messages.create(
+                model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "count"}], stream=True
+            ):
+                pass
+        body: Final = raised.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+    async def test_a_failure_before_the_first_byte_answers_with_its_status_as_json(self) -> None:
+        response: Final = await create_response(
+            self._sse_generator_failing_with(self._upstream_failure(502)), "text/event-stream", {}
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 502
+        body: Final = json.loads(response.body)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "api_error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+    async def test_a_failure_before_the_first_byte_raises_with_its_status_in_the_anthropic_sdk(self) -> None:
+        response: Final = await create_response(
+            self._sse_generator_failing_with(self._upstream_failure(502)), "text/event-stream", {}
+        )
+        assert isinstance(response, JSONResponse)
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(response.status_code, headers=dict(response.headers), content=response.body)
+
+        client: Final = anthropic.Anthropic(
+            api_key="sk-test",
+            base_url="http://proxy.test",
+            http_client=httpx.Client(transport=httpx.MockTransport(serve)),
+            max_retries=0,
+        )
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            client.messages.create(
+                model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "count"}], stream=True
+            )
+        assert raised.value.status_code == 502
+        body: Final = raised.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+
+class TestStreamingContainerOwnershipRecordedBeforeDone:
+    """Regression for LIT-8612: the OpenAI SDK closes the connection at
+    ``data: [DONE]`` and starlette cancels the body task, so an ownership row
+    written after the SSE generator is exhausted never lands. The row must be
+    written before the chunk carrying ``response.completed`` is handed to the
+    client."""
+
+    CHUNKS: Final = (
+        'data: {"type":"response.created"}\n\n',
+        'data: {"type":"response.output_text.delta"}\n\n',
+        'data: {"type":"response.completed"}\n\n',
+        "data: [DONE]\n\n",
+    )
+    TERMINAL_INDEX: Final = 2
+
+    @staticmethod
+    def _completed_event() -> SimpleNamespace:
+        return SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id="resp_lit8612",
+                output=[SimpleNamespace(type="code_interpreter_call", container_id="cntr_lit8612")],
+            ),
+        )
+
+    async def _sse(self, stream: SimpleNamespace, populate_at: int) -> AsyncGenerator[str, None]:
+        for index, chunk in enumerate(self.CHUNKS):
+            if index == populate_at:
+                stream.completed_response = self._completed_event()
+            yield chunk
+        if populate_at == len(self.CHUNKS):
+            stream.completed_response = self._completed_event()
+
+    async def _await_counts_per_chunk(self, populate_at: int) -> tuple[tuple[tuple[str, int], ...], AsyncMock]:
+        stream: Final = SimpleNamespace(completed_response=None, _hidden_params={"custom_llm_provider": "azure"})
+        recorder: Final = AsyncMock(return_value=None)
+        with patch(
+            "litellm.proxy.container_endpoints.ownership.record_container_owners_from_responses_response", recorder
+        ):
+            wrapped: Final = ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+                original_stream_response=stream,
+                wrapped_generator=self._sse(stream, populate_at),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", team_id="team-1"),
+            )
+            observed: Final = tuple([(chunk, recorder.await_count) async for chunk in wrapped])
+        return observed, recorder
+
+    async def test_row_is_written_before_the_terminal_chunk_reaches_the_client(self) -> None:
+        observed, recorder = await self._await_counts_per_chunk(populate_at=self.TERMINAL_INDEX)
+
+        assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
+        assert tuple(count for _, count in observed) == (0, 0, 1, 1)
+        recorder.assert_awaited_once()
+        assert recorder.await_args.kwargs["response"].output[0].container_id == "cntr_lit8612"
+        assert recorder.await_args.kwargs["user_api_key_dict"].team_id == "team-1"
+
+    async def test_row_is_still_written_when_the_iterator_completes_only_at_exhaustion(self) -> None:
+        observed, recorder = await self._await_counts_per_chunk(populate_at=len(self.CHUNKS))
+
+        assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
+        assert tuple(count for _, count in observed) == (0, 0, 0, 0)
+        recorder.assert_awaited_once()

@@ -98,6 +98,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "arize_api_key",
     "arize_space_key",
     "arize_space_id",
+    "arize_success_sampling_rate",
+    "arize_error_sampling_rate",
     "posthog_api_key",
     "posthog_host",
     "braintrust_api_key",
@@ -111,6 +113,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "dd_agent_port",
     "newrelic_api_key",
     "newrelic_region",
+    "signoz_ingestion_endpoint",
+    "signoz_ingestion_key",
     "turn_off_message_logging",
 )
 
@@ -124,6 +128,8 @@ _request_blocked_callback_params: Final = frozenset(
         "dd_agent_port",
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 
@@ -136,6 +142,8 @@ _trusted_overlay_callback_params: Final = frozenset(
     {
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 

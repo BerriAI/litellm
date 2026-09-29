@@ -478,6 +478,72 @@ async def test_claim_token_sets_accepted_at_after_password_written():
 
 
 @pytest.mark.asyncio
+async def test_claim_token_revokes_existing_ui_sessions():
+    """A claimed invite/reset link changes the password; any UI session minted
+    under the old password may be in hostile hands and must be revoked. The
+    sweep runs before the fresh session key is minted, so revoke-all is safe."""
+    from litellm.proxy.proxy_server import claim_onboarding_link
+
+    invite = _make_invite(is_accepted=False)
+    user = _make_user()
+    prisma = _make_prisma(invite, user)
+    request = _make_claim_request(_make_onboarding_token())
+
+    data = InvitationClaim(
+        invitation_link="invite-abc",
+        user_id="user-123",
+        password="NewP@ssw0rd123",
+    )
+
+    mock_token_response = {"token": "sk-generated-key", "user_id": "user-123"}
+    revoke_mock = AsyncMock(return_value=1)
+    mint_order: list[str] = []
+
+    async def _mint(*args, **kwargs):
+        mint_order.append("mint")
+        return mock_token_response
+
+    async def _revoke(*args, **kwargs):
+        mint_order.append("revoke")
+        return 1
+
+    revoke_mock.side_effect = _revoke
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+        patch(  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            side_effect=_mint,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.session_endpoints.revoke_ui_session_keys",
+            revoke_mock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.get_custom_url",
+            return_value="http://localhost:4000/",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.get_disabled_non_admin_personal_key_creation",
+            return_value=False,
+        ),
+        patch("litellm.proxy.proxy_server.get_server_root_path", return_value=""),
+    ):
+        await claim_onboarding_link(data=data, request=request)
+
+    revoke_mock.assert_awaited_once()
+    assert revoke_mock.await_args.kwargs["user_id"] == "user-123"
+    # The sweep must precede the mint or it would kill the fresh session too.
+    assert mint_order == ["revoke", "mint"]
+
+
+@pytest.mark.asyncio
 async def test_claim_token_rolls_back_invite_when_session_key_mint_fails():
     """A session key failure must not leave the invite permanently consumed."""
     from litellm.proxy.proxy_server import claim_onboarding_link
