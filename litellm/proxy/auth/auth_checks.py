@@ -3596,7 +3596,7 @@ class ExperimentalUIJWTToken:
         from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            encrypt_value_helper,
+            encrypt_bearer_token,
         )
 
         if user_info.user_role is None:
@@ -3622,7 +3622,7 @@ class ExperimentalUIJWTToken:
             user_role=LitellmUserRoles(user_info.user_role),
         )
 
-        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
+        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
 
     @staticmethod
     def get_cli_jwt_auth_token(
@@ -3653,7 +3653,7 @@ class ExperimentalUIJWTToken:
         from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            encrypt_value_helper,
+            encrypt_bearer_token,
         )
 
         if user_info.user_role is None:
@@ -3691,7 +3691,7 @@ class ExperimentalUIJWTToken:
             is_session_token=True,
         )
 
-        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
+        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), aad=LITELLM_SESSION_TOKEN_AAD)
 
     @staticmethod
     def get_key_object_from_ui_hash_key(
@@ -3701,12 +3701,10 @@ class ExperimentalUIJWTToken:
 
         from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            decrypt_value_helper,
+            decrypt_bearer_token,
         )
 
-        decrypted_token: Final = decrypt_value_helper(
-            hashed_token, key="ui_hash_key", exception_type="debug", aad=LITELLM_SESSION_TOKEN_AAD
-        )
+        decrypted_token: Final = decrypt_bearer_token(hashed_token, aad=LITELLM_SESSION_TOKEN_AAD)
         if decrypted_token is None:
             return None
         try:

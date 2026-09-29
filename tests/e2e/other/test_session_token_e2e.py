@@ -25,7 +25,6 @@ pytestmark = pytest.mark.e2e
 
 SALT_KEY: Final = os.environ.get("LITELLM_SALT_KEY") or MASTER_KEY
 SESSION_TOKEN_AAD: Final = b"litellm-session-token"
-AES_GCM_PREFIX: Final = "v2:gcm:"
 ENCRYPTED_PREFIX: Final = "litellm_enc::"
 
 
@@ -43,7 +42,7 @@ def _admin_session_token(expires_at: datetime) -> str:
     sealed: Final = AESGCM(hashlib.sha256(SALT_KEY.encode()).digest()).encrypt(
         nonce, claims.encode(), SESSION_TOKEN_AAD
     )
-    return AES_GCM_PREFIX + base64.urlsafe_b64encode(nonce + sealed).decode()
+    return base64.urlsafe_b64encode(nonce + sealed).decode().rstrip("=")
 
 
 class TestSessionToken:

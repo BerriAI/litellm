@@ -72,38 +72,65 @@ def _derive_key(signing_key: str) -> bytes:
     return hashlib.sha256(signing_key.encode()).digest()
 
 
-def _encrypt_aes_gcm(value: str, signing_key: str, aad: bytes | None = None) -> str:
-    """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
+def _seal_aes_gcm(value: str, signing_key: str, aad: bytes | None) -> bytes:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     nonce: Final = os.urandom(12)
     # AESGCM.encrypt returns ciphertext || tag(16); wire format is nonce || that.
-    blob: Final = AESGCM(_derive_key(signing_key)).encrypt(nonce, value.encode("utf-8"), aad)
-    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(nonce + blob).decode("utf-8")
+    return nonce + AESGCM(_derive_key(signing_key)).encrypt(nonce, value.encode("utf-8"), aad)
 
 
-def _decrypt_aes_gcm(value: str, signing_key: str, aad: bytes | None = None) -> str:
-    """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
+def _open_aes_gcm(sealed: bytes, signing_key: str, aad: bytes | None) -> str:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-    raw: Final = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
     # An empty plaintext still serializes to nonce(12) || tag(16) = 28 bytes, so a
     # short/empty buffer here is a corrupt value: let AESGCM.decrypt raise and be
-    # swallowed by decrypt_value_helper (returns None/original), same as legacy.
-    nonce, blob = raw[:12], raw[12:]
-    return AESGCM(_derive_key(signing_key)).decrypt(nonce, blob, aad).decode("utf-8")
+    # swallowed by the caller (returns None/original), same as legacy.
+    return AESGCM(_derive_key(signing_key)).decrypt(sealed[:12], sealed[12:], aad).decode("utf-8")
 
 
-def encrypt_value_helper(value: str, new_encryption_key: str | None = None, aad: bytes | None = None):
+def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
+    """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
+    sealed: Final = _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
+    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
+
+
+def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
+    """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
+    sealed: Final = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
+    return _open_aes_gcm(sealed=sealed, signing_key=signing_key, aad=None)
+
+
+def encrypt_bearer_token(value: str, aad: bytes) -> str:
+    """AES-256-GCM bound to ``aad``, encoded as unpadded base64url so it is valid in any auth header."""
+    salt_key: Final = _get_salt_key()
+    if not isinstance(salt_key, str):
+        raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")
+    sealed: Final = _seal_aes_gcm(value=value, signing_key=salt_key, aad=aad)
+    return base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
+
+
+def decrypt_bearer_token(token: str, aad: bytes) -> str | None:
+    """None unless ``token`` came from :func:`encrypt_bearer_token` with the same ``aad``."""
+    salt_key: Final = _get_salt_key()
+    if not isinstance(salt_key, str):
+        return None
+    try:
+        sealed: Final = base64.b64decode(token + "=" * (-len(token) % 4), altchars=b"-_", validate=True)
+        return _open_aes_gcm(sealed=sealed, signing_key=salt_key, aad=aad)
+    except Exception:  # noqa: BLE001  # base64 and AES-GCM each raise their own "not a token" type
+        return None
+
+
+def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
     signing_key: Final = new_encryption_key or _get_salt_key()
 
     try:
         if isinstance(value, str):
-            # XSalsa20 cannot bind associated data, so AAD-bound values are always AES-256-GCM.
-            if aad is not None or _get_encryption_algorithm() == _ALGO_AES_GCM:
+            if _get_encryption_algorithm() == _ALGO_AES_GCM:
                 # AES path: the v2:gcm: output is already a base64url string, so it
                 # is returned directly with no extra base64 wrapper.
-                return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key), aad=aad)
+                return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
 
             encrypted_value = encrypt_value(value=value, signing_key=signing_key)
             # Use urlsafe_b64encode for URL-safe base64 encoding (replaces + with - and / with _)
@@ -129,13 +156,11 @@ def _legacy_ciphertext_bytes(value: str) -> bytes:
         return base64.b64decode(value)
 
 
-def _decrypt_with_signing_key(value: str, signing_key: str, aad: bytes | None = None) -> str:
+def _decrypt_with_signing_key(value: str, signing_key: str) -> str:
     # Versioned AES-256-GCM values are detected before any base64 decode.
     # The prefix is the algorithm tag the legacy nacl format never carried.
     if value.startswith(_V2_GCM_PREFIX):
-        return _decrypt_aes_gcm(value=value, signing_key=signing_key, aad=aad)
-    if aad is not None:
-        raise ValueError("AAD-bound values are always AES-256-GCM")
+        return _decrypt_aes_gcm(value=value, signing_key=signing_key)
 
     return decrypt_value(value=_legacy_ciphertext_bytes(value), signing_key=signing_key)
 
@@ -156,13 +181,12 @@ def decrypt_value_helper(
     key: str,  # this is just for debug purposes, showing the k,v pair that's invalid. not a signing key.
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
-    aad: bytes | None = None,
 ) -> str | None:
     signing_key: Final = _get_salt_key()
 
     try:
         if isinstance(value, str):
-            return _decrypt_with_signing_key(value=value, signing_key=cast(str, signing_key), aad=aad)
+            return _decrypt_with_signing_key(value=value, signing_key=cast(str, signing_key))
 
         # if it's not str - do not decrypt it, return the value
         return value

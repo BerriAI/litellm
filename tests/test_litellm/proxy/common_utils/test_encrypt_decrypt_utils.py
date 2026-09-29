@@ -7,14 +7,17 @@ gate, and the backward-compatibility guarantees that let legacy XSalsa20-Poly130
 """
 
 import base64
+import re
 
 import pytest
 
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _V2_GCM_PREFIX,
+    decrypt_bearer_token,
     decrypt_if_encrypted_with,
     decrypt_value_helper,
+    encrypt_bearer_token,
     encrypt_value,
     encrypt_value_helper,
 )
@@ -238,15 +241,26 @@ def test_explicit_key_decrypt_supports_the_empty_master_key():
     assert decrypt_if_encrypted_with(base64.urlsafe_b64encode(written_with_empty_key).decode(), "") == "stored-secret"
 
 
+def test_bearer_token_decrypts_only_with_the_same_aad():
+    token = encrypt_bearer_token("session", aad=b"purpose-a")
+
+    assert decrypt_bearer_token(token, aad=b"purpose-a") == "session"
+    assert decrypt_bearer_token(token, aad=b"purpose-b") is None
+
+
 @pytest.mark.parametrize("use_aes", [False, True])
-def test_aad_bound_value_decrypts_only_with_the_same_aad(monkeypatch, use_aes: bool):
+def test_stored_value_is_not_a_bearer_token_even_when_reshaped(monkeypatch, use_aes: bool):
     if use_aes:
         _use_aes(monkeypatch)
-    bound = encrypt_value_helper("stored-secret", aad=b"purpose-a")
-    unbound = encrypt_value_helper("stored-secret")
+    stored = encrypt_value_helper("stored-secret")
 
-    assert decrypt_value_helper(bound, key="t", exception_type="debug", aad=b"purpose-a") == "stored-secret"
-    assert decrypt_value_helper(bound, key="t", exception_type="debug", aad=b"purpose-b") is None
-    assert decrypt_value_helper(bound, key="t", exception_type="debug") is None
-    assert decrypt_value_helper(unbound, key="t", exception_type="debug") == "stored-secret"
-    assert decrypt_value_helper(unbound, key="t", exception_type="debug", aad=b"purpose-a") is None
+    for candidate in (stored, stored.removeprefix(_V2_GCM_PREFIX).rstrip("=")):
+        assert decrypt_bearer_token(candidate, aad=b"purpose-a") is None
+
+
+@pytest.mark.parametrize("length", range(6))
+def test_bearer_token_uses_only_header_safe_characters(length: int):
+    token = encrypt_bearer_token("x" * length, aad=b"purpose-a")
+
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", token), token
+    assert decrypt_bearer_token(token, aad=b"purpose-a") == "x" * length
