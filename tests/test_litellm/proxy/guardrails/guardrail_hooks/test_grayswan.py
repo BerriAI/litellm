@@ -748,6 +748,31 @@ async def test_post_call_scan_only_tool_results_scopes_context_and_tools() -> No
 
 
 @pytest.mark.asyncio
+async def test_post_call_merges_response_text_and_tool_calls_into_one_message() -> None:
+    guardrail = _post_call_guardrail()
+    client = _CapturingClient()
+    guardrail.async_handler = client
+
+    tool_call = {
+        "id": "call_send",
+        "type": "function",
+        "function": {"name": "send_email", "arguments": '{"to": "cfo@example.com"}'},
+    }
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["response text"], "tool_calls": [tool_call]},
+        request_data={**_REQUEST_DATA, "litellm_logging_obj": _LoggingObj("acompletion")},
+        input_type="response",
+        logging_obj=_LoggingObj("acompletion"),
+    )
+
+    messages = list(client.calls[0]["json"]["messages"])
+    assert messages == [
+        *_REQUEST_DATA["messages"],
+        {"role": "assistant", "content": "response text", "tool_calls": (tool_call,)},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_post_call_prefers_request_route_over_logging_call_type() -> None:
     guardrail = _post_call_guardrail()
     client = _CapturingClient()

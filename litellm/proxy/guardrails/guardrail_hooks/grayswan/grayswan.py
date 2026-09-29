@@ -275,10 +275,20 @@ class GraySwanGuardrail(CustomGuardrail):
         # Convert texts to messages format for GraySwan API
         # Use "user" role for request content, "assistant" for response content
         role: Final = "assistant" if input_type == "response" else "user"
+        merged_tail: Final = (
+            _MonitorMessage(role="assistant", content=texts[-1], tool_calls=response_tool_calls)
+            if texts and response_tool_calls
+            else None
+        )
         messages: Final = (
             *context,
-            *(_MonitorMessage(role=role, content=text) for text in texts),
-            *((_MonitorMessage(role="assistant", tool_calls=response_tool_calls),) if response_tool_calls else ()),
+            *(_MonitorMessage(role=role, content=text) for text in (texts[:-1] if merged_tail else texts)),
+            *((merged_tail,) if merged_tail else ()),
+            *(
+                (_MonitorMessage(role="assistant", tool_calls=response_tool_calls),)
+                if response_tool_calls and not texts
+                else ()
+            ),
         )
 
         # Get dynamic params from request metadata

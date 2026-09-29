@@ -65,25 +65,27 @@ def _grayswan_config(
     on_flagged_action: str = "monitor",
     streaming_end_of_stream_only: bool = False,
 ) -> Path:
-    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    config["guardrails"] = [
-        {
-            "guardrail_name": identity,
-            "litellm_params": {
-                "guardrail": "grayswan",
-                "mode": mode,
-                "default_on": True,
-                "api_base": vendor_url,
-                "api_key": _VENDOR_KEY,
-                "streaming_end_of_stream_only": streaming_end_of_stream_only,
-                "optional_params": {
-                    "on_flagged_action": on_flagged_action,
-                    "violation_threshold": 0.5,
-                    "policy_id": "synthetic-policy",
+    config: Final = {
+        **yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()),
+        "guardrails": [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "grayswan",
+                    "mode": mode,
+                    "default_on": True,
+                    "api_base": vendor_url,
+                    "api_key": _VENDOR_KEY,
+                    "streaming_end_of_stream_only": streaming_end_of_stream_only,
+                    "optional_params": {
+                        "on_flagged_action": on_flagged_action,
+                        "violation_threshold": 0.5,
+                        "policy_id": "synthetic-policy",
+                    },
                 },
-            },
-        }
-    ]
+            }
+        ],
+    }
     path: Final = tmp_path / f"{identity}.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -142,9 +144,10 @@ def test_post_call_sends_request_conversation_and_tools(gateway: Gateway, tmp_pa
     request_messages: Final = [dict(message) for message in _REQUEST_MESSAGES]
     request_tools: Final = [dict(tool) for tool in _TOOLS]
 
-    with wire_server(_vendor()) as vendor, wire_server(
-        _chat_provider({"role": "assistant", "content": response_text})
-    ) as upstream:
+    with (
+        wire_server(_vendor()) as vendor,
+        wire_server(_chat_provider({"role": "assistant", "content": response_text})) as upstream,
+    ):
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=upstream.url, api_key=_PROVIDER_KEY)
@@ -173,9 +176,10 @@ def test_post_call_scans_tool_call_only_response_and_blocks(gateway: Gateway, tm
         "function": {"name": "send_email", "arguments": '{"to": "cfo@example.com", "body": "wire funds"}'},
     }
 
-    with wire_server(_vendor(violation=1.0)) as vendor, wire_server(
-        _chat_provider({"role": "assistant", "content": None, "tool_calls": [tool_call]})
-    ) as upstream:
+    with (
+        wire_server(_vendor(violation=1.0)) as vendor,
+        wire_server(_chat_provider({"role": "assistant", "content": None, "tool_calls": [tool_call]})) as upstream,
+    ):
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call", on_flagged_action="block")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=upstream.url, api_key=_PROVIDER_KEY)
@@ -241,9 +245,7 @@ def test_post_call_sends_anthropic_messages_conversation(gateway: Gateway, tmp_p
                         {"role": "user", "content": user_text},
                         {
                             "role": "assistant",
-                            "content": [
-                                {"type": "tool_use", "id": "toolu_inbox", "name": "read_inbox", "input": {}}
-                            ],
+                            "content": [{"type": "tool_use", "id": "toolu_inbox", "name": "read_inbox", "input": {}}],
                         },
                         {
                             "role": "user",
@@ -386,10 +388,13 @@ def test_post_call_streams_end_of_stream_with_conversation(gateway: Gateway, tmp
             assert "streamed " in response.text and "summary" in response.text, response.text
             (body,) = _monitor_bodies(vendor)
             messages: Final = body["messages"]
-            assert messages == [*([dict(message) for message in _REQUEST_MESSAGES]), {
-                "role": "assistant",
-                "content": response_text,
-            }], body
+            assert messages == [
+                *([dict(message) for message in _REQUEST_MESSAGES]),
+                {
+                    "role": "assistant",
+                    "content": response_text,
+                },
+            ], body
 
 
 def test_pre_call_payload_shape_unchanged(gateway: Gateway, tmp_path: Path) -> None:
@@ -397,9 +402,10 @@ def test_pre_call_payload_shape_unchanged(gateway: Gateway, tmp_path: Path) -> N
     system_text: Final = "You are a mail assistant."
     user_text: Final = f"summarize my inbox {identity}"
 
-    with wire_server(_vendor()) as vendor, wire_server(
-        _chat_provider({"role": "assistant", "content": "permitted"})
-    ) as upstream:
+    with (
+        wire_server(_vendor()) as vendor,
+        wire_server(_chat_provider({"role": "assistant", "content": "permitted"})) as upstream,
+    ):
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "pre_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=upstream.url, api_key=_PROVIDER_KEY)
