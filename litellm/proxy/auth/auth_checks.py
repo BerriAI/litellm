@@ -142,6 +142,7 @@ from litellm.router import Router
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,
@@ -1058,10 +1059,9 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
-    if _model and valid_token is not None and valid_token.managed_agent_policy is not None:
-        managed_models: Final = (valid_token.managed_agent_policy.object_permission or MappingProxyType({})).get(
-            "models", ()
-        )
+    managed_policy: Final = managed_agent_policy(valid_token)
+    if _model and managed_policy is not None:
+        managed_models: Final = (managed_policy.object_permission or MappingProxyType({})).get("models", ())
         if not isinstance(managed_models, (list, tuple)) or not managed_models:
             raise HTTPException(403, "This agent has no model grants")
         _can_object_call_model(
@@ -4548,10 +4548,11 @@ async def _check_agent_access_group_model_access(
 
     from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
 
-    unmanaged: Final = await resolve_ceiling(valid_token.agent_id) if valid_token.managed_agent_policy is None else None
+    managed: Final = managed_agent_policy(valid_token)
+    unmanaged: Final = await resolve_ceiling(valid_token.agent_id) if managed is None else None
     ceilings: Final = (
-        await resolve_managed_agent_ceilings(valid_token.managed_agent_policy)
-        if valid_token.managed_agent_policy is not None
+        await resolve_managed_agent_ceilings(managed)
+        if managed is not None
         else (unmanaged,)
         if unmanaged is not None
         else ()

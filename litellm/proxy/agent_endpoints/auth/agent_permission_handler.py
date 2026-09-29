@@ -29,6 +29,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +90,7 @@ class AgentRequestHandler:
     ) -> AgentAccess:
         """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
         and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
-        if user_api_key_auth is not None and user_api_key_auth.managed_agent_policy is not None:
+        if managed_agent_policy(user_api_key_auth) is not None:
             return await _managed_actor_agent_access(user_api_key_auth)
         key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(user_api_key_auth)
         caller_access: Final = await AgentRequestHandler._agent_caller_access(user_api_key_auth)
@@ -183,7 +184,7 @@ class AgentRequestHandler:
                 authority: Final = (
                     await MCPRequestHandler._reload_admitted_key(key_hash, check_db_only=True)
                     if key_hash
-                    and user_api_key_auth.managed_agent_policy is None
+                    and managed_agent_policy(user_api_key_auth) is None
                     and not user_api_key_auth.is_session_token
                     else user_api_key_auth
                 )
@@ -633,13 +634,13 @@ async def accessible_agents(
 
 
 async def _strict_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
-    if auth.managed_agent_policy is not None:
+    if managed_agent_policy(auth) is not None:
         return await _managed_actor_agent_access(auth)
     return await AgentRequestHandler.resolve_key_team_agent_access(auth, strict=True)
 
 
 async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
-    agent: Final = auth.managed_agent_policy
+    agent: Final = managed_agent_policy(auth)
     if agent is None or not agent.object_permission:
         return RestrictedAgentAccess(frozenset())
     permission: Final = LiteLLM_ObjectPermissionTable.model_validate(agent.object_permission or MappingProxyType({}))

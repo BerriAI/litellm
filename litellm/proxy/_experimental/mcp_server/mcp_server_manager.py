@@ -210,6 +210,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     parse_pinned_tools,
 )
 from litellm.types.utils import CallTypes
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -3479,7 +3480,7 @@ class MCPServerManager:
         2. If admin and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
-        if user_api_key_auth is not None and user_api_key_auth.managed_agent_policy is not None:
+        if managed_agent_policy(user_api_key_auth) is not None:
             managed: Final = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
             return managed if access is None else [server for server in managed if server in access.server_ids]
 

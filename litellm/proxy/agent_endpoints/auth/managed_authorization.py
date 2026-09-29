@@ -7,6 +7,16 @@ from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 
 
+def managed_agent_policy(auth: "UserAPIKeyAuth | None") -> AgentResponse | None:
+    """The admitted managed policy, or ``None`` when the subject was never admitted as a managed agent.
+
+    ``admit_managed_actor`` only assigns ``managed_agent_policy`` after ``actor_admission_failure``
+    has verified the bound context, so an ``AgentResponse`` here means admission succeeded.
+    """
+    policy: Final = auth.managed_agent_policy if auth is not None else None
+    return policy if isinstance(policy, AgentResponse) else None
+
+
 async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | None) -> None:
     delegation_verified: Final = auth._managed_delegation_verified
     auth._managed_delegation_verified = False
