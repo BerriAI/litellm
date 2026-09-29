@@ -1778,9 +1778,33 @@ SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS: Final = float(
 )
 TOOL_SPEND_TOP_TOOLS: Final = 100
 MODEL_INSIGHTS_TOP_MODELS: Final = 10
+MODEL_INSIGHTS_MAX_RANGE_DAYS: Final = 365
 MODEL_INSIGHTS_TASK_TYPES: Final = frozenset(
-    {"chat", "embeddings", "images", "audio", "rerank", "responses", "unknown"}
+    {
+        "classification",
+        "content_writing",
+        "roleplay_fiction",
+        "conversation",
+        "research_reports",
+        "qa_knowledge",
+        "customer_support",
+        "summarization",
+        "translation",
+        "workflow_execution",
+        "multi_step_planning",
+        "tool_dispatch",
+        "code_generation",
+        "debugging",
+        "code_review",
+        "frontend_ui",
+        "file_io",
+        "shell_execution",
+        "data_extraction",
+        "data_transformation",
+    }
 )
+MODEL_INSIGHTS_DEFAULT_TASK: Final = "uncategorized"
+MODEL_INSIGHTS_TASK_TAG_PREFIX: Final = "task:"
 SPEND_LOG_PARTITION_INTERVAL: Final = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
 SPEND_LOG_PARTITION_PRECREATE_AHEAD: Final = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
 SPEND_LOG_WRITE_BATCH_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000)))
