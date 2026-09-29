@@ -14,6 +14,7 @@ from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
@@ -2869,3 +2870,193 @@ def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
     assert exc_info.value.status_code == 401
     assert exc_info.value.llm_provider == "anthropic"
     assert route.calls.last.request.headers["x-api-key"] == "bad-anthropic-key"
+
+
+def test_anthropic_refusal_metadata_streaming():
+    """
+    Test that Anthropic refusal stop_reason and stop_details are captured
+    in provider_specific_fields during streaming and preserved through
+    stream_chunk_builder aggregation (#43752).
+    """
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_refusal_streaming_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "I cannot fulfill this request."},
+        },
+        {
+            "type": "content_block_stop",
+            "index": 0,
+        },
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "refusal",
+                "stop_details": {"type": "refusal", "category": "cyber"},
+            },
+            "usage": {"output_tokens": 8},
+        },
+    ]
+
+    parsed_chunks = [iterator.chunk_parser(c) for c in chunks]
+
+    # Verify message_delta chunk carries provider_specific_fields
+    last_chunk = parsed_chunks[-1]
+    assert last_chunk.choices[0].finish_reason == "content_filter"
+    assert last_chunk.choices[0].delta.provider_specific_fields is not None
+    assert last_chunk.choices[0].delta.provider_specific_fields["stop_reason"] == "refusal"
+    assert last_chunk.choices[0].delta.provider_specific_fields["stop_details"] == {
+        "type": "refusal",
+        "category": "cyber",
+    }
+
+    # Verify stream_chunk_builder preserves refusal metadata
+    assembled = litellm.stream_chunk_builder(parsed_chunks)
+    assert assembled is not None
+    assert assembled.choices[0].finish_reason == "content_filter"
+    assert assembled.choices[0].message.content == "I cannot fulfill this request."
+    assert assembled.choices[0].message.provider_specific_fields is not None
+    assert assembled.choices[0].message.provider_specific_fields["stop_reason"] == "refusal"
+    assert assembled.choices[0].message.provider_specific_fields["stop_details"] == {
+        "type": "refusal",
+        "category": "cyber",
+    }
+    assert assembled.choices[0].provider_specific_fields == assembled.choices[0].message.provider_specific_fields
+    assert (
+        assembled.hidden_params.get("provider_specific_fields", {}).get("stop_reason") == "refusal"
+        if hasattr(assembled, "hidden_params")
+        else assembled._hidden_params.get("provider_specific_fields", {}).get("stop_reason") == "refusal"
+    )
+
+
+def test_anthropic_refusal_metadata_non_streaming():
+    """
+    Test that Anthropic refusal stop_reason and stop_details are captured
+    in provider_specific_fields for non-streaming responses (#43752).
+    """
+    config = AnthropicConfig()
+    completion_response = {
+        "id": "msg_refusal_non_streaming_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20241022",
+        "content": [{"type": "text", "text": "I cannot fulfill this request."}],
+        "stop_reason": "refusal",
+        "stop_details": {"type": "refusal", "category": "hate"},
+        "usage": {"input_tokens": 10, "output_tokens": 7},
+    }
+
+    resp = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=httpx.Response(200),
+        model_response=litellm.ModelResponse(),
+    )
+
+    assert resp.choices[0].finish_reason == "content_filter"
+    assert resp.choices[0].message.provider_specific_fields is not None
+    assert resp.choices[0].message.provider_specific_fields["stop_reason"] == "refusal"
+    assert resp.choices[0].message.provider_specific_fields["stop_details"] == {
+        "type": "refusal",
+        "category": "hate",
+    }
+    assert resp.choices[0].provider_specific_fields == resp.choices[0].message.provider_specific_fields
+    hidden = resp.hidden_params if hasattr(resp, "hidden_params") else resp._hidden_params
+    assert hidden["provider_specific_fields"]["stop_reason"] == "refusal"
+    assert hidden["provider_specific_fields"]["stop_details"] == {
+        "type": "refusal",
+        "category": "hate",
+    }
+
+
+def test_anthropic_normal_completion_does_not_leak_refusal_fields():
+    """
+    Test that standard non-refusal completions (stop_reason="end_turn", stop_details=None)
+    do not have stop_reason or stop_details in provider_specific_fields.
+    """
+    # 1. Streaming
+    iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_normal_streaming_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 0},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello, world!"},
+        },
+        {
+            "type": "content_block_stop",
+            "index": 0,
+        },
+        {
+            "type": "message_delta",
+            "delta": {
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+            },
+            "usage": {"output_tokens": 5},
+        },
+    ]
+
+    parsed_chunks = [iterator.chunk_parser(c) for c in chunks]
+    last_chunk = parsed_chunks[-1]
+    if last_chunk.choices[0].delta.provider_specific_fields:
+        assert "stop_reason" not in last_chunk.choices[0].delta.provider_specific_fields
+        assert "stop_details" not in last_chunk.choices[0].delta.provider_specific_fields
+
+    assembled = litellm.stream_chunk_builder(parsed_chunks)
+    assert assembled is not None
+    if assembled.choices[0].message.provider_specific_fields:
+        assert "stop_reason" not in assembled.choices[0].message.provider_specific_fields
+        assert "stop_details" not in assembled.choices[0].message.provider_specific_fields
+
+    # 2. Non-streaming
+    config = AnthropicConfig()
+    completion_response = {
+        "id": "msg_normal_non_streaming_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-5-sonnet-20241022",
+        "content": [{"type": "text", "text": "Hello, world!"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+    resp = config.transform_parsed_response(
+        completion_response=completion_response,
+        raw_response=httpx.Response(200),
+        model_response=litellm.ModelResponse(),
+    )
+    if resp.choices[0].message.provider_specific_fields:
+        assert "stop_reason" not in resp.choices[0].message.provider_specific_fields
+        assert "stop_details" not in resp.choices[0].message.provider_specific_fields
+

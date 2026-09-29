@@ -2647,6 +2647,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
+        stop_reason: Final = completion_response.get("stop_reason")
+        stop_details: Final = completion_response.get("stop_details")
+        if stop_reason == "refusal" or stop_details is not None:
+            if stop_reason is not None:
+                provider_specific_fields["stop_reason"] = stop_reason
+            if stop_details is not None:
+                provider_specific_fields["stop_details"] = stop_details
+
         return provider_specific_fields
 
     def transform_parsed_response(
@@ -2734,6 +2742,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _message = json_mode_message
 
         model_response.choices[0].message = _message
+        model_response.choices[0].provider_specific_fields = provider_specific_fields
         model_response.hidden_params["original_response"] = completion_response["content"]
         model_response.choices[0].finish_reason = cast(
             OpenAIChatCompletionFinishReason,

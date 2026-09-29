@@ -440,6 +440,27 @@ class TestHandleMessageDelta:
         assert response["stop_reason"] == "end_turn"
         assert response["usage"]["output_tokens"] == 15
 
+    def test_should_set_stop_details_refusal_metadata(self):
+        response: Dict[str, Any] = {
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+        _handle_message_delta(
+            {
+                "delta": {
+                    "stop_reason": "refusal",
+                    "stop_sequence": None,
+                    "stop_details": {"type": "refusal", "explanation": "Policy violation"},
+                },
+                "usage": {"output_tokens": 10},
+            },
+            response,
+        )
+        assert response["stop_reason"] == "refusal"
+        assert response["stop_details"] == {"type": "refusal", "explanation": "Policy violation"}
+        assert response["usage"]["output_tokens"] == 10
+
 
 # ---------------------------------------------------------------------------
 # Tests for _rebuild_anthropic_response_from_sse

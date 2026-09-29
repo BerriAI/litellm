@@ -1583,6 +1583,9 @@ def stream_chunk_builder(
             if combined_provider_fields:
                 _choice = response.choices[0]
                 _choice.message.provider_specific_fields = combined_provider_fields
+                _choice.provider_specific_fields = combined_provider_fields
+                if hasattr(response, "hidden_params") and isinstance(response.hidden_params, dict):
+                    response.hidden_params.setdefault("provider_specific_fields", {}).update(combined_provider_fields)
 
         completion_output = get_content_from_model_response(response)
 
