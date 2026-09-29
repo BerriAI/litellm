@@ -279,10 +279,6 @@ else:
 _T: Final = TypeVar("_T")
 
 
-async def _await_within_guardrail_timeout(callback: object, coro: Awaitable[_T], fail_open_result: _T) -> _T:
-    return resolve_hook_timeout(await await_within_hook_timeout(callback, coro), fail_open_result)
-
-
 class _ViewCountRow(TypedDict):
     view_count: ReadOnly[int]
     view_names: ReadOnly[Sequence[str] | None]
@@ -1825,7 +1821,7 @@ class ProxyLogging:
             response: Response object (for post_call hooks)
 
         Returns:
-            Result from the guardrail execution
+            Result from the guardrail execution, or ``GuardrailHookTimedOut`` when it exceeded ``hook_timeout``
         """
         # Use unified_guardrail if callback has apply_guardrail method
         has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__ and not getattr(
@@ -1840,7 +1836,7 @@ class ProxyLogging:
         target: Final = unified_guardrail if use_unified else callback
 
         if hook_type == "pre_call":
-            return await _await_within_guardrail_timeout(
+            return await await_within_hook_timeout(
                 callback,
                 target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -1848,27 +1844,24 @@ class ProxyLogging:
                     data=data,
                     call_type=call_type,
                 ),
-                fail_open_result=None,
             )
         elif hook_type == "during_call":
-            return await _await_within_guardrail_timeout(
+            return await await_within_hook_timeout(
                 callback,
                 target.async_moderation_hook(
                     data=data,
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                 ),
-                fail_open_result=None,
             )
         elif hook_type == "post_call":
-            return await _await_within_guardrail_timeout(
+            return await await_within_hook_timeout(
                 callback,
                 target.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict,
                     data=data,
                     response=response,
                 ),
-                fail_open_result=None,
             )
         else:
             raise ValueError(f"Unknown hook_type: {hook_type}")
@@ -1960,7 +1953,7 @@ class ProxyLogging:
         try:
             # Check if load balancing should be used
             if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
-                response = await self._execute_guardrail_with_load_balancing(
+                outcome = await self._execute_guardrail_with_load_balancing(
                     guardrail_name=guardrail_name,
                     hook_type="pre_call",
                     data=data,
@@ -1969,13 +1962,18 @@ class ProxyLogging:
                 )
             else:
                 # Single guardrail - execute directly
-                response = await self._execute_guardrail_hook(
+                outcome = await self._execute_guardrail_hook(
                     callback=callback,
                     hook_type="pre_call",
                     data=data,
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                 )
+
+            if isinstance(outcome, GuardrailHookTimedOut):
+                status = "timeout"
+                error_type = litellm.Timeout.__name__
+            response: Final = resolve_hook_timeout(outcome, fail_open_result=None)
 
             # Process the response if one was returned
             if response is not None:
@@ -1987,8 +1985,9 @@ class ProxyLogging:
             status = "intervened"
             raise
         except Exception as e:
-            status = "error"
-            error_type = type(e).__name__
+            if status != "timeout":
+                status = "error"
+                error_type = type(e).__name__
             enrich_http_exception_with_guardrail_context(e, callback)
             # Re-raise the exception to maintain existing behavior
             raise
@@ -2739,16 +2738,17 @@ class ProxyLogging:
         error_type: str | None = None
         try:
             outcome: Final = await await_within_hook_timeout(callback, coro)
-            if isinstance(outcome, GuardrailHookTimedOut) and outcome.fail_open:
-                status = "skipped"
+            if isinstance(outcome, GuardrailHookTimedOut):
+                status = "timeout"
                 error_type = litellm.Timeout.__name__
             return resolve_hook_timeout(outcome, fail_open_result)
         except SensitiveDataRouteException:
             status = "intervened"
             raise
         except Exception as e:
-            status = "error"
-            error_type = type(e).__name__
+            if status != "timeout":
+                status = "error"
+                error_type = type(e).__name__
             enrich_http_exception_with_guardrail_context(e, callback)
             _record_raising_guardrail(request_data, callback)
             raise
