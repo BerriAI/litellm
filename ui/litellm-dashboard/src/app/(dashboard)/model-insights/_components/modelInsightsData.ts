@@ -78,10 +78,10 @@ export const formatMetric = (value: number, metric: Metric) => {
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 };
 
-const weekStart = (date: string, origin: number) => {
-  const offset = Math.floor((Date.parse(date) - origin) / DAY_MS / WEEK_DAYS);
-  return new Date(origin + offset * WEEK_DAYS * DAY_MS).toISOString().slice(0, 10);
-};
+const toDay = (date: string) => Date.parse(`${date}T00:00:00Z`);
+const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+export type DateRange = { start: string; end: string };
 
 export const modelOrder = (rows: DailyMetric[], metric: Metric) => {
   const totals = new Map<string, number>();
@@ -89,17 +89,19 @@ export const modelOrder = (rows: DailyMetric[], metric: Metric) => {
   return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([model]) => model);
 };
 
-export const buildWeeklySeries = (rows: DailyMetric[], models: string[], metric: Metric) => {
-  if (rows.length === 0) return [];
-  const origin = Math.min(...rows.map((row) => Date.parse(row.date)));
-  const buckets = new Map<string, Record<string, number | string>>();
+export const buildWeeklySeries = (rows: DailyMetric[], models: string[], metric: Metric, range: DateRange) => {
+  const weekMs = WEEK_DAYS * DAY_MS;
+  const origin = toDay(range.start);
+  const weekCount = Math.floor((toDay(range.end) - origin) / weekMs) + 1;
+  const buckets = Array.from({ length: weekCount }, (_, week) => ({
+    date: isoDay(origin + week * weekMs),
+    ...Object.fromEntries(models.map((model) => [model, 0])),
+  })) as Record<string, number | string>[];
   for (const row of rows) {
-    const key = weekStart(row.date, origin);
-    const bucket = buckets.get(key) ?? { date: key, ...Object.fromEntries(models.map((model) => [model, 0])) };
-    bucket[row.model_group] = Number(bucket[row.model_group] ?? 0) + metricValue(row, metric);
-    buckets.set(key, bucket);
+    const bucket = buckets[Math.floor((toDay(row.date) - origin) / weekMs)];
+    if (bucket) bucket[row.model_group] = Number(bucket[row.model_group] ?? 0) + metricValue(row, metric);
   }
-  return [...buckets.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return buckets;
 };
 
 const shareByModel = (rows: { model_group: string; provider: string }[], values: number[]) => {
@@ -112,15 +114,17 @@ const shareByModel = (rows: { model_group: string; provider: string }[], values:
   return { totals, grand };
 };
 
-const halfShares = (daily: DailyMetric[], metric: Metric) => {
-  const dates = [...new Set(daily.map((row) => row.date))].sort();
-  const midpoint = dates[Math.floor(dates.length / 2)];
+const halfShares = (daily: DailyMetric[], metric: Metric, range: DateRange) => {
+  const midpoint = isoDay(toDay(range.start) + Math.floor((toDay(range.end) - toDay(range.start)) / 2 + DAY_MS / 2));
   const share = (rows: DailyMetric[]) => {
     const { totals, grand } = shareByModel(
       rows,
       rows.map((row) => metricValue(row, metric)),
     );
-    return (model: string) => (grand === 0 ? 0 : ((totals.get(model)?.value ?? 0) / grand) * 100);
+    return {
+      hasUsage: grand > 0,
+      of: (model: string) => (grand === 0 ? 0 : ((totals.get(model)?.value ?? 0) / grand) * 100),
+    };
   };
   return {
     earlier: share(daily.filter((row) => row.date < midpoint)),
@@ -128,19 +132,25 @@ const halfShares = (daily: DailyMetric[], metric: Metric) => {
   };
 };
 
-export const rankModels = (rows: ModelMetric[], daily: DailyMetric[], metric: Metric): RankedModel[] => {
+export const rankModels = (
+  rows: ModelMetric[],
+  daily: DailyMetric[],
+  metric: Metric,
+  range: DateRange,
+): RankedModel[] => {
   const { totals, grand } = shareByModel(
     rows,
     rows.map((row) => metricValue(row, metric)),
   );
-  const { earlier, later } = halfShares(daily, metric);
+  const { earlier, later } = halfShares(daily, metric, range);
+  const comparable = earlier.hasUsage && later.hasUsage;
   return [...totals.entries()]
     .sort((a, b) => b[1].value - a[1].value)
     .map(([model_group, entry]) => ({
       model_group,
       provider: entry.provider,
       share: grand === 0 ? 0 : (entry.value / grand) * 100,
-      delta: later(model_group) - earlier(model_group),
+      delta: comparable ? later.of(model_group) - earlier.of(model_group) : 0,
     }));
 };
 
