@@ -11,7 +11,7 @@ import asyncio
 import copy
 import inspect
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -26,7 +26,10 @@ from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_logged_object,
 )
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import (
+    StandardCallbackDynamicParams,
+    StandardLoggingPayloadErrorInformation,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -183,6 +186,42 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
     return _redact_standard_logging_object(payload)
 
 
+def redact_error_information(
+    error_information: StandardLoggingPayloadErrorInformation,
+) -> StandardLoggingPayloadErrorInformation:
+    """
+    Return a copy of ``StandardLoggingPayloadErrorInformation`` with the fields that can
+    quote the prompt (``error_message``, ``traceback``) replaced by ``REDACTED_BY_LITELLM``
+    when they are non-empty strings. Every other field is carried over unchanged.
+    """
+    redacted: Final = dict(error_information)
+    for field in ("error_message", "traceback"):
+        value: Final = redacted.get(field)
+        if isinstance(value, str) and value:
+            redacted[field] = REDACTED_BY_LITELLM
+    return cast(StandardLoggingPayloadErrorInformation, redacted)
+
+
+def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
+    """
+    Message-redaction decision for proxy ``async_post_call_failure_hook`` callbacks, which
+    only receive ``request_data`` (the Logging object is popped before hooks run).
+    ``litellm_metadata`` is included only when present so
+    ``get_metadata_variable_name_from_kwargs`` resolves ``metadata`` for chat routes.
+    """
+    litellm_params: Final[dict[str, object]] = {"metadata": request_data.get("metadata")}
+    if "litellm_metadata" in request_data:
+        litellm_params["litellm_metadata"] = request_data.get("litellm_metadata")
+    return should_redact_message_logging(
+        {
+            "litellm_params": litellm_params,
+            "standard_callback_dynamic_params": {
+                "turn_off_message_logging": request_data.get("turn_off_message_logging")
+            },
+        }
+    )
+
+
 def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, object]:
     standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
@@ -207,6 +246,14 @@ def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, 
         else:
             # For other formats (empty dict, None, etc.), use simple text format
             standard_logging_object["response"] = {"text": redacted_str}
+
+    if standard_logging_object.get("error_str"):
+        standard_logging_object["error_str"] = redacted_str
+    error_information: Final = standard_logging_object.get("error_information")
+    if isinstance(error_information, Mapping):
+        standard_logging_object["error_information"] = redact_error_information(
+            cast(StandardLoggingPayloadErrorInformation, dict(error_information))
+        )
     return standard_logging_object
 
 
@@ -272,6 +319,8 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
         model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)
+    if isinstance(model_call_details.get("traceback_exception"), str) and model_call_details["traceback_exception"]:
+        model_call_details["traceback_exception"] = REDACTED_BY_LITELLM
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response

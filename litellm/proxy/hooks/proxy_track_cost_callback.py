@@ -16,6 +16,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.redact_messages import (
+    redact_error_information,
+    should_redact_failed_request,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -171,6 +175,8 @@ class _ProxyDBLogger(CustomLogger):
             original_exception=original_exception,
             traceback_str=traceback_str,
         )
+        if should_redact_failed_request(request_data):
+            _error_information = redact_error_information(_error_information)
         if should_suppress_spend_log_tracebacks():
             # Drop the traceback key entirely so the per-row Metadata pane in
             # the UI (which renders the JSON blob verbatim) doesn't show a

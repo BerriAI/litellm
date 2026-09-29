@@ -3238,3 +3238,56 @@ def test_provisional_close_then_payload_close_does_not_duplicate():
     server.end()
     llm_spans = [s for s in exporter.get_finished_spans() if s.name.startswith("chat")]
     assert len(llm_spans) == 1
+
+def test_async_post_call_failure_hook_redacts_error_text_when_gated():
+    """With message redaction on, the proxy-level failure span must not carry the
+    prompt through error.message / the exception event, while error.type and the
+    provider error code stay intact."""
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    litellm.turn_off_message_logging = True
+    try:
+        logger, exporter = _logger()
+        server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+        set_request_root_span(server)
+        secret = "secret-prompt-marker"
+        result = asyncio.run(
+            logger.async_post_call_failure_hook(
+                request_data={"metadata": {}},
+                original_exception=_proxy_exc(f"Unsupported content: {secret}", 400),
+                user_api_key_dict=UserAPIKeyAuth(),
+                traceback_str=f"Traceback ... {secret} ...",
+            )
+        )
+        server.end()
+        assert result is None
+        (span,) = exporter.get_finished_spans()
+        assert secret not in str(dict(span.attributes or {}))
+        assert secret not in str([dict(e.attributes or {}) for e in span.events])
+        assert span.attributes["error.message"] == "redacted-by-litellm"
+        assert span.attributes["error.type"] == "ProxyException"
+        assert span.attributes["litellm.provider.error.code"] == "400"
+        assert span.attributes["litellm.provider.error.stack_trace"] == "redacted-by-litellm"
+    finally:
+        litellm.turn_off_message_logging = False
+
+
+def test_async_post_call_failure_hook_keeps_error_text_when_not_gated():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    set_request_root_span(server)
+    secret = "secret-prompt-marker"
+    asyncio.run(
+        logger.async_post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=_proxy_exc(f"Unsupported content: {secret}", 400),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str="trace",
+        )
+    )
+    server.end()
+    (span,) = exporter.get_finished_spans()
+    assert secret in span.attributes["error.message"]

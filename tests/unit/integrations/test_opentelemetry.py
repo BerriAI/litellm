@@ -6762,3 +6762,83 @@ class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
         self.assertEqual(
             self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 1
         )
+
+SECRET_PROMPT = "secret-prompt-marker"
+
+
+class TestOpenTelemetryFailureHookRedaction(unittest.TestCase):
+    def _run_hook(self, request_data, exception, redact):
+        original = litellm.turn_off_message_logging
+        litellm.turn_off_message_logging = redact
+        try:
+            exporter = InMemorySpanExporter()
+            provider = TracerProvider()
+            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            tracer = provider.get_tracer(__name__)
+
+            otel = OpenTelemetry()
+            otel.tracer = tracer
+            server_span = tracer.start_span("Received Proxy Server Request")
+
+            user_api_key_dict = MagicMock()
+            user_api_key_dict.parent_otel_span = server_span
+
+            asyncio.run(
+                otel.async_post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=exception,
+                    user_api_key_dict=user_api_key_dict,
+                    traceback_str=f"Traceback ... {SECRET_PROMPT} ...",
+                )
+            )
+        finally:
+            litellm.turn_off_message_logging = original
+
+        finished = {s.name: s for s in exporter.get_finished_spans()}
+        return finished
+
+    def test_failure_hook_redacts_error_text_when_gated(self):
+        secret = SECRET_PROMPT
+        finished = self._run_hook(
+            {"metadata": {}},
+            litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+            redact=True,
+        )
+        server = finished["Received Proxy Server Request"]
+        child = finished["Failed Proxy Server Request"]
+        for span in (server, child):
+            assert secret not in str(dict(span.attributes or {}))
+            for event in span.events:
+                assert secret not in str(dict(event.attributes or {}))
+        assert server.attributes["error.message"] == "redacted-by-litellm"
+        assert server.attributes["error.type"] == "BadRequestError"
+        assert child.attributes["exception"] == "redacted-by-litellm"
+
+    def test_failure_hook_keeps_error_text_when_not_gated(self):
+        secret = SECRET_PROMPT
+        finished = self._run_hook(
+            {"metadata": {}},
+            litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+            redact=False,
+        )
+        child = finished["Failed Proxy Server Request"]
+        assert secret in child.attributes["exception"]
+
+    def test_record_error_attributes_on_span_redacts_via_global_gate(self):
+        original = litellm.turn_off_message_logging
+        litellm.turn_off_message_logging = True
+        try:
+            otel = OpenTelemetry()
+            span = MagicMock()
+            otel.record_error_attributes_on_span(
+                span=span,
+                exception=litellm.BadRequestError(
+                    message=f"Unsupported content: {SECRET_PROMPT}", model="gpt-4o", llm_provider="openai"
+                ),
+                status_code=400,
+            )
+        finally:
+            litellm.turn_off_message_logging = original
+        stamped = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+        assert stamped.get("error.message") == "redacted-by-litellm"
+        assert stamped.get("error.type") == "BadRequestError"

@@ -9029,3 +9029,140 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+class _CapturingFailureLogger(CustomLogger):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sync_kwargs = None
+        self.async_kwargs = None
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.sync_kwargs = kwargs
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.async_kwargs = kwargs
+
+
+def _failure_logging_obj(secret):
+    return LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": secret}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="failure-redaction-test",
+        function_id="failure-redaction-test",
+    )
+
+
+def _assert_no_secret_leaks(kwargs, secret):
+    payload = kwargs.get("standard_logging_object") or {}
+    assert secret not in json.dumps(payload, default=str)
+    assert secret not in str(kwargs.get("traceback_exception"))
+    error_information = payload.get("error_information") or {}
+    assert error_information.get("error_class") == "BadRequestError"
+    assert error_information.get("error_code") == "400"
+    assert error_information.get("llm_provider") == "openai"
+
+
+def test_sync_failure_handler_redacts_error_text_for_custom_logger(monkeypatch):
+    secret = "secret-prompt-marker"
+    capture = _CapturingFailureLogger()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "failure_callback", [capture])
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", None)
+    logging_obj = _failure_logging_obj(secret)
+
+    logging_obj.failure_handler(
+        litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+        f"Traceback ... {secret} ...",
+    )
+
+    assert capture.sync_kwargs is not None
+    _assert_no_secret_leaks(capture.sync_kwargs, secret)
+
+
+def test_sync_failure_handler_honours_excluded_fields(monkeypatch):
+    capture = _CapturingFailureLogger()
+    monkeypatch.setattr(litellm, "failure_callback", [capture])
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["hidden_params"])
+    logging_obj = _failure_logging_obj("anything")
+
+    logging_obj.failure_handler(litellm.BadRequestError(message="denied", model="gpt-4o", llm_provider="openai"), "tb")
+
+    payload = capture.sync_kwargs.get("standard_logging_object") or {}
+    assert "hidden_params" not in payload
+
+
+def test_sync_failure_handler_leaves_error_text_alone_when_redaction_off(monkeypatch):
+    secret = "secret-prompt-marker"
+    capture = _CapturingFailureLogger()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "failure_callback", [capture])
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", None)
+    logging_obj = _failure_logging_obj(secret)
+
+    logging_obj.failure_handler(
+        litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+        f"Traceback ... {secret} ...",
+    )
+
+    payload = capture.sync_kwargs.get("standard_logging_object") or {}
+    assert secret in payload.get("error_information", {}).get("error_message", "")
+    assert secret in str(payload.get("error_str"))
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_redacts_error_text_for_custom_logger(monkeypatch):
+    secret = "secret-prompt-marker"
+    capture = _CapturingFailureLogger()
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [capture])
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", None)
+    logging_obj = _failure_logging_obj(secret)
+
+    await logging_obj.async_failure_handler(
+        litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+        f"Traceback ... {secret} ...",
+    )
+
+    assert capture.async_kwargs is not None
+    _assert_no_secret_leaks(capture.async_kwargs, secret)
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_honours_excluded_fields(monkeypatch):
+    capture = _CapturingFailureLogger()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [capture])
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", ["hidden_params"])
+    logging_obj = _failure_logging_obj("anything")
+
+    await logging_obj.async_failure_handler(
+        litellm.BadRequestError(message="denied", model="gpt-4o", llm_provider="openai"), "tb"
+    )
+
+    payload = capture.async_kwargs.get("standard_logging_object") or {}
+    assert "hidden_params" not in payload
+
+
+@pytest.mark.asyncio
+async def test_per_callback_turn_off_redacts_error_fields_even_for_self_redacting_logger(monkeypatch):
+    secret = "secret-prompt-marker"
+
+    class SelfRedactingLogger(_CapturingFailureLogger):
+        def redacts_messages_itself(self):
+            return True
+
+    capture = SelfRedactingLogger(turn_off_message_logging=True)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [capture])
+    monkeypatch.setattr(litellm, "standard_logging_payload_excluded_fields", None)
+    logging_obj = _failure_logging_obj(secret)
+
+    await logging_obj.async_failure_handler(
+        litellm.BadRequestError(message=f"Unsupported content: {secret}", model="gpt-4o", llm_provider="openai"),
+        f"Traceback ... {secret} ...",
+    )
+
+    assert capture.async_kwargs is not None
+    _assert_no_secret_leaks(capture.async_kwargs, secret)

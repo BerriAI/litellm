@@ -3,7 +3,9 @@ import threading
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -88,7 +90,19 @@ class MlflowLogger(CustomLogger):
 
             # Record exception info as event
             if exception := kwargs.get("exception"):
-                span.add_event(SpanEvent.from_exception(exception))
+                if should_redact_message_logging(kwargs):
+                    span.add_event(
+                        SpanEvent(
+                            name="exception",
+                            attributes={
+                                "exception.type": type(exception).__name__,
+                                "exception.message": REDACTED_BY_LITELLM,
+                                "exception.stacktrace": REDACTED_BY_LITELLM,
+                            },
+                        )
+                    )
+                else:
+                    span.add_event(SpanEvent.from_exception(exception))
 
             self._extract_and_set_chat_attributes(span, kwargs, response_obj)
             self._end_span_or_trace(

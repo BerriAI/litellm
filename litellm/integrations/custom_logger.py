@@ -4,7 +4,7 @@ import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, cast
 
 from pydantic import BaseModel
 
@@ -24,6 +24,7 @@ from litellm.types.utils import (
     StandardAuditLogPayload,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
 )
 
 if TYPE_CHECKING:
@@ -960,6 +961,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict: Final = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
+        if turn_off_message_logging:
+            # Error text can quote the prompt; callbacks never scrub it themselves,
+            # so redact it regardless of `redacts_messages_itself`.
+            if standard_logging_object_copy.get("error_str"):
+                standard_logging_object_copy["error_str"] = "redacted-by-litellm"
+            error_information: Final = standard_logging_object_copy.get("error_information")
+            if isinstance(error_information, Mapping):
+                from litellm.litellm_core_utils.redact_messages import redact_error_information
+
+                standard_logging_object_copy["error_information"] = redact_error_information(
+                    cast(StandardLoggingPayloadErrorInformation, dict(error_information))
+                )
+
         params: Final = model_call_details.get("litellm_params")
         request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
         redacted_params: Final = (
@@ -967,9 +981,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict)
             else EMPTY_MAPPING
         )
+        redacted_failure_fields: Final = (
+            MappingProxyType({"traceback_exception": "redacted-by-litellm"})
+            if turn_off_message_logging and model_call_details.get("traceback_exception")
+            else EMPTY_MAPPING
+        )
         return {
             **model_call_details,
             **redacted_params,
+            **redacted_failure_fields,
             "standard_logging_object": standard_logging_object_copy,
         }
 
