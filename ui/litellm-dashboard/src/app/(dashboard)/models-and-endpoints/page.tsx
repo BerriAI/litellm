@@ -123,7 +123,7 @@ export default function ModelsAndEndpointsPage() {
     [canCreate, canViewAutoRouters, isAdmin, isViewOnly],
   );
 
-  const allModelsLabel = isAdmin ? "All Models" : "Your Models";
+  const allModelsLabel = isAdmin ? "Deployed Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
     if (slug === "auto-routers" || slug === "access-group-budgets") {
