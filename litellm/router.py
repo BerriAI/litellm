@@ -13716,8 +13716,6 @@ class Router:
             self._stamp_or_clear_metadata_key(request_kwargs, "model_group", bound_model)
             return bound_registered_model
 
-        if self._request_header(request_kwargs, "x-app") != "cli":
-            return registered_model_name
         if self._select_pre_routing_strategy(registered_model_name, request_kwargs) is None:
             return registered_model_name
         await self._claude_code_session_router_cache.async_set_cache(
