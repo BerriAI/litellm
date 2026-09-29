@@ -276,6 +276,20 @@ else:
 _T: Final = TypeVar("_T")
 
 
+async def _await_within_guardrail_timeout(callback: object, coro: Awaitable[_T], fail_open_result: _T) -> _T:
+    if not isinstance(callback, CustomGuardrail) or callback.hook_timeout is None:
+        return await coro
+    timeout: Final = callback.hook_timeout
+    try:
+        return await asyncio.wait_for(coro, timeout)
+    except asyncio.TimeoutError:
+        message: Final = f"Guardrail '{callback.guardrail_name}' did not finish within {timeout}s"
+        if callback.hook_timeout_fallback == "fail_open":
+            verbose_proxy_logger.critical("%s; unreachable_fallback=fail_open, skipping it", message)
+            return fail_open_result
+        raise litellm.Timeout(message=message, model="", llm_provider="guardrail") from None
+
+
 class _ViewCountRow(TypedDict):
     view_count: ReadOnly[int]
     view_names: ReadOnly[Sequence[str] | None]
@@ -1833,23 +1847,35 @@ class ProxyLogging:
         target: Final = unified_guardrail if use_unified else callback
 
         if hook_type == "pre_call":
-            return await target.async_pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                cache=self.call_details["user_api_key_cache"],
-                data=data,
-                call_type=call_type,
+            return await _await_within_guardrail_timeout(
+                callback,
+                target.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=self.call_details["user_api_key_cache"],
+                    data=data,
+                    call_type=call_type,
+                ),
+                fail_open_result=None,
             )
         elif hook_type == "during_call":
-            return await target.async_moderation_hook(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
+            return await _await_within_guardrail_timeout(
+                callback,
+                target.async_moderation_hook(
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                ),
+                fail_open_result=None,
             )
         elif hook_type == "post_call":
-            return await target.async_post_call_success_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                response=response,
+            return await _await_within_guardrail_timeout(
+                callback,
+                target.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    response=response,
+                ),
+                fail_open_result=None,
             )
         else:
             raise ValueError(f"Unknown hook_type: {hook_type}")
@@ -2706,6 +2732,7 @@ class ProxyLogging:
         coro: Awaitable[_T],
         hook_type: str,
         request_data: Mapping[str, object],
+        fail_open_result: _T,
     ) -> _T:
         """
         Await `coro`, recording its latency and status to the
@@ -2718,7 +2745,7 @@ class ProxyLogging:
         status = "success"
         error_type: str | None = None
         try:
-            return await coro
+            return await _await_within_guardrail_timeout(callback, coro, fail_open_result)
         except SensitiveDataRouteException:
             status = "intervened"
             raise
@@ -3001,6 +3028,7 @@ class ProxyLogging:
                 ),
                 "during_call",
                 request_data=data,
+                fail_open_result=None,
             )
             return
         await self._run_guardrail_with_metrics(
@@ -3012,6 +3040,7 @@ class ProxyLogging:
             ),
             "during_call",
             request_data=data,
+            fail_open_result=None,
         )
 
     async def failed_tracking_alert(
@@ -3549,6 +3578,7 @@ class ProxyLogging:
                         ),
                         "post_call",
                         request_data=data,
+                        fail_open_result=None,
                     )
                 else:
                     guardrail_response = await self._run_guardrail_with_metrics(
@@ -3560,6 +3590,7 @@ class ProxyLogging:
                         ),
                         "post_call",
                         request_data=data,
+                        fail_open_result=None,
                     )
 
                 if guardrail_response is not None:
@@ -3624,6 +3655,7 @@ class ProxyLogging:
                     ),
                     "post_call",
                     request_data=data,
+                    fail_open_result=None,
                 )
             else:
                 await self._run_guardrail_with_metrics(
@@ -3635,6 +3667,7 @@ class ProxyLogging:
                     ),
                     "post_call",
                     request_data=data,
+                    fail_open_result=None,
                 )
 
         results: Final = await asyncio.gather(
@@ -3699,6 +3732,7 @@ class ProxyLogging:
                 ),
                 "post_mcp_call",
                 request_data=request_data,
+                fail_open_result=response,
             )
         return response
 

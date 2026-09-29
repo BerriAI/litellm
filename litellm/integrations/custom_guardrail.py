@@ -176,6 +176,9 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
+    hook_timeout: float | None = None
+    hook_timeout_fallback: Literal["fail_closed", "fail_open"] = "fail_closed"
+
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
         own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")

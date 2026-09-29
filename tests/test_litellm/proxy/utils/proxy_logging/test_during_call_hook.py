@@ -24,6 +24,7 @@ def _clear_caps_cache():
 def _make_guardrail(name="g1", should_run=True, response=None):
     cb = MagicMock(spec=CustomGuardrail)
     cb.__class__ = CustomGuardrail
+    cb.hook_timeout = None
     cb.guardrail_name = name
     cb.event_hook = GuardrailEventHooks.during_call
     cb.use_native_during_call_hook = False

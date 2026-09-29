@@ -1084,3 +1084,42 @@ def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot
+
+
+class _ProviderOwnsTimeoutGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        self.timeout = 10.0
+        super().__init__(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "litellm_params, expected",
+    [
+        ({}, (None, "fail_closed")),
+        ({"timeout": "2.5", "unreachable_fallback": "FAIL_OPEN"}, (2.5, "fail_open")),
+    ],
+)
+def test_initialize_guardrail_sets_hook_timeout_without_touching_provider_timeout(litellm_params, expected):
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return _ProviderOwnsTimeoutGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    registry_module.guardrail_initializer_registry["hook_timeout_test"] = _initializer
+    try:
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "hook-timeout",
+                "litellm_params": {"guardrail": "hook_timeout_test", "mode": "pre_call", **litellm_params},
+            },
+        )
+
+        stored = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+        assert (stored.hook_timeout, stored.hook_timeout_fallback) == expected
+        assert stored.timeout == 10.0
+    finally:
+        registry_module.guardrail_initializer_registry.pop("hook_timeout_test", None)

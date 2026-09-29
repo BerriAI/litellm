@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from copy import deepcopy
 import logging
 from collections.abc import Iterator
@@ -90,6 +91,7 @@ def test_should_use_guardrail_load_balancing_error_on_bad_guardrail_list(proxy_l
 def _make_guardrail():
     cb = MagicMock(spec=CustomGuardrail)
     cb.__class__ = CustomGuardrail
+    cb.hook_timeout = None
     cb.guardrail_name = "g"
     cb.event_hook = GuardrailEventHooks.pre_call
     cb.use_native_during_call_hook = False
@@ -637,7 +639,11 @@ async def test_run_guardrail_with_metrics_passes_result_and_records_success(monk
     monkeypatch.setattr(litellm, "callbacks", [prom])
 
     out = await ProxyLogging._run_guardrail_with_metrics(
-        callback=MagicMock(guardrail_name="g"), coro=task(), hook_type="during_call", request_data={}
+        callback=MagicMock(guardrail_name="g"),
+        coro=task(),
+        hook_type="during_call",
+        request_data={},
+        fail_open_result=None,
     )
 
     assert out == {"a": 1, "b": 2, "c": 3}
@@ -663,13 +669,158 @@ async def test_run_guardrail_with_metrics_records_error_and_enriches(monkeypatch
     monkeypatch.setattr(litellm, "callbacks", [prom])
 
     with pytest.raises(HTTPException):
-        await ProxyLogging._run_guardrail_with_metrics(callback=cb, coro=task(), hook_type="post_call", request_data={})
+        await ProxyLogging._run_guardrail_with_metrics(
+            callback=cb, coro=task(), hook_type="post_call", request_data={}, fail_open_result=None
+        )
 
     assert detail["guardrail_name"] == "presidio"
     recorded = prom._record_guardrail_metrics.call_args.kwargs
     assert recorded["status"] == "error"
     assert recorded["error_type"] == "HTTPException"
     assert recorded["hook_type"] == "post_call"
+
+
+class _HangingGuardrail(CustomGuardrail):
+    def __init__(self, delay_seconds: float, **kwargs: Any) -> None:
+        super().__init__(guardrail_name="hanging", **kwargs)
+        self.delay_seconds = delay_seconds
+
+    async def _hang(self) -> dict[str, str]:
+        await asyncio.sleep(self.delay_seconds)
+        return {"guardrail": "finished"}
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return await self._hang()
+
+    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+        return await self._hang()
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        return await self._hang()
+
+
+def _hanging_guardrail(
+    delay_seconds: float, hook_timeout: float | None, fallback: str = "fail_closed"
+) -> _HangingGuardrail:
+    guardrail = _HangingGuardrail(delay_seconds)
+    guardrail.hook_timeout = hook_timeout
+    guardrail.hook_timeout_fallback = fallback
+    return guardrail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_type", ["pre_call", "during_call", "post_call"])
+async def test_execute_guardrail_hook_raises_timeout_once_hook_timeout_elapses(
+    proxy_logging, make_user_api_key_auth, hook_type
+):
+    guardrail = _hanging_guardrail(delay_seconds=30, hook_timeout=0.1)
+    start = time.perf_counter()
+
+    with pytest.raises(litellm.Timeout, match=r"Guardrail 'hanging' did not finish within 0\.1s"):
+        await proxy_logging._execute_guardrail_hook(
+            callback=guardrail,
+            hook_type=hook_type,
+            data={"model": "m"},
+            user_api_key_dict=make_user_api_key_auth(),
+            call_type="completion",
+            response={"original": True},
+        )
+
+    assert time.perf_counter() - start < 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook_type", ["pre_call", "during_call", "post_call"])
+async def test_execute_guardrail_hook_skips_guardrail_on_timeout_when_fail_open(
+    proxy_logging, make_user_api_key_auth, hook_type
+):
+    guardrail = _hanging_guardrail(delay_seconds=30, hook_timeout=0.1, fallback="fail_open")
+
+    out = await proxy_logging._execute_guardrail_hook(
+        callback=guardrail,
+        hook_type=hook_type,
+        data={"model": "m"},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+        response={"original": True},
+    )
+
+    assert out is None
+
+
+@pytest.mark.asyncio
+async def test_execute_guardrail_hook_waits_for_slow_guardrail_without_hook_timeout(
+    proxy_logging, make_user_api_key_auth
+):
+    guardrail = _hanging_guardrail(delay_seconds=0.3, hook_timeout=None)
+
+    out = await proxy_logging._execute_guardrail_hook(
+        callback=guardrail,
+        hook_type="pre_call",
+        data={"model": "m"},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+    )
+
+    assert out == {"guardrail": "finished"}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_rejects_request_when_guardrail_exceeds_hook_timeout(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    guardrail = _hanging_guardrail(delay_seconds=30, hook_timeout=0.1)
+    guardrail.event_hook = GuardrailEventHooks.pre_call
+    guardrail.default_on = True
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom, guardrail])
+
+    with pytest.raises(litellm.Timeout):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+
+    recorded = prom._record_guardrail_metrics.call_args.kwargs
+    assert (recorded["guardrail_name"], recorded["status"], recorded["error_type"]) == ("hanging", "error", "Timeout")
+
+
+@pytest.mark.asyncio
+async def test_run_guardrail_with_metrics_times_out_and_records_error(monkeypatch):
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom])
+    guardrail = _hanging_guardrail(delay_seconds=30, hook_timeout=0.1)
+
+    with pytest.raises(litellm.Timeout):
+        await ProxyLogging._run_guardrail_with_metrics(
+            callback=guardrail,
+            coro=guardrail._hang(),
+            hook_type="post_mcp_call",
+            request_data={},
+            fail_open_result={"original": "response"},
+        )
+
+    recorded = prom._record_guardrail_metrics.call_args.kwargs
+    assert (recorded["status"], recorded["error_type"], recorded["hook_type"]) == ("error", "Timeout", "post_mcp_call")
+
+
+@pytest.mark.asyncio
+async def test_run_guardrail_with_metrics_returns_fail_open_result_on_timeout(monkeypatch):
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom])
+    guardrail = _hanging_guardrail(delay_seconds=30, hook_timeout=0.1, fallback="fail_open")
+
+    out = await ProxyLogging._run_guardrail_with_metrics(
+        callback=guardrail,
+        coro=guardrail._hang(),
+        hook_type="post_mcp_call",
+        request_data={},
+        fail_open_result={"original": "response"},
+    )
+
+    assert out == {"original": "response"}
+    assert prom._record_guardrail_metrics.call_args.kwargs["status"] == "success"
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +831,7 @@ async def test_run_guardrail_with_metrics_records_error_and_enriches(monkeypatch
 def _moderation_guardrail() -> MagicMock:
     cb = MagicMock(spec=CustomGuardrail)
     cb.__class__ = CustomGuardrail
+    cb.hook_timeout = None
     cb.guardrail_name = "g"
     cb.event_hook = GuardrailEventHooks.during_call
     cb.use_native_during_call_hook = False
