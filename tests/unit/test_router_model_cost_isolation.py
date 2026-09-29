@@ -731,11 +731,13 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
 
 _MODE_TEST_API_BASE: Final = "http://localhost:38543/v1"
 
+_CATALOG_CHAT_MODEL: Final = "chat-model-38543"
+
 _CHAT_COMPLETION_REPLY: Final = {
     "id": "chatcmpl-38543",
     "object": "chat.completion",
     "created": 1,
-    "model": "gpt-5.6",
+    "model": _CATALOG_CHAT_MODEL,
     "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
@@ -745,7 +747,7 @@ _RESPONSES_REPLY: Final = {
     "object": "response",
     "created_at": 1,
     "status": "completed",
-    "model": "gpt-5.6",
+    "model": _CATALOG_CHAT_MODEL,
     "output": [
         {
             "type": "message",
@@ -762,13 +764,22 @@ _RESPONSES_REPLY: Final = {
 }
 
 
+def _use_catalog_with_a_chat_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**copy.deepcopy(litellm.model_cost), _CATALOG_CHAT_MODEL: {"litellm_provider": "openai", "mode": "chat"}},
+    )
+    _invalidate_model_cost_lowercase_map()
+
+
 def _mode_test_deployment(
     model_name: str, mode: str | None, custom_pricing: Mapping[str, float] = MappingProxyType({})
 ) -> dict[str, object]:
     return {
         "model_name": model_name,
         "litellm_params": {
-            "model": "openai/gpt-5.6",
+            "model": f"openai/{_CATALOG_CHAT_MODEL}",
             "api_key": "sk-fake",
             "api_base": _MODE_TEST_API_BASE,
             **custom_pricing,
@@ -787,8 +798,7 @@ def test_a_responses_deployment_does_not_move_its_siblings_onto_the_responses_ap
     a litellm.model_cost key, so a `mode: responses` deployment used to send every sibling
     through the Responses API bridge, whichever order they were registered in
     """
-    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
-    _invalidate_model_cost_lowercase_map()
+    _use_catalog_with_a_chat_model(monkeypatch)
     chat_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/chat/completions").mock(
         return_value=httpx.Response(200, json=_CHAT_COMPLETION_REPLY)
     )
@@ -818,8 +828,7 @@ def test_a_priced_responses_deployment_does_not_move_its_siblings_after_serving_
     A deployment with custom pricing re-registers its model_info on every request it serves,
     so the shared key has to stay out of its mode on that path too, not just at router setup
     """
-    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
-    _invalidate_model_cost_lowercase_map()
+    _use_catalog_with_a_chat_model(monkeypatch)
     chat_route: Final = respx_mock.post(f"{_MODE_TEST_API_BASE}/chat/completions").mock(
         return_value=httpx.Response(200, json=_CHAT_COMPLETION_REPLY)
     )
