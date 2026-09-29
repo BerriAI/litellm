@@ -2962,6 +2962,17 @@ class _NativeLifecycleLoggingGuardrail(CustomGuardrail):
 
 
 @pytest.mark.asyncio
+async def test_native_lifecycle_guardrail_logging_only_scope_scans_only_input():
+    guardrail: Final = _NativeLifecycleLoggingGuardrail()
+    guardrail.logging_only_scope = "input"
+    kwargs, response = _logged_call([{"role": "user", "content": "native lifecycle input"}])
+
+    await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+    assert guardrail.calls == [("request", ["native lifecycle input"])]
+
+
+@pytest.mark.asyncio
 async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response():
     """A use_native_lifecycle_hooks guardrail accepts mode logging_only and its
     async_logging_hook scans kwargs["async_complete_streaming_response"], not the raw result."""

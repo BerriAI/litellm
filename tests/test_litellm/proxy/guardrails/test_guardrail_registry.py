@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from typing import Final
+from typing import ClassVar, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -956,6 +956,10 @@ class _LoggingOnlyScopeUnsupportedGuardrail(_LoggingOnlyScopeSupportedGuardrail)
         return kwargs, result
 
 
+class _LoggingOnlyScopeNativeGuardrail(_LoggingOnlyScopeSupportedGuardrail):
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+
 class TestLoggingOnlyScopeValidation:
     def _initialize(
         self,
@@ -968,9 +972,13 @@ class TestLoggingOnlyScopeValidation:
         guardrail_type: Final = "logging_only_scope_test"
 
         def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+            supported_event_hooks: Final = (
+                [GuardrailEventHooks.logging_only] if callback_type.use_native_lifecycle_hooks else None
+            )
             return callback_type(
                 guardrail_name=guardrail["guardrail_name"],
                 event_hook=litellm_params.mode,
+                supported_event_hooks=supported_event_hooks,
             )
 
         registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
@@ -1040,6 +1048,15 @@ class TestLoggingOnlyScopeValidation:
         )
 
         assert callback.logging_only_scope == "both"
+
+    def test_output_scope_accepted_for_native_lifecycle_guardrail(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="output",
+            callback_type=_LoggingOnlyScopeNativeGuardrail,
+        )
+
+        assert callback.logging_only_scope == "output"
 
     def test_invalid_scope_fails_litellm_params_validation(self) -> None:
         with pytest.raises(ValidationError):

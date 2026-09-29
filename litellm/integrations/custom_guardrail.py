@@ -809,7 +809,6 @@ class CustomGuardrail(CustomLogger):
     def supports_logging_only_scope(self) -> bool:
         return (
             self.uses_apply_guardrail_interface()
-            and not self.use_native_lifecycle_hooks
             and type(self).async_logging_hook is CustomGuardrail.async_logging_hook
         )
 
