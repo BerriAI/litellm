@@ -133,6 +133,7 @@ pub(super) fn prepare_provider_request(
 mod tests {
     use litellm_auth::CredentialPlacement;
     use litellm_llms::base_llm::auth::{AuthScheme, resolve_auth};
+    use litellm_types::llms::anthropic::AnthropicVersion;
     use serde_json::{Map, Value, json};
 
     use super::{prepare_provider_request, resolve_request};
@@ -229,10 +230,10 @@ mod tests {
         assert!(
             wire_headers(&prepared).contains(&("x-api-key".to_string(), "sk-test".to_string()))
         );
-        assert!(
-            wire_headers(&prepared)
-                .contains(&("anthropic-version".to_string(), "2023-06-01".to_string()))
-        );
+        assert!(wire_headers(&prepared).contains(&(
+            "anthropic-version".to_string(),
+            AnthropicVersion::Version20230601.into_str().to_string()
+        )));
         assert!(matches!(
             prepared.environment.auth,
             AuthScheme::Credential {

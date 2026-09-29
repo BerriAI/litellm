@@ -4,7 +4,7 @@ use litellm_core_utils::{
     prompt_templates::factory::{Conversation, build_conversation},
 };
 use litellm_types::{
-    llms::openai::ChatMessage,
+    llms::{anthropic::AnthropicVersion, openai::ChatMessage},
     utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
 };
 use serde::Deserialize;
@@ -199,10 +199,14 @@ impl BaseConfig for AnthropicConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("anthropic-version", "2023-06-01"),
+        const HEADERS: &[(&str, &str)] = &[
+            (
+                "anthropic-version",
+                AnthropicVersion::Version20230601.into_str(),
+            ),
             ("content-type", "application/json"),
-        ]
+        ];
+        HEADERS
     }
 
     /// An OAuth bearer is the whole credential: Python's `validate_environment`
@@ -274,6 +278,7 @@ mod tests {
             chat::transformation::{BaseConfig, ProviderChatResponseData, Unsupported},
         },
     };
+    use litellm_types::llms::anthropic::AnthropicVersion;
     use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
     use rstest::rstest;
     use serde_json::{Map, Value, json};
@@ -716,7 +721,10 @@ mod tests {
         assert_eq!(
             config.default_headers(),
             &[
-                ("anthropic-version", "2023-06-01"),
+                (
+                    "anthropic-version",
+                    AnthropicVersion::Version20230601.into_str()
+                ),
                 ("content-type", "application/json"),
             ]
         );

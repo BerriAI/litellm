@@ -606,6 +606,7 @@ pub fn flatten_unencrypted_web_search_results(
 #[cfg(test)]
 mod tests {
     use crate::base_llm::messages::context::SupportedEffortTiers;
+    use litellm_types::llms::anthropic::AnthropicVersion;
     use rstest::{fixture, rstest};
     use serde_json::json;
 
@@ -707,7 +708,7 @@ mod tests {
     #[rstest]
     #[case::forwarded_api_key(&[("X-Api-Key", "k")], true)]
     #[case::forwarded_bearer(&[("Authorization", "Bearer t")], true)]
-    #[case::nothing_forwarded(&[("anthropic-version", "2023-06-01")], false)]
+    #[case::nothing_forwarded(&[("anthropic-version", AnthropicVersion::Version20230601.into_str())], false)]
     fn forwarded_credential_is_detected_in_either_header(
         #[case] forwarded: &[(&str, &str)],
         #[case] expected: bool,
@@ -1496,9 +1497,9 @@ mod tests {
         &[],
     )]
     #[case::forwarded_bearer_keeps_unrelated_headers_in_place(
-        &[("anthropic-version", "2023-06-01"), ("authorization", OAUTH_BEARER)],
+        &[("anthropic-version", AnthropicVersion::Version20230601.into_str()), ("authorization", OAUTH_BEARER)],
         None,
-        &[("anthropic-version", "2023-06-01")],
+        &[("anthropic-version", AnthropicVersion::Version20230601.into_str())],
     )]
     #[case::forwarded_bearer_wins_over_an_oauth_api_key(
         &[("authorization", OAUTH_BEARER)],

@@ -1,3 +1,4 @@
+use litellm_types::llms::anthropic::AnthropicVersion;
 use litellm_types::llms::anthropic_messages::anthropic_request::{AnthropicMessage, SystemPrompt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -84,7 +85,10 @@ impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
         vec![
             ("content-type", "application/json".to_string()),
             auth,
-            ("anthropic-version", "2023-06-01".to_string()),
+            (
+                "anthropic-version",
+                AnthropicVersion::Version20230601.into_str().to_string(),
+            ),
             ("anthropic-beta", TOKEN_COUNTING_BETA.to_string()),
         ]
     }

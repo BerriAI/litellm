@@ -162,6 +162,7 @@ fn strip_scope_from_message(message: AnthropicMessage) -> AnthropicMessage {
 
 #[cfg(test)]
 mod tests {
+    use litellm_types::llms::anthropic::AnthropicVersion;
     use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
     use rstest::rstest;
     use serde_json::json;
@@ -307,7 +308,10 @@ mod tests {
         assert_eq!(
             AZURE_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
             &[
-                ("anthropic-version", "2023-06-01"),
+                (
+                    "anthropic-version",
+                    AnthropicVersion::Version20230601.into_str()
+                ),
                 ("content-type", "application/json"),
             ]
         );

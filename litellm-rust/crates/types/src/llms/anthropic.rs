@@ -7,6 +7,15 @@ use std::{
     str::FromStr,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::IntoStaticStr)]
+#[strum(const_into_str)]
+pub enum AnthropicVersion {
+    #[strum(serialize = "2023-01-01")]
+    Version20230101,
+    #[strum(serialize = "2023-06-01")]
+    Version20230601,
+}
+
 /// One value of the `anthropic-beta` header. Equality, ordering and hashing follow the wire
 /// string, so a value parsed from a caller's header never disagrees with the matching variant.
 #[derive(Clone, Debug, strum::AsRefStr, strum::Display, strum::EnumString)]
@@ -152,6 +161,13 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::initial(AnthropicVersion::Version20230101, "2023-01-01")]
+    #[case::incremental_streaming(AnthropicVersion::Version20230601, "2023-06-01")]
+    fn versions_have_their_wire_value(#[case] version: AnthropicVersion, #[case] wire: &str) {
+        assert_eq!(version.into_str(), wire);
+    }
 
     fn set(header: &str) -> BetaSet {
         header.parse().unwrap_or_else(|never| match never {})

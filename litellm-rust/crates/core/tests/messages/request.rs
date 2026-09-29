@@ -1,5 +1,5 @@
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
-use litellm_types::llms::anthropic::{AnthropicBeta, BetaSet};
+use litellm_types::llms::anthropic::{AnthropicBeta, AnthropicVersion, BetaSet};
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use rstest::rstest;
 
@@ -132,7 +132,10 @@ async fn each_provider_posts_to_its_messages_endpoint(
     assert_eq!(request.method.as_str(), "POST");
     assert_eq!(request.url.path(), path);
     assert_eq!(request.json()["model"], MODEL);
-    assert_eq!(request.header_values("anthropic-version"), ["2023-06-01"]);
+    assert_eq!(
+        request.header_values("anthropic-version"),
+        [AnthropicVersion::Version20230601.into_str()]
+    );
     assert_eq!(request.header_values("content-type"), ["application/json"]);
 }
 

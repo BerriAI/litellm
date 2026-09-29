@@ -1,7 +1,7 @@
 use litellm_auth::CredentialPlacement;
 use litellm_types::{
     llms::{
-        anthropic::{AnthropicBeta, BetaSet},
+        anthropic::{AnthropicBeta, AnthropicVersion, BetaSet},
         anthropic_messages::anthropic_request::{
             AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest,
             ContextEdit, ContextManagement, Speed,
@@ -29,7 +29,10 @@ use crate::{
 };
 
 pub(crate) const DEFAULT_HEADERS: &[(&str, &str)] = &[
-    ("anthropic-version", "2023-06-01"),
+    (
+        "anthropic-version",
+        AnthropicVersion::Version20230601.into_str(),
+    ),
     ("content-type", "application/json"),
 ];
 
@@ -852,10 +855,10 @@ mod tests {
 
     #[rstest]
     #[case::forwarded_oauth_bearer(
-        &[("anthropic-version", "2023-06-01"), ("X-Api-Key", "sk-caller"), ("Authorization", OAUTH_BEARER)],
+        &[("anthropic-version", AnthropicVersion::Version20230601.into_str()), ("X-Api-Key", "sk-caller"), ("Authorization", OAUTH_BEARER)],
         Some("sk-deployment"),
         &[("ANTHROPIC_API_KEY", "sk-env")],
-        &[("anthropic-version", "2023-06-01"), ("anthropic-beta", OAUTH_BETA), BROWSER_ACCESS],
+        &[("anthropic-version", AnthropicVersion::Version20230601.into_str()), ("anthropic-beta", OAUTH_BETA), BROWSER_ACCESS],
         Some(("Authorization", OAUTH_TOKEN)),
     )]
     #[case::oauth_api_key(
@@ -1018,7 +1021,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_betas(&[("x-api-key", "k"), ("anthropic-version", "2023-06-01")], json!({}), &[("x-api-key", "k"), ("anthropic-version", "2023-06-01")])]
+    #[case::no_betas(&[("x-api-key", "k"), ("anthropic-version", AnthropicVersion::Version20230601.into_str())], json!({}), &[("x-api-key", "k"), ("anthropic-version", AnthropicVersion::Version20230601.into_str())])]
     #[case::blank_beta_header(&[("Anthropic-Beta", " , "), ("x-api-key", "k")], json!({}), &[("Anthropic-Beta", " , "), ("x-api-key", "k")])]
     #[case::feature_beta_is_appended(
         &[("x-api-key", "k")],
@@ -1098,7 +1101,10 @@ mod tests {
         assert_eq!(
             ANTHROPIC_MESSAGES_CONFIG.default_headers(),
             &[
-                ("anthropic-version", "2023-06-01"),
+                (
+                    "anthropic-version",
+                    AnthropicVersion::Version20230601.into_str()
+                ),
                 ("content-type", "application/json"),
             ]
         );
