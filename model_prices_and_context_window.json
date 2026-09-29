@@ -28272,7 +28272,7 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "mode": "chat",
-        "output_cost_per_reasoning_token": 1e-05,
+        "output_cost_per_reasoning_token": 5e-06,
         "output_cost_per_token": 5e-06,
         "output_cost_per_token_batches": 2.5e-06,
         "search_context_cost_per_query": {
