@@ -362,6 +362,63 @@ func TestResourceKeyUpdateFailureKeepsPriorState(t *testing.T) {
 	}
 }
 
+func TestKeyUpdateClearsAllowedPassthroughRoutes(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/update" {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &captured)
+			w.Write([]byte(`{"key":"hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"alias-1","allowed_passthrough_routes":[]}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	newState := applyKeyUpdate(t, client,
+		map[string]string{
+			"key_alias":                    "alias-1",
+			"allowed_passthrough_routes.#": "1",
+			"allowed_passthrough_routes.0": "/direct/openai/v1/batches",
+		},
+		map[string]interface{}{
+			"key_alias":                  "alias-1",
+			"allowed_passthrough_routes": []interface{}{},
+		},
+	)
+
+	routes, present := captured["allowed_passthrough_routes"].([]interface{})
+	if !present || len(routes) != 0 {
+		t.Errorf("update payload allowed_passthrough_routes = %v, want an explicitly present empty list", captured["allowed_passthrough_routes"])
+	}
+	if got := newState.Attributes["allowed_passthrough_routes.#"]; got != "0" {
+		t.Errorf("state allowed_passthrough_routes count = %q, want 0", got)
+	}
+}
+
+func TestKeyReadClearsAllowedPassthroughRoutesFromState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"alias-1","allowed_passthrough_routes":[]}}`))
+	}))
+	defer srv.Close()
+
+	resourceData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":                  "alias-1",
+		"allowed_passthrough_routes": []interface{}{`/direct/openai/v1/batches`},
+	})
+	resourceData.SetId("hash-1")
+
+	if diags := resourceKeyRead(context.Background(), resourceData, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("Read returned error: %v", diags)
+	}
+	if routes := resourceData.Get("allowed_passthrough_routes").([]interface{}); len(routes) != 0 {
+		t.Errorf("state allowed_passthrough_routes = %v, want empty", routes)
+	}
+}
+
 // /key/info nests the key's fields under "info"; GetKey must unwrap that
 // envelope or reads map nothing back into state.
 func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {

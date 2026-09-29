@@ -158,6 +158,7 @@ type Key struct {
 	EnforcedParams           []string               `json:"enforced_params,omitempty"`
 	AllowedRoutes            []string               `json:"allowed_routes,omitempty"`
 	AllowedPassthroughRoutes []string               `json:"allowed_passthrough_routes,omitempty"`
+	PassthroughRoutesChanged bool                   `json:"-"`
 	RPMLimitType             string                 `json:"rpm_limit_type,omitempty"`
 	TPMLimitType             string                 `json:"tpm_limit_type,omitempty"`
 	Prompts                  []string               `json:"prompts,omitempty"`

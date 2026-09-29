@@ -189,7 +189,7 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	if len(key.AllowedRoutes) > 0 {
 		updateData["allowed_routes"] = key.AllowedRoutes
 	}
-	if len(key.AllowedPassthroughRoutes) > 0 {
+	if len(key.AllowedPassthroughRoutes) > 0 || key.PassthroughRoutesChanged {
 		updateData["allowed_passthrough_routes"] = key.AllowedPassthroughRoutes
 	}
 	if key.RPMLimitType != "" {

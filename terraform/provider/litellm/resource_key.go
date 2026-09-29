@@ -317,28 +317,29 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 	return nil
 }
 
-func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
+func resourceKeyUpdate(ctx context.Context, resourceData *schema.ResourceData, m interface{}) diag.Diagnostics {
 	c := m.(*Client)
 
-	key := &Key{Key: d.Id()}
-	mapResourceDataToKey(d, key)
-	if !d.HasChange("duration") {
+	key := &Key{Key: resourceData.Id()}
+	mapResourceDataToKey(resourceData, key)
+	key.PassthroughRoutesChanged = resourceData.HasChange("allowed_passthrough_routes")
+	if !resourceData.HasChange("duration") {
 		key.Duration = ""
 	}
-	key.ModelRPMLimit = changedMap(d, "model_rpm_limit")
-	key.ModelTPMLimit = changedMap(d, "model_tpm_limit")
+	key.ModelRPMLimit = changedMap(resourceData, "model_rpm_limit")
+	key.ModelTPMLimit = changedMap(resourceData, "model_tpm_limit")
 
-	metadata, err := plannedKeyMetadata(c, d)
+	metadata, err := plannedKeyMetadata(c, resourceData)
 	if err != nil {
-		return failedKeyUpdate(ctx, d, m, err)
+		return failedKeyUpdate(ctx, resourceData, m, err)
 	}
 	key.Metadata = metadata
 
 	if _, err := c.UpdateKey(key); err != nil {
-		return failedKeyUpdate(ctx, d, m, err)
+		return failedKeyUpdate(ctx, resourceData, m, err)
 	}
 
-	return resourceKeyRead(ctx, d, m)
+	return resourceKeyRead(ctx, resourceData, m)
 }
 
 // Deleting a team cascade-deletes its keys, so an apply that moves a key onto a
@@ -579,9 +580,7 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 	if len(key.AllowedRoutes) > 0 {
 		d.Set("allowed_routes", key.AllowedRoutes)
 	}
-	if len(key.AllowedPassthroughRoutes) > 0 {
-		d.Set("allowed_passthrough_routes", key.AllowedPassthroughRoutes)
-	}
+	d.Set("allowed_passthrough_routes", key.AllowedPassthroughRoutes)
 	if key.RPMLimitType != "" {
 		d.Set("rpm_limit_type", key.RPMLimitType)
 	}
