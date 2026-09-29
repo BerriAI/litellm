@@ -3713,14 +3713,24 @@ async def test_summary_subrequest_honors_project_itpm_otpm(rate_limiter):
     """Regression for #41395: summary subrequests gate and charge project ITPM/OTPM."""
     from typing import Final
 
-    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+    from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
         _check_summary_model_rate_limit,
     )
     from litellm.proxy import proxy_server
 
     handler, _cache = rate_limiter
     previous_limiter: Final = getattr(proxy_server.proxy_logging_obj, "max_parallel_request_limiter", None)
-    proxy_server.proxy_logging_obj.max_parallel_request_limiter = handler
+    previous_hook: Final = proxy_server.proxy_logging_obj.proxy_hook_mapping.get(
+        "parallel_request_limiter"
+    )
+
+    def install_limiter(limiter: RateLimitHandler) -> None:
+        # Summary gate resolves the limiter via get_proxy_hook(), not the
+        # legacy max_parallel_request_limiter attribute alone.
+        proxy_server.proxy_logging_obj.max_parallel_request_limiter = limiter
+        proxy_server.proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    install_limiter(handler)
     try:
         model: Final = "gpt-4o-mini"
         project: Final = "proj-summary-io"
@@ -3789,7 +3799,7 @@ async def test_summary_subrequest_honors_project_itpm_otpm(rate_limiter):
         )
 
         rpm_handler: Final = RateLimitHandler(internal_usage_cache=InternalUsageCache(DualCache()))
-        proxy_server.proxy_logging_obj.max_parallel_request_limiter = rpm_handler
+        install_limiter(rpm_handler)
         allowed_rpm, refusal_rpm = await drive_until_refused(
             rpm_handler, make_auth(model_rpm_limit={model: 4})
         )
@@ -3804,7 +3814,7 @@ async def test_summary_subrequest_honors_project_itpm_otpm(rate_limiter):
         )
 
         charging: Final = RateLimitHandler(internal_usage_cache=InternalUsageCache(DualCache()))
-        proxy_server.proxy_logging_obj.max_parallel_request_limiter = charging
+        install_limiter(charging)
         summary_response: Final = ModelResponse(
             usage=Usage(prompt_tokens=60, completion_tokens=40, total_tokens=100)
         )
@@ -3856,6 +3866,14 @@ async def test_summary_subrequest_honors_project_itpm_otpm(rate_limiter):
         assert int(await dual.async_get_cache(key=itpm_key) or 0) >= 60
     finally:
         proxy_server.proxy_logging_obj.max_parallel_request_limiter = previous_limiter
+        if previous_hook is None:
+            proxy_server.proxy_logging_obj.proxy_hook_mapping.pop(
+                "parallel_request_limiter", None
+            )
+        else:
+            proxy_server.proxy_logging_obj.proxy_hook_mapping[
+                "parallel_request_limiter"
+            ] = previous_hook
 
 
 if __name__ == "__main__":
