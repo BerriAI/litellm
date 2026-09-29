@@ -1,7 +1,7 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
 pub enum Recognized<T> {
     Known(T),
@@ -48,7 +48,7 @@ mod tests {
         assert_eq!(serde_json::to_value(expected).unwrap(), value);
     }
 
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, serde::Serialize, Deserialize)]
     struct Payload {
         #[serde(
             default,

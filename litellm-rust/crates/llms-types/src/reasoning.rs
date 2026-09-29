@@ -1,9 +1,8 @@
-use serde::{Deserialize, Serialize};
 use strum::IntoStaticStr;
 
 /// Reasoning effort level accepted or applied by the model.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, IntoStaticStr, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Copy, Eq, IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ReasoningEffort {

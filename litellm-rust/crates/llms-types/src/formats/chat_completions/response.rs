@@ -1,15 +1,15 @@
-use serde::{Deserialize, Serialize};
-
 /// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python
 /// path reports so cost tracking sees the same numbers on either path.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct PromptTokensDetails {
     pub cached_tokens: u64,
     pub cache_creation_tokens: u64,
     pub text_tokens: u64,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct ChatCompletionsUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -17,7 +17,7 @@ pub struct ChatCompletionsUsage {
     pub prompt_tokens_details: PromptTokensDetails,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionsChoiceMessage {
     pub role: String,
     // Whether an empty turn is `None` or `""` is the provider's choice, not a
@@ -27,7 +27,7 @@ pub struct ChatCompletionsChoiceMessage {
     pub content: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionsChoice {
     pub index: u64,
     pub message: ChatCompletionsChoiceMessage,
@@ -39,7 +39,7 @@ pub struct ChatCompletionsChoice {
 /// There is deliberately no `id`: Python mints the `chatcmpl-…` id on the
 /// `ModelResponse` it already created, and echoing the provider's own id here
 /// would change it. Pinned by `response_carries_no_id` in the Anthropic chat transformation tests.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionsResponse {
     pub created: u64,
     pub model: String,

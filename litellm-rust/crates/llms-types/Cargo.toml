@@ -9,6 +9,7 @@ repository.workspace = true
 schema = ["dep:schemars"]
 
 [dependencies]
+macro_rules_attribute.workspace = true
 litellm-python-compat = { workspace = true, features = ["serde-compat"] }
 schemars = { workspace = true, optional = true }
 serde.workspace = true

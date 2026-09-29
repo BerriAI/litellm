@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::recognized::{Recognized, deserialize_present};
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct MessagesUsage {
     #[serde(
         default,
@@ -33,7 +33,7 @@ pub struct MessagesUsage {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct MessagesResponse {
     pub id: String,
     #[serde(rename = "type")]

@@ -1,16 +1,15 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::recognized::Recognized;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
 pub enum ResponsesContent {
     Text(String),
     Parts(Vec<Recognized<ResponsesContentPart>>),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesContentPart {
     InputText {
@@ -40,7 +39,7 @@ pub enum ResponsesContentPart {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponsesItem {
     Message {

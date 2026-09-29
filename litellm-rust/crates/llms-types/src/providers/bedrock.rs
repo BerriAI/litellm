@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::recognized::{Recognized, deserialize_present};
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BedrockInvocationMetrics {
     #[serde(

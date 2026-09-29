@@ -1,10 +1,9 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::ResponsesItem;
 use crate::recognized::Recognized;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ResponsesApiResponse {
     pub id: String,
     pub model: String,

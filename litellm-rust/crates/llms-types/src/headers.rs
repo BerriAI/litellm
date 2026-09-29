@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct ProviderSpecificHeader {
     #[serde(default)]
     pub custom_llm_provider: String,
@@ -9,7 +9,7 @@ pub struct ProviderSpecificHeader {
     pub extra_headers: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
 pub enum ProviderSpecificHeaders {
     One(ProviderSpecificHeader),

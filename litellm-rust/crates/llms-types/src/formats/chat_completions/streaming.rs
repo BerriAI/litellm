@@ -1,9 +1,8 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::ChatCompletionsUsage;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionToolCallFunctionChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -12,7 +11,7 @@ pub struct ChatCompletionToolCallFunctionChunk {
     pub provider_specific_fields: Option<Map<String, Value>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionToolCallChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -22,7 +21,7 @@ pub struct ChatCompletionToolCallChunk {
     pub index: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatCompletionThinkingBlock {
     Thinking {
@@ -41,7 +40,8 @@ pub enum ChatCompletionThinkingBlock {
     },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Default)]
 pub struct ChatCompletionDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
@@ -59,7 +59,7 @@ pub struct ChatCompletionDelta {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionStreamingChoice {
     pub index: u64,
     pub delta: ChatCompletionDelta,
@@ -69,7 +69,7 @@ pub struct ChatCompletionStreamingChoice {
     pub logprobs: Option<Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionChunk {
     pub id: String,
     pub created: u64,

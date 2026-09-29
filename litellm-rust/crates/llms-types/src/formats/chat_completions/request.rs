@@ -1,16 +1,15 @@
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::recognized::Recognized;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
 pub enum ChatMessageContent {
     Text(String),
     Parts(Vec<Recognized<ChatContentPart>>),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatContentPart {
     Text {
@@ -39,21 +38,21 @@ impl ChatContentPart {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatMediaUrl {
     pub url: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 #[serde(untagged)]
 pub enum ChatVideoUrl {
     Url(String),
     Options(ChatMediaUrl),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -64,7 +63,7 @@ pub struct ChatMessage {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[macro_rules_attribute::apply(wire_type)]
 pub struct ChatCompletionsRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
