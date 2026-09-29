@@ -224,17 +224,17 @@ def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
 
 
 @pytest.mark.parametrize(
-    ("size", "optional_params", "response_size", "megapixels"),
+    ("size", "optional_params", "response_size", "per_image"),
     [
-        ("512x512", None, None, 1),
-        ("1024-x-1024", None, None, 1),
-        ("1920x1080", None, None, 2),
-        ("1024x1024", {"width": 2048, "height": 2048}, None, 4),
-        (None, None, "1025x1024", 2),
+        ("512x512", None, None, 0.05 * 0.25),
+        ("1024-x-1024", None, None, 0.05),
+        ("1920x1080", None, None, 0.05 + 0.02 * (1920 * 1080 / 1_048_576 - 1)),
+        ("1024x1024", {"width": 2048, "height": 2048}, None, 0.05 + 0.02 * 3),
+        (None, None, "1536x1024", 0.05 + 0.02 * 0.5),
     ],
 )
-def test_flux2_pro_cost_bills_first_then_each_additional_rounded_up_megapixel_per_image(
-    size: str | None, optional_params: dict[str, object] | None, response_size: str | None, megapixels: int
+def test_flux2_pro_cost_bills_first_then_additional_fractional_megapixels_per_image(
+    size: str | None, optional_params: dict[str, object] | None, response_size: str | None, per_image: float
 ) -> None:
     response: Final = ImageResponse(
         data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")], size=response_size
@@ -250,7 +250,7 @@ def test_flux2_pro_cost_bills_first_then_each_additional_rounded_up_megapixel_pe
         model_info={"output_cost_per_first_megapixel": 0.05, "output_cost_per_additional_megapixel": 0.02},
     )
 
-    assert cost == pytest.approx(2 * (0.05 + 0.02 * (megapixels - 1)))
+    assert cost == pytest.approx(2 * per_image)
 
 
 def test_flux2_pro_catalog_row_bills_its_megapixel_tiers() -> None:
@@ -267,7 +267,7 @@ def test_flux2_pro_catalog_row_bills_its_megapixel_tiers() -> None:
 
     first: Final = _PRICE.validate_python(info.get("output_cost_per_first_megapixel"))
     additional: Final = _PRICE.validate_python(info.get("output_cost_per_additional_megapixel"))
-    assert cost == pytest.approx(first + additional)
+    assert cost == pytest.approx(first + additional * (1920 * 1080 / 1_048_576 - 1))
     assert cost != pytest.approx(info.get("output_cost_per_image"))
 
 

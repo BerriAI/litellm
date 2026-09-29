@@ -76,10 +76,10 @@ def test_deployment_first_and_additional_megapixel_prices_bill_each_image(gatewa
 
 @pytest.mark.parametrize(
     ("size", "megapixels"),
-    (("512x512", 1), ("1024x1024", 1), ("1920x1080", 2), ("2048x2048", 4)),
+    (("512x512", 0.25), ("1024x1024", 1.0), ("1920x1080", 1920 * 1080 / 1_048_576), ("2048x2048", 4.0)),
 )
-def test_catalog_flux_2_pro_bills_first_megapixel_then_each_additional_rounded_up(
-    gateway: Gateway, size: str, megapixels: int
+def test_catalog_flux_2_pro_bills_first_then_additional_fractional_megapixels(
+    gateway: Gateway, size: str, megapixels: float
 ) -> None:
     catalog: Final = get_model_info(_MODEL)
     first: Final = _PRICE.validate_python(catalog.get("output_cost_per_first_megapixel"))
@@ -87,7 +87,7 @@ def test_catalog_flux_2_pro_bills_first_megapixel_then_each_additional_rounded_u
 
     billed: Final = _generate(gateway, size, 1)
 
-    expected: Final = first + (megapixels - 1) * additional
+    expected: Final = first * min(megapixels, 1.0) + additional * max(megapixels - 1.0, 0.0)
     assert billed.response_cost == pytest.approx(expected), billed
     assert billed.spend == pytest.approx(expected), billed
     assert billed.response_cost != pytest.approx(catalog.get("output_cost_per_image")), billed

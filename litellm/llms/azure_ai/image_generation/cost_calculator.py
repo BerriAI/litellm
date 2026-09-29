@@ -1,6 +1,5 @@
 import re
 from collections.abc import Mapping
-from math import ceil
 from typing import Any, Final
 
 import litellm
@@ -54,8 +53,8 @@ def _image_dimensions(size: str | None, optional_params: Mapping[str, object] | 
 
 
 def _tiered_megapixel_cost(first: float, additional: float, width: int, height: int) -> float:
-    megapixels: Final = max(1, ceil(width * height / PIXELS_PER_MEGAPIXEL))
-    return first + additional * (megapixels - 1)
+    megapixels: Final = width * height / PIXELS_PER_MEGAPIXEL
+    return first * min(megapixels, 1.0) + additional * max(megapixels - 1.0, 0.0)
 
 
 def cost_calculator(
