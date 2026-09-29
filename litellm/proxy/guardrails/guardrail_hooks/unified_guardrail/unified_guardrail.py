@@ -23,6 +23,7 @@ from litellm.llms import get_guardrail_translation_mapping, load_guardrail_trans
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
+    MCP_GUARDRAIL_CALL_TYPES,
     CallTypes,
     CallTypesLiteral,
     Delta,
@@ -206,7 +207,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
-        if call_type == CallTypes.call_mcp_tool.value:
+        if call_type in MCP_GUARDRAIL_CALL_TYPES:
             event_type = GuardrailEventHooks.pre_mcp_call
 
         if guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type) is not True:
@@ -256,7 +257,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
-        if call_type == CallTypes.call_mcp_tool.value:
+        if call_type in MCP_GUARDRAIL_CALL_TYPES:
             event_type = GuardrailEventHooks.during_mcp_call
 
         if guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type) is not True:

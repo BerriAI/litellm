@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, Tool as MCPTool
 from openai.types.responses.tool_param import Mcp
 
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
@@ -650,7 +650,15 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     Regression test for 872e5b98...:
     Ensure responses-side tool discovery enables list-tools SpendLogs logging flags.
     """
-    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    served_tools: Final = [
+        MCPTool(name="safe", description="Safe lookup", inputSchema={"type": "object"}),
+        MCPTool(
+            name="masked",
+            description="Contact [MASKED]",
+            inputSchema={"type": "object", "properties": {"query": {"type": "string", "description": "For [MASKED]"}}},
+        ),
+    ]
+    mock_get_tools = AsyncMock(return_value=AggregateToolListing(tools=served_tools, outcomes={}))
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
         mock_get_tools,
@@ -676,7 +684,15 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
         ],
     )
 
-    assert tools == []
+    forwarded: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(tools)
+    assert [tool["name"] for tool in forwarded] == ["safe", "masked"]
+    assert forwarded[0]["description"] == "Safe lookup"
+    assert forwarded[1]["description"] == "Contact [MASKED]"
+    assert forwarded[1]["parameters"] == {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "For [MASKED]"}},
+        "additionalProperties": False,
+    }
     assert mock_get_tools.await_count == 1
     assert mock_get_tools.await_args is not None
     assert mock_get_tools.await_args.kwargs["log_list_tools_to_spendlogs"] is True

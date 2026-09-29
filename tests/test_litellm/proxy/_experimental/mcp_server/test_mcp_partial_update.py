@@ -16,9 +16,11 @@ from prisma import Json, models
 
 from litellm.proxy._experimental.mcp_server.db import (
     create_mcp_server,
+    set_mcp_server_pinned_tools,
     update_mcp_server,
 )
 from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
 
 
 def _credentials_cleared(value) -> bool:
@@ -1091,3 +1093,54 @@ async def test_clearing_alias_with_free_server_name_returns_the_row():
     )
 
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_register_and_update_bodies_never_write_pinned_tools():
+    """Only POST /v1/mcp/server/{id}/pin sets the pin; a pinned_tools field in a request body is dropped."""
+    body_pin = {"list_notes": {"description": "List notes", "input_schema": {}}}
+
+    updated = await _run_update(
+        UpdateMCPServerRequest.model_validate(
+            {"server_id": "my-test-server", "allowed_tools": ["foo"], "pinned_tools": body_pin}
+        )
+    )
+    assert "pinned_tools" not in updated
+
+    mock_prisma = _mock_prisma()
+    await create_mcp_server(
+        mock_prisma,
+        NewMCPServerRequest.model_validate(
+            {"server_id": "new-server", "url": "https://example.com/mcp", "transport": "http", "pinned_tools": body_pin}
+        ),
+        "test-user",
+    )
+    assert "pinned_tools" not in mock_prisma.db.litellm_mcpservertable.create.call_args[1]["data"]
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_writes_the_snapshot_and_null_clears_it():
+    mock_prisma = _mock_prisma()
+    mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=MagicMock())
+    pinned = {"list_notes": PinnedMCPTool(description="List notes", input_schema={"type": "object"})}
+
+    record = await set_mcp_server_pinned_tools(mock_prisma, "test-server", pinned, "admin")
+
+    written = mock_prisma.db.litellm_mcpservertable.update.call_args[1]
+    assert written["where"] == {"server_id": "test-server"}
+    assert json.loads(written["data"]["pinned_tools"]) == {
+        "list_notes": {"description": "List notes", "input_schema": {"type": "object"}}
+    }
+    assert written["data"]["updated_by"] == "admin"
+    assert record is not None and record.server_id == "test-server"
+
+    await set_mcp_server_pinned_tools(mock_prisma, "test-server", None, "admin")
+    assert mock_prisma.db.litellm_mcpservertable.update.call_args[1]["data"]["pinned_tools"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_set_mcp_server_pinned_tools_on_a_missing_server_writes_nothing():
+    mock_prisma = _mock_prisma()
+
+    assert await set_mcp_server_pinned_tools(mock_prisma, "ghost", None, "admin") is None
+    mock_prisma.db.litellm_mcpservertable.update.assert_not_awaited()

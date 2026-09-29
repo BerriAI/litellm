@@ -801,6 +801,7 @@ class TestSigV4BuildFromTable:
         table_record.description = None
         table_record.url = "https://bedrock-agentcore.us-east-1.amazonaws.com/invocations"
         table_record.spec_path = None
+        table_record.pinned_tools = None
         table_record.transport = "http"
         table_record.auth_type = "aws_sigv4"
         table_record.mcp_info = {"server_name": "sigv4_server"}
@@ -870,6 +871,7 @@ class TestSigV4BuildFromTable:
         table_record.description = None
         table_record.url = "https://example.com/mcp"
         table_record.spec_path = None
+        table_record.pinned_tools = None
         table_record.transport = "http"
         table_record.auth_type = "bearer_token"
         table_record.mcp_info = {"server_name": "bearer_server"}
