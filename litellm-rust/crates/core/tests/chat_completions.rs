@@ -1,3 +1,8 @@
+use litellm_host::interceptors::RawResponse;
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use std::time::Duration;
 
 use litellm_core::chat_completions::{Error, types::ChatCompletionsRequest};
@@ -13,7 +18,7 @@ use support::*;
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions_route().execute(request, &()).await
+    chat_completions_route().execute(request, &(), None).await
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -253,7 +258,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     #[case] hosted: bool,
 ) {
     use litellm_core::chat_completions::route::ChatCompletions;
-    use litellm_host::{call::HostedCompletion, event::CallEvent};
+    use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
@@ -265,8 +270,9 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         .into(),
     );
     let response = if hosted {
-        let result = litellm_host::in_process::run_hosted(
-            chat_completions_route().machine(host.request().unwrap()),
+        let result = litellm_host_native::in_process::run_hosted(
+            chat_completions_route()
+                .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
             host.runtime(),
         )
         .await
@@ -290,6 +296,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
                     timeout: call.timeout,
                 },
                 &host,
+                Some(host.events.0.sender.clone()),
             )
             .await
             .unwrap()
@@ -307,7 +314,13 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         &events[..],
         [
             CallEvent::Started { .. },
-            CallEvent::Machine(_),
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
             CallEvent::Succeeded { .. }
         ]
     ));
@@ -318,12 +331,9 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
 async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     request: ChatCompletionsRequest<'static>,
 ) {
-    use litellm_host::{
-        event::{MachineEvent, RequestContext, WireRequest},
-        hooks::RouteHooks,
-    };
+    use litellm_host::interceptors::{Interceptors, RequestContext, WireRequest};
     struct FailingHook;
-    impl RouteHooks<Error> for FailingHook {
+    impl Interceptors<Error> for FailingHook {
         async fn before_provider_request(
             &self,
             wire: WireRequest,
@@ -331,7 +341,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
         ) -> Result<WireRequest, Error> {
             Ok(wire)
         }
-        async fn on_event(&self, _: MachineEvent) -> Result<(), Error> {
+        async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
             Err(Error::InvalidRequest("callback rejected".into()))
         }
     }
@@ -344,6 +354,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
                 ..request
             },
             &FailingHook,
+            None,
         )
         .await
         .unwrap_err();

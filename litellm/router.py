@@ -10384,6 +10384,11 @@ class Router:
             output_cost_per_token=Router._configured_price(model_info, litellm_params, "output_cost_per_token"),
         )
 
+    def _pattern_deployments(self) -> Iterator[Mapping[str, object]]:
+        """Every deployment registered behind a wildcard pattern, across all patterns."""
+        for deployments in self.pattern_router.patterns.values():
+            yield from deployments
+
     def get_wildcard_listing_prices(self, model_name: str) -> tuple[DeploymentListingPrice, ...]:
         """One record per wildcard deployment that a name expands from, in match order.
 
@@ -10406,8 +10411,7 @@ class Router:
                     deployment.get("model_info") or MappingProxyType({}),
                     deployment.get("litellm_params") or MappingProxyType({}),
                 )
-                for deployments in self.pattern_router.patterns.values()
-                for deployment in deployments
+                for deployment in self._pattern_deployments()
             )
         ):
             return ()
