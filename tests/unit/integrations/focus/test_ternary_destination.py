@@ -127,11 +127,16 @@ async def test_should_upload_to_correct_url_with_auth_and_upload_headers():
 
 
 @pytest.mark.asyncio
-async def test_should_close_the_client_after_upload():
+async def test_should_close_the_client_after_upload_failure():
     dest = FocusTernaryDestination(prefix="exports", config=_config())
     mock_client, _ = _capturing_client()
+    mock_client.post = AsyncMock(side_effect=RuntimeError("synthetic upload failure"))
+
     with patch(MOCK_TARGET, return_value=mock_client):
-        await dest.deliver(content=b"h\nr\n", time_window=_window(), filename="usage.csv")
+        with pytest.raises(RuntimeError) as error:
+            await dest.deliver(content=b"h\nr\n", time_window=_window(), filename="usage.csv")
+
+    assert str(error.value) == "synthetic upload failure"
     mock_client.close.assert_awaited_once()
 
 
