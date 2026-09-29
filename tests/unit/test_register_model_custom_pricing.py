@@ -11,6 +11,7 @@ calculations for DB-sourced models with prompt caching pricing.
 
 import copy
 import os
+from typing import Final
 
 import pytest
 
@@ -993,3 +994,21 @@ def test_completion_cost_applies_off_peak_only_deployment_pricing():
     finally:
         _restore_model_cost_entries(original_entries)
         del router
+
+
+def test_completion_registers_cost_per_second_pricing():
+    model_key: Final = "openai/test-cost-per-second-registration"
+    original_entries: Final = _snapshot_model_cost_entries([model_key])
+
+    try:
+        litellm.completion(
+            model=model_key,
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="fake-key",
+            cost_per_second=0.02,
+            mock_response="hello back",
+        )
+
+        assert litellm.model_cost[model_key]["cost_per_second"] == 0.02
+    finally:
+        _restore_model_cost_entries(original_entries)

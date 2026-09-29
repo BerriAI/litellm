@@ -125,6 +125,8 @@ pub struct ModelInfo {
     pub computer_use_input_cost_per_1k_tokens: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub computer_use_output_cost_per_1k_tokens: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_per_second: Option<f64>,
     /// Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_reasoning_effort: Option<ReasoningEffort>,

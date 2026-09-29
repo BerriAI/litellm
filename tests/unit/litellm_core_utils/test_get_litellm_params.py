@@ -21,7 +21,13 @@ from litellm.litellm_core_utils.get_litellm_params import (
 from litellm.types.litellm_params import ControlOptions
 
 NAMED_PRICE_PARAMS: Final = frozenset(
-    {"input_cost_per_token", "output_cost_per_token", "input_cost_per_second", "output_cost_per_second"}
+    {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cost_per_second",
+        "input_cost_per_second",
+        "output_cost_per_second",
+    }
 )
 
 
