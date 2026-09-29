@@ -5,8 +5,10 @@ import { Bar, BarChart, CartesianGrid, Treemap, XAxis, YAxis } from "recharts";
 import { ArrowDownRight, ArrowUpRight, BarChart3, Layers, Minus } from "lucide-react";
 
 import { apiClient } from "@/components/networking";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -112,18 +114,36 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   const [metric, setMetric] = React.useState<Metric>("tokens");
   const [scale, setScale] = React.useState<Scale>("linear");
   const [taskMetric, setTaskMetric] = React.useState<Metric>("spend");
+  const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!accessToken) return;
-    void apiClient.get<ModelInsightsResponse>("/model-insights", { accessToken }).then(setData);
-  }, [accessToken]);
+    let cancelled = false;
+    apiClient
+      .get<ModelInsightsResponse>("/model-insights", { accessToken, query: { metric } })
+      .then((response) => {
+        if (cancelled) return;
+        setError(null);
+        setData(response);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(extractErrorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, metric]);
 
+  const range = React.useMemo(() => ({ start: data?.start_date ?? "", end: data?.end_date ?? "" }), [data]);
   const models = React.useMemo(() => (data ? modelOrder(data.daily, metric) : []), [data, metric]);
   const series = React.useMemo(
-    () => (data ? buildWeeklySeries(data.daily, models, metric) : []),
-    [data, models, metric],
+    () => (data ? buildWeeklySeries(data.daily, models, metric, range) : []),
+    [data, models, metric, range],
   );
-  const ranking = React.useMemo(() => (data ? rankModels(data.top_models, data.daily, metric) : []), [data, metric]);
+  const ranking = React.useMemo(
+    () => (data ? rankModels(data.top_models, data.daily, metric, range) : []),
+    [data, metric, range],
+  );
   const tiles = React.useMemo(() => (data ? buildTaskTiles(data.by_task, taskMetric) : []), [data, taskMetric]);
   const categoryShares = React.useMemo(
     () =>
@@ -133,6 +153,17 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
       })).filter(({ share }) => share > 0),
     [tiles],
   );
+
+  if (error) {
+    return (
+      <div className="p-8">
+        <Alert variant="destructive">
+          <AlertTitle>Could not load model insights</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   if (!data) {
     return (
