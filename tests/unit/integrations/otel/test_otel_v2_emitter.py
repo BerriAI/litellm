@@ -735,3 +735,32 @@ def test_fully_populated_span_with_every_vocabulary_stays_within_the_attribute_l
     assert a["llm.input_messages.0.message.content"] == "turn 0"
     assert a["llm.input_messages.199.message.content"] == "turn 199"
     assert a["llm.output_messages.0.message.content"] == "reply 0"
+
+
+def test_llm_call_span_carries_detailed_timings():
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _payload(
+            hidden_params={
+                "timing_pre_processing_ms": 20.0,
+                "timing_llm_api_ms": 500.0,
+                "timing_post_processing_ms": 10.0,
+                "timing_message_copy_ms": 2.5,
+            }
+        )
+    )
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+    assert a[f"{LiteLLM.TIMING_PREFIX}pre_processing_ms"] == 20.0
+    assert a[f"{LiteLLM.TIMING_PREFIX}llm_api_ms"] == 500.0
+    assert a[f"{LiteLLM.TIMING_PREFIX}post_processing_ms"] == 10.0
+    assert a[f"{LiteLLM.TIMING_PREFIX}message_copy_ms"] == 2.5
+
+
+def test_llm_call_span_omits_timings_when_not_recorded():
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_payload())
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    assert not [key for key in span.attributes if key.startswith(LiteLLM.TIMING_PREFIX)]

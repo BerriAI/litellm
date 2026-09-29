@@ -89,6 +89,10 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}margin_fixed_amount": lambda d: d.cost.margin_fixed_amount,
         f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
         f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
+        f"{LiteLLM.TIMING_PREFIX}pre_processing_ms": lambda d: d.timing.pre_processing_ms,
+        f"{LiteLLM.TIMING_PREFIX}llm_api_ms": lambda d: d.timing.llm_api_ms,
+        f"{LiteLLM.TIMING_PREFIX}post_processing_ms": lambda d: d.timing.post_processing_ms,
+        f"{LiteLLM.TIMING_PREFIX}message_copy_ms": lambda d: d.timing.message_copy_ms,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
         LiteLLM.REQUEST_ROUTE: lambda d: d.request_route,
     }

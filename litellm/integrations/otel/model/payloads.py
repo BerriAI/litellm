@@ -396,6 +396,24 @@ class EmbeddingOutput:
 
 
 @dataclass(frozen=True)
+class LLMTiming:
+    pre_processing_ms: float | None = None
+    llm_api_ms: float | None = None
+    post_processing_ms: float | None = None
+    message_copy_ms: float | None = None
+
+    @classmethod
+    def from_hidden_params(cls, hidden_params: Mapping[str, object] | None) -> LLMTiming:
+        h: Final = hidden_params or {}
+        return cls(
+            pre_processing_ms=as_float(h.get("timing_pre_processing_ms")),
+            llm_api_ms=as_float(h.get("timing_llm_api_ms")),
+            post_processing_ms=as_float(h.get("timing_post_processing_ms")),
+            message_copy_ms=as_float(h.get("timing_message_copy_ms")),
+        )
+
+
+@dataclass(frozen=True)
 class LLMCallSpanData:
     operation: GenAIOperation
     provider: str
@@ -411,6 +429,7 @@ class LLMCallSpanData:
     identity: RequestIdentity
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)
+    timing: LLMTiming = field(default_factory=LLMTiming)
     tools: tuple[ToolDefinition, ...] = ()
     # Raw messages and response, needed by vendor mappers (OpenInference,
     # Langfuse, Weave) that stamp message-level attributes. ``messages_in`` is
@@ -474,6 +493,7 @@ class LLMCallSpanData:
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
+            timing=LLMTiming.from_hidden_params(cast("Mapping[str, object] | None", payload.get("hidden_params"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
             is_streaming=as_bool(payload.get("stream")),

@@ -288,6 +288,7 @@ class LiteLLM:
     # that tells them apart.
     CALL_TYPE: Final = "litellm.call_type"
     COST_PREFIX: Final = "litellm.cost."
+    TIMING_PREFIX: Final = "litellm.timing."
     METADATA_PREFIX: Final = "litellm.metadata."
     TEAM_ID: Final = "litellm.team.id"
     TEAM_ALIAS: Final = "litellm.team.alias"
