@@ -1732,7 +1732,7 @@ async def test_get_user_object_permission_denies_when_the_linked_row_cannot_be_r
     with pytest.raises(_ProxyException) as exc_info:
         await get_user_object_permission("user-1", UserAPIKeyAuth(user_id="user-1"))
 
-    assert exc_info.value.code == "403"
+    assert exc_info.value.code == "503"
 
 
 @pytest.mark.asyncio

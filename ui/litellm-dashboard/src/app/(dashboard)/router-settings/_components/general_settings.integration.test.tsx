@@ -1,4 +1,11 @@
-import { fireEvent, renderWithProviders, screen, within } from "../../../../../tests/test-utils";
+import {
+  fireEvent,
+  renderWithProviders,
+  screen,
+  testQueryClient,
+  waitFor,
+  within,
+} from "../../../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import GeneralSettings from "./general_settings";
@@ -252,4 +259,28 @@ it("should delete only the Default setting and retain explicit false and zero", 
     ["token", "synthetic_flag", false],
     ["token", "synthetic_count", 0],
   ]);
+});
+
+it("refetches UI settings after a general setting is updated so dependent screens see the new value", async () => {
+  vi.mocked(getGeneralSettingsCall).mockResolvedValue([
+    {
+      field_name: "default_search_list_deny",
+      field_type: "Boolean",
+      field_value: true,
+      field_description: "search deny",
+      stored_in_db: null,
+    },
+  ]);
+  testQueryClient.setQueryData(["uiSettings", "list", { params: {} }], { values: { default_search_list_deny: false } });
+  const user = userEvent.setup();
+  renderWithProviders(<GeneralSettings accessToken="token" userRole="Admin" userID="user" />);
+  await user.click(screen.getByRole("tab", { name: "General" }));
+  await user.click(
+    within(await screen.findByRole("row", { name: /default_search_list_deny/ })).getByRole("button", {
+      name: "Update",
+    }),
+  );
+  await waitFor(() =>
+    expect(testQueryClient.getQueryState(["uiSettings", "list", { params: {} }])?.isInvalidated).toBe(true),
+  );
 });

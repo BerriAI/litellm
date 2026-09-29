@@ -1556,6 +1556,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                 tool_params: Final[_SearchToolLitellmParams] = search_tool.get("litellm_params", {}) or {}
                 search_litellm_params = dict[str, object](tool_params)
                 search_provider = tool_params.get("search_provider")
+            else:
+                self._authorize_unregistered_search_fallback(kwargs=kwargs)
 
             # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
@@ -1622,6 +1624,16 @@ class WebSearchInterceptionLogger(CustomLogger):
         except Exception as e:
             verbose_logger.error("WebSearchInterception: Search failed for '%s': %s", query, e)
             raise
+
+    def _authorize_unregistered_search_fallback(self, kwargs: Mapping[str, object] | None) -> None:
+        user_api_key_auth: Final = self._get_user_api_key_auth_from_kwargs(kwargs)
+        if user_api_key_auth is None:
+            return
+
+        from litellm.proxy.auth.auth_checks import check_unregistered_search_fallback
+        from litellm.proxy.proxy_server import general_settings
+
+        check_unregistered_search_fallback(valid_token=user_api_key_auth, general_settings=general_settings)
 
     async def _authorize_search_tool(
         self,

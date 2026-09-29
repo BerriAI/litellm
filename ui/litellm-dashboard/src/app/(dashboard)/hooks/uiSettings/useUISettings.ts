@@ -2,7 +2,7 @@ import { getUiSettings } from "@/components/networking";
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
-const uiSettingsKeys = createQueryKeys("uiSettings");
+export const uiSettingsKeys = createQueryKeys("uiSettings");
 
 /**
  * UI settings, cached for an hour by default because they rarely change.

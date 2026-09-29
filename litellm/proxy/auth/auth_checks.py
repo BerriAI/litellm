@@ -5404,11 +5404,18 @@ async def get_user_object_permission(
     if object_permission is None:
         raise ProxyException(
             message=f"Search tool grants of user {user_id} could not be loaded",
-            type=ProxyErrorTypes.key_model_access_denied,
+            type=ProxyErrorTypes.no_db_connection,
             param="search_tool_name",
-            code=status.HTTP_403_FORBIDDEN,
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     return object_permission
+
+
+def _is_search_default_deny_applied(valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]) -> bool:
+    return (
+        general_settings.get("default_search_list_deny") is True
+        and valid_token.user_role != LitellmUserRoles.PROXY_ADMIN
+    )
 
 
 async def resolve_search_tool_grants(
@@ -5422,10 +5429,7 @@ async def resolve_search_tool_grants(
     ``general_settings.default_search_list_deny`` turns a missing, null or empty grant into a denial for
     every caller except a proxy admin. The user layer is only consulted in that mode.
     """
-    default_deny: Final = (
-        general_settings.get("default_search_list_deny") is True
-        and valid_token.user_role != LitellmUserRoles.PROXY_ADMIN
-    )
+    default_deny: Final = _is_search_default_deny_applied(valid_token, general_settings)
     user_id: Final = valid_token.user_id
     return SearchToolGrants(
         key=tuple(_search_tool_names_from_object_permission(valid_token.object_permission)),
@@ -5460,6 +5464,20 @@ async def can_caller_call_search_tool(
             lookup_user_object_permission=lookup_user_object_permission,
         ),
     )
+
+
+def check_unregistered_search_fallback(
+    valid_token: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> Literal[True]:
+    if _is_search_default_deny_applied(valid_token, general_settings):
+        raise ProxyException(
+            message="No registered search tool is available and general_settings.default_search_list_deny is enabled",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="search_tool_name",
+            code=status.HTTP_403_FORBIDDEN,
+        )
+    return True
 
 
 def can_grants_view_search_tool(search_tool_name: str, grants: SearchToolGrants) -> bool:

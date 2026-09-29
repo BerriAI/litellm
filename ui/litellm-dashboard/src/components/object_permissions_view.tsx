@@ -4,7 +4,7 @@ import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
 import type { ObjectPermission } from "./object_permission_types";
 import type { InheritedGrant } from "./permissions/inheritedGrants";
-import { searchToolPermissionCopy } from "./search_tools/searchToolPermissionCopy";
+import { searchToolPermissionCopy, type SearchToolPermissionScope } from "./search_tools/searchToolPermissionCopy";
 import { useDefaultSearchListDeny } from "@/app/(dashboard)/hooks/uiSettings/useDefaultSearchListDeny";
 
 interface ObjectPermissionsViewProps {
@@ -14,6 +14,7 @@ interface ObjectPermissionsViewProps {
   variant?: "card" | "inline";
   className?: string;
   accessToken?: string | null;
+  searchToolScope?: SearchToolPermissionScope;
 }
 
 export function ObjectPermissionsView({
@@ -23,6 +24,7 @@ export function ObjectPermissionsView({
   variant = "card",
   className = "",
   accessToken,
+  searchToolScope = "team",
 }: ObjectPermissionsViewProps) {
   const vectorStores = objectPermission?.vector_stores || [];
   const mcpServers = objectPermission?.mcp_servers || [];
@@ -33,7 +35,7 @@ export function ObjectPermissionsView({
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
   const searchTools = objectPermission?.search_tools || [];
   const skills = objectPermission?.skills || [];
-  const searchToolCopy = searchToolPermissionCopy(useDefaultSearchListDeny());
+  const searchToolCopy = searchToolPermissionCopy(useDefaultSearchListDeny(), searchToolScope);
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>

@@ -16,4 +16,14 @@ describe("searchToolPermissionCopy", () => {
     expect(copy.emptyState).toContain("no search tool is allowed");
     expect(Object.values(copy).join(" ")).not.toContain("all allowed");
   });
+
+  it("describes an empty key-level list as deferring to the team or user grant", () => {
+    expect(searchToolPermissionCopy(true, "key").emptyState).toBe(
+      "No key-level search tools. Default search list deny is on, so this key can use only the search tools granted to its team or user.",
+    );
+    expect(searchToolPermissionCopy(false, "key").emptyState).toBe(
+      "No key-level restriction: this key can use any search tool its team or user allows.",
+    );
+    expect(searchToolPermissionCopy(true, "key").hint).toBe(searchToolPermissionCopy(true).hint);
+  });
 });

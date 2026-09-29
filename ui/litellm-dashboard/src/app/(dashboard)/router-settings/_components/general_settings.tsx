@@ -9,6 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "@/components/networking";
 import { Trash2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { uiSettingsKeys } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { StatusBadge } from "@/components/shared/table_cells";
 
 import RouterSettings from "@/components/router_settings";
@@ -221,6 +223,8 @@ export const PromptCachingPanel: React.FC<{
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
+  const queryClient = useQueryClient();
+  const refreshUISettings = () => queryClient.invalidateQueries({ queryKey: uiSettingsKeys.all });
 
   useEffect(() => {
     if (!accessToken) {
@@ -253,7 +257,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
       return;
     }
     try {
-      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+      updateConfigFieldSetting(accessToken, fieldName, fieldValue).then(refreshUISettings);
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
@@ -271,7 +275,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     }
 
     try {
-      deleteConfigFieldSetting(accessToken, fieldName);
+      deleteConfigFieldSetting(accessToken, fieldName).then(refreshUISettings);
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
