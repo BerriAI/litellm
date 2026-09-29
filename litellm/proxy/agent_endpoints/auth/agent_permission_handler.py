@@ -161,13 +161,15 @@ class AgentRequestHandler:
         from litellm.types.proxy.agent_identity import AgentIdentityFailure
 
         registered: Final = global_agent_registry.get_agent_by_id(agent_id)
-        if prisma_client is not None or (registered is not None and registered.identity_managed):
+        registry_managed: Final = isinstance(registered, AgentResponse) and registered.identity_managed
+        if registry_managed or (registered is None and prisma_client is not None):
             target: Final = await AgentIdentityStore.from_client(prisma_client).agent(agent_id)
             if isinstance(target, AgentIdentityFailure):
-                raise_identity_failure(target)
-            if target is None and registered is not None and registered.identity_managed:
+                if registry_managed:
+                    raise_identity_failure(target)
+            elif target is None and registry_managed:
                 return False
-            if target is not None and target.identity_managed:
+            elif isinstance(target, AgentResponse) and target.identity_managed:
                 if (
                     not target.enabled
                     or target.identity is None
