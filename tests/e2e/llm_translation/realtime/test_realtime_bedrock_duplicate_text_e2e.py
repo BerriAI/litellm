@@ -1,6 +1,6 @@
 """Live e2e: Bedrock Nova 2 Sonic realtime shows each assistant sentence once.
 
-Customer path (Pylon 9279): a voice client on /v1/realtime streams mic audio
+User flow: a voice client on /v1/realtime streams mic audio
 through input_audio_buffer.append, keeps streaming after the user stops talking,
 and renders every response.text.done as a chat bubble. Nova 2 Sonic sends each
 assistant text block twice, a SPECULATIVE preview next to the audio and then the
