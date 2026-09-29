@@ -1,4 +1,5 @@
 import functools
+import itertools
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Final
@@ -112,8 +113,12 @@ def _daily_metric(row: _GroupedDaily) -> ModelInsightDailyMetric:
 
 def _summarize_tasks(rows: list[_GroupedTask], metric: ModelInsightsMetric) -> list[ModelInsightTaskSummary]:
     catalog: Final = load_model_insight_tasks()
+    first_seen: Final = {task: index for index, task in enumerate(dict.fromkeys(row.task_type for row in rows))}
     by_task: Final = {
-        task: tuple(row for row in rows if row.task_type == task) for task in dict.fromkeys(r.task_type for r in rows)
+        task: tuple(group)
+        for task, group in itertools.groupby(
+            sorted(rows, key=lambda row: first_seen[row.task_type]), key=lambda row: row.task_type
+        )
     }
     totals: Final = {
         task: functools.reduce(lambda total, row: total + _rank_value(row, metric), task_rows, 0.0)
