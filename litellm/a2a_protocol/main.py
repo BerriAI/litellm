@@ -471,13 +471,20 @@ async def asend_message(
     if custom_llm_provider:
         if request is None:
             raise ValueError("request is required for completion bridge")
-        return await _send_message_via_completion_bridge(
+        bridge_response: Final = await _send_message_via_completion_bridge(
             request=request,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             litellm_params=litellm_params,
             agent_extra_headers=agent_extra_headers,
         )
+        bridge_prompt_tokens, bridge_completion_tokens, _ = await asyncify(
+            A2ARequestUtils.calculate_usage_from_request_response
+        )(request=request, response_dict=bridge_response.model_dump(mode="json", exclude_none=True))
+        _set_usage_on_logging_obj(kwargs, bridge_prompt_tokens, bridge_completion_tokens)
+        _set_litellm_params_on_logging_obj(kwargs, litellm_params)
+        _set_agent_id_on_logging_obj(kwargs, agent_id)
+        return bridge_response
 
     # Standard A2A client flow
     if request is None:
@@ -692,12 +699,35 @@ async def asend_message_streaming(
             request.params.model_dump(mode="json") if hasattr(request.params, "model_dump") else dict(request.params)
         )
 
-        async for chunk in A2ACompletionBridgeHandler.handle_streaming(
+        bridge_name: Final = str(litellm_params.get("model") or agent_id or "agent")
+        existing_logging: Final = kwargs.get("litellm_logging_obj")
+        bridge_logging: Final = (
+            existing_logging
+            if isinstance(existing_logging, Logging)
+            else _build_streaming_logging_obj(
+                request=request,
+                agent_name=bridge_name,
+                agent_id=agent_id,
+                litellm_params=litellm_params,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
+            )
+        )
+        bridge_context: Final = {"litellm_logging_obj": bridge_logging}
+        _set_litellm_params_on_logging_obj(bridge_context, litellm_params)
+        _set_agent_id_on_logging_obj(bridge_context, agent_id)
+        bridge_stream: Final = A2ACompletionBridgeHandler.handle_streaming(
             request_id=str(request.id),
             params=params,
             litellm_params=litellm_params,
             api_base=api_base,
             agent_extra_headers=agent_extra_headers,
+        )
+        async for chunk in A2AStreamingIterator(
+            stream=bridge_stream,
+            request=request,
+            logging_obj=bridge_logging,
+            agent_name=bridge_name,
         ):
             yield chunk
         return
