@@ -1,3 +1,4 @@
+import asyncio
 import datetime as real_datetime
 import smtplib
 from typing import Final
@@ -1688,6 +1689,36 @@ async def test_post_mcp_call_hook_propagates_guardrail_block(restore_callbacks):
             user_api_key_dict=None,
         )
 
+
+
+class _StalledMCPGuardrail(_RecordingMCPGuardrail):
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.call_count += 1
+        await asyncio.sleep(30)
+        return {"texts": [self.masked_text for _ in inputs.get("texts", [])]}
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_fail_open_timeout_returns_the_unscanned_tool_result(restore_callbacks):
+    """A post_mcp_call guardrail past its timeout with fail_open must hand back the original tool result."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _StalledMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    guardrail.hook_timeout = 0.1
+    guardrail.hook_timeout_fallback = "fail_open"
+    litellm.callbacks = [guardrail]
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert guardrail.call_count == 1
+    assert returned is result
+    assert [item.text for item in returned.content] == ["jane@example.com"]
 
 @pytest.mark.asyncio
 async def test_prisma_health_check_failure_names_itself_at_operator_visible_level(caplog):
