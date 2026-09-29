@@ -175,8 +175,12 @@ class RealtimeClient:
 
         try:
             while self.is_active:
-                audio_data = self.input_stream.read(
-                    CHUNK_SIZE, exception_on_overflow=False
+                # Stream.read() blocks the calling thread until the requested frames
+                # are recorded (PyAudio "blocking mode" semantics). Run it off the
+                # event loop thread so it doesn't stall receive_messages()/play_audio()
+                # for the duration of every read.
+                audio_data = await asyncio.to_thread(
+                    self.input_stream.read, CHUNK_SIZE, exception_on_overflow=False
                 )
                 await self.send_audio_chunk(audio_data)
                 await asyncio.sleep(0.01)  # Small delay to prevent overwhelming
@@ -206,7 +210,9 @@ class RealtimeClient:
                         self.audio_queue.get(), timeout=0.1
                     )
                     if audio_data:
-                        self.output_stream.write(audio_data)
+                        # Stream.write() also blocks in PyAudio's blocking mode;
+                        # same reasoning as capture_audio() above.
+                        await asyncio.to_thread(self.output_stream.write, audio_data)
                 except asyncio.TimeoutError:
                     continue
         except Exception as e:
