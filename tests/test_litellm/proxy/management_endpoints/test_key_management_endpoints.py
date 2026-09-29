@@ -21258,3 +21258,72 @@ async def test_rotation_grace_period_is_written_to_the_selected_database(transac
     assert saved["data"]["update"]["active_token_id"] == "new-token"
     assert before + timedelta(hours=1) <= saved["data"]["create"]["revoke_at"] <= datetime.now(timezone.utc) + timedelta(hours=1)
     unused.litellm_deprecatedverificationtoken.upsert.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["update", "regenerate"])
+async def test_source_binding_race_denial_preserves_object_permissions(monkeypatch, operation):
+    from types import SimpleNamespace
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn, _execute_virtual_key_regeneration
+
+    key = _make_regenerate_existing_key().model_copy(update={"allowed_routes": ["/scim/*"], "object_permission_id": "permission-before"})
+    if operation == "update":
+        _wire_update_key_fn(monkeypatch, key)
+        client = proxy_server.prisma_client
+    else:
+        client = _make_regenerate_mock_prisma()
+    client.writer_db.litellm_scimsource.find_unique = AsyncMock(return_value=None)
+    events = []
+    _record_object_permission_writes(client, events)
+    tx = AsyncMock()
+    client.tx = MagicMock()
+    client.tx.return_value.__aenter__.return_value = tx
+    tx.litellm_verificationtoken.find_unique.return_value = key
+    tx.litellm_scimsource.find_unique.return_value = SimpleNamespace(source_id="concurrent-source")
+    permission = LiteLLM_ObjectPermissionBase(vector_stores=["vs-after"])
+    if operation == "update":
+        request = MagicMock()
+        request.query_params = {}
+        call = update_key_fn(request=request, data=UpdateKeyRequest(key=key.token, allowed_routes=["/*"], object_permission=permission), user_api_key_dict=_make_regenerate_user_api_key_dict(), litellm_changed_by=None)
+    else:
+        call = _execute_virtual_key_regeneration(prisma_client=client, key_in_db=key, hashed_api_key=key.token, key="sk-original", data=RegenerateKeyRequest(object_permission=permission), user_api_key_dict=_make_regenerate_user_api_key_dict(), litellm_changed_by=None, user_api_key_cache=MagicMock(), proxy_logging_obj=MagicMock())
+    with _patch_regenerate_side_effects():
+        with pytest.raises((HTTPException, ProxyException)) as denied:
+            await call
+    assert str(getattr(denied.value, "code", getattr(denied.value, "status_code", None))) == "409"
+    assert events == []
+    client.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+    tx.litellm_objectpermissiontable.upsert.assert_not_awaited()
+    tx.litellm_verificationtoken.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["update", "regenerate"])
+async def test_permission_update_joins_key_write_transaction(operation):
+    from litellm.proxy.management_endpoints.key_management_endpoints import _execute_virtual_key_regeneration, _update_key_row_with_soft_budget
+
+    client = _make_regenerate_mock_prisma()
+    client.writer_db.litellm_scimsource.find_unique = AsyncMock(return_value=None)
+    key = _make_regenerate_existing_key().model_copy(update={"object_permission_id": "permission-before"})
+    tx = AsyncMock()
+    client.tx.return_value.__aenter__.return_value = tx
+    tx.litellm_verificationtoken.find_unique.return_value = key
+    tx.litellm_scimsource.find_unique.return_value = None
+    tx.litellm_objectpermissiontable.find_unique.return_value = None
+    tx.litellm_objectpermissiontable.upsert.return_value = MagicMock(object_permission_id="permission-before")
+    tx.litellm_verificationtoken.update.side_effect = RuntimeError("token write failed")
+    permission = LiteLLM_ObjectPermissionBase(vector_stores=["vs-after"])
+    if operation == "update":
+        call = _update_key_row_with_soft_budget(client, key.token, UpdateKeyRequest(key=key.token, allowed_routes=[], object_permission=permission), {"allowed_routes": [], "object_permission": permission.model_dump()}, key, "admin")
+    else:
+        call = _execute_virtual_key_regeneration(prisma_client=client, key_in_db=key, hashed_api_key=key.token, key="sk-original", data=RegenerateKeyRequest(object_permission=permission), user_api_key_dict=_make_regenerate_user_api_key_dict(), litellm_changed_by=None, user_api_key_cache=MagicMock(), proxy_logging_obj=MagicMock())
+    with _patch_regenerate_side_effects():
+        with pytest.raises(RuntimeError, match="token write failed"):
+            await call
+    client.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+    saved = tx.litellm_objectpermissiontable.upsert.await_args.kwargs
+    assert saved["where"] == {"object_permission_id": "permission-before"}
+    assert saved["data"]["update"]["vector_stores"] == ["vs-after"]
+    assert tx.litellm_verificationtoken.update.await_args.kwargs["data"]["object_permission_id"] == "permission-before"
+    assert client.tx.return_value.__aexit__.await_args.args[0] is RuntimeError

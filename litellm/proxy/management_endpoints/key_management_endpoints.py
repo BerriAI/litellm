@@ -2437,16 +2437,22 @@ async def _update_key_row_with_soft_budget(
     async with prisma_client.tx() as tx:
         if "allowed_routes" in data.model_fields_set:
             await _lock_and_validate_source_key_change(tx, hashed_token, data.allowed_routes)
+        permission_values: Final = await _handle_update_object_permission(
+            data_json=dict(non_default_values),
+            existing_key_row=existing_key_row,
+            prisma_client=prisma_client,
+            tx=tx,
+        )
         update_values: Final = (
             await _apply_soft_budget_update(
                 data=data,
-                non_default_values=non_default_values,
+                non_default_values=permission_values,
                 db=tx,
                 existing_key_row=existing_key_row,
                 changed_by=changed_by,
             )
             if "soft_budget" in data.model_fields_set
-            else non_default_values
+            else permission_values
         )
         include_object_permission: Final[prisma.types.LiteLLM_VerificationTokenInclude] = {"object_permission": True}
         updated_row: Final = await tx.litellm_verificationtoken.update(
@@ -2573,6 +2579,8 @@ async def _handle_update_object_permission(
     data_json: dict,
     existing_key_row: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
+    *,
+    tx: "Prisma | None" = None,
 ) -> dict:
     """Persist the requested object permission row and swap it for its id, only after the key policy allowed the write."""
     if "object_permission" not in data_json:
@@ -2582,6 +2590,7 @@ async def _handle_update_object_permission(
         data_json=data_json,
         existing_object_permission_id=existing_key_row.object_permission_id,
         prisma_client=prisma_client,
+        tx=tx,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
@@ -3544,10 +3553,15 @@ async def update_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        update_values: Final = await _handle_update_object_permission(
-            data_json=non_default_values,
-            existing_key_row=existing_key_row,
-            prisma_client=prisma_client,
+        uses_transaction: Final = bool(data.model_fields_set.intersection(("soft_budget", "allowed_routes")))
+        update_values: Final = (
+            non_default_values
+            if uses_transaction
+            else await _handle_update_object_permission(
+                data_json=non_default_values,
+                existing_key_row=existing_key_row,
+                prisma_client=prisma_client,
+            )
         )
         changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
         response: Final = (
@@ -3559,7 +3573,7 @@ async def update_key_fn(
                 existing_key_row=existing_key_row,
                 changed_by=changed_by,
             )
-            if {"soft_budget", "allowed_routes"}.intersection(data.model_fields_set)
+            if uses_transaction
             else await prisma_client.update_data(token=key, data=MappingProxyType({**update_values, "token": key}))
         )
 
@@ -5678,14 +5692,6 @@ async def _execute_virtual_key_regeneration(
             request=data if data is not None else RegenerateKeyRequest(),
         ),
     )
-    update_values: Final = await _handle_update_object_permission(
-        data_json=non_default_values,
-        existing_key_row=key_in_db,
-        prisma_client=prisma_client,
-    )
-    update_data.update(update_values)
-    jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
-
     # Snapshot before the token update: the FK cascade rewrites mapping rows to the new hash,
     # but their cached jwt_key_mapping entries still point at the old token (LIT-5379).
     jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_token(
@@ -5695,6 +5701,15 @@ async def _execute_virtual_key_regeneration(
 
     async with prisma_client.tx() as tx:
         await _lock_and_validate_source_key_change(tx, hashed_api_key)
+        update_values: Final = await _handle_update_object_permission(
+            data_json=non_default_values,
+            existing_key_row=key_in_db,
+            prisma_client=prisma_client,
+            tx=tx,
+        )
+        jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(
+            data={**update_data, **update_values}
+        )
         await _persist_deleted_verification_tokens(
             keys=[key_in_db],
             prisma_client=prisma_client,
