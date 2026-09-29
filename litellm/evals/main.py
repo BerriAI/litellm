@@ -148,7 +148,7 @@ def create_eval(
         _is_async: Final = kwargs.pop("acreate_eval", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -333,7 +333,7 @@ def list_evals(
         _is_async: Final = kwargs.pop("alist_evals", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -499,7 +499,7 @@ def get_eval(
         _is_async: Final = kwargs.pop("aget_eval", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -664,7 +664,7 @@ def update_eval(
         _is_async: Final = kwargs.pop("aupdate_eval", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -869,7 +869,7 @@ def delete_eval(
         _is_async: Final = kwargs.pop("adelete_eval", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -1019,7 +1019,7 @@ def cancel_eval(
         _is_async: Final = kwargs.pop("acancel_eval", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -1198,7 +1198,7 @@ def create_run(
         _is_async: Final = kwargs.pop("acreate_run", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -1382,7 +1382,7 @@ def list_runs(
         _is_async: Final = kwargs.pop("alist_runs", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -1552,7 +1552,7 @@ def get_run(
         _is_async: Final = kwargs.pop("aget_run", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -1708,7 +1708,7 @@ def cancel_run(
         _is_async: Final = kwargs.pop("acancel_run", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
@@ -1873,7 +1873,7 @@ def delete_run(
         _is_async: Final = kwargs.pop("adelete_run", False) is True
 
         # Get LiteLLM parameters
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
         # Determine provider
         if custom_llm_provider is None:
