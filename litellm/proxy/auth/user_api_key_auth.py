@@ -3333,7 +3333,7 @@ async def user_api_key_auth(
     with (
         phase_span(
             f"auth {route}",
-            redact_content=request_opts_into_message_redaction(request.headers, request_data),
+            redact_content=request_opts_into_message_redaction(_safe_get_request_headers(request), request_data),
         ),
         spend_counter_batch_scope(_spend_counter_redis_cache()),
     ):
