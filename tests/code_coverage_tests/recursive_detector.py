@@ -57,6 +57,8 @@ IGNORE_FUNCTIONS = [
     "_redact_scanned_content",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning "[REDACTED]" at the cap.
     "replace_ciphertexts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); walks stored JSON, which has no cycles, and leaves values below the cap untouched.
     "_map_litellm_param_strings",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); walks vector store litellm_params JSON, which has no cycles, and leaves values below the cap untouched.
+    "_map_param_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); list items of vector store litellm_params, same walk as _map_litellm_param_strings.
+    "_secret_strings_in",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); read-only twin of _map_param_value over vector store litellm_params.
     "_iter_fallback_targets",  # max depth set (2 * ROUTER_MAX_FALLBACKS); fails closed by raising ValueError at the cap.
     "_mergeable_branch",  # max depth set (_MAX_SCHEMA_FLATTEN_DEPTH=32) plus a seen_refs cycle guard; passes the schema through untouched at the cap.
     "json_string_leaves",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); fails closed by raising at the cap so nothing goes unscanned.
