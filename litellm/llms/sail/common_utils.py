@@ -106,19 +106,15 @@ def extra_body_for_sail(
 
 
 def chat_request_for_sail(request: Mapping[str, object], *, model: str, drop_params: bool) -> Mapping[str, object]:
-    raw_tier: Final = request.get("service_tier")
-    window: Final = completion_window_for_service_tier(raw_tier, model=model, drop_params=drop_params)
-    caller_metadata: Final = _metadata_without_caller_window(
-        request.get("metadata"), field="metadata", model=model, drop_params=drop_params
-    )
-    metadata: Final = MappingProxyType({**caller_metadata, "completion_window": window}) if window else caller_metadata
     extra_body: Final = request.get("extra_body")
     return MappingProxyType(
         {
-            **without_keys(request, frozenset({"service_tier", "metadata", "extra_body"})),
-            **(_entry("metadata", metadata) if metadata else _EMPTY),
+            **without_keys(request, frozenset({"service_tier", "extra_body"})),
             **(
-                _entry("extra_body", extra_body_for_sail(extra_body, metadata, model=model, drop_params=drop_params))
+                _entry(
+                    "extra_body",
+                    extra_body_for_sail(extra_body, request.get("metadata"), model=model, drop_params=drop_params),
+                )
                 if isinstance(extra_body, Mapping)
                 else _EMPTY
             ),
@@ -138,10 +134,10 @@ def _caller_completion_window(window: object, *, model: str, drop_params: bool) 
     )
 
 
-def responses_params_with_completion_window(
+def params_with_completion_window(
     params: Mapping[str, object], *, model: str, drop_params: bool
 ) -> Mapping[str, object]:
-    """Responses billing reads these mapped params, so ``service_tier`` is kept
+    """Billing reads these mapped params, so ``service_tier`` is kept
     as the tier whose price columns match the window and stripped from the body later."""
     raw_tier: Final = params.get("service_tier")
     raw_metadata: Final = params.get("metadata")
@@ -175,3 +171,13 @@ def responses_params_with_completion_window(
             **(_entry("service_tier", billed_tier) if billed_tier else _EMPTY),
         }
     )
+
+
+def billed_service_tier(optional_params: Mapping[str, object]) -> str | None:
+    metadata: Final = optional_params.get("metadata")
+    if isinstance(metadata, Mapping):
+        window: Final = metadata.get("completion_window")
+        if isinstance(window, str) and window.lower() in _BILLED_TIER_FOR_WINDOW:
+            return _BILLED_TIER_FOR_WINDOW[window.lower()]
+    service_tier: Final = optional_params.get("service_tier")
+    return service_tier if isinstance(service_tier, str) else None

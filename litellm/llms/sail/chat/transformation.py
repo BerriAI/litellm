@@ -4,16 +4,16 @@ from typing import Final
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.sail.common_utils import (
     chat_request_for_sail,
-    completion_window_for_service_tier,
     extra_body_for_sail,
     json_body,
+    params_with_completion_window,
 )
 from litellm.types.llms.openai import AllMessageValues
 
 _REJECTED_BY_SAIL: Final = frozenset(
     {"stop", "seed", "frequency_penalty", "presence_penalty", "logit_bias", "logprobs", "top_logprobs"}
 )
-_ACCEPTED_BY_SAIL: Final = ("reasoning_effort", "user")
+_ACCEPTED_BY_SAIL: Final = ("reasoning_effort", "user", "metadata")
 
 
 class SailChatConfig(OpenAIGPTConfig):
@@ -31,13 +31,18 @@ class SailChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: return type fixed by the base interface
-        completion_window_for_service_tier(non_default_params.get("service_tier"), model=model, drop_params=drop_params)
-        return super().map_openai_params(
+        mapped: Final = super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
         )
+        normalized: Final = params_with_completion_window(
+            {key: non_default_params[key] for key in ("service_tier", "metadata") if key in non_default_params},
+            model=model,
+            drop_params=drop_params,
+        )
+        return {**mapped, **normalized}
 
     def transform_request(
         self,

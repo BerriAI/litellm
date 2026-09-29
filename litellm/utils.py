@@ -8915,6 +8915,15 @@ class ProviderConfigManager:
                 return GithubCopilotAnthropicMessagesConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAIAnthropicMessagesConfig()
+        elif litellm.LlmProviders.SAIL == provider:
+            from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+            from litellm.llms.sail.messages.transformation import (
+                SailAnthropicMessagesConfig,
+            )
+
+            sail_json_provider: Final = JSONProviderRegistry.get("sail")
+            if sail_json_provider is not None:
+                return SailAnthropicMessagesConfig(sail_json_provider)
 
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 

@@ -473,9 +473,8 @@ def anthropic_messages_handler(
         messages, system, kwargs, model=model, custom_llm_provider=custom_llm_provider, tools=tools, api_base=api_base
     )
 
-    metadata = validate_anthropic_api_metadata(metadata)
-
     local_vars: Final = locals()
+    anthropic_metadata: Final = validate_anthropic_api_metadata(metadata)
     is_async: Final = kwargs.pop("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -543,7 +542,7 @@ def anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=model,
-                metadata=metadata,
+                metadata=anthropic_metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
                 system=system,
@@ -587,7 +586,7 @@ def anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=original_model,
-                metadata=metadata,
+                metadata=anthropic_metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
                 system=system,
@@ -613,7 +612,7 @@ def anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
             model=original_model,
-            metadata=metadata,
+            metadata=anthropic_metadata,
             stop_sequences=stop_sequences,
             stream=stream,
             system=system,
@@ -636,10 +635,11 @@ def anthropic_messages_handler(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
         )
 
-    local_vars.update(kwargs)
+    request_metadata: Final = anthropic_messages_provider_config.request_metadata(metadata)
+    request_params: Final = {**local_vars, **kwargs, "metadata": request_metadata}
     anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars,
+            params=request_params,
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
             custom_llm_provider=custom_llm_provider,
