@@ -91,7 +91,7 @@ mod tests {
         mistral::ocr::transformation::MistralOcrConfig,
         vertex_ai::ocr::transformation::VertexAiOcrConfig,
     };
-    use litellm_llms_types::ocr::OcrResponseFormat;
+    use litellm_llms_types::formats::ocr::OcrResponseFormat;
     use serde_json::{Value, json};
 
     use super::*;

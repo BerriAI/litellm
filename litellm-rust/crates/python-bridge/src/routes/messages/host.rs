@@ -247,7 +247,7 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<litellm_llms_types::messages::MessagesResponse>,
+        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
     ) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("response")?

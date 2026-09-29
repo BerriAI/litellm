@@ -1,4 +1,4 @@
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
 use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};

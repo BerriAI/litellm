@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::IntoStaticStr;
 
-use crate::chat_completions::ReasoningEffort;
+use crate::formats::chat_completions::ReasoningEffort;
 use crate::recognized::Recognized;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

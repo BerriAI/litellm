@@ -1,4 +1,4 @@
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrPage};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 

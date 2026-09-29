@@ -1,4 +1,4 @@
-use litellm_llms_types::audio_transcription::AudioTranscriptionResponseData;
+use litellm_llms_types::formats::audio_transcription::AudioTranscriptionResponseData;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 

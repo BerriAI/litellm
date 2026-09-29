@@ -1,4 +1,4 @@
-use litellm_llms_types::messages::streaming::MessagesStreamEvent;
+use litellm_llms_types::formats::messages::streaming::MessagesStreamEvent;
 use rstest::rstest;
 use serde_json::{Value, json};
 

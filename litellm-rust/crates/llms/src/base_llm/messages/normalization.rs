@@ -1,4 +1,4 @@
-use litellm_llms_types::messages::{
+use litellm_llms_types::formats::messages::{
     ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest, SystemPrompt,
 };
 

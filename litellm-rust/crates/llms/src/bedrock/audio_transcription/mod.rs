@@ -4,7 +4,7 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
-use litellm_llms_types::audio_transcription::AudioTranscriptionResponseData;
+use litellm_llms_types::formats::audio_transcription::AudioTranscriptionResponseData;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use strum::IntoStaticStr;

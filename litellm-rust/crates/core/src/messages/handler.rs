@@ -13,7 +13,7 @@ use litellm_llms::base_llm::{
         transformation::BaseMessagesConfig,
     },
 };
-use litellm_llms_types::messages::MessagesResponse;
+use litellm_llms_types::formats::messages::MessagesResponse;
 use litellm_tracing::ByteChunk;
 use serde_json::Value;
 

@@ -3,7 +3,7 @@ use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, build_conversation},
 };
-use litellm_llms_types::chat_completions::{
+use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse, ChatMessage,
 };
 use serde::Deserialize;

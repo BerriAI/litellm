@@ -8,7 +8,7 @@ use litellm_core::messages::{
     route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_http::{HttpSettings, Resolution};
-use litellm_llms_types::messages::{MessagesRequest, MessagesResponse};
+use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
 use litellm_secrets::source::SecretSource;
 use rstest::fixture;
 use serde_json::{Map, Value, json};

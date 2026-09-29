@@ -1,6 +1,6 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_http::request::{has_bearer_auth, has_header};
-use litellm_llms_types::messages::{
+use litellm_llms_types::formats::messages::{
     CacheControl, ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest,
     SystemPrompt,
 };
@@ -162,7 +162,7 @@ fn strip_scope_from_message(message: Message) -> Message {
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms_types::messages::MessagesResponse;
+    use litellm_llms_types::formats::messages::MessagesResponse;
     use rstest::rstest;
     use serde_json::json;
 

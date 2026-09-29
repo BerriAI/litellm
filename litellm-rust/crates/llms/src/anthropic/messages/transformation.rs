@@ -1,6 +1,6 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
-    messages::{
+    formats::messages::{
         ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
     },
     providers::anthropic::{AnthropicBeta, BetaSet},

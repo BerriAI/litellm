@@ -12,7 +12,7 @@ use crate::{
         CohereOptions, CohereParseConfig, CohereRequest, validate_document,
     },
 };
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 pub const AZURE_COHERE_PARSE_PATH: [&str; 4] = ["providers", "cohere", "v2", "parse"];
 

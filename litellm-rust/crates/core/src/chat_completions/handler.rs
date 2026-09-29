@@ -8,7 +8,7 @@ use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     chat::transformation::ProviderChatResponseData,
 };
-use litellm_llms_types::chat_completions::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use serde_json::Value;
 
 use super::Error;

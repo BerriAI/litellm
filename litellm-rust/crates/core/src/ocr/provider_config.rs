@@ -24,7 +24,7 @@ use litellm_llms::{
         deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
     },
 };
-use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 macro_rules! with_config {
     ($kind:expr, $config:ident => $body:expr) => {
