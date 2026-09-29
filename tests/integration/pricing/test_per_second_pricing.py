@@ -19,6 +19,7 @@ PRICING_FIELDS: Final = frozenset({"cost_per_second", "input_cost_per_second", "
 PER_SECOND_CONFIGURATIONS: Final[tuple[tuple[str, Mapping[str, JsonValue]], ...]] = (
     ("new_field", {"cost_per_second": RATE}),
     ("legacy_input", {"input_cost_per_second": RATE}),
+    ("legacy_output", {"output_cost_per_second": RATE}),
     ("legacy_both", {"input_cost_per_second": RATE, "output_cost_per_second": 0.25}),
     (
         "all_three",
@@ -76,7 +77,7 @@ def _observed_request_body(upstream: httpx.Client) -> dict[str, JsonValue]:
 @pytest.mark.parametrize(
     ("pricing_case", "pricing"),
     PER_SECOND_CONFIGURATIONS,
-    ids=("new_field", "legacy_input", "legacy_both", "all_three"),
+    ids=("new_field", "legacy_input", "legacy_output", "legacy_both", "all_three"),
 )
 def test_chat_per_second_pricing_is_charged_once_and_not_forwarded(
     gateway: Gateway, pricing_case: str, pricing: Mapping[str, JsonValue]
@@ -120,46 +121,10 @@ def test_chat_per_second_pricing_is_charged_once_and_not_forwarded(
         assert float(str(rows[0]["spend"])) == pytest.approx(response_cost, rel=1e-3)
 
 
-def test_chat_output_cost_per_second_alone_is_not_a_chat_rate(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
-        scenario_id: Final = f"output-per-second-{uuid.uuid4().hex}"
-        key: Final = scenario.key()
-        model: Final = scenario.model(
-            model=f"openai/integration-per-second-{uuid.uuid4().hex}",
-            api_key=scenario_id,
-            api_base=f"{gateway.upstream_url.rstrip('/')}/v1",
-            output_cost_per_second=RATE,
-        )
-        with httpx.Client(base_url=gateway.upstream_url, trust_env=False) as upstream:
-            _clear_observations(upstream)
-            response: Final = gateway.request(
-                "POST",
-                "/v1/chat/completions",
-                {"model": model, "messages": [{"role": "user", "content": "price this request"}]},
-                key=key,
-            )
-            body: Final = _observed_request_body(upstream)
-            assert response.status_code == 200, response.text
-            response_cost: Final = float(response.headers.get("x-litellm-response-cost", "0"))
-            assert response_cost == 0.0, response_cost
-            assert not PRICING_FIELDS.intersection(body), body
-
-        request_id: Final = string_value(object_value(response.json())["id"])
-        rows: Final = eventually(
-            lambda: read_rows(
-                'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
-                (request_id,),
-            ),
-            lambda values: len(values) == 1,
-            seconds=70,
-        )
-        assert float(str(rows[0]["spend"])) == 0.0
-
-
 @pytest.mark.parametrize(
     ("pricing_case", "pricing"),
     PER_SECOND_CONFIGURATIONS,
-    ids=("new_field", "legacy_input", "legacy_both", "all_three"),
+    ids=("new_field", "legacy_input", "legacy_output", "legacy_both", "all_three"),
 )
 def test_streaming_chat_per_second_pricing_covers_the_full_stream(
     gateway: Gateway, pricing_case: str, pricing: Mapping[str, JsonValue]

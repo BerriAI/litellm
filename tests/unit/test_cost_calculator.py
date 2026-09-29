@@ -12,7 +12,6 @@ from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
-    _per_second_pricing_cost,
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
@@ -3131,6 +3130,7 @@ def test_cost_per_token_ignores_cost_per_second_when_token_pricing_is_set(monkey
     ("pricing_fields", "expected_rate"),
     [
         ({"cost_per_second": 0.02}, 0.02),
+        ({"output_cost_per_second": 0.04}, 0.04),
         (
             {"cost_per_second": 0.05, "input_cost_per_second": 0.02, "output_cost_per_second": 0.04},
             0.05,
@@ -3157,33 +3157,6 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
         completion_tokens=20,
         response_time_ms=1500.0,
     ) == pytest.approx((expected_rate * 1.5, 0.0))
-
-
-def test_per_second_pricing_ignores_output_cost_per_second_for_chat(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
-    model: Final = "test-chat-output-cost-per-second-only"
-    litellm.register_model(
-        model_cost={
-            model: {
-                "output_cost_per_second": 0.04,
-                "litellm_provider": "together_ai",
-                "mode": "chat",
-            }
-        }
-    )
-
-    assert (
-        _per_second_pricing_cost(
-            model=model,
-            custom_llm_provider="together_ai",
-            response_time_ms=1500.0,
-        )
-        is None
-    )
 
 
 def _logging_obj_with_call_window(duration_ms: float) -> Logging:

@@ -353,7 +353,14 @@ def _per_second_pricing_cost(
         return None
     cost_per_second: Final = model_info.get("cost_per_second")
     input_cost_per_second: Final = model_info.get("input_cost_per_second")
-    resolved_cost_per_second: Final = cost_per_second if cost_per_second is not None else input_cost_per_second
+    output_cost_per_second: Final = model_info.get("output_cost_per_second")
+    resolved_cost_per_second: Final = (
+        cost_per_second
+        if cost_per_second is not None
+        else input_cost_per_second
+        if input_cost_per_second is not None
+        else output_cost_per_second
+    )
     if resolved_cost_per_second is None:
         return None
 
@@ -792,7 +799,7 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
 
 
 _NON_TOKEN_RATE_FIELDS: Final = frozenset(
-    {"cost_per_second", "input_cost_per_second", "input_cost_per_query", "tiered_pricing"}
+    {"cost_per_second", "input_cost_per_second", "output_cost_per_second", "input_cost_per_query", "tiered_pricing"}
 )
 
 

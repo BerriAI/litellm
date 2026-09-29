@@ -5517,6 +5517,7 @@ def completion(
         if (
             (input_cost_per_token is not None and output_cost_per_token is not None)
             or input_cost_per_second is not None
+            or output_cost_per_second is not None
             or cost_per_second is not None
         ):
             _register_custom_pricing_for_request(
@@ -6360,6 +6361,7 @@ def embedding(
     output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
     cost_per_second: Final = kwargs.get("cost_per_second", None)
     input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
+    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
     openai_params: Final = [
         "user",
         "dimensions",
@@ -6403,6 +6405,7 @@ def embedding(
     if (
         (input_cost_per_token is not None and output_cost_per_token is not None)
         or input_cost_per_second is not None
+        or output_cost_per_second is not None
         or cost_per_second is not None
     ):
         _register_custom_pricing_for_request(
