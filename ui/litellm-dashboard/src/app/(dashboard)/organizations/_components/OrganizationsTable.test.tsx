@@ -83,7 +83,7 @@ describe("OrganizationsTable", () => {
   });
 
   it("right-aligns the money and count columns only", () => {
-    render(<OrganizationsTable {...baseProps} organizations={[]} />);
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={[]} />);
     for (const header of ["Spend (USD)", "Budget (USD)", "Members"]) {
       expect(screen.getByText(header).closest("th")).toHaveClass("text-right");
     }
