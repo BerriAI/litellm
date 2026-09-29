@@ -2274,6 +2274,60 @@ def test_assign_key_keeps_explicit_virtual_key_update_with_saved_session(isolate
     assert load_token() == before
 
 
+@pytest.mark.parametrize("restore_fails", [False, True])
+def test_assign_key_handles_keychain_update_without_metadata(isolated_home, secret_vault_factory, restore_fails):
+    vault = secret_vault_factory()
+    save_cli_token(
+        CliTokenRecord(
+            **_pkce_record(key="session-old", expires_at=time.time() + 3600, team_id="team-a", client_id="old-client")
+        ),
+        vault=vault,
+    )
+    before = load_token(vault=vault)
+    metadata_before = (isolated_home / ".litellm" / "token.json").read_bytes()
+    _FakeSession.instances.clear()
+
+    def refuse_metadata(*_):
+        if restore_fails:
+            vault.writable = False
+        raise OSError("read-only")
+
+    with (
+        patch("litellm.proxy.client.cli.commands.teams.Client"),
+        patch(
+            "litellm.proxy.client.cli.commands.auth.run_pkce_login",
+            return_value=replace(_pkce_credential(), access_token="session-new", team_id="team-b"),
+        ),
+        patch("litellm.litellm_core_utils.cli_token_utils.commit_staged_json", side_effect=refuse_metadata),
+        patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+    ):
+        result = CliRunner().invoke(
+            cli,
+            ["--base-url", PKCE_BASE_URL, "teams", "assign-key", "--team-id", "team-b"],
+            obj={"secret_vault": vault},
+        )
+
+    assert result.exit_code != 0, result.output
+    assert (isolated_home / ".litellm" / "token.json").read_bytes() == metadata_before
+    if restore_fails:
+        assert load_token(vault=vault)["key"] == "session-new"
+        assert "Could not restore the previous login" in result.output
+    else:
+        assert load_token(vault=vault) == before
+        assert "previous login was restored" in result.output
+    assert "Successfully assigned" not in result.output
+    assert [post for session in _FakeSession.instances for post in session.posts] == (
+        []
+        if restore_fails
+        else [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_fresh", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+    )
+
+
 def test_assign_key_warns_when_a_rejected_login_cannot_be_revoked(isolated_home, monkeypatch):
     monkeypatch.setenv(DISABLE_KEYRING_ENV_VAR, "1")
     save_cli_token(CliTokenRecord(**_pkce_record(key="session-old", expires_at=time.time() + 3600)))

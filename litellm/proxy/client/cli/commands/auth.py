@@ -869,8 +869,23 @@ def _replace_stored_token(
             )
         raise click.ClickException("The login did not select the requested team; your saved login has not changed")
     previous: Final = load_token(vault=vault)
+    previous_secret: Final = vault.read()
     stored: Final = save_token(record, vault=vault)
-    if previous is None or isinstance(stored, CredentialNotSaved):
+    if previous is not None and isinstance(stored, CredentialNotRecorded):
+        restored: Final = (
+            vault.write(previous_secret.blob) if isinstance(previous_secret, SecretFound) else previous_secret
+        )
+        if isinstance(restored, SecretStored):
+            abandoned_revocation: Final = revoke_stored_credential(record, http)
+            if abandoned_revocation is not None:
+                click.echo(
+                    "Could not revoke the abandoned login's refresh token "
+                    f"on the proxy ({abandoned_revocation.reason}); "
+                    "it expires on its own."
+                )
+            return CredentialNotSaved("The replacement could not be recorded; your previous login was restored")
+        click.echo("Could not restore the previous login after the partial save; sign in again to repair it.")
+    if previous is None or isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
         return stored
     revocation: Final = revoke_stored_credential(previous, http)
     if revocation is not None:
