@@ -21,6 +21,8 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
 - Shared request/response bodies, message and content-block enums, usage records, tool-call chunks, stream-event payloads, and protocol error bodies belong here
   - This includes LiteLLM's normalized response contracts and extensions, not just exact upstream schemas
   - `ChatCompletionsResponse` currently represents the response handed to the host, so replacing it with a supposedly more complete upstream schema must not silently change that contract
+  - Keep Chat Completions messages and choices distinct from Responses input/output items. A Responses message is one item kind alongside reasoning, function calls, and function-call outputs; similar fields do not justify one shared message or content-block model across formats
+  - Add typed item and content variants as consumers need them, preserving opaque values where passthrough is part of the contract. Arbitrary tool arguments and JSON schemas remain user-defined data
   - Messages web-search result/error schemas and encrypted-content fields belong to the Messages format regardless of which providers implement them
 
 - Shared LiteLLM input data such as `ProviderSpecificHeader` and `ProviderSpecificHeaders` also belongs here
@@ -62,8 +64,15 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - `Recognized<T>` deliberately retains values that fail typed parsing, including wrong-shaped values, so use it only where permissive passthrough is already part of the contract
   - Typing an opaque field must neither reject previously accepted inputs nor accept malformed inputs previously rejected
   - Do not silently discard unknown data or tighten a partial projection into a stricter public schema
+  - Recognizing a reasoning effort or another wire value does not establish model support, a default, or equivalent behavior across providers. Those decisions belong to provider adapters
 
 - Test observable serialization, malformed-input rejection, unknown-value preservation, and value semantics in this crate
   - Follow the workspace test-placement and `rstest` rules
   - Test provider transformations, header policy, and stream execution in their owning crates
   - Do not test import locations or Rust source structure as substitutes for behavior
+
+Chat Completions references: [OpenAI overview](https://developers.openai.com/api/reference/chat-completions/overview.md) and [MiniMax compatibility](https://platform.minimax.io/docs/api-reference/text-chat-openai.md)
+
+Responses references: [OpenAI migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses.md) and [MiniMax create response](https://platform.minimax.io/docs/api-reference/responses-create.md)
+
+These references describe format shapes and individual implementations, not a requirement to reproduce every field or impose one provider's restrictions on the shared types. Preserve supported extensions without requiring another provider to implement them, and verify provider-specific behavior against the current reference when changing its adapter
