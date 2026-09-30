@@ -31,9 +31,7 @@ function StepTitle({ step }: { step: TraceStep }) {
     <>
       <SpanTypePill type={span.type} />
       <span className={cn(span.status === "error" && "text-destructive")}>{spanLabel(span)}</span>
-      <span className="text-muted-foreground">
-        {fmtMs(span.duration_ms)}
-      </span>
+      <span className="text-muted-foreground">{fmtMs(span.duration_ms)}</span>
     </>
   );
 }

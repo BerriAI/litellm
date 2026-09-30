@@ -62,7 +62,8 @@ describe("formatting", () => {
   });
 
   it("headlines LLM spans with the OTLP model", () => {
-    expect(spanLabel(span({ span_id: "llm", type: "llm", name: "generation", model: "model-a" }))).toBe("model-a");
+    const llm = { span_id: "llm", type: "llm", name: "generation", model: "model-a" } as const;
+    expect(spanLabel(span(llm))).toBe("model-a");
   });
 
   it("pulls the user message out of a truncated JSON preview", () => {
@@ -84,13 +85,17 @@ describe("formatting", () => {
 
 describe("buildVisibleTree", () => {
   it("hides framework spans and re-parents their children to the nearest visible ancestor", () => {
-    const spans = [
-      span({ span_id: "root", type: "agent" }),
-      span({ span_id: "mw", parent_span_id: "root", type: "framework", name: "X.wrap_model_call" }),
-      span({ span_id: "model", parent_span_id: "mw", type: "chain", name: "model" }),
-      span({ span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 }),
-      span({ span_id: "step", parent_span_id: "root", type: "chain", name: "planner", start_offset_ms: 1 }),
-    ];
+    const middleware = { span_id: "mw", parent_span_id: "root", type: "framework", name: "X.wrap_model_call" } as const;
+    const model = { span_id: "model", parent_span_id: "mw", type: "chain", name: "model" } as const;
+    const llm = { span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 } as const;
+    const step = {
+      span_id: "step",
+      parent_span_id: "root",
+      type: "chain",
+      name: "planner",
+      start_offset_ms: 1,
+    } as const;
+    const spans = [span({ span_id: "root", type: "agent" }), span(middleware), span(model), span(llm), span(step)];
     const compact = buildVisibleTree(spans, false);
     expect(compact.visibleCount).toBe(3);
     expect(compact.children.get(ROOT_KEY)?.map((s) => s.span_id)).toEqual(["root"]);
@@ -141,9 +146,10 @@ describe("groupSiblingAgents", () => {
 
   it("leaves groups of 10 or fewer alone", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = Array.from({ length: 10 }, (_, i) =>
-      span({ span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker" }),
-    );
+    const kids = Array.from({ length: 10 }, (_, i) => {
+      const props = { span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker" } as const;
+      return span(props);
+    });
     const items = groupSiblingAgents("p", kids, subtreeStats([parent, ...kids]));
     expect(items.every((i) => i.kind === "span")).toBe(true);
   });
@@ -161,9 +167,16 @@ describe("flattenTree + revealSpan", () => {
 
   it("pages group invocations 20 at a time with a 'more' row until all are shown", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = Array.from({ length: 45 }, (_, i) =>
-      span({ span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker", start_offset_ms: i }),
-    );
+    const kids = Array.from({ length: 45 }, (_, i) => {
+      const props = {
+        span_id: `k${i}`,
+        parent_span_id: "p",
+        type: "agent",
+        name: "worker",
+        start_offset_ms: i,
+      } as const;
+      return span(props);
+    });
     const all = [parent, ...kids];
     const tree = buildVisibleTree(all, false).children;
     const key = "p::worker";
@@ -211,7 +224,6 @@ describe("stepsFromSpans", () => {
     // the lead's first decision runs write_file and task
     expect(first.toolNames).toEqual(["write_file", "task"]);
   });
-
 });
 
 describe("trace-level helpers", () => {

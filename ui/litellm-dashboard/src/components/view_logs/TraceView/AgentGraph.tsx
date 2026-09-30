@@ -196,9 +196,7 @@ export function AgentGraph({ agents, spans, onOpenInvocation }: AgentGraphProps)
           />
         ))}
       </svg>
-      <p className="mt-1 text-[11px] text-muted-foreground">
-        Click an agent to list its invocations.
-      </p>
+      <p className="mt-1 text-[11px] text-muted-foreground">Click an agent to list its invocations.</p>
       {selected && (
         <InvocationList key={selected} agentName={selected} spans={spans} onOpenInvocation={onOpenInvocation} />
       )}

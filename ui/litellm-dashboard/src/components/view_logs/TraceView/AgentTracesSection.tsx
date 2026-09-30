@@ -60,14 +60,15 @@ export function AgentTracesSection({
   isLiveTail,
 }: AgentTracesSectionProps) {
   const [openTrace, setOpenTrace] = useState<{ traceId: string; spanId: string | null } | null>(null);
-  const traces = useAgentTraces({
+  const traceOptions: Parameters<typeof useAgentTraces>[0] = {
     accessToken,
     startTime,
     endTime,
     isCustomDate,
     isLiveTail,
     enabled: isActive && view !== "llm",
-  });
+  };
+  const traces = useAgentTraces(traceOptions);
 
   if (view === "llm") return null;
 

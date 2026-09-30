@@ -92,7 +92,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     return debouncedSearch === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value: debouncedSearch }];
   }, [columnFilters, debouncedSearch]);
 
-  const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic({
+  const filterOptions: Parameters<typeof useLogFilterLogic>[0] = {
     accessToken,
     token,
     userRole,
@@ -107,7 +107,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     isCustomDate,
     sorting,
     sessionCursors,
-  });
+  };
+  const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic(filterOptions);
 
   // Follow the table's own last fetch so a live-tail refresh carries the filter
   // window with it; before the first fetch, fall back to the stored end time.
