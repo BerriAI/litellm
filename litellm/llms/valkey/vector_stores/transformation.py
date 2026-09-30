@@ -246,7 +246,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
-        client: Final = _import_sync_redis().from_url(
+        client: Final = _import_sync_redis().from_url(  # pyright: ignore[reportCallIssue]  # types-redis 4.6 stubs shadow redis 5.3.1 and omit from_url(lib_name=...); redis-py accepts it at runtime
             params.connection_url(),
             socket_connect_timeout=connect_timeout,
             socket_timeout=op_timeout,
@@ -297,7 +297,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
-        client: Final = _import_async_redis().from_url(
+        client: Final = _import_async_redis().from_url(  # pyright: ignore[reportCallIssue]  # types-redis 4.6 stubs shadow redis 5.3.1 and omit from_url(lib_name=...); redis-py accepts it at runtime
             params.connection_url(),
             socket_connect_timeout=connect_timeout,
             socket_timeout=op_timeout,
