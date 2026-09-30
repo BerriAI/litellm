@@ -12419,7 +12419,8 @@ class Router:
         # Safe to check statically since `rpm` is a direct litellm_params setting, unlike
         # max_input_tokens which get_router_model_info() can also derive from the cost map.
         _any_deployment_has_rpm = self.routing_strategy != "usage-based-routing-v2" and any(
-            (d.get("litellm_params") or {}).get("rpm") is not None for d in _returned_deployments
+            isinstance(litellm_params := d.get("litellm_params"), dict) and litellm_params.get("rpm") is not None
+            for d in _returned_deployments
         )
 
         ## get model group RPM ##
@@ -12428,9 +12429,10 @@ class Router:
             dt = get_utc_datetime()
             current_minute = dt.strftime("%H-%M")
             rpm_key = f"{model}:rpm:{current_minute}"
-            model_group_cache = (
-                self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span) or {}
-            )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
+            cached_model_group: Final = self.cache.get_cache(
+                key=rpm_key, local_only=True, parent_otel_span=parent_otel_span
+            )
+            model_group_cache = cached_model_group or {}  # mutable-ok: updated below
         for idx, deployment in enumerate(_returned_deployments):
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
