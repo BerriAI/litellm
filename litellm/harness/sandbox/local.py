@@ -25,6 +25,11 @@ _SECRET_PREFIXES: Final = (
     "CODEX_",
     "CURSOR_",
     "VERTEX",
+    # A parent Claude Code session's socket/session vars make a child `claude` attach to
+    # the parent's login instead of the harness token.
+    "CLAUDE_CODE_",
+    "CLAUDE_PID",
+    "CLAUDECODE",
 )
 _SECRET_NAMES: Final = frozenset({"GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"})
 _SECRET_SUBSTRINGS: Final = ("API_KEY", "TOKEN", "SECRET")
