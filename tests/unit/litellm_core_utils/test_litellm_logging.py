@@ -2,9 +2,11 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import importlib
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator, Mapping
@@ -24,6 +26,7 @@ from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import litellm_logging as litellm_logging_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     _extract_response_obj_and_hidden_params,
@@ -9081,3 +9084,173 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+_CONCRETE_INTEGRATION_MODULES: Final = (
+    "litellm.integrations.langfuse.langfuse",
+    "litellm.integrations.datadog.datadog",
+    "litellm.integrations.opik.opik",
+    "litellm.integrations.s3",
+    "litellm.integrations.langsmith",
+    "litellm.integrations.opentelemetry",
+    "litellm.integrations.agentops",
+    "litellm.integrations.mlflow",
+)
+
+
+def test_import_litellm_does_not_load_concrete_logging_integrations():
+    probe: Final = (
+        f"import sys, litellm; print(','.join(m for m in {_CONCRETE_INTEGRATION_MODULES!r} if m in sys.modules))"
+    )
+    result: Final = subprocess.run(
+        [sys.executable, "-P", "-c", probe],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+    )
+
+    assert result.stdout.strip() == ""
+
+
+def test_init_custom_logger_compatible_class_builds_langsmith_once_and_reuses_it():
+    from litellm.integrations.langsmith import LangsmithLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    try:
+        assert logging_module.get_custom_logger_compatible_class("langsmith") is None
+
+        first: Final = logging_module._init_custom_logger_compatible_class("langsmith", None, None)
+        second: Final = logging_module._init_custom_logger_compatible_class("langsmith", None, None)
+
+        assert isinstance(first, LangsmithLogger)
+        assert second is first
+        assert logging_module._in_memory_loggers == [first]
+        assert logging_module.get_custom_logger_compatible_class("langsmith") is first
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+def test_lazy_integration_names_import_from_litellm_logging_as_the_real_classes():
+    from litellm.integrations.langsmith import LangsmithLogger as real_langsmith_logger
+    from litellm.integrations.s3_v2 import S3Logger as real_s3_v2_logger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.litellm_core_utils.litellm_logging import LangsmithLogger, S3V2Logger
+
+    assert LangsmithLogger is real_langsmith_logger
+    assert S3V2Logger is real_s3_v2_logger
+    assert not hasattr(logging_module, "NotARealLogger")
+
+
+@pytest.mark.parametrize(
+    "class_name",
+    sorted(
+        set(litellm_logging_module._ZERO_ARG_LOGGER_CLASS.values())
+        | set(litellm_logging_module._LOOKUP_ONLY_LOGGER_CLASS.values())
+    ),
+)
+def test_every_dispatch_table_entry_resolves_to_a_custom_logger_subclass(class_name: str):
+    resolved: Final = litellm_logging_module._custom_logger_class(class_name)
+
+    assert issubclass(resolved, CustomLogger)
+    assert getattr(litellm_logging_module, class_name) is resolved
+
+
+_LEGACY_CALLBACK_ENV: Final = MappingProxyType(
+    {
+        "OPENMETER_API_KEY": "test-openmeter-key",
+        "DD_API_KEY": "test-datadog-key",
+        "DD_SITE": "us5.datadoghq.com",
+        "AWS_REGION_NAME": "us-east-1",
+        "AWS_DEFAULT_REGION": "us-east-1",
+        "LANGFUSE_PUBLIC_KEY": "pk-lf-test",
+        "LANGFUSE_SECRET_KEY": "sk-lf-test",
+        "LANGFUSE_HOST": "http://127.0.0.1:9",
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callback", "global_name", "module_path", "class_name"),
+    (
+        ("athina", "athinaLogger", "litellm.integrations.athina", "AthinaLogger"),
+        ("helicone", "heliconeLogger", "litellm.integrations.helicone", "HeliconeLogger"),
+        ("promptlayer", "promptLayerLogger", "litellm.integrations.prompt_layer", "PromptLayerLogger"),
+        ("langfuse", "langFuseLogger", "litellm.integrations.langfuse.langfuse", "LangFuseLogger"),
+        ("openmeter", "openMeterLogger", "litellm.integrations.openmeter", "OpenMeterLogger"),
+        ("datadog", "dataDogLogger", "litellm.integrations.datadog.datadog", "DataDogLogger"),
+        ("dynamodb", "dynamoLogger", "litellm.integrations.dynamodb", "DyanmoDBLogger"),
+        ("s3", "s3Logger", "litellm.integrations.s3", "S3Logger"),
+        ("greenscale", "greenscaleLogger", "litellm.integrations.greenscale", "GreenscaleLogger"),
+    ),
+)
+async def test_set_callbacks_builds_the_logger_for_each_legacy_string_callback(
+    monkeypatch: pytest.MonkeyPatch, callback: str, global_name: str, module_path: str, class_name: str
+):
+    for key, value in _LEGACY_CALLBACK_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(litellm, "dynamodb_table_name", "litellm-test-logs")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
+    monkeypatch.setattr(litellm_logging_module, global_name, None)
+
+    set_callbacks([callback])
+
+    expected_class: Final = getattr(importlib.import_module(module_path), class_name)
+    assert type(getattr(litellm_logging_module, global_name)) is expected_class
+
+
+def test_set_callbacks_builds_the_lunary_logger(monkeypatch: pytest.MonkeyPatch):
+    pytest.importorskip("lunary")
+    from litellm.integrations.lunary import LunaryLogger
+
+    monkeypatch.setattr(litellm_logging_module, "lunaryLogger", None)
+
+    set_callbacks(["lunary"])
+
+    assert type(litellm_logging_module.lunaryLogger) is LunaryLogger
+
+
+def test_custom_logger_class_rejects_a_registry_entry_that_is_not_a_logger():
+    with pytest.raises(TypeError, match="langtrace_trace_endpoint"):
+        litellm_logging_module._custom_logger_class("langtrace_trace_endpoint")
+
+
+@pytest.mark.asyncio
+async def test_get_custom_logger_compatible_class_builds_one_sqs_logger_and_reuses_it(monkeypatch: pytest.MonkeyPatch):
+    from litellm.integrations.sqs import SQSLogger
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    litellm_logging_module._in_memory_loggers.clear()
+    try:
+        first: Final = litellm_logging_module.get_custom_logger_compatible_class("aws_sqs")
+        second: Final = litellm_logging_module.get_custom_logger_compatible_class("aws_sqs")
+
+        assert type(first) is SQSLogger
+        assert second is first
+        assert litellm_logging_module._in_memory_loggers == [first]
+    finally:
+        litellm_logging_module._in_memory_loggers.clear()
+
+
+def test_get_custom_logger_compatible_class_finds_a_newrelic_logger_registered_after_other_loggers():
+    from litellm.integrations.newrelic import NewRelicLogger
+
+    newrelic_logger: Final = NewRelicLogger()
+    litellm_logging_module._in_memory_loggers.clear()
+    litellm_logging_module._in_memory_loggers.extend([CustomLogger(), newrelic_logger])
+    try:
+        assert litellm_logging_module.get_custom_logger_compatible_class("newrelic") is newrelic_logger
+    finally:
+        litellm_logging_module._in_memory_loggers.clear()
+
+
+def test_modify_integration_sets_the_supabase_table_name(monkeypatch: pytest.MonkeyPatch):
+    from litellm.integrations.supabase import Supabase
+
+    monkeypatch.setattr(Supabase, "supabase_table_name", Supabase.supabase_table_name)
+
+    litellm_logging_module.modify_integration("supabase", {"table_name": "litellm-test-logs"})
+
+    assert Supabase.supabase_table_name == "litellm-test-logs"
