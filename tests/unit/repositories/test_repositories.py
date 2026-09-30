@@ -18,6 +18,7 @@ from litellm.models.credentials import CredentialItem
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
@@ -898,6 +899,18 @@ class TestUserRepository:
         repo._prisma_client.db.litellm_usertable.find_many.assert_awaited_once()
         where = repo._prisma_client.db.litellm_usertable.find_many.await_args.kwargs["where"]
         assert where["user_email"] == {"in": ["B@Example.com", "a@example.com"], "mode": "insensitive"}
+
+    @pytest.mark.asyncio
+    async def test_find_by_emails_slices_the_list_into_bounded_statements(self, repo):
+        repo._prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+        emails = [f"user{index}@example.com" for index in range(IN_LIST_CHUNK_SIZE + 1)]
+        await repo.find_by_emails(emails)
+        assert repo._prisma_client.db.litellm_usertable.find_many.await_count == 2
+        sizes = [
+            len(call.kwargs["where"]["user_email"]["in"])
+            for call in repo._prisma_client.db.litellm_usertable.find_many.await_args_list
+        ]
+        assert sizes == [IN_LIST_CHUNK_SIZE, 1]
 
     @pytest.mark.asyncio
     async def test_find_by_emails_skips_the_query_for_no_emails(self, repo):

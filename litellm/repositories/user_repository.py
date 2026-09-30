@@ -4,12 +4,14 @@ User repository for database operations on LiteLLM_UserTable.
 
 import json
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
 from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
@@ -67,22 +69,29 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         return records[0] if records else None
 
     async def find_by_emails(self, user_emails: Sequence[str]) -> Sequence[LiteLLM_UserTable]:
-        """Every user whose email matches one of ``user_emails``, ignoring case, in one query.
+        """Every user whose email matches one of ``user_emails``, ignoring case.
 
         A roster entry stored by email can differ in case from its user row (member_add
-        resolves emails case-insensitively), so an exact match would miss it. One query for
-        the whole list keeps the round-trip count independent of how many emails there are.
+        resolves emails case-insensitively), so an exact match would miss it. The list goes
+        out in slices of ``IN_LIST_CHUNK_SIZE`` so one statement stays under Postgres's
+        bind-parameter cap; ``chunked_in.find_many_in`` cannot carry the insensitive mode.
         """
-        if not user_emails:
-            return ()
-        return await self.find_many(
-            where={  # mutable-ok: Prisma query filters are dict-shaped
-                "user_email": {  # mutable-ok: Prisma query filters are dict-shaped
-                    "in": sorted(frozenset(user_emails)),
-                    "mode": "insensitive",
-                }
-            }
+        unique: Final = sorted(frozenset(user_emails))
+        pages: Final = tuple(
+            [
+                await self.find_many(
+                    where={  # mutable-ok: Prisma query filters are dict-shaped
+                        "user_email": {  # mutable-ok: Prisma query filters are dict-shaped
+                            # bounded-ok: sliced to IN_LIST_CHUNK_SIZE values per statement
+                            "in": unique[start : start + IN_LIST_CHUNK_SIZE],
+                            "mode": "insensitive",
+                        }
+                    }
+                )
+                for start in range(0, len(unique), IN_LIST_CHUNK_SIZE)
+            ]
         )
+        return tuple(chain.from_iterable(pages))
 
     async def find_by_sso_id(self, sso_user_id: str) -> LiteLLM_UserTable | None:
         """Find a user by SSO ID."""
