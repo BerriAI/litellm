@@ -207,20 +207,25 @@ def filter_team_based_models(
     ]
 
 
+def pinned_deployment_id(request_kwargs: Mapping[str, object] | None) -> str | None:
+    """The deployment a follow-up call must reach, such as the one that created a video."""
+    if request_kwargs is None:
+        return None
+    buckets: Final = (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
+    pinned_ids: Final = [
+        bucket.get(PINNED_DEPLOYMENT_ID_METADATA_KEY) for bucket in buckets if isinstance(bucket, Mapping)
+    ]
+    return next((pinned_id for pinned_id in pinned_ids if isinstance(pinned_id, str) and pinned_id), None)
+
+
 def filter_pinned_deployment(
     model: str,
     healthy_deployments: list[dict] | dict,
     request_kwargs: Mapping[str, object] | None,
 ) -> list[dict] | dict:
-    """Keep only the deployment a follow-up call must reach, such as the one that created a video."""
-    if request_kwargs is None or isinstance(healthy_deployments, dict):
-        return healthy_deployments
-    buckets: Final = (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
-    pinned_ids: Final = [
-        bucket.get(PINNED_DEPLOYMENT_ID_METADATA_KEY) for bucket in buckets if isinstance(bucket, Mapping)
-    ]
-    pinned_id: Final = next((pinned_id for pinned_id in pinned_ids if pinned_id), None)
-    if pinned_id is None:
+    """Keep only the pinned deployment, if the request has one."""
+    pinned_id: Final = pinned_deployment_id(request_kwargs)
+    if pinned_id is None or isinstance(healthy_deployments, dict):
         return healthy_deployments
     pinned: Final = [d for d in healthy_deployments if (d.get("model_info") or {}).get("id") == pinned_id]
     if not pinned:

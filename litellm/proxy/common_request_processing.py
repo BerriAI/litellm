@@ -41,6 +41,7 @@ from litellm.constants import (
     MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
+    PINNED_DEPLOYMENT_ID_METADATA_KEY,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
@@ -236,6 +237,7 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
 )
 from litellm.proxy.litellm_pre_call_utils import (
+    _get_metadata_variable_name,
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
@@ -1684,8 +1686,9 @@ def _timing_values(
 
 
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, pinned_deployment_id: str | None = None):
         self.data = data
+        self.pinned_deployment_id: Final = pinned_deployment_id
         self._tags_before_guardrails: frozenset[str] | None = None
 
     @property
@@ -2034,6 +2037,12 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if self.pinned_deployment_id is not None:
+            # Set after add_litellm_data_to_request, which strips any pin the client sent
+            self.data[_get_metadata_variable_name(request)][PINNED_DEPLOYMENT_ID_METADATA_KEY] = (
+                self.pinned_deployment_id
+            )
+            self.data["disable_fallbacks"] = True
         if not general_settings.get("expose_fallback_errors_to_caller"):
             self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
@@ -2056,8 +2065,6 @@ class ProxyBaseLLMRequestProcessing:
 
         # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
         if queue_time_seconds is not None:
-            from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
-
             _metadata_variable_name: Final = _get_metadata_variable_name(request)
             if _metadata_variable_name not in self.data:
                 self.data[_metadata_variable_name] = {}

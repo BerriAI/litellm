@@ -111,6 +111,9 @@ class Harness:
         assert self.base_process.call_count == 1
         return dict(self.base_process.call_args.args[0].data)
 
+    def pinned_deployment_id(self) -> str | None:
+        return self.base_process.call_args.args[0].pinned_deployment_id
+
     def route_type(self) -> str:
         return self.base_process.call_args.kwargs["route_type"]
 
@@ -892,9 +895,7 @@ async def test_follow_up__model_comes_from_the_id(harness, endpoint, model_id, e
         await FOLLOW_UP_CALLS[endpoint](harness, model_id)
 
     assert harness.processor_data().get("model") == expected_model
-    assert (harness.processor_data().get("metadata") or {}).get("pinned_deployment_id") == (
-        "deployment-b" if model_id == "deployment-b" else None
-    )
+    assert harness.pinned_deployment_id() == ("deployment-b" if model_id == "deployment-b" else None)
 
 
 @pytest.mark.asyncio
@@ -909,7 +910,10 @@ async def test_status__real_router_reaches_the_creating_deployment(harness, monk
         deployment_b = respx_mock.get("http://b.localhost/v1/videos/video_orig").respond(
             json={"id": "video_orig", "object": "video", "status": "completed", "created_at": 0}
         )
-        status = await llm_router.avideo_status(**harness.processor_data())
+        data = harness.processor_data()
+        status = await llm_router.avideo_status(
+            **{**data, "metadata": {**data.get("metadata", {}), "pinned_deployment_id": harness.pinned_deployment_id()}}
+        )
 
     assert deployment_b.call_count == 1
     assert status.status == "completed"
@@ -945,7 +949,7 @@ async def test_status__response_id_keeps_the_deployment_for_content(harness):
 
     assert decode_video_id_with_provider(status.id)["model_id"] == "deployment-b"
     assert harness.processor_data().get("model") == "sora-2"
-    assert harness.processor_data()["metadata"]["pinned_deployment_id"] == "deployment-b"
+    assert harness.pinned_deployment_id() == "deployment-b"
 
 
 @pytest.mark.asyncio
@@ -983,18 +987,25 @@ async def test_follow_up__pinned_deployment_keeps_its_model_level_guardrails(har
 
 
 @pytest.mark.asyncio
-async def test_remix__pin_keeps_the_metadata_sent_as_a_form_string(harness):
+@pytest.mark.parametrize("metadata", [False, [], "", '{"tag": "blue"}'])
+async def test_remix__pinned_id_leaves_the_client_metadata_for_the_proxy_to_validate(harness, metadata):
     harness.base_process.return_value = b"video-bytes"
 
     with patch.object(proxy_server, "llm_router", _video_router()):
-        await call_remix(harness, _video_id("deployment-b"), body={"prompt": "x", "metadata": '{"tag": "blue"}'})
+        await call_remix(harness, _video_id("deployment-b"), body={"prompt": "x", "metadata": metadata})
 
-    assert harness.processor_data()["metadata"] == {"tag": "blue", "pinned_deployment_id": "deployment-b"}
+    assert harness.processor_data()["metadata"] == metadata
+    assert harness.pinned_deployment_id() == "deployment-b"
 
 
 async def _call_router_as_proxy(llm_router: Router, harness, key: UserAPIKeyAuth):
     data = harness.processor_data()
-    metadata = {**data.get("metadata", {}), "user_api_key_auth": key, "user_api_key_team_id": key.team_id}
+    metadata = {
+        **data.get("metadata", {}),
+        "pinned_deployment_id": harness.pinned_deployment_id(),
+        "user_api_key_auth": key,
+        "user_api_key_team_id": key.team_id,
+    }
     return await getattr(llm_router, harness.route_type())(**{**data, "metadata": metadata})
 
 
@@ -1054,7 +1065,7 @@ async def test_status__id_inside_the_key_access_pins_the_deployment(harness, mon
         await call_status(harness, _video_id(model_id))
 
     assert harness.processor_data().get("model") == "sora-2"
-    assert harness.processor_data()["metadata"]["pinned_deployment_id"] == model_id
+    assert harness.pinned_deployment_id() == model_id
 
 
 def _team_router() -> Router:
@@ -1102,4 +1113,4 @@ async def test_status__id_of_a_team_deployment_pins_it_for_that_team(harness, mo
         await call_status(harness, _video_id("team-b-deployment"))
 
     assert harness.processor_data().get("model") == "model_name_team-b_sora"
-    assert harness.processor_data()["metadata"]["pinned_deployment_id"] == "team-b-deployment"
+    assert harness.pinned_deployment_id() == "team-b-deployment"

@@ -842,3 +842,22 @@ def test_sync_routing_reaches_the_pinned_deployment():
     ]
 
     assert picked == ["deployment-b"] * 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_kwargs", "expected_ids"),
+    [
+        ({"metadata": {PINNED_DEPLOYMENT_ID_METADATA_KEY: "deployment-b"}}, ["deployment-b"]),
+        ({"metadata": {}}, ["deployment-a", "deployment-b"]),
+    ],
+)
+async def test_retry_candidates_of_a_pinned_request_are_only_the_pinned_deployment(request_kwargs, expected_ids):
+    router = _pinned_router("simple-shuffle")
+
+    healthy, all_deployments = await router._async_get_healthy_deployments(
+        model="sora-2", parent_otel_span=None, request_kwargs=request_kwargs
+    )
+
+    assert [d["model_info"]["id"] for d in healthy] == expected_ids
+    assert [d["model_info"]["id"] for d in all_deployments] == expected_ids

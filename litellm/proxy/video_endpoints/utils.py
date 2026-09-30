@@ -3,9 +3,7 @@ from typing import Any, Final
 
 import orjson
 
-from litellm.constants import PINNED_DEPLOYMENT_ID_METADATA_KEY
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.router import Router
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -64,7 +62,9 @@ def _hidden_param(response: object, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def deployment_id_for_encoding(response: object, data: Mapping[str, Any]) -> str | None:
+def deployment_id_for_encoding(
+    response: object, data: Mapping[str, Any], pinned_deployment_id: str | None = None
+) -> str | None:
     """The deployment the request actually routed to, not the public model group.
 
     The router leaves ``model_id`` out of ``_hidden_params`` on the generic path and
@@ -74,12 +74,11 @@ def deployment_id_for_encoding(response: object, data: Mapping[str, Any]) -> str
     """
     litellm_metadata: Final = data.get("litellm_metadata") or {}
     model_info: Final = litellm_metadata.get("model_info") or {}
-    pinned_id: Final = (data.get("metadata") or {}).get(PINNED_DEPLOYMENT_ID_METADATA_KEY)
-    return _hidden_param(response, "model_id") or model_info.get("id") or pinned_id or data.get("model")
+    return _hidden_param(response, "model_id") or model_info.get("id") or pinned_deployment_id or data.get("model")
 
 
-def route_to_encoded_deployment(llm_router: Router, model_id: str, data: dict[str, Any]) -> None:
-    """Route by the model group, pinned to the deployment the id encodes.
+def route_to_encoded_deployment(llm_router: Router, model_id: str, data: dict[str, Any]) -> str | None:
+    """Route by the model group and return the deployment id to pin, if the id encodes one.
 
     ``data["model"]`` stays the group so guardrails, limits and budgets keyed on it apply.
     The router's own access-group and team filters run first, then the pin narrows the result.
@@ -88,11 +87,8 @@ def route_to_encoded_deployment(llm_router: Router, model_id: str, data: dict[st
     if resolved_model:
         data["model"] = resolved_model
     if model_id in llm_router.model_names or not llm_router.has_model_id(model_id):
-        return
-    raw_metadata: Final = data.get("metadata") or {}
-    metadata: Final = safe_json_loads(raw_metadata) if isinstance(raw_metadata, str) else raw_metadata
-    if isinstance(metadata, dict):
-        data["metadata"] = {**metadata, PINNED_DEPLOYMENT_ID_METADATA_KEY: model_id}
+        return None
+    return model_id
 
 
 def video_id_for_provider(llm_router: Router, video_id: str) -> str:

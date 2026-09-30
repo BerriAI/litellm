@@ -183,6 +183,7 @@ from litellm.router_utils.common_utils import (
     format_fallback_outcome_message,
     format_no_fallback_group_message,
     get_request_team_id,
+    pinned_deployment_id,
     provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
@@ -7678,6 +7679,7 @@ class Router:
             ) = await self._async_get_healthy_deployments(
                 model=kwargs.get("model") or "",
                 parent_otel_span=parent_otel_span,
+                request_kwargs=kwargs,
             )
 
             # Check retry policy FIRST, before should_retry_this_error
@@ -7770,6 +7772,7 @@ class Router:
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
+                            request_kwargs=kwargs,
                         )
                     else:
                         _healthy_deployments = []
@@ -8545,7 +8548,7 @@ class Router:
         return healthy_deployments, _all_deployments
 
     async def _async_get_healthy_deployments(
-        self, model: str, parent_otel_span: Span | None
+        self, model: str, parent_otel_span: Span | None, request_kwargs: Mapping[str, object] | None = None
     ) -> tuple[list[dict], list[dict]]:
         """
         Returns Tuple of:
@@ -8562,6 +8565,9 @@ class Router:
                 return [], _all_deployments
         except Exception:
             pass
+        pinned_id: Final = pinned_deployment_id(request_kwargs)
+        if pinned_id is not None:
+            _all_deployments = [d for d in _all_deployments if d["model_info"]["id"] == pinned_id]
 
         unhealthy_deployments: Final = await _async_get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
