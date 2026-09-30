@@ -79218,12 +79218,12 @@
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1050000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -79253,12 +79253,12 @@
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1050000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html",
         "supported_modalities": [
             "text",
             "image"
@@ -79285,12 +79285,12 @@
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
         "litellm_provider": "bedrock_mantle",
         "max_input_tokens": 1050000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "responses",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
-        "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -79323,12 +79323,12 @@
         "input_cost_per_token_above_272k_tokens": 4.4e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1050000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.1e-05,
         "output_cost_per_token_above_272k_tokens": 1.65e-05,
-        "source": "https://developers.openai.com/api/docs/pricing",
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html",
         "supported_endpoints": [
             "/v1/responses"
         ],
