@@ -62,6 +62,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
     BedrockGuardrailStreamingParams,
+    BedrockStreamingStrategy,
     GuardrailEventHooks,
     LitellmParams,
 )
@@ -245,6 +246,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         pii_confidence_threshold: float | None = 0.5,
         chunk_budget_chars: int = BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
         contextual_grounding_from_messages: bool = False,
+        streaming_strategy: BedrockStreamingStrategy | None = None,
         streaming_buffer_until_moderated: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_end_of_stream_only: bool | None = None,
@@ -256,6 +258,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             BedrockGuardrailStreamingParams.from_extras(
                 MappingProxyType(
                     {
+                        "streaming_strategy": streaming_strategy,
                         "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
                         "streaming_sampling_rate": streaming_sampling_rate,
                         "streaming_end_of_stream_only": streaming_end_of_stream_only,
@@ -320,6 +323,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     def _set_streaming_params(self, streaming_params: BedrockGuardrailStreamingParams) -> None:
+        self.streaming_strategy = streaming_params.streaming_strategy
         self.streaming_buffer_until_moderated = streaming_params.streaming_buffer_until_moderated
         self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
         self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only

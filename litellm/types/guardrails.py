@@ -662,7 +662,18 @@ class BedrockGuardrailConfigModel(BaseModel):
     )
 
 
+BedrockStreamingStrategy = Literal["aggregate", "sync", "async"]
+
+
 class BedrockGuardrailStreamingParams(BaseModel):
+    streaming_strategy: BedrockStreamingStrategy | None = Field(
+        default=None,
+        description="How a streamed response is checked. aggregate (default when unset) holds every chunk, "
+        "runs one ApplyGuardrail call, then releases the response or a block. sync holds each window of "
+        "streaming_sampling_rate chunks, waits for ApplyGuardrail, then releases that window. async sends "
+        "chunks immediately and runs one ApplyGuardrail call after the stream. When set, this wins over "
+        "the individual streaming flags.",
+    )
     streaming_buffer_until_moderated: bool = Field(
         default=True,
         description="If True (default), withhold every streamed chunk until the end-of-stream "
@@ -674,9 +685,10 @@ class BedrockGuardrailStreamingParams(BaseModel):
     streaming_sampling_rate: int = Field(
         default=5,
         ge=1,
-        description="When not buffering and not end-of-stream-only, scan the accumulated response "
-        "every Nth streamed chunk. Each sampled scan is a full ApplyGuardrail call that delays "
-        "that chunk, so lower values add latency and AWS text-unit cost.",
+        description="How many streamed chunks to accumulate before an ApplyGuardrail call. "
+        "sync waits for that call before releasing the window. Unbuffered sampling uses the same "
+        "interval and delays that chunk. Each scan is a full ApplyGuardrail call, so lower values "
+        "add latency and AWS text-unit cost.",
     )
     streaming_end_of_stream_only: bool = Field(
         default=False,
@@ -693,13 +705,43 @@ class BedrockGuardrailStreamingParams(BaseModel):
         "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
     )
 
+    def with_strategy_applied(self) -> "BedrockGuardrailStreamingParams":
+        match self.streaming_strategy:
+            case None:
+                return self
+            case "aggregate":
+                return self.model_copy(
+                    update={
+                        "streaming_buffer_until_moderated": True,
+                        "streaming_buffer_release_on_scan": False,
+                        "streaming_end_of_stream_only": False,
+                    }
+                )
+            case "sync":
+                return self.model_copy(
+                    update={
+                        "streaming_buffer_until_moderated": True,
+                        "streaming_buffer_release_on_scan": True,
+                        "streaming_end_of_stream_only": False,
+                    }
+                )
+            case "async":
+                return self.model_copy(
+                    update={
+                        "streaming_buffer_until_moderated": False,
+                        "streaming_buffer_release_on_scan": False,
+                        "streaming_end_of_stream_only": True,
+                    }
+                )
+
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":
         if not extras:
             return cls()
-        return cls.model_validate(
+        parsed: Final = cls.model_validate(
             MappingProxyType({name: extras[name] for name in cls.model_fields if extras.get(name) is not None})
         )
+        return parsed.with_strategy_applied()
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):

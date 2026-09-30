@@ -640,6 +640,8 @@ async def test_provider_specific_params_exposes_bedrock_streaming_flags():
     assert bedrock["streaming_buffer_until_moderated"]["default_value"] is True
     assert bedrock["streaming_end_of_stream_only"]["type"] == "boolean"
     assert bedrock["streaming_sampling_rate"]["type"] == "number"
+    assert bedrock["streaming_strategy"]["type"] == "select"
+    assert bedrock["streaming_strategy"]["options"] == ["aggregate", "sync", "async"]
 
 
 @pytest.mark.asyncio
