@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 import httpx
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # pyright: ignore[reportMissingTypeStubs]  # no upstream stubs
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
@@ -554,6 +555,17 @@ def _next_update(settings: ROISettings, status: ROISyncStatus, report: ROIReport
         parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
     )
     return utc_anchor + timedelta(minutes=settings.update_interval_minutes)
+
+
+def register_scheduled_sync(scheduler: AsyncIOScheduler) -> None:
+    scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler exposes untyped scheduling parameters
+        run_scheduled_sync,
+        "interval",
+        seconds=30,
+        id="roi_calculator_refresh",
+        max_instances=1,
+        replace_existing=True,
+    )
 
 
 async def run_scheduled_sync() -> None:

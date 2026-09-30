@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Final, cast
 
 import pytest
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
@@ -16,13 +17,30 @@ from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
     _estimator_models_from_deployments,
     _next_update,
     get_roi_config_repository,
+    register_scheduled_sync,
     router,
+    run_scheduled_sync,
 )
 from litellm.proxy.roi_calculator.estimator import estimator_options
 from litellm.proxy.roi_calculator.sample import sample_report
 from litellm.types.roi_calculator import ROIReport, ROISettings, ROISyncStatus
 
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
+
+
+@pytest.mark.asyncio
+async def test_repeated_startup_keeps_one_roi_schedule() -> None:
+    scheduler: Final = AsyncIOScheduler()
+    scheduler.start(paused=True)
+    try:
+        register_scheduled_sync(scheduler)
+        register_scheduled_sync(scheduler)
+
+        jobs: Final = scheduler.get_jobs()
+        assert len(jobs) == 1
+        assert jobs[0].func is run_scheduled_sync
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 def _assert_json_round_trip(value: object) -> None:
