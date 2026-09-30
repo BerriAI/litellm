@@ -1,8 +1,12 @@
 """Chaos rows for ``/team/delete`` on an owned two-worker proxy: C1 worker kill, C2 Redis outage, C3 proxy restart.
 
 Each leg creates 24 teams through the owned proxy (two internal users per team in one bulk
-``/team/member_add``, plus one team key), then deletes all 24 in a 24-thread burst while the
-infrastructure fails once the third delete has answered:
+``/team/member_add``, plus one team key), then deletes all 24 in a 24-thread burst and breaks the
+infrastructure while a delete is provably in flight: the test holds the first team's advisory lock
+from its own transaction, waits until that team's delete is queued behind it inside Postgres with
+its request unanswered, applies the failure once the third of the other deletes has answered, and
+only then releases the lock. The outage therefore overlaps a live delete on every run and both legs,
+and the pinned delete finishes, or is dropped, under the failure:
 
 - C1 SIGKILLs one uvicorn worker child; the survivor still answers ``/health/readiness`` and uvicorn
   respawns the worker.
@@ -16,9 +20,11 @@ row, no ``LiteLLM_TeamMembership`` row, no ``LiteLLM_UserTable.teams`` entry nam
 from ``LiteLLM_VerificationToken``, and one ``LiteLLM_DeletedTeamTable`` row per attempt that reached
 the tombstone write. Both legs commit that tombstone before the locked transaction that removes the
 team, so an attempt that died in between leaves a tombstone for a live team and the retry adds a
-second; that count is pinned as observed (pre-existing, outside this PR's diff, ticketed in the audit
+second; that count is pinned as observed (pre-existing, outside this PR's diff, recorded in the audit
 report) and the affected teams are recorded as ``double_tombstones``. Teams found half-deleted before
-the retry are recorded as ``partial_states_before_retry`` and named in any failure.
+the retry are recorded as ``partial_states_before_retry`` and named in any failure; the pinned team's
+outcome is recorded as ``pinned_delete`` and the answers the outage interrupted as
+``answered_before_outage``.
 
 Nothing sleeps, and only processes the test started are signalled.
 """
@@ -29,8 +35,9 @@ import os
 import threading
 import uuid
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -38,6 +45,7 @@ from typing import Final
 
 import httpx
 import psutil
+import psycopg
 import pytest
 
 from tests.integration._support.client import (
@@ -66,6 +74,22 @@ TOMBSTONE_SQL: Final = 'SELECT id FROM "LiteLLM_DeletedTeamTable" WHERE team_id 
 MEMBERSHIP_SQL: Final = 'SELECT user_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s'
 REFERENCING_USERS_SQL: Final = 'SELECT user_id FROM "LiteLLM_UserTable" WHERE %s = ANY(teams)'
 TOKEN_SQL: Final = 'SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s'
+TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
+# Sessions blocked on an advisory lock the given backend holds: the pinned team's delete, on either leg.
+WAITERS_ON_HELD_LOCK_SQL: Final = """
+SELECT count(*)::int AS waiting
+FROM pg_locks waiter
+JOIN pg_stat_activity session ON session.pid = waiter.pid
+WHERE waiter.locktype = 'advisory'
+  AND NOT waiter.granted
+  AND session.wait_event_type = 'Lock'
+  AND session.query ILIKE %s
+  AND (waiter.classid, waiter.objid, waiter.objsubid) IN (
+      SELECT held.classid, held.objid, held.objsubid
+      FROM pg_locks held
+      WHERE held.locktype = 'advisory' AND held.granted AND held.pid = %s::int
+  )
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,12 +220,12 @@ class Burst:
         self._target: Final = target
         self._lock: Final = threading.Lock()
         self._answers = 0  # rebind-ok: counter behind _lock
-        self._futures: tuple[Future[Outcome], ...] = ()
+        self._futures: dict[str, Future[Outcome]] = {}
         self.chaos_point: Final = threading.Event()
 
     def start(self, pool: ThreadPoolExecutor, fleet: Sequence[Team]) -> None:
         assert not self._futures, "burst already started"
-        self._futures = tuple(pool.submit(self._delete, team) for team in fleet)
+        self._futures.update((team.team_id, pool.submit(self._delete, team)) for team in fleet)
         assert self.chaos_point.wait(DELETE_TIMEOUT_SECONDS), (
             f"fewer than {CHAOS_AFTER_ANSWERS} deletes answered within {DELETE_TIMEOUT_SECONDS}s"
         )
@@ -224,14 +248,52 @@ class Burst:
                 self.chaos_point.set()
         return outcome
 
+    def answered(self) -> int:
+        with self._lock:
+            return self._answers
+
+    def pending(self, team_id: str) -> bool:
+        return not self._futures[team_id].done()
+
     def outcomes(self) -> tuple[Outcome, ...]:
-        return tuple(future.result(timeout=DELETE_TIMEOUT_SECONDS + 30) for future in self._futures)
+        return tuple(future.result(timeout=DELETE_TIMEOUT_SECONDS + 30) for future in self._futures.values())
 
 
-def _record_burst(record_property: RecordProperty, outcomes: Sequence[Outcome], observed: Sequence[TeamState]) -> None:
-    """Record the status split and the half-deleted teams seen before the retry."""
+def _waiters_on_lock_held_by(backend_pid: int) -> int:
+    rows: Final = read_rows(WAITERS_ON_HELD_LOCK_SQL, ("%pg_advisory_xact_lock%", str(backend_pid)))
+    waiting: Final = rows[0]["waiting"]
+    assert isinstance(waiting, int)
+    return waiting
+
+
+@contextmanager
+def _holding_team_lock(team_id: str) -> Iterator[int]:
+    """Hold ``team_id``'s advisory lock in a test-owned transaction and yield the holder's backend pid;
+    leaving the block commits, which releases the lock."""
+    with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+        holder.execute(TAKE_TEAM_LOCK_SQL, (team_id,))
+        yield holder.info.backend_pid
+
+
+def _await_pinned_delete_blocked(burst: Burst, pinned: Team, holder_pid: int, record_property: RecordProperty) -> None:
+    """The pinned team's delete is queued behind the held lock inside Postgres with its request unanswered,
+    so the failure applied next lands on a live delete; records how many other deletes had answered."""
+    eventually(lambda: _waiters_on_lock_held_by(holder_pid), lambda waiting: waiting >= 1, seconds=20)
+    assert burst.pending(pinned.team_id), f"{pinned.team_id}: delete answered while its team lock was held"
+    record_property("answered_before_outage", burst.answered())
+
+
+def _record_burst(
+    record_property: RecordProperty, outcomes: Sequence[Outcome], observed: Sequence[TeamState], pinned: Team
+) -> None:
+    """Record the status split, the pinned team's outcome and the half-deleted teams seen before the retry."""
     split: Final = Counter(outcome.label for outcome in outcomes)
     record_property("status_split", dict(sorted(split.items())))
+    pinned_outcome: Final = next(outcome for outcome in outcomes if outcome.team_id == pinned.team_id)
+    record_property(
+        "pinned_delete",
+        {"team_id": pinned.team_id, "status": pinned_outcome.status, "detail": pinned_outcome.detail},
+    )
     record_property("partial_states_before_retry", [state.describe() for state in observed if state.partial])
     record_property("rows_present_before_retry", sum(state.row_present for state in observed))
 
@@ -250,7 +312,7 @@ def _expected_tombstones(before: TeamState, retried: bool) -> int:
     Both legs commit the tombstone before the locked transaction that removes the team, so a burst
     attempt that died in between left one (``before.tombstones``, 0 or 1) for a team whose row
     survived, and the retry adds one more. Pinned as observed: pre-existing on the merge base,
-    outside this PR's diff, ticketed in the audit report.
+    outside this PR's diff, recorded in the audit report.
     """
     assert before.tombstones <= 1, before.describe()
     return before.tombstones + (1 if retried else 0)
@@ -318,20 +380,22 @@ def test_worker_killed_mid_burst_leaves_every_team_fully_deleted_after_retry(
     ):
         root: Final = psutil.Process(owned.process.pid)
         fleet: Final = _fleet(owned.gateway, scenario)
+        pinned: Final = fleet[0]
         burst: Final = Burst(owned.gateway)
-        burst.start(pool, fleet)
-
-        before: Final = _workers(root)
-        assert len(before) == WORKERS, [process.pid for process in before]
-        victim: Final = before[0]
-        victim.kill()  # SIGKILL: the worker cannot finish its in-flight deletes
-        victim.wait(timeout=10)
-        with httpx.Client(base_url=str(owned.gateway.client.base_url), timeout=15, trust_env=False) as fresh:
-            readiness: Final = fresh.get("/health/readiness")
-        assert readiness.status_code == 200, (
-            f"/health/readiness with worker {victim.pid} dead: {readiness.status_code} {readiness.text}"
-        )
-
+        with _holding_team_lock(pinned.team_id) as holder_pid:
+            burst.start(pool, fleet)
+            _await_pinned_delete_blocked(burst, pinned, holder_pid, record_property)
+            before: Final = _workers(root)
+            assert len(before) == WORKERS, [process.pid for process in before]
+            victim: Final = before[0]
+            victim.kill()  # SIGKILL with the pinned delete blocked: the worker cannot finish its in-flight deletes
+            victim.wait(timeout=10)
+            with httpx.Client(base_url=str(owned.gateway.client.base_url), timeout=15, trust_env=False) as fresh:
+                readiness: Final = fresh.get("/health/readiness")
+            assert readiness.status_code == 200, (
+                f"/health/readiness with worker {victim.pid} dead: {readiness.status_code} {readiness.text}"
+            )
+        # The lock is released: the pinned delete finishes on the survivor, or was dropped with the victim.
         outcomes: Final = burst.outcomes()
         respawned: Final = eventually(
             lambda: tuple(process.pid for process in _workers(root)),
@@ -342,7 +406,7 @@ def test_worker_killed_mid_burst_leaves_every_team_fully_deleted_after_retry(
             "worker_pids", {"before": [process.pid for process in before], "killed": victim.pid, "after": respawned}
         )
         observed: Final = _states(fleet)
-        _record_burst(record_property, outcomes, observed)
+        _record_burst(record_property, outcomes, observed, pinned)
         assert all(outcome.answered_or_dropped for outcome in outcomes), [
             (outcome.team_id, outcome.status, outcome.detail) for outcome in outcomes if not outcome.answered_or_dropped
         ]
@@ -374,22 +438,25 @@ def test_redis_stopped_mid_burst_keeps_deletes_answering_200(
         ThreadPoolExecutor(TEAMS) as pool,
     ):
         fleet: Final = _fleet(owned.gateway, scenario)
+        pinned: Final = fleet[0]
         assert _cache_status(_cache_ping(owned.gateway)) == "healthy"
         burst: Final = Burst(owned.gateway)
-        burst.start(pool, fleet)
-
-        coordination.stop()
-        down: Final = _cache_ping(owned.gateway)
-        assert down.status_code == 503, f"/cache/ping with Redis stopped: {down.status_code} {down.text}"
-        assert "Service Unhealthy" in down.text, down.text
-
+        with _holding_team_lock(pinned.team_id) as holder_pid:
+            burst.start(pool, fleet)
+            _await_pinned_delete_blocked(burst, pinned, holder_pid, record_property)
+            coordination.stop()
+            down: Final = _cache_ping(owned.gateway)
+            assert down.status_code == 503, f"/cache/ping with Redis stopped: {down.status_code} {down.text}"
+            assert "Service Unhealthy" in down.text, down.text
+            assert burst.pending(pinned.team_id), f"{pinned.team_id}: delete answered while its team lock was held"
+        # The lock is released with Redis down: the pinned delete's cache eviction runs against the outage.
         outcomes: Final = burst.outcomes()
         coordination.start()
         recovered: Final = eventually(lambda: _cache_ping(owned.gateway), lambda r: r.status_code == 200, seconds=60)
         assert _cache_status(recovered) == "healthy"
 
         observed: Final = _states(fleet)
-        _record_burst(record_property, outcomes, observed)
+        _record_burst(record_property, outcomes, observed, pinned)
         assert all(outcome.status == 200 for outcome in outcomes), (
             "deletes not answered 200 while Redis was down: "
             + str([(outcome.team_id, outcome.status, outcome.detail) for outcome in outcomes if outcome.status != 200])
@@ -408,14 +475,19 @@ def test_proxy_terminated_mid_burst_then_restarted_leaves_every_team_fully_delet
             gateway, tmp_path, _overrides(), remove_environment=REMOVE_FROM_ENVIRONMENT, workers=WORKERS
         ) as doomed:
             fleet: Final = _fleet(doomed.gateway, scenario)
+            pinned: Final = fleet[0]
             burst: Final = Burst(doomed.gateway)
-            burst.start(pool, fleet)
-            doomed.process.terminate()  # SIGTERM: uvicorn stops accepting, drains, and exits
+            with _holding_team_lock(pinned.team_id) as holder_pid:
+                burst.start(pool, fleet)
+                _await_pinned_delete_blocked(burst, pinned, holder_pid, record_property)
+                doomed.process.terminate()  # SIGTERM with the pinned delete blocked: uvicorn stops accepting and drains
+                assert burst.pending(pinned.team_id), f"{pinned.team_id}: delete answered while its team lock was held"
+            # The lock is released: the drain lets the pinned delete finish before the proxy exits.
             doomed.process.wait(timeout=120)
             outcomes: Final = burst.outcomes()
 
         at_restart: Final = _states(fleet)
-        _record_burst(record_property, outcomes, at_restart)
+        _record_burst(record_property, outcomes, at_restart, pinned)
         assert all(outcome.answered_or_dropped for outcome in outcomes), [
             (outcome.team_id, outcome.status, outcome.detail) for outcome in outcomes if not outcome.answered_or_dropped
         ]
