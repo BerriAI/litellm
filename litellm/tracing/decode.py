@@ -85,6 +85,13 @@ def _exception_message(span: DecodedSpan) -> str:
     return ""
 
 
+def _is_langgraph_handoff(span: DecodedSpan) -> bool:
+    return (
+        span["attributes"].get("langsmith.metadata.langgraph_node") == "tools"
+        and span["status_message"].startswith("ParentCommand(Command(")
+    )
+
+
 def _span_row(span: DecodedSpan) -> SpanRow:
     attributes = span["attributes"]
     resource = span["resource_attributes"]
@@ -102,7 +109,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         ScopeVersion=span["scope_version"],
         SpanAttributes=attributes,
         Duration=max(span["end_ns"] - span["start_ns"], 0),
-        StatusCode=span["status_code"],
+        StatusCode="STATUS_CODE_OK" if _is_langgraph_handoff(span) else span["status_code"],
         StatusMessage=span["status_message"] or _exception_message(span),
         TeamId="",
         ApiKeyHash="",

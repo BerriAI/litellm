@@ -311,3 +311,20 @@ def test_encode_otlp_response_matches_request_encoding():
     assert encode_otlp_response("application/json") == (b"{}", "application/json")
     assert encode_otlp_response("application/x-protobuf") == (b"", "application/x-protobuf")
     assert encode_otlp_response(None) == (b"", "application/x-protobuf")
+
+
+@pytest.mark.parametrize(
+    ("node", "message", "expected"),
+    [
+        ("tools", "ParentCommand(Command(graph='__parent__', update={}, goto='verifier'))", "STATUS_CODE_OK"),
+        ("tools", "RuntimeError: search unavailable", "STATUS_CODE_ERROR"),
+        ("tools", "ParentCommandError: invalid target", "STATUS_CODE_ERROR"),
+        ("", "ParentCommand(Command(graph='__parent__'))", "STATUS_CODE_ERROR"),
+    ],
+)
+def test_langgraph_handoffs_are_control_flow_but_real_errors_remain(node, message, expected):
+    span = _span("tools", b"12345678", langsmith__metadata__langgraph_node=node, langsmith__span__kind="chain")
+    span.status.CopyFrom(Status(code=Status.STATUS_CODE_ERROR, message=message))
+    row = decode_otlp(_export(span), "application/x-protobuf")[0]
+    assert row["StatusCode"] == expected
+    assert row["StatusMessage"] == message
