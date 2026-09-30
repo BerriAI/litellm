@@ -8,6 +8,7 @@ Reads join agent spans (otel_traces) to LiteLLM requests (spend_logs) on
 import base64
 import json
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Final
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
@@ -34,6 +35,7 @@ _STATUS: Final[dict[str, SpanStatus]] = {"STATUS_CODE_OK": "ok", "STATUS_CODE_ER
 # Page of traces from the per-trace MV, then cost from spend logs via ARRAY JOIN on request ids.
 # The MV writes one partial row per insert, so root fields come from the partial that saw the root span.
 # agent_traces has no ApiKeyHash, so key-scoped (team-less) reads filter trace ids through otel_traces.
+
 
 def encode_cursor(start_ms: int, trace_id: str) -> str:
     return base64.urlsafe_b64encode(json.dumps([start_ms, trace_id]).encode()).decode()
@@ -229,11 +231,11 @@ class ClickHouseTraceStore:
         return TracePage(data=[trace_summary_from_row(r) for r in rows], next_cursor=next_cursor)
 
     async def get_trace(self, trace_id: str, scope: TraceScope) -> Trace | None:
-        rows = await self.storage.trace_spans({**scope, "trace_id": trace_id})
+        rows = await self.storage.trace_spans(MappingProxyType({**scope, "trace_id": trace_id}))
         return trace_from_rows(trace_id, rows)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope) -> SpanDetail | None:
-        rows = await self.storage.span_detail({**scope, "trace_id": trace_id, "span_id": span_id})
+        rows = await self.storage.span_detail(MappingProxyType({**scope, "trace_id": trace_id, "span_id": span_id}))
         if not rows:
             return None
         return SpanDetail(

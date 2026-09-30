@@ -15,7 +15,7 @@ call, joined on the provider response id.
 
 from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 SpanType = Literal["agent", "llm", "tool", "chain", "framework"]
 SpanStatus = Literal["ok", "error", "unset"]
@@ -24,160 +24,160 @@ SpanStatus = Literal["ok", "error", "unset"]
 class LiteLLMRequest(TypedDict):
     """The LiteLLM side of an LLM span: joined from spend logs by response id."""
 
-    request_id: str
-    model: str
-    model_group: str
-    provider: str
-    key_alias: str
-    team_alias: str
-    spend: float
-    prompt_tokens: int
-    completion_tokens: int
-    cache_read_tokens: int
-    cache_write_tokens: int
-    latency_ms: int
-    ttft_ms: int | None
-    status: str
+    request_id: ReadOnly[str]
+    model: ReadOnly[str]
+    model_group: ReadOnly[str]
+    provider: ReadOnly[str]
+    key_alias: ReadOnly[str]
+    team_alias: ReadOnly[str]
+    spend: ReadOnly[float]
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    cache_read_tokens: ReadOnly[int]
+    cache_write_tokens: ReadOnly[int]
+    latency_ms: ReadOnly[int]
+    ttft_ms: ReadOnly[int | None]
+    status: ReadOnly[str]
 
 
 class Span(TypedDict):
-    span_id: str
-    parent_span_id: str | None
-    name: str
-    type: SpanType
-    agent: str  # the agent this span runs inside, e.g. "researcher"
-    start_offset_ms: float  # relative to trace start
-    duration_ms: float
-    status: SpanStatus
-    error: str | None  # exception message when status == "error"
-    input_preview: str
-    model: str | None
-    input_tokens: int
-    output_tokens: int
-    litellm: LiteLLMRequest | None
+    span_id: ReadOnly[str]
+    parent_span_id: ReadOnly[str | None]
+    name: ReadOnly[str]
+    type: ReadOnly[SpanType]
+    agent: ReadOnly[str]  # the agent this span runs inside, e.g. "researcher"
+    start_offset_ms: ReadOnly[float]  # relative to trace start
+    duration_ms: ReadOnly[float]
+    status: ReadOnly[SpanStatus]
+    error: ReadOnly[str | None]  # exception message when status == "error"
+    input_preview: ReadOnly[str]
+    model: ReadOnly[str | None]
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+    litellm: ReadOnly[LiteLLMRequest | None]
 
 
 class AgentNode(TypedDict):
     """One distinct agent in a trace. 200 invocations of `researcher` = one node."""
 
-    name: str
-    parent_agent: str | None
-    invocations: int
-    llm_calls: int
-    tool_calls: int
-    spend: float | None
-    duration_ms: float
+    name: ReadOnly[str]
+    parent_agent: ReadOnly[str | None]
+    invocations: ReadOnly[int]
+    llm_calls: ReadOnly[int]
+    tool_calls: ReadOnly[int]
+    spend: ReadOnly[float | None]
+    duration_ms: ReadOnly[float]
 
 
 class TraceSummary(TypedDict):
-    trace_id: str
-    name: str
-    service: str
-    input_preview: str
-    start_time: str  # ISO 8601
-    duration_ms: float
-    status: SpanStatus
-    span_count: int
-    agent_count: int  # distinct agent names (researcher x200 counts once)
-    agent_invocations: int  # agent spans (researcher x200 counts 200)
-    llm_calls: int
-    tool_calls: int
-    error_count: int  # spans with an error status; > 0 means the run shows as failed
-    input_tokens: int
-    output_tokens: int
-    spend: float | None
-    models: list[str]
+    trace_id: ReadOnly[str]
+    name: ReadOnly[str]
+    service: ReadOnly[str]
+    input_preview: ReadOnly[str]
+    start_time: ReadOnly[str]  # ISO 8601
+    duration_ms: ReadOnly[float]
+    status: ReadOnly[SpanStatus]
+    span_count: ReadOnly[int]
+    agent_count: ReadOnly[int]  # distinct agent names (researcher x200 counts once)
+    agent_invocations: ReadOnly[int]  # agent spans (researcher x200 counts 200)
+    llm_calls: ReadOnly[int]
+    tool_calls: ReadOnly[int]
+    error_count: ReadOnly[int]  # spans with an error status; > 0 means the run shows as failed
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+    spend: ReadOnly[float | None]
+    models: ReadOnly[list[str]]
 
 
 class Trace(TypedDict):
-    summary: TraceSummary
-    agents: list[AgentNode]
-    spans: list[Span]
+    summary: ReadOnly[TraceSummary]
+    agents: ReadOnly[list[AgentNode]]
+    spans: ReadOnly[list[Span]]
 
 
 class TracePage(TypedDict):
-    data: list[TraceSummary]
-    next_cursor: str | None
+    data: ReadOnly[list[TraceSummary]]
+    next_cursor: ReadOnly[str | None]
 
 
 class SpanDetail(TypedDict):
-    span_id: str
-    input: str
-    output: str
-    attributes: dict[str, str]
+    span_id: ReadOnly[str]
+    input: ReadOnly[str]
+    output: ReadOnly[str]
+    attributes: ReadOnly[dict[str, str]]
 
 
 class TraceScope(TypedDict):
     """Who is asking. Empty team_ids = all teams (admins only)."""
 
-    team_ids: list[str]
-    api_key_hash: str
+    team_ids: ReadOnly[list[str]]
+    api_key_hash: ReadOnly[str]
 
 
 class SpanRow(TypedDict):
     """One stored span (ClickHouse `otel_traces` row). Produced by `litellm.tracing.decode`."""
 
-    Timestamp: int  # unix ns
-    TraceId: str
-    SpanId: str
-    ParentSpanId: str
-    TraceState: str
-    SpanName: str
-    SpanKind: str
-    ServiceName: str
-    ResourceAttributes: dict[str, str]
-    ScopeName: str
-    ScopeVersion: str
-    SpanAttributes: dict[str, str]
-    Duration: int  # ns
-    StatusCode: str
-    StatusMessage: str
-    TeamId: str
-    ApiKeyHash: str
-    ObservationType: SpanType
-    AgentName: str
-    LiteLLMRequestId: str
-    Model: str
-    InputTokens: int
-    OutputTokens: int
-    Input: str
-    Output: str
+    Timestamp: ReadOnly[int]  # unix ns
+    TraceId: ReadOnly[str]
+    SpanId: ReadOnly[str]
+    ParentSpanId: ReadOnly[str]
+    TraceState: ReadOnly[str]
+    SpanName: ReadOnly[str]
+    SpanKind: ReadOnly[str]
+    ServiceName: ReadOnly[str]
+    ResourceAttributes: ReadOnly[dict[str, str]]
+    ScopeName: ReadOnly[str]
+    ScopeVersion: ReadOnly[str]
+    SpanAttributes: ReadOnly[dict[str, str]]
+    Duration: ReadOnly[int]  # ns
+    StatusCode: ReadOnly[str]
+    StatusMessage: ReadOnly[str]
+    TeamId: ReadOnly[str]
+    ApiKeyHash: ReadOnly[str]
+    ObservationType: ReadOnly[SpanType]
+    AgentName: ReadOnly[str]
+    LiteLLMRequestId: ReadOnly[str]
+    Model: ReadOnly[str]
+    InputTokens: ReadOnly[int]
+    OutputTokens: ReadOnly[int]
+    Input: ReadOnly[str]
+    Output: ReadOnly[str]
 
 
 class SpendLogRecord(TypedDict):
     """One LiteLLM request, as written by the `clickhouse` logging callback."""
 
-    request_id: str
-    response_id: str
-    call_type: str
-    api_key: str
-    key_alias: str
-    team_id: str
-    team_alias: str
-    organization_id: str
-    user: str
-    end_user: str
-    model: str
-    model_group: str
-    model_id: str
-    custom_llm_provider: str
-    api_base: str
-    spend: float
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-    cache_read_tokens: int
-    cache_write_tokens: int
-    start_time: int  # unix ms
-    end_time: int  # unix ms
-    completion_start_time: int | None
-    status: str
-    error_str: str
-    cache_hit: bool
-    session_id: str
-    trace_id: str  # from an incoming W3C traceparent, if any
-    span_id: str
-    request_tags: list[str]
-    metadata: str
-    messages: str
-    response: str
+    request_id: ReadOnly[str]
+    response_id: ReadOnly[str]
+    call_type: ReadOnly[str]
+    api_key: ReadOnly[str]
+    key_alias: ReadOnly[str]
+    team_id: ReadOnly[str]
+    team_alias: ReadOnly[str]
+    organization_id: ReadOnly[str]
+    user: ReadOnly[str]
+    end_user: ReadOnly[str]
+    model: ReadOnly[str]
+    model_group: ReadOnly[str]
+    model_id: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    api_base: ReadOnly[str]
+    spend: ReadOnly[float]
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    cache_read_tokens: ReadOnly[int]
+    cache_write_tokens: ReadOnly[int]
+    start_time: ReadOnly[int]  # unix ms
+    end_time: ReadOnly[int]  # unix ms
+    completion_start_time: ReadOnly[int | None]
+    status: ReadOnly[str]
+    error_str: ReadOnly[str]
+    cache_hit: ReadOnly[bool]
+    session_id: ReadOnly[str]
+    trace_id: ReadOnly[str]  # from an incoming W3C traceparent, if any
+    span_id: ReadOnly[str]
+    request_tags: ReadOnly[list[str]]
+    metadata: ReadOnly[str]
+    messages: ReadOnly[str]
+    response: ReadOnly[str]

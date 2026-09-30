@@ -12,7 +12,8 @@ const TRACING_NOT_ENABLED_STATUS = 501;
 const TRACING_ROUTE_MISSING_STATUS = 404;
 
 const isTracingUnavailable = (error: unknown): error is ApiError =>
-  error instanceof ApiError && (error.status === TRACING_NOT_ENABLED_STATUS || error.status === TRACING_ROUTE_MISSING_STATUS);
+  error instanceof ApiError &&
+  (error.status === TRACING_NOT_ENABLED_STATUS || error.status === TRACING_ROUTE_MISSING_STATUS);
 
 interface UseAgentTracesOptions {
   accessToken: string;

@@ -8,6 +8,7 @@ so `response_id` is always the raw provider response id (cache-hit suffix stripp
 import json
 import re
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
@@ -55,10 +56,16 @@ def _json(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
+def _json_mapping(value: Mapping[str, Any]) -> str:
+    return _json(dict(value))  # mutable-ok: [LIT002] JSON serialization requires a dict
+
+
 def _find_traceparent(metadata: Mapping[str, Any], kwargs: Mapping[str, Any]) -> tuple[str, str]:
-    custom_headers = metadata.get("requester_custom_headers") or {}
-    proxy_request = (kwargs.get("litellm_params") or {}).get("proxy_server_request") or {}
-    request_headers = proxy_request.get("headers") or {}
+    custom_headers = metadata.get("requester_custom_headers") or MappingProxyType({})
+    proxy_request = (kwargs.get("litellm_params") or MappingProxyType({})).get(
+        "proxy_server_request"
+    ) or MappingProxyType({})
+    request_headers = proxy_request.get("headers") or MappingProxyType({})
     for headers in (custom_headers, request_headers):
         for name, value in headers.items():
             if str(name).lower() == "traceparent":
@@ -68,7 +75,7 @@ def _find_traceparent(metadata: Mapping[str, Any], kwargs: Mapping[str, Any]) ->
 
 def _cache_tokens(usage: Mapping[str, Any]) -> tuple[int, int]:
     """(cache_read, cache_write) from a Usage dict: OpenAI prompt_tokens_details first, Anthropic fields as fallback."""
-    details = usage.get("prompt_tokens_details") or {}
+    details = usage.get("prompt_tokens_details") or MappingProxyType({})
     cache_read = _int(details.get("cached_tokens")) or _int(usage.get("cache_read_input_tokens"))
     cache_write = (
         _int(details.get("cache_write_tokens"))
@@ -78,9 +85,15 @@ def _cache_tokens(usage: Mapping[str, Any]) -> tuple[int, int]:
     return cache_read, cache_write
 
 
+def _request_tags(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []  # mutable-ok: [LIT002] empty spend-log tag payload
+    return [str(tag) for tag in value]  # mutable-ok: [LIT002] SpendLogRecord schema
+
+
 def _session_id(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> str:
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
-    request_metadata = (kwargs.get("litellm_params") or {}).get("metadata") or {}
+    request_metadata = (kwargs.get("litellm_params") or MappingProxyType({})).get("metadata") or MappingProxyType({})
     return str(payload.get("session_id") or request_metadata.get("session_id") or payload.get("trace_id") or "")
 
 
@@ -90,9 +103,9 @@ def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
 
 
 def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
-    metadata: Mapping[str, Any] = payload.get("metadata") or {}
-    hidden_params: Mapping[str, Any] = payload.get("hidden_params") or {}
-    usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or {}
+    metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
+    hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
+    usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})
     cache_read_tokens, cache_write_tokens = _cache_tokens(usage)
     trace_id, span_id = _find_traceparent(metadata, kwargs)
     request_id = str(payload.get("id") or "")
@@ -129,8 +142,8 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         session_id=_session_id(payload, kwargs),
         trace_id=trace_id,
         span_id=span_id,
-        request_tags=[str(tag) for tag in payload.get("request_tags") or []],
-        metadata=_json(dict(metadata)),
+        request_tags=_request_tags(payload.get("request_tags")),
+        metadata=_json_mapping(metadata),
         messages="" if redact else _json(payload.get("messages")),
         response="" if redact else _json(payload.get("response")),
     )
@@ -150,6 +163,6 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
             payload = kwargs.get("standard_logging_object")
             if payload is None or _is_trace_ingest(payload):
                 return
-            self.enqueue([dict(spend_log_row_from_payload(payload, kwargs))])
+            self.enqueue([dict(spend_log_row_from_payload(payload, kwargs))])  # mutable-ok: [LIT002] batch logger API
         except Exception as e:
             verbose_logger.exception("ClickHouseSpendLogger: failed to log request: %s", e)
