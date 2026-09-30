@@ -36,10 +36,18 @@ async def async_completion_with_fallbacks(**kwargs):
     model = original_model
     top_level_fallbacks = kwargs.pop("fallbacks", [])
     nested_fallbacks = nested_kwargs.pop("fallbacks", [])
-    raw_fallbacks: Final = top_level_fallbacks or nested_fallbacks
-    fallbacks: Final = [original_model] + (
-        raw_fallbacks if isinstance(raw_fallbacks, list) else [raw_fallbacks]
-    )
+    combined_fallbacks = []
+    if isinstance(top_level_fallbacks, list):
+        combined_fallbacks.extend(top_level_fallbacks)
+    elif top_level_fallbacks:
+        combined_fallbacks.append(top_level_fallbacks)
+
+    if isinstance(nested_fallbacks, list):
+        combined_fallbacks.extend(nested_fallbacks)
+    elif nested_fallbacks:
+        combined_fallbacks.append(nested_fallbacks)
+
+    fallbacks: Final = [original_model] + combined_fallbacks
     kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
     litellm_call_id: Final = str(uuid.uuid4())
     base_kwargs: Final = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
