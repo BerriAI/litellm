@@ -59,6 +59,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
 
     # Mock agent
     mock_agent = MagicMock()
+    mock_agent.agent_id = "test-agent"
     mock_agent.agent_card_params = {
         "url": "http://backend-agent:10001",
         "name": "Test Agent",
@@ -72,6 +73,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
             "jsonrpc": "2.0",
             "id": "test-id",
             "method": "message/send",
+            "metadata": {"model_info": {"id": "caller-supplied-id"}},
             "params": {
                 "message": {
                     "role": "user",
@@ -153,7 +155,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
             "litellm.a2a_protocol.asend_message",
             new_callable=AsyncMock,
             return_value=mock_response,
-        ),
+        ) as mock_send_message,
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {},
@@ -190,6 +192,9 @@ async def test_invoke_agent_a2a_adds_litellm_data():
         mock_add_data.assert_called_once()
 
         # Verify model and custom_llm_provider were set
+        assert mock_send_message.await_args.kwargs["model"] == "a2a_agent/Test Agent"
+        assert captured_data["metadata"]["model_group"] == "a2a_agent/Test Agent"
+        assert captured_data["metadata"]["model_info"] == {"id": mock_agent.agent_id}
         assert captured_data.get("model") == "a2a_agent/Test Agent"
         assert captured_data.get("custom_llm_provider") == "a2a_agent"
 
