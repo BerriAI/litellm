@@ -7,12 +7,8 @@ deep_research_agent -> task (tool) -> researcher (subagent) -> search_docs (tool
 
 import gzip
 import json
-import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
-
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 from google.protobuf.json_format import Parse

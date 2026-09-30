@@ -2,12 +2,8 @@
 Tests for TraceReceiver.ingest (litellm/tracing/receiver.py) with a fake store.
 """
 
-import os
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest

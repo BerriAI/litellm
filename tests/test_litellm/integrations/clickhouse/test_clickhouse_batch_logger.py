@@ -2,11 +2,7 @@
 Tests for the CustomBatchLogger-based ClickHouse base logger.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
-
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 

@@ -2,12 +2,8 @@
 Tests for the pure read-side helpers in litellm/tracing/store.py (no ClickHouse needed).
 """
 
-import os
-import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 
