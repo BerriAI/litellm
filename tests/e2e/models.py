@@ -42,10 +42,10 @@ class BudgetWindowState(BudgetWindow):
 
 
 class KeyLoggingCallbackVars(BaseModel):
-    langfuse_public_key: str | None = None
-    langfuse_secret_key: str | None = None
+    langfuse_public_key: str | None = Field(default=None, repr=False)
+    langfuse_secret_key: str | None = Field(default=None, repr=False)
     langfuse_host: str | None = None
-    wandb_api_key: str | None = None
+    wandb_api_key: str | None = Field(default=None, repr=False)
     weave_project_id: str | None = None
 
 
