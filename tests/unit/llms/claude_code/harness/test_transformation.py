@@ -43,6 +43,7 @@ from litellm.llms.base_llm.harness.utils import (
     native_tool_names,
 )
 from litellm.llms.claude_code.harness.transformation import (
+    MANAGED_CONFIG_KEYS,
     MANAGED_ENV_KEYS,
     NORMALIZED_TO_NATIVE,
     PERMISSION_MODES,
@@ -379,7 +380,8 @@ def test_session_setup_and_turn_request_env_and_command(tmp_path):
         tmp_path,
         instructions="Be terse.",
         disable_tools=["bash", "web_search"],
-        options=ClaudeCodeOptions(max_turns=7, small_model="small-m", env={"X": "1"}),
+        max_turns=7,
+        options=ClaudeCodeOptions(config={"cleanupPeriodDays": 1}, env={"X": "1"}),
     )
     cfg = ClaudeCodeHarnessConfig()
     setup = cfg.transform_session_setup(ctx, PRIV)
@@ -392,7 +394,7 @@ def test_session_setup_and_turn_request_env_and_command(tmp_path):
     assert env["ANTHROPIC_API_KEY"] == ""
     assert env["ANTHROPIC_BASE_URL"] == f"http://host.docker.internal:{PORT}"
     assert env["ANTHROPIC_MODEL"] == "claude-haiku-4-5-20251001"
-    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "small-m"
+    assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "claude-haiku-4-5-20251001"
     assert env["CLAUDE_CONFIG_DIR"] == PRIV
     assert env["DISABLE_TELEMETRY"] == "1"
     assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
@@ -412,11 +414,12 @@ def test_session_setup_and_turn_request_env_and_command(tmp_path):
     assert cmd[cmd.index("--setting-sources") + 1] == "user"
     assert cmd[cmd.index("--append-system-prompt") + 1] == "Be terse."
     assert cmd[cmd.index("--max-turns") + 1] == "7"
+    assert json.loads(cmd[cmd.index("--settings") + 1]) == {"cleanupPeriodDays": 1}
     assert cmd[cmd.index("--disallowedTools") + 1] == "Bash,WebSearch"
     assert "--resume" not in cmd
 
 
-def test_small_model_defaults_to_model(tmp_path):
+def test_background_model_is_the_session_model(tmp_path):
     env = (
         ClaudeCodeHarnessConfig().transform_session_setup(pure_ctx(tmp_path), PRIV).env
     )
@@ -692,3 +695,14 @@ def test_capabilities_match_spec():
     assert caps.resume
     assert not (caps.tool_approval or caps.custom_tools or caps.history)
     assert caps.permission_modes == frozenset({"read-only", "edit", "full"})
+
+
+@pytest.mark.parametrize("key", sorted(MANAGED_CONFIG_KEYS))
+def test_options_config_cannot_set_managed_keys(tmp_path, key):
+    ctx = pure_ctx(tmp_path, options=ClaudeCodeOptions(config={key: "x"}))
+    with pytest.raises(OptionsMismatch, match=key):
+        ClaudeCodeHarnessConfig().validate_environment(ctx)
+
+
+def test_no_settings_flag_without_config(tmp_path):
+    assert "--settings" not in list(request_for(pure_ctx(tmp_path), None).argv)
