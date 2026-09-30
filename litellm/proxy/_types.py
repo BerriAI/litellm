@@ -555,6 +555,15 @@ class LiteLLMRoutes(enum.Enum):
         "/rag/query",
         "/v1/rag/query",
         # agent tracing: OTLP ingest + reads (scoped to the caller's team in the handler)
+        "/engine",
+        "/engine/{engine_id}",
+        "/engine/{engine_id}/runs",
+        "/engine/{engine_id}/executions/{execution_id}",
+        "/engine/{engine_id}/cancel",
+        "/engine/{engine_id}/findings/{finding_id}",
+        "/engine/preview/sample",
+        "/engine/workers/register",
+        "/engine/workers/{worker_id}",
         "/v1/traces",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
@@ -935,7 +944,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
-        # handler calls _verify_team_access, which admits only a proxy admin, an
+        # handler asks TeamAccess.allows for TEAM_OR_ORG_ADMIN: a proxy admin, an
         # org admin for the team, or an admin of this team.
         #
         # team_id is a free-form string, so it spells these with the same path

@@ -22,10 +22,8 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
-    _set_object_metadata_field,
-)
+from litellm.proxy.management.teams.access import is_team_admin
+from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
@@ -117,7 +115,7 @@ async def _check_user_permission_for_project(
         return False
 
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    return _is_user_team_admin(user_api_key_dict, team) or user_api_key_dict.user_id in (team.admins or [])
+    return is_team_admin(user_api_key_dict, team) or user_api_key_dict.user_id in (team.admins or [])
 
 
 async def _validate_team_exists(
