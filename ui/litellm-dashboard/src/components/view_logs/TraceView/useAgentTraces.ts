@@ -53,24 +53,27 @@ export function useAgentTraces({
   isLiveTail,
   enabled,
 }: UseAgentTracesOptions): AgentTracesResult {
-  const query = useInfiniteQuery<TracePage, Error>({
+  const fetchPage = (pageParam: unknown): Promise<TracePage> => {
+    const nowMs = Date.now();
+    const listOptions: Parameters<typeof agentTraceListCall>[0] = {
+      accessToken,
+      startMs: traceWindowStartMs(startTime, endTime, isCustomDate, nowMs),
+      endMs: isCustomDate ? moment(endTime).valueOf() : nowMs,
+      cursor: pageParam as string | null,
+    };
+    return agentTraceListCall(listOptions);
+  };
+  const queryOptions: Parameters<typeof useInfiniteQuery<TracePage, Error>>[0] = {
     queryKey: ["agentTraces", accessToken, startTime, endTime, isCustomDate],
-    queryFn: ({ pageParam }) => {
-      const nowMs = Date.now();
-      return agentTraceListCall({
-        accessToken,
-        startMs: traceWindowStartMs(startTime, endTime, isCustomDate, nowMs),
-        endMs: isCustomDate ? moment(endTime).valueOf() : nowMs,
-        cursor: pageParam as string | null,
-      });
-    },
+    queryFn: ({ pageParam }) => fetchPage(pageParam),
     initialPageParam: null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled,
     retry: (failureCount, error) => !isTracingNotEnabled(error) && failureCount < 1,
     refetchInterval: (q) => (isLiveTail && !isTracingNotEnabled(q.state.error) ? LIVE_TAIL_INTERVAL_MS : false),
     refetchIntervalInBackground: false,
-  });
+  };
+  const query = useInfiniteQuery<TracePage, Error>(queryOptions);
 
   const traces = useMemo(() => query.data?.pages.flatMap((page) => page.data) ?? [], [query.data]);
   const notEnabled = isTracingNotEnabled(query.error);
