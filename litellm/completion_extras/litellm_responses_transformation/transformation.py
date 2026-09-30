@@ -1567,7 +1567,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
         ):
             raw_annotation = parsed_chunk.get("annotation")
-            annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+            annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(  # pyright: ignore[reportPrivateUsage]  # shared converter also used on the non-stream bridge path
                 [raw_annotation]  # mutable-ok: one-shot wrapper for shared converter
                 if raw_annotation is not None
                 else None
