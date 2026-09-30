@@ -171,7 +171,6 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "atranscription": ("file",),
     "arerank": ("query", "documents"),
     "acompact_responses": ("input",),
-    "aimage_edit": ("image", "prompt"),
     "anthropic_messages": ("messages", "max_tokens"),
     "agenerate_content": ("contents",),
     "aocr": ("document",),

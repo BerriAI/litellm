@@ -135,7 +135,9 @@ async def search(
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
 
-    if not data.get("search_tool_name") and not data.get("model"):
+    if not (
+        data.get("search_tool_name") or data.get("model") or general_settings.get("completion_model") or user_model
+    ):
         raise ProxyMissingRequiredParamError(route="/search", param="search_tool_name")
 
     if "search_tool_name" in data and data["search_tool_name"]:
