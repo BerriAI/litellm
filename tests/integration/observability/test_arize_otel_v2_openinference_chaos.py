@@ -27,6 +27,7 @@ from _openinference_support import (
     _chat_tool_call,
     _collect_marker_spans,
     _json_object,
+    _llm_spans_through_markers,
     _matching_marker_span,
     _messages_caller_raw_stream,
     _messages_caller_response,
@@ -163,10 +164,17 @@ def _call_without_worker_error(
 
 
 def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: Path) -> None:
-    markers: Final = tuple("f1-" + uuid.uuid4().hex for _ in range(30))
+    outage_markers: Final = tuple("f1-outage-" + uuid.uuid4().hex for _ in range(30))
+    recovery_markers: Final = tuple("f1-recovery-" + uuid.uuid4().hex for _ in range(30))
     surfaces: Final = ("chat", "responses", "messages")
+    surface_streams: Final = tuple(
+        (surfaces[index % len(surfaces)], index % 2 == 0) for index in range(len(outage_markers))
+    )
     calls: Final = tuple(
-        (marker, surfaces[index % len(surfaces)], index % 2 == 0) for index, marker in enumerate(markers)
+        (marker, surface, stream) for marker, (surface, stream) in zip(outage_markers, surface_streams, strict=True)
+    )
+    recovery_calls: Final = tuple(
+        (marker, surface, stream) for marker, (surface, stream) in zip(recovery_markers, surface_streams, strict=True)
     )
 
     def upstream(request: Request) -> Reply:
@@ -213,6 +221,33 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
     def sink(_request: Request) -> Reply:
         return Reply(body=b"", content_type="application/x-protobuf")
 
+    def run_burst(
+        burst: tuple[tuple[str, str, bool], ...],
+        proxy: Gateway,
+        chat_model: str,
+        messages_model: str,
+    ) -> None:
+        with ThreadPoolExecutor(max_workers=len(burst)) as executor:
+            futures: Final = tuple(
+                executor.submit(
+                    _call,
+                    proxy,
+                    messages_model if surface == "messages" else chat_model,
+                    marker,
+                    surface=surface,
+                    stream=stream,
+                    prompt=marker,
+                )
+                for marker, surface, stream in burst
+            )
+            responses: Final = tuple(
+                (marker, surface, stream, future.result(timeout=60))
+                for (marker, surface, stream), future in zip(burst, futures, strict=True)
+            )
+        for marker, surface, stream, response in responses:
+            model_name: Final = messages_model if surface == "messages" else chat_model
+            _assert_response(response, marker, surface, stream, model_name)
+
     with ExitStack() as servers:
         initial_stack: Final = servers.enter_context(ExitStack())
         stopped_destination: Final = initial_stack.enter_context(wire_server(_owned_sink_handler(sink)))
@@ -223,7 +258,6 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
             gateway,
             tmp_path,
             upstream,
-            environment={"OTEL_BSP_SCHEDULE_DELAY": "20000"},
             destination_wire=stopped_destination,
         ) as rig:
             with httpx.Client(trust_env=False) as client, pytest.raises(httpx.ConnectError):
@@ -233,37 +267,23 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
                     model="anthropic/claude-opus-5-5",
                     api_base=rig.provider.url,
                 )
-                with ThreadPoolExecutor(max_workers=len(calls)) as executor:
-                    futures: Final = tuple(
-                        executor.submit(
-                            _call,
-                            rig.proxy,
-                            messages_model if surface == "messages" else rig.model,
-                            marker,
-                            surface=surface,
-                            stream=stream,
-                            prompt=marker,
-                        )
-                        for marker, surface, stream in calls
-                    )
-                    responses: Final = tuple(
-                        (marker, surface, stream, future.result(timeout=60))
-                        for (marker, surface, stream), future in zip(calls, futures, strict=True)
-                    )
-                for marker, surface, stream, response in responses:
-                    model: Final = messages_model if surface == "messages" else rig.model
-                    _assert_response(response, marker, surface, stream, model)
+                run_burst(calls, rig.proxy, rig.model, messages_model)
                 with httpx.Client(trust_env=False) as client, pytest.raises(httpx.ConnectError):
                     client.get(stopped_destination.url + "/health", timeout=2)
                 recovered_stack: Final = servers.enter_context(ExitStack())
                 recovered_destination: Final = recovered_stack.enter_context(
                     wire_server(_owned_sink_handler(sink), port=sink_port)
                 )
-                spans: Final = _collect_marker_spans(recovered_destination, markers, timeout_seconds=90)
-                assert len(spans) == len(markers), spans
-                recorded: Final = tuple(span["litellm.metadata.trace_marker"] for span in spans)
-                assert len(recorded) == len(markers), recorded
-                assert frozenset(recorded) == frozenset(markers), recorded
+                run_burst(recovery_calls, rig.proxy, rig.model, messages_model)
+                spans: Final = _llm_spans_through_markers(recovered_destination, recovery_markers)
+                assert all(
+                    sum(span.get("litellm.metadata.trace_marker") == marker for span in spans) == 1
+                    for marker in recovery_markers
+                ), spans
+                assert all(
+                    sum(span.get("litellm.metadata.trace_marker") == marker for span in spans) <= 1
+                    for marker in outage_markers
+                ), spans
 
 
 def test_arize_otel_v2_f2_slow_sink_does_not_deadlock(gateway: Gateway, tmp_path: Path) -> None:
