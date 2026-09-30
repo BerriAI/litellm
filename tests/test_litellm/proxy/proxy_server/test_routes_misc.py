@@ -203,8 +203,6 @@ PNG_COLOUR_TYPE_RGBA = 6
     ],
 )
 def test_get_image_bundled_logos_have_an_alpha_channel(client, monkeypatch, params):
-    """Every bundled logo must be an RGBA PNG so it never renders as an opaque slab
-    on a sidebar whose background differs from the image's."""
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
     monkeypatch.delenv("UI_LOGO_PATH_DARK", raising=False)
     response = client.get("/get_image", params=params)
@@ -244,7 +242,6 @@ def test_get_image_serves_the_bundled_logo_for_each_theme_and_variant(client, mo
 
 
 def test_get_image_monogram_variant_keeps_serving_a_custom_ui_logo(client, monkeypatch, tmp_path):
-    """A collapsed sidebar must not swap the admin's own branding for LiteLLM's monogram."""
     custom_logo = tmp_path / "custom.png"
     custom_logo.write_bytes(PNG_SIGNATURE + b"custom-logo-marker")
     monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo))
