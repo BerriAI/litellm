@@ -37,8 +37,13 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
     );
     let client = Client::no_redirect_for_test();
     for sql in [
-        "CREATE TABLE otel_traces (n UInt8) ENGINE = Memory",
-        "INSERT INTO otel_traces VALUES (1)",
+        "CREATE DATABASE litellm",
+        "CREATE TABLE litellm.otel_traces (n UInt8) ENGINE = Memory",
+        "INSERT INTO litellm.otel_traces VALUES (1)",
+        "CREATE TABLE litellm.agent_traces (n UInt8) ENGINE = Memory",
+        "INSERT INTO litellm.agent_traces VALUES (2)",
+        "CREATE TABLE litellm.spend_logs (n UInt8) ENGINE = Memory",
+        "INSERT INTO litellm.spend_logs VALUES (3)",
         "CREATE TABLE private_traces (n UInt8) ENGINE = Memory",
     ] {
         client
@@ -71,7 +76,7 @@ async fn admin_sql_reads_rows_with_enforced_settings(
     let result = read(
         &database.client,
         &connection,
-        "SELECT n AS answer FROM otel_traces",
+        "SELECT n AS answer FROM litellm.otel_traces",
     )
     .await?;
     let json: Value = serde_json::from_str(&result)?;
@@ -82,15 +87,15 @@ async fn admin_sql_reads_rows_with_enforced_settings(
 
 #[rstest]
 #[case::table("CREATE TABLE admin_sql_test (n UInt8) ENGINE = Memory")]
-#[case::insert("INSERT INTO otel_traces VALUES (2)")]
-#[case::drop("DROP TABLE otel_traces")]
+#[case::insert("INSERT INTO litellm.otel_traces VALUES (2)")]
+#[case::drop("DROP TABLE litellm.otel_traces")]
 #[case::named_collection("CREATE NAMED COLLECTION admin_sql_test AS host = 'localhost'")]
 #[case::settings("SET readonly = 0")]
-#[case::inline_settings("SELECT n FROM otel_traces SETTINGS readonly = 0")]
-#[case::time_limit("SELECT n FROM otel_traces SETTINGS max_execution_time = 0")]
-#[case::row_limit("SELECT n FROM otel_traces SETTINGS max_result_rows = 0")]
-#[case::byte_limit("SELECT n FROM otel_traces SETTINGS max_result_bytes = 0")]
-#[case::memory_limit("SELECT n FROM otel_traces SETTINGS max_memory_usage = 0")]
+#[case::inline_settings("SELECT n FROM litellm.otel_traces SETTINGS readonly = 0")]
+#[case::time_limit("SELECT n FROM litellm.otel_traces SETTINGS max_execution_time = 0")]
+#[case::row_limit("SELECT n FROM litellm.otel_traces SETTINGS max_result_rows = 0")]
+#[case::byte_limit("SELECT n FROM litellm.otel_traces SETTINGS max_result_bytes = 0")]
+#[case::memory_limit("SELECT n FROM litellm.otel_traces SETTINGS max_memory_usage = 0")]
 #[case::other_table("SELECT * FROM private_traces")]
 #[tokio::test]
 async fn reader_rejects_writes_and_privilege_escalation(
@@ -103,9 +108,38 @@ async fn reader_rejects_writes_and_privilege_escalation(
     let result = read(&database.client, &connection, sql).await;
 
     assert!(matches!(result, Err(Error::QueryFailed(_))), "{result:?}");
-    let rows = read(&database.client, &connection, "SELECT n FROM otel_traces").await?;
+    let rows = read(
+        &database.client,
+        &connection,
+        "SELECT n FROM litellm.otel_traces",
+    )
+    .await?;
     let json: Value = serde_json::from_str(&rows)?;
     assert_eq!(json["data"], serde_json::json!([{ "n": 1 }]));
+    Ok(())
+}
+
+#[rstest]
+#[case::otel("litellm.otel_traces", 1)]
+#[case::agent("litellm.agent_traces", 2)]
+#[case::spend("litellm.spend_logs", 3)]
+#[tokio::test]
+async fn reader_selects_each_granted_table(
+    #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
+    #[case] table: &str,
+    #[case] expected: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database = database?;
+    let connection = Connection::parse(&database.url)?;
+
+    let rows = read(
+        &database.client,
+        &connection,
+        &format!("SELECT n FROM {table}"),
+    )
+    .await?;
+    let json: Value = serde_json::from_str(&rows)?;
+    assert_eq!(json["data"], serde_json::json!([{ "n": expected }]));
     Ok(())
 }
 
@@ -247,9 +281,13 @@ async fn query_parameters_preserve_values_and_replace_url_parameters(
     assert_eq!(json["data"][0]["teams"], serde_json::json!(values));
     assert_eq!(json["data"][0]["number"], -42);
     assert!(
-        read(&database.client, &connection, "SELECT n FROM otel_traces")
-            .await
-            .is_ok()
+        read(
+            &database.client,
+            &connection,
+            "SELECT n FROM litellm.otel_traces"
+        )
+        .await
+        .is_ok()
     );
     Ok(())
 }
