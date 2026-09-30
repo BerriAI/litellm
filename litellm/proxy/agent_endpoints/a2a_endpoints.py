@@ -597,7 +597,6 @@ async def get_agent_card(
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
-        # Check agent permission (skip for admin users)
         is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
             user_api_key_auth=user_api_key_dict,
