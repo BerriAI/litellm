@@ -28,6 +28,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
 from fastapi.exceptions import HTTPException
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -77,6 +78,12 @@ _DEFAULT_POLICIES: Final = [
 ]
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+    supported_event_hooks: ReadOnly[list[GuardrailEventHooks] | None]
+
+
 class XecGuardMissingCredentials(Exception):
     pass
 
@@ -90,7 +97,7 @@ class XecGuardGuardrail(CustomGuardrail):
         policy_names: list[str] | None = None,
         block_on_error: bool | None = None,
         grounding_strictness: str | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.api_key = api_key or os.environ.get("XECGUARD_API_KEY")
         if not self.api_key:
@@ -122,9 +129,12 @@ class XecGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        options: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
 
-        super().__init__(**kwargs)
+        super().__init__(**options)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

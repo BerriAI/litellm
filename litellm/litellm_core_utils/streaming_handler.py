@@ -1106,7 +1106,7 @@ class CustomStreamWrapper:
         self,
         chunk: Any,
         model_response: ModelResponseStream,
-        completion_obj: dict[str, Any],
+        completion_obj: dict[str, object],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
         if (

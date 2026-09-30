@@ -158,7 +158,7 @@ class LiteLLM_Proxy_MCP_Handler:
     def _parse_mcp_tools(tools: Iterable[Mapping[str, object]] | None) -> SplitTools:
         items: Final = tuple(tools or ())
         gateway_tools: Final[list[ToolParam]] = [tool for tool in items if _names_gateway_explicitly(tool)]
-        other_tools: Final[list[Any]] = [tool for tool in items if not _names_gateway_explicitly(tool)]
+        other_tools: Final[list[ToolParam]] = [tool for tool in items if not _names_gateway_explicitly(tool)]
         return gateway_tools, other_tools
 
     @staticmethod

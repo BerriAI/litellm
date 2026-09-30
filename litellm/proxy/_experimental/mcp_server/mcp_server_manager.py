@@ -1678,7 +1678,7 @@ def _create_elicitation_callback():
 
 
 def _record_mcp_guardrail_evaluations(
-    synthetic_llm_data: dict[str, Any],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
+    synthetic_llm_data: dict[str, object],  # mutable-ok: `_sync_guardrail_info_to_logging_obj` takes a concrete dict
     litellm_logging_obj: "LiteLLMLoggingObj | None",
 ) -> None:
     """Bridge guardrail decision records off an MCP synthetic request onto the request's logger.

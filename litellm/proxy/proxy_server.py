@@ -3598,7 +3598,7 @@ async def _get_source_cache_base_spend(
 ) -> float:
     source_cache_keys: Final = [source_cache_key] if isinstance(source_cache_key, str) else source_cache_key
     for cache_key in source_cache_keys:
-        source = await user_api_key_cache.async_get_cache(key=cache_key)
+        source: object = await user_api_key_cache.async_get_cache(key=cache_key)
         if source is None:
             continue
         if isinstance(source, dict):

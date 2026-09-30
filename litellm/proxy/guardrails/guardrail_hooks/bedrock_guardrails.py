@@ -1181,7 +1181,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     or attempt >= _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES
                 ):
                     raise
-                await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (2**attempt))
+                await asyncio.sleep(_BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS * (2.0**attempt))
         raise HTTPException(status_code=500, detail="Bedrock guardrail throttle retries exhausted")
 
     async def _post_apply_guardrail_content(
