@@ -28,16 +28,16 @@ TEAM_KEY = UserAPIKeyAuth(
 def test_scope_for_admin_sees_everything():
     for role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         auth = UserAPIKeyAuth(token="k", team_id="team-a", user_role=role)
-        assert tracing_endpoints.scope_for(auth) == {"team_ids": [], "api_key_hash": ""}
+        assert tracing_endpoints.scope_for(auth) == {"team_ids": (), "api_key_hash": ""}
 
 
 def test_scope_for_team_key_sees_its_team():
-    assert tracing_endpoints.scope_for(TEAM_KEY) == {"team_ids": ["team-research"], "api_key_hash": ""}
+    assert tracing_endpoints.scope_for(TEAM_KEY) == {"team_ids": ("team-research",), "api_key_hash": ""}
 
 
 def test_scope_for_teamless_key_sees_only_its_own_traces():
     auth = UserAPIKeyAuth(token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER)
-    assert tracing_endpoints.scope_for(auth) == {"team_ids": [""], "api_key_hash": "hashed-key"}
+    assert tracing_endpoints.scope_for(auth) == {"team_ids": ("",), "api_key_hash": "hashed-key"}
 
 
 def test_scope_for_no_team_no_token_is_forbidden():
@@ -122,7 +122,7 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
     assert response.status_code == 200
     assert response.json() == {"data": [], "next_cursor": None}
     receiver.list_traces.assert_awaited_once_with(
-        scope={"team_ids": ["team-research"], "api_key_hash": ""}, start_ms=1, end_ms=2, cursor="abc"
+        scope={"team_ids": ("team-research",), "api_key_hash": ""}, start_ms=1, end_ms=2, cursor="abc"
     )
 
 
@@ -140,7 +140,7 @@ def test_get_trace_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
     assert response.json() == trace
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ["team-research"], "api_key_hash": ""}, "")
+    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
 
 
 def test_get_span_404_and_200(client, receiver):
@@ -149,13 +149,13 @@ def test_get_span_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1/spans/s1")
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
-    receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ["team-research"], "api_key_hash": ""}, "")
+    receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
 
 
 def test_trace_detail_passes_scoped_reference(client, receiver):
     receiver.get_trace.return_value = {"summary": {"trace_id": "t1"}, "agents": [], "spans": []}
     assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ["team-research"], "api_key_hash": ""}, "run-one")
+    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "run-one")
 
 
 def test_invalid_export_and_cursor_are_client_errors(client, receiver):

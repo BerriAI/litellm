@@ -169,7 +169,7 @@ def _parent_agent_of(span: Span, by_id: Mapping[str, Span]) -> str | None:
 def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
     """One node per distinct agent name (200 `researcher` invocations = 1 node), with who invoked it."""
     by_id: Final = MappingProxyType({s["span_id"]: s for s in spans})
-    agents: dict[str, AgentNode] = {}
+    agents: dict[str, AgentNode] = {}  # mutable-ok: linear-time aggregation updates counters per agent
     for span in spans:
         if span["type"] != "agent":
             continue
@@ -251,14 +251,16 @@ class ClickHouseTraceStore:
         cursor_ms, cursor_trace_id = decode_cursor(cursor)
         rows = await self.storage.query(
             LIST_TRACES_SQL,
-            MappingProxyType({
-                **scope,
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-                "cursor_ms": cursor_ms,
-                "cursor_trace_id": cursor_trace_id,
-                "limit": limit,
-            }),
+            MappingProxyType(
+                {
+                    **scope,
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "cursor_ms": cursor_ms,
+                    "cursor_trace_id": cursor_trace_id,
+                    "limit": limit,
+                }
+            ),
         )
         next_cursor = encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_ref"]) if len(rows) == limit else None
         return TracePage(data=tuple(trace_summary_from_row(r) for r in rows), next_cursor=next_cursor)

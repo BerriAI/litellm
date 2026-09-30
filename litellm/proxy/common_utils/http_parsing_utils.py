@@ -124,13 +124,13 @@ def coerce_numeric_form_fields(
 
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
-    if not body:
-        return {}
     try:
         parsed: Final = orjson.loads(body)
+        if isinstance(parsed, dict):
+            return parsed
     except orjson.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        pass
+    return {}  # mutable-ok: auth parser returns a fresh dict per request
 
 
 async def _read_request_body(request: Request | None) -> dict:

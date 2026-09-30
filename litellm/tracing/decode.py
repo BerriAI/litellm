@@ -41,9 +41,7 @@ _FRAMEWORK_SUFFIXES: Final = (
 )
 _LLM_OPERATIONS: Final = frozenset({"chat", "text_completion", "generate_content"})
 _LC_ROLES: Final = MappingProxyType({"human": "user", "ai": "assistant", "system": "system", "tool": "tool"})
-_OPENINFERENCE_TYPES: Final[Mapping[str, SpanType]] = MappingProxyType(
-    {"AGENT": "agent", "LLM": "llm", "TOOL": "tool"}
-)
+_OPENINFERENCE_TYPES: Final[Mapping[str, SpanType]] = MappingProxyType({"AGENT": "agent", "LLM": "llm", "TOOL": "tool"})
 
 
 class InvalidOTLPPayloadError(ValueError):
@@ -65,7 +63,9 @@ def _truncate(value: str) -> str:
     return f"{kept}…[truncated {size - OTLP_MAX_ATTRIBUTE_VALUE_BYTES} bytes]"
 
 
-def decode_otlp(body: bytes, content_type: str | None = None, content_encoding: str | None = None) -> list[SpanRow]:
+def decode_otlp(
+    body: bytes, content_type: str | None = None, content_encoding: str | None = None
+) -> tuple[SpanRow, ...]:
     """Decode an OTLP trace export and normalize every span."""
     try:
         spans: Final = native_decode_otlp(body, content_type, content_encoding, OTLP_MAX_BODY_BYTES)
@@ -73,7 +73,7 @@ def decode_otlp(body: bytes, content_type: str | None = None, content_encoding: 
         raise OTLPPayloadTooLargeError(str(error)) from error
     except ValueError as error:
         raise InvalidOTLPPayloadError(str(error)) from error
-    return [_span_row(span) for span in spans]
+    return tuple(_span_row(span) for span in spans)
 
 
 def _exception_message(span: DecodedSpan) -> str:
@@ -100,7 +100,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         ResourceAttributes=resource,
         ScopeName=span["scope_name"],
         ScopeVersion=span["scope_version"],
-        SpanAttributes={},
+        SpanAttributes=attributes,
         Duration=max(span["end_ns"] - span["start_ns"], 0),
         StatusCode=span["status_code"],
         StatusMessage=span["status_message"] or _exception_message(span),
@@ -116,7 +116,9 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         Output="",
     )
     normalize(row, attributes)
-    row["SpanAttributes"] = {k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES}
+    row["SpanAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict for span attributes
+        k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES
+    }
     row["Input"], row["Output"] = _truncate(row["Input"]), _truncate(row["Output"])
     return row
 
@@ -136,9 +138,15 @@ def _lc_message(message: Mapping[str, Any]) -> dict[str, Any]:
     kwargs = message.get("kwargs", message)
     role = _LC_ROLES.get(kwargs.get("type") or kwargs.get("role"), kwargs.get("role") or kwargs.get("type") or "")
     content = kwargs.get("content", "")
-    out: dict[str, Any] = {"role": role, "content": content if isinstance(content, str) else json.dumps(content)}
+    out: dict[str, Any] = {  # mutable-ok: the framework message is built for JSON serialization
+        "role": role,
+        "content": content if isinstance(content, str) else json.dumps(content),
+    }
     if kwargs.get("tool_calls"):
-        out["tool_calls"] = [{"name": t.get("name"), "args": t.get("args")} for t in kwargs["tool_calls"]]
+        out["tool_calls"] = tuple(
+            {"name": t.get("name"), "args": t.get("args")}  # mutable-ok: JSON tool calls need object payloads
+            for t in kwargs["tool_calls"]
+        )
     if role == "tool" and kwargs.get("name"):
         out["name"] = kwargs["name"]
     return out

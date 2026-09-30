@@ -86,5 +86,7 @@ class TraceStorage:
         await self._native.insert_rows(table, INSERT_ROWS.validate_python(rows))
 
     async def query(self, sql: str, parameters: Mapping[str, object] | None = None) -> list[dict[str, JsonValue]]:
-        result: Final = await self._native.query(sql, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({})))
+        result: Final = await self._native.query(
+            sql, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
+        )
         return QueryResponse.model_validate_json(result).data

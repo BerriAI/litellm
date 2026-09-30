@@ -50,7 +50,7 @@ class Tenant:
     def stamp(self, row: SpanRow) -> SpanRow:
         row["TeamId"] = self.team_id
         row["ApiKeyHash"] = self.api_key_hash
-        row["ResourceAttributes"] = {
+        row["ResourceAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict
             **row["ResourceAttributes"],
             "litellm.team_id": self.team_id,
             "litellm.api_key_hash": self.api_key_hash,
