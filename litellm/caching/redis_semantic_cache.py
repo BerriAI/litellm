@@ -297,16 +297,7 @@ class RedisSemanticCache(BaseCache):
                 cls._collect_responses_input_text(content, prompt_parts)
                 return
 
-            for text_key in ("text", "output", "input_text", "output_text"):
-                text_value = value.get(text_key)
-                if isinstance(text_value, (list, tuple)):
-                    cls._collect_responses_input_text(text_value, prompt_parts)
-                    return
-                if isinstance(text_value, str):
-                    stripped_text = text_value.strip()
-                    if stripped_text:
-                        prompt_parts.append(stripped_text)
-                        return
+            cls._collect_responses_text_fields(value, prompt_parts)
             return
 
         content = getattr(value, "content", None)
@@ -321,6 +312,17 @@ class RedisSemanticCache(BaseCache):
                 if stripped_text:
                     prompt_parts.append(stripped_text)
                     return
+
+    @classmethod
+    def _collect_responses_text_fields(cls, value: dict, prompt_parts: list[str]) -> None:
+        for text_key in ("text", "output", "input_text", "output_text"):
+            text_value = value.get(text_key)
+            if isinstance(text_value, (list, tuple)):
+                cls._collect_responses_input_text(text_value, prompt_parts)
+                return
+            if isinstance(text_value, str) and (stripped_text := text_value.strip()):
+                prompt_parts.append(stripped_text)
+                return
 
     @staticmethod
     def _function_call_as_prompt(value: object) -> object:
