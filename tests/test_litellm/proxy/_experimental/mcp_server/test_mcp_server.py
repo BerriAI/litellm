@@ -10267,6 +10267,7 @@ class TestOboPreflightScopedToAllowedServers:
                 "x-litellm-api-key": key.api_key,
                 "authorization": self.SUBJECT_HEADERS["Authorization"],
             },
+            connected_as=requested.alias,
         )
 
 
