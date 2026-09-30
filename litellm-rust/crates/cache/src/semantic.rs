@@ -199,10 +199,13 @@ fn collect_input_text(value: &Value, parts: &mut Vec<String>) {
                 return;
             }
             for key in ["text", "output", "input_text", "output_text"] {
-                if let Some(Value::String(text)) = map.get(key)
-                    && push_trimmed(text, parts)
-                {
-                    return;
+                match map.get(key) {
+                    Some(nested @ Value::Array(_)) => {
+                        collect_input_text(nested, parts);
+                        return;
+                    }
+                    Some(Value::String(text)) if push_trimmed(text, parts) => return,
+                    _ => {}
                 }
             }
         }

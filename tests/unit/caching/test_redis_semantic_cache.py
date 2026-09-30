@@ -614,6 +614,27 @@ def test_redis_semantic_cache_prompt_extraction_keeps_responses_function_calls()
     assert prompt == 'update the config\n{"name":"write_file","arguments":"{\\"path\\":\\"a.yaml\\"}"}\nok'
 
 
+def test_redis_semantic_cache_prompt_extraction_keeps_structured_function_call_outputs():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    def prompt_for(output_text: str) -> str | None:
+        return RedisSemanticCache._get_prompt_from_kwargs(
+            input=[
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "write hello"}]},
+                {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": '{"path":"a.txt"}'},
+                {
+                    "type": "function_call_output",
+                    "call_id": "c1",
+                    "output": [{"type": "input_text", "text": output_text}],
+                },
+            ]
+        )
+
+    expected_call = '{"name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}"}'
+    assert prompt_for("wrote 5 bytes") == f"write hello\n{expected_call}\nwrote 5 bytes"
+    assert prompt_for("wrote 5 bytes") != prompt_for("PermissionError")
+
+
 def test_redis_semantic_cache_prompt_extraction_handles_model_objects():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 

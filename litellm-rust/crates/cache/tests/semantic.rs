@@ -240,6 +240,14 @@ fn prompt_from_messages_reads_messages_only(
     ])),
     Some("update the config\n{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.yaml\\\"}\"}\nok"),
 )]
+#[case::responses_structured_function_call_output(
+    None,
+    Some(json!([
+        {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "denied"}]},
+    ])),
+    Some("{\"name\":\"write_file\",\"arguments\":\"{}\"}\ndenied"),
+)]
 fn prompt_from_context_matches_python(
     #[case] messages: Option<Value>,
     #[case] input: Option<Value>,
