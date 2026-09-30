@@ -528,6 +528,8 @@ def test_langfuse_trace_and_session_prefer_caller_metadata_over_w3c_headers(
     upstream_targets: Final[list[str]] = []  # mutable-ok: records which upstream endpoint each call hit
 
     def upstream(request: Request) -> Reply:
+        if not request.body:
+            return Reply(status=404)
         assert request.headers["authorization"] == f"Bearer {provider_secret}"
         upstream_targets.append(request.target)
         if request.target == "/v1/responses":
@@ -571,6 +573,8 @@ def test_missing_session_id_reject_accepts_caller_metadata_and_baggage_fallback(
     upstream_targets: Final[list[str]] = []  # mutable-ok: records which upstream endpoint each call hit
 
     def upstream(request: Request) -> Reply:
+        if not request.body:
+            return Reply(status=404)
         assert request.headers["authorization"] == f"Bearer {provider_secret}"
         upstream_targets.append(request.target)
         if request.target == "/v1/responses":
@@ -650,6 +654,8 @@ def test_missing_session_id_generate_derives_session_from_caller_trace(
     upstream_targets: Final[list[str]] = []  # mutable-ok: records which upstream endpoint each call hit
 
     def upstream(request: Request) -> Reply:
+        if not request.body:
+            return Reply(status=404)
         assert request.headers["authorization"] == f"Bearer {provider_secret}"
         upstream_targets.append(request.target)
         if request.target == "/v1/responses":
