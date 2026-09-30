@@ -100,6 +100,15 @@ class _EvaluateResponse(TypedDict, total=False):
     correlationId: ReadOnly[str]
 
 
+class _AdmissionMetadata(TypedDict):
+    user_api_key_metadata: ReadOnly[dict | None]
+    user_api_key_team_metadata: ReadOnly[dict | None]
+
+
+class _AdmissionProbe(TypedDict):
+    metadata: ReadOnly[_AdmissionMetadata]
+
+
 class _ToolReference(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -447,10 +456,8 @@ class Agent365Guardrail(CustomGuardrail):
         if not (self.default_on and server.keeps_caller_authorization):
             return None
         if user_api_key_auth is not None:
-            probe: Final[
-                dict[str, Mapping[str, object]]
-            ] = {  # mutable-ok: should_run_guardrail takes a mutable data dict  # pyright: ignore[reportUnknownVariableType]  # UserAPIKeyAuth metadata dicts are untyped
-                "metadata": {  # mutable-ok: should_run_guardrail takes a mutable data dict
+            probe: Final[_AdmissionProbe] = {
+                "metadata": {
                     "user_api_key_metadata": user_api_key_auth.metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a raw dict
                     "user_api_key_team_metadata": user_api_key_auth.team_metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.team_metadata is a raw dict
                 }
@@ -477,12 +484,12 @@ class Agent365Guardrail(CustomGuardrail):
     async def preflight_caller_sign_in(
         self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None", subject_token: str
     ) -> CallerSignInPreflight:
-        """The connect-time check the preemptive gate runs: a bearer Entra rejects gets the sign-in
-        challenge here, where ``WWW-Authenticate`` still reaches the client, instead of surfacing as a
-        JSON-RPC error on every tools/call. ``subject_token=None`` stays the challenge gate's job."""
+        """The connect-time check the preemptive gate runs: a bearer Entra rejects, or one it could never
+        accept, gets the sign-in challenge here, where ``WWW-Authenticate`` still reaches the client, instead of
+        surfacing as a JSON-RPC error on every tools/call. ``subject_token=None`` stays the challenge gate's job."""
         assertion: Final = entra_assertion(subject_token)
         if assertion is None:
-            return SignedIn()
+            return Rejected(detail="the caller's bearer is not an Entra token; sign in with Entra and retry")
         try:
             exchange_result: Final = await self._exchange_caller_assertion(assertion)
         except (httpx.HTTPError, LitellmTimeout, TimeoutError) as exc:

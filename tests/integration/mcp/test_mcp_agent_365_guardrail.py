@@ -136,13 +136,17 @@ def test_a_missing_or_malformed_caller_bearer_blocks_on_every_entry_point_whatev
         assert f"{rig.alias}-add" in rig.caller().list_tools().tools, "the catalog needs only the virtual key"
         for entry in ENTRY_POINTS:
             missing: Final = rig.caller(entry).call(f"{rig.alias}-add", {"entry": entry}, server_id=rig.server_id)
-            assert missing.error is not None and REJECTED in missing.raw, f"{entry} without a bearer: {missing.raw}"
             malformed: Final = rig.caller(entry, "not-a-jws").call(
                 f"{rig.alias}-add", {"entry": entry}, server_id=rig.server_id
             )
-            assert malformed.error is not None and REJECTED in malformed.raw, f"{entry} opaque bearer: {malformed.raw}"
+            for label, outcome in (("without a bearer", missing), ("opaque bearer", malformed)):
+                assert outcome.error is not None, f"{entry} {label}: {outcome.raw}"
+                if entry == "server_mcp":
+                    assert outcome.status == 401, f"{entry} {label} skips the connect sign-in challenge: {outcome.raw}"
+                else:
+                    assert REJECTED in outcome.raw, f"{entry} {label}: {outcome.raw}"
         assert rig.upstream_tool_names() == ()
-        expected: Final = 2 * len(ENTRY_POINTS)
+        expected: Final = 2 * (len(ENTRY_POINTS) - 1)
         assert rig.guardrail_statuses("call_mcp_tool", expected) == ["guardrail_intervened"] * expected
 
 

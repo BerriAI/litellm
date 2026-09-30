@@ -39,6 +39,7 @@ def test_convert_mcp_to_llm_format_returns_synthetic_data(proxy_logging, make_mc
             "user_api_key_hash": "hash",
             "user_api_key_request_route": "/mcp",
             "incoming_bearer_token": "tok",
+            "incoming_subject_token": "a.b.c",
         },
     )
     snapshot = {
@@ -47,6 +48,7 @@ def test_convert_mcp_to_llm_format_returns_synthetic_data(proxy_logging, make_mc
         "mcp_tool_name": out["mcp_tool_name"],
         "mcp_arguments": out["mcp_arguments"],
         "incoming_bearer_token": out["incoming_bearer_token"],
+        "incoming_subject_token": out["incoming_subject_token"],
         "message_role": out["messages"][0]["role"],
     }
     assert snapshot == {
@@ -55,6 +57,7 @@ def test_convert_mcp_to_llm_format_returns_synthetic_data(proxy_logging, make_mc
         "mcp_tool_name": "search",
         "mcp_arguments": {"q": "hello"},
         "incoming_bearer_token": "tok",
+        "incoming_subject_token": "a.b.c",
         "message_role": "user",
     }
 
@@ -66,12 +69,14 @@ def test_convert_mcp_to_llm_format_defaults_model(proxy_logging, make_mcp_reques
         "model": out["model"],
         "mcp_tool_name": out["mcp_tool_name"],
         "incoming_bearer_token": out["incoming_bearer_token"],
+        "incoming_subject_token": out["incoming_subject_token"],
         "user_id": out["user_api_key_user_id"],
     }
     assert snapshot == {
         "model": "mcp-tool-call",
         "mcp_tool_name": "calculator",
         "incoming_bearer_token": None,
+        "incoming_subject_token": None,
         "user_id": None,
     }
 

@@ -3787,9 +3787,9 @@ async def test_protected_resource_metadata_resolves_the_connected_case_variant()
             use_standard_pattern=True,
         )
 
-    assert result["authorization_servers"] == [
-        "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
-    ]
+    assert result["authorization_servers"] == (
+        "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",
+    )
     assert result["resource"] == "https://llm.example.com/mcp/CATALOG"
 
 
@@ -7367,21 +7367,21 @@ def test_caller_sign_in_protected_resource_response_names_jwt_issuers():
     with patch(_PATCH_ISSUERS, return_value=["https://idp.example.com"]):
         response = _caller_sign_in_protected_resource_response(_obo_server(scopes=["read"]), _OBO_RESOURCE)
     assert response == {
-        "authorization_servers": ["https://idp.example.com"],
+        "authorization_servers": ("https://idp.example.com",),
         "resource": _OBO_RESOURCE,
-        "scopes_supported": ["read"],
+        "scopes_supported": ("read",),
     }
 
 
 def test_caller_sign_in_protected_resource_response_scopes_default_empty():
-    """A scopeless OBO server reports scopes_supported as [] rather than None."""
+    """A scopeless OBO server reports scopes_supported as an empty array rather than None."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _caller_sign_in_protected_resource_response,
     )
 
     with patch(_PATCH_ISSUERS, return_value=["https://idp.example.com"]):
         response = _caller_sign_in_protected_resource_response(_obo_server(scopes=None), _OBO_RESOURCE)
-    assert response["scopes_supported"] == []
+    assert response["scopes_supported"] == ()
 
 
 def test_caller_sign_in_protected_resource_response_falls_back_when_no_issuer():
@@ -7440,7 +7440,7 @@ async def test_build_oauth_protected_resource_response_obo_end_to_end():
                 mcp_server_name="obo_mcp",
                 use_standard_pattern=True,
             )
-        assert response["authorization_servers"] == ["https://idp.example.com"]
+        assert response["authorization_servers"] == ("https://idp.example.com",)
         assert response["resource"] == "https://litellm.example.com/mcp/obo_mcp"
     finally:
         global_mcp_server_manager.registry.clear()

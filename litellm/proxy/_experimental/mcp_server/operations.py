@@ -1766,13 +1766,11 @@ def _challenge_missing_token_exchange_subject(
     The listing that fills a cold catalog absorbs the upstream 401 by design, so without this
     check a missing subject surfaces as an unknown-tool error instead of the challenge the
     warm path already raises. Gated to servers the key may reach so an unauthorized caller
-    learns nothing about the catalog.
+    learns nothing about the catalog. Guardrail-only sign-in is challenged at connect instead: a
+    tool call's JSON-RPC error drops ``WWW-Authenticate``, so the guardrail's own rejection is
+    the more useful answer there.
     """
-    from litellm.proxy._experimental.mcp_server.caller_sign_in import (
-        caller_sign_in_for,  # noqa: PLC0415  # lazy: caller_sign_in pulls the proxy graph
-    )
-
-    if server is None or caller_sign_in_for(server, user_api_key_auth) is None:
+    if server is None or server.auth_type != MCPAuth.oauth2_token_exchange:
         return
     if requested_server is not None and requested_server.server_id != server.server_id:
         return

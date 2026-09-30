@@ -5971,10 +5971,7 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
-        inbound_authorization: Final = next(
-            (v for k, v in (raw_headers or {}).items() if isinstance(k, str) and k.lower() == "authorization"),
-            "",
-        )
+        inbound_authorization: Final = _raw_header_value(raw_headers, "authorization") or ""
         incoming_bearer_token: Final = (
             inbound_authorization[len("bearer ") :] if inbound_authorization.lower().startswith("bearer ") else None
         )

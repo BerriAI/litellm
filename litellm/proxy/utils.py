@@ -1519,6 +1519,7 @@ class ProxyLogging:
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
+            "incoming_subject_token": kwargs.get("incoming_subject_token"),
             "metadata": synthetic_metadata,
         }
         user_api_key_auth: Final = kwargs.get("user_api_key_auth")

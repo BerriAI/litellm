@@ -1135,6 +1135,34 @@ class _ArgumentMasker(CustomGuardrail):
         return data
 
 
+class TestMcpBridgeHandsOverTheSubjectToken:
+    """The MCP manager separates the raw ``Authorization`` bearer from the caller's subject token (the
+    bearer minus LiteLLM's own admission credentials). The bridge that turns the manager's kwargs into
+    the guardrail's data dict has to carry the subject token, or every tool call looks anonymous."""
+
+    @pytest.mark.asyncio
+    async def test_manager_kwargs_reach_the_obo_exchange(self):
+        exchanger: Final = StubTokenExchanger([_ok_exchange()])
+        handler: Final = FakeHandler([_allow_response()])
+        guardrail: Final = _make_guardrail(handler, exchanger=exchanger)
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        manager_kwargs: Final = {
+            "name": "send_email",
+            "arguments": {"to": "user@example.com"},
+            "server_name": "outlook_mcp",
+            "user_api_key_auth": _user(),
+            "incoming_bearer_token": "sk-1234",
+            "incoming_subject_token": FAKE_ASSERTION,
+            "headers": {"mcp-session-id": "sess-123"},
+        }
+        data: Final = proxy_logging._convert_mcp_to_llm_format(
+            proxy_logging._create_mcp_request_object_from_kwargs(manager_kwargs), manager_kwargs
+        )
+        await _run(guardrail, data)
+        assert [call[0] for call in exchanger.calls] == [FAKE_ASSERTION]
+        assert handler.calls[0].json["tool"]["name"] == "send_email"
+
+
 class TestFinalArgumentsEvaluated:
     """Agent 365 must judge the arguments that reach the upstream tool. A sibling guardrail that rewrites
     them must not be able to slip a different argument state past the verdict, whichever way the two
@@ -1185,20 +1213,17 @@ class TestCallerSignIn:
         assert guardrail.caller_sign_in(_server(auth_type=MCPAuth.oauth2), None) is None
         assert guardrail.caller_sign_in(_server(extra_headers=["authorization"]), None) is None
 
-    def test_opted_out_key_does_not_gate(self):
-        class _OptedOut(Agent365Guardrail):
-            def should_run_guardrail(self, data, event_type) -> bool:
-                return False
-
-        guardrail: Final = _OptedOut(
-            guardrail_name="a365-off",
-            tenant_id="tenant-abc",
-            client_id="client-xyz",
-            client_secret="secret-123",
-            token_exchanger=StubTokenExchanger(),
-            default_on=True,
+    def test_opted_out_key_or_team_does_not_gate(self):
+        guardrail: Final = _make_guardrail(FakeHandler([]))
+        opted_out_key: Final = UserAPIKeyAuth(
+            api_key="k", user_id="u-1", metadata={"opted_out_global_guardrails": [guardrail.guardrail_name]}
         )
-        assert guardrail.caller_sign_in(_server(), UserAPIKeyAuth(api_key="k", user_id="u-1")) is None
+        opted_out_team: Final = UserAPIKeyAuth(
+            api_key="k", user_id="u-1", team_metadata={"opted_out_global_guardrails": [guardrail.guardrail_name]}
+        )
+        assert guardrail.caller_sign_in(_server(), opted_out_key) is None
+        assert guardrail.caller_sign_in(_server(), opted_out_team) is None
+        assert guardrail.caller_sign_in(_server(), UserAPIKeyAuth(api_key="k", user_id="u-1")) is not None
         assert guardrail.caller_sign_in(_server(), None) is not None
 
     def test_obo_server_with_provider_advertises_both_issuers_and_scopes(self, monkeypatch):
@@ -1269,11 +1294,12 @@ class TestPreflightCallerSignIn:
         assert verdict.fail_open is True
 
     @pytest.mark.asyncio
-    async def test_non_assertion_subject_signs_in_without_exchanging(self):
+    async def test_non_assertion_subject_is_rejected_without_exchanging(self):
         exchanger: Final = StubTokenExchanger()
         guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger)
 
         verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), "opaque-bearer")
 
-        assert verdict == SignedIn()
+        assert isinstance(verdict, Rejected)
+        assert verdict.claims is None
         assert exchanger.calls == []
