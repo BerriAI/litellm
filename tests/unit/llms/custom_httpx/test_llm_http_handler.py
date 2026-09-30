@@ -40,6 +40,8 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
+from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
+from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
@@ -4302,3 +4304,41 @@ async def test_async_text_to_speech_handler_records_upstream_response_headers():
 
     assert response.content == b"audio-bytes"
     _assert_upstream_headers_recorded(response)
+
+
+
+async def _get_by_id_with_upstream(handler_name: str, upstream_response: httpx.Response) -> object:
+    async_client: Final = AsyncHTTPHandler()
+    await async_client.close()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: upstream_response))
+    handler: Final = BaseLLMHTTPHandler()
+    if handler_name == "get_eval":
+        return await handler.async_get_eval_handler(
+            url="https://api.example.test/v1/evals/eval_missing",
+            evals_api_provider_config=OpenAIEvalsConfig(),
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=Mock(),
+            client=async_client,
+        )
+    return await handler.async_get_skill_handler(
+        url="https://api.example.test/v1/skills/skill_missing",
+        skills_api_provider_config=AnthropicSkillsConfig(),
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=async_client,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handler_name", ("get_eval", "get_skill"))
+@pytest.mark.parametrize("status_code", (400, 401, 404, 429, 503))
+async def test_get_by_id_handlers_raise_the_provider_error_status(handler_name: str, status_code: int) -> None:
+    upstream_response: Final = httpx.Response(status_code, json={"error": {"message": "No such object"}})
+
+    with pytest.raises(BaseLLMException) as error:
+        await _get_by_id_with_upstream(handler_name, upstream_response)
+
+    assert error.value.status_code == status_code
+    assert "No such object" in error.value.message

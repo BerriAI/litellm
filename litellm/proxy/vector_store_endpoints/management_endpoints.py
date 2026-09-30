@@ -369,6 +369,11 @@ async def list_vector_stores(
     - page: int - Page number for pagination (default: 1)
     - page_size: int - Number of items per page (default: 100)
     """
+    if page < 1 or page_size < 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"page and page_size must be >= 1, got page={page}, page_size={page_size}",
+        )
     await check_feature_access_for_user(user_api_key_dict, "vector_stores")
 
     from litellm.proxy.proxy_server import prisma_client

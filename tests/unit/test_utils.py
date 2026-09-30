@@ -6437,6 +6437,11 @@ def test_function_setup_logs_the_search_query_edit_prompt_and_ocr_document_summa
     assert _logged_request_messages(original_function, *args, **kwargs) == [{"role": "user", "content": expected}]
 
 
+@pytest.mark.parametrize("original_function", ("atext_completion", "text_completion"))
+def test_function_setup_without_a_prompt_leaves_the_missing_prompt_to_request_validation(original_function: str) -> None:
+    assert _logged_request_messages(original_function, model="gpt-4o") is None
+
+
 def test_search_with_a_mixed_type_query_list_still_reaches_its_own_validation_error() -> None:
     mixed_query: Final = cast(list[str], ["Eiffel Tower", 7])  # cast-ok: the invalid list is the point of the test
 

@@ -135,3 +135,17 @@ async def test_list_vector_stores_admin_not_blocked():
                 ):
                     # Must not raise any HTTPException — admin is always allowed.
                     await list_vector_stores(user_api_key_dict=admin)
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page, page_size", [(0, 10), (-1, 10), (1, 0), (1, -5)])
+async def test_list_vector_stores_rejects_non_positive_pagination_with_400(page, page_size):
+    from litellm.proxy.vector_store_endpoints.management_endpoints import (
+        list_vector_stores,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await list_vector_stores(user_api_key_dict=_make_internal_user(), page=page, page_size=page_size)
+
+    assert exc_info.value.status_code == 400, exc_info.value.detail

@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
@@ -165,7 +166,34 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "amoderation": ("input",),
     "aimage_generation": ("prompt",),
     "asearch": ("query",),
+    "atext_completion": ("prompt",),
+    "atranscription": ("file",),
+    "arerank": ("query", "documents"),
+    "acompact_responses": ("input",),
+    "aimage_edit": ("image", "prompt"),
+    "anthropic_messages": ("messages", "max_tokens"),
+    "agenerate_content": ("contents",),
+    "aocr": ("document",),
+    "acreate_fine_tuning_job": ("training_file",),
+    "avector_store_search": ("query",),
+    "avector_store_file_create": ("file_id",),
+    "avector_store_file_update": ("attributes",),
+    "avideo_generation": ("prompt",),
+    "avideo_remix": ("prompt",),
+    "avideo_edit": ("prompt",),
+    "avideo_extension": ("prompt", "seconds"),
+    "avideo_create_character": ("name", "video"),
+    "acreate_container": ("name",),
+    "aupload_container_file": ("file",),
+    "acreate_agent": ("name",),
+    "acreate_interaction": ("input",),
+    "acreate_eval": ("data_source_config", "testing_criteria"),
+    "acreate_run": ("data_source",),
 }
+
+REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
+    {"acreate_interaction": ("model", "agent")}
+)
 
 
 class ProxyMissingRequiredParamError(ProxyException):
@@ -178,11 +206,18 @@ class ProxyMissingRequiredParamError(ProxyException):
         )
 
 
-def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
-    missing_param: Final = next(
+def _find_missing_required_body_param(route_type: str, data: Mapping[str, object]) -> str | None:
+    one_of_params: Final = REQUIRED_ONE_OF_BODY_PARAMS_BY_ROUTE.get(route_type)
+    if one_of_params is not None and all(data.get(param) is None for param in one_of_params):
+        return one_of_params[0]
+    return next(
         (param for param in REQUIRED_BODY_PARAMS_BY_ROUTE.get(route_type, ()) if data.get(param) is None),
         None,
     )
+
+
+def raise_if_required_body_param_missing(route_type: str, data: Mapping[str, object]) -> None:
+    missing_param: Final = _find_missing_required_body_param(route_type, data)
     if missing_param is None:
         return
     raise ProxyMissingRequiredParamError(
@@ -634,6 +669,11 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             # These endpoints don't need a model, use custom_llm_provider directly
             return getattr(litellm, f"{route_type}")(**data)
 
+        if "model" not in data:
+            raise ProxyMissingRequiredParamError(
+                route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
+                param="model",
+            )
         team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
         if team_model_name is not None:
             data["model"] = team_model_name

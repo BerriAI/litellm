@@ -12,14 +12,14 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_reque
 @pytest.mark.parametrize(
     "route_type, required_body_params",
     [
-        ("atext_completion", {}),
+        ("atext_completion", {"prompt": "Hello"}),
         ("acompletion", {"messages": [{"role": "user", "content": "Hello"}]}),
         ("aembedding", {"input": "Hello"}),
         ("aimage_generation", {"prompt": "a cat"}),
         ("aspeech", {"input": "Hello"}),
-        ("atranscription", {}),
+        ("atranscription", {"file": b"audio"}),
         ("amoderation", {"input": "Hello"}),
-        ("arerank", {}),
+        ("arerank", {"query": "Hello", "documents": ["hi"]}),
     ],
 )
 @pytest.mark.asyncio
@@ -251,7 +251,7 @@ async def test_route_request_no_model_required():
 
     for route_type in test_cases:
         # Test data without model parameter
-        data = {"input": "test input", "api_key": "test-key"}
+        data = {"input": "test input", "query": "test query", "api_key": "test-key"}
 
         llm_router = MagicMock()
         getattr(llm_router, route_type).return_value = "fake_response"
@@ -282,6 +282,7 @@ async def test_route_request_no_model_required_with_router_settings():
         # Test data with model parameter (it will be ignored for these route types)
         data = {
             "input": "test input",
+            "query": "test query",
             "model": "test-model",  # Include dummy model to avoid KeyError
         }
 
@@ -1047,10 +1048,47 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
         ("amoderation", "input", "/moderations"),
         ("aimage_generation", "prompt", "/image/generations"),
         ("asearch", "query", "/search"),
+        ("atext_completion", "prompt", "/completions"),
+        ("atranscription", "file", "/audio/transcriptions"),
+        ("arerank", "query", "/rerank"),
+        ("acompact_responses", "input", "/responses/compact"),
+        ("aimage_edit", "image", "/images/edits"),
+        ("anthropic_messages", "messages", "anthropic_messages"),
+        ("agenerate_content", "contents", "agenerate_content"),
+        ("aocr", "document", "/ocr"),
+        ("acreate_fine_tuning_job", "training_file", "acreate_fine_tuning_job"),
+        ("avector_store_search", "query", "avector_store_search"),
+        ("avector_store_file_create", "file_id", "avector_store_file_create"),
+        ("avector_store_file_update", "attributes", "avector_store_file_update"),
+        ("avideo_generation", "prompt", "/videos"),
+        ("avideo_remix", "prompt", "/videos/{video_id}/remix"),
+        ("avideo_edit", "prompt", "/videos/edits"),
+        ("avideo_extension", "prompt", "/videos/extensions"),
+        ("avideo_create_character", "name", "/videos/characters"),
+        ("acreate_container", "name", "/containers"),
+        ("aupload_container_file", "file", "/containers/{container_id}/files"),
+        ("acreate_agent", "name", "/v1beta/agents"),
+        ("acreate_eval", "data_source_config", "/evals"),
+        ("acreate_run", "data_source", "/evals/{eval_id}/runs"),
     ],
 )
 @pytest.mark.parametrize(
-    "data_extra", [{}, {"messages": None, "input": None, "input_file_id": None, "prompt": None, "query": None}]
+    "data_extra",
+    [
+        {},
+        {
+            "messages": None,
+            "input": None,
+            "input_file_id": None,
+            "prompt": None,
+            "query": None,
+            "file": None,
+            "image": None,
+            "contents": None,
+            "document": None,
+            "name": None,
+        },
+    ],
 )
 def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, param, route, data_extra):
     from litellm.proxy.route_llm_request import (
@@ -1089,15 +1127,48 @@ def test_raise_if_required_body_param_missing_names_first_missing_batch_param(da
 
 
 @pytest.mark.parametrize(
+    "route_type, data, param",
+    [
+        ("arerank", {"model": "rerank-model", "query": "hi"}, "documents"),
+        ("aimage_edit", {"model": "gpt-image-1", "image": b"png"}, "prompt"),
+        ("anthropic_messages", {"model": "claude", "messages": []}, "max_tokens"),
+        ("avideo_extension", {"model": "sora-2", "prompt": "longer"}, "seconds"),
+        ("avideo_create_character", {"name": "hero"}, "video"),
+        ("acreate_eval", {"data_source_config": {"type": "custom"}}, "testing_criteria"),
+        ("acreate_interaction", {"input": "hi"}, "model"),
+        ("acreate_interaction", {"model": None, "agent": None, "input": "hi"}, "model"),
+        ("acreate_interaction", {"model": "gemini-3-pro-preview"}, "input"),
+    ],
+)
+def test_raise_if_required_body_param_missing_names_each_missing_param(route_type, data, param):
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data=data)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == param
+
+
+@pytest.mark.parametrize(
     "route_type, data",
     [
         ("acompletion", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}),
         ("acompletion", {"model": "gpt-4o", "messages": []}),
-        ("atext_completion", {"model": "gpt-4o"}),
+        ("atext_completion", {"model": "gpt-4o", "prompt": "hi"}),
         ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
         ("aresponses", {"model": "gpt-4o", "input": "hi"}),
         ("aresponses", {"model": "gpt-4o", "input": []}),
-        ("arerank", {"model": "rerank-model"}),
+        ("arerank", {"model": "rerank-model", "query": "hi", "documents": ["hello"]}),
+        ("aimage_edit", {"model": "gpt-image-1", "image": b"png", "prompt": "a hat"}),
+        ("anthropic_messages", {"model": "claude", "messages": [], "max_tokens": 16}),
+        ("avideo_extension", {"model": "sora-2", "prompt": "longer", "seconds": "4"}),
+        ("acreate_eval", {"data_source_config": {"type": "custom"}, "testing_criteria": []}),
+        ("acreate_interaction", {"model": "gemini-3-pro-preview", "input": "hi"}),
+        ("acreate_interaction", {"agent": "deep-research", "input": "hi"}),
         ("aimage_generation", {"model": "gpt-image-1", "prompt": "a cat"}),
         ("aspeech", {"model": "gpt-4o-mini-tts", "input": "hi", "voice": "alloy"}),
         ("amoderation", {"model": "omni-moderation-latest", "input": ""}),
@@ -1333,3 +1404,23 @@ def test_proxy_model_not_found_error_keeps_the_raw_model_only_in_the_client_resp
     assert raw_model in error.detail["error"]
     assert raw_model not in error.spend_log_error_message
     assert error.spend_log_error_message.startswith("/chat/completions: Invalid model name passed in")
+
+
+@pytest.mark.asyncio
+async def test_route_request_without_model_on_model_routed_endpoint_is_a_400():
+    import litellm
+    from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "rerank-model", "litellm_params": {"model": "cohere/rerank-v3.5", "api_key": "fake"}}
+        ]
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        await route_request(
+            data={"query": "hi", "documents": ["hello"]}, llm_router=router, user_model=None, route_type="arerank"
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "model"

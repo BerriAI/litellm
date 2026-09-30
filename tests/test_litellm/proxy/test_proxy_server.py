@@ -601,6 +601,13 @@ def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     assert "<form" in html
 
 
+def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_auth):
+    response = client_no_auth.post("/v1/completions", json={"model": "vllm_embed_model"})
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["param"] == "prompt", response.text
+
+
 @pytest.mark.parametrize(
     "ui_logo_path",
     [
