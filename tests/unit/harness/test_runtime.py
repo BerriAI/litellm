@@ -102,7 +102,7 @@ async def test_skills_capability_error_before_start(monkeypatch, sandbox, tmp_pa
 
 async def test_skill_folder_without_skill_md_rejected(monkeypatch, sandbox, tmp_path):
     install_adapter(monkeypatch)
-    with pytest.raises(ValueError, match="SKILL.md"):
+    with pytest.raises(ValueError, match=r"SKILL\.md"):
         await runtime.aagent(
             Harness.CLAUDE_CODE, "hi", sandbox=sandbox, skills=[tmp_path]
         )
@@ -137,14 +137,20 @@ def test_litellm_proxy_prefix_routes_through_gateway_env(monkeypatch):
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
     model, gateway = runtime.resolve_model_route("litellm_proxy/coder", None, None)
     assert model == "coder"
-    assert gateway == runtime.GatewayTarget(api_base="https://gw.example.com", api_key="sk-test")
+    assert gateway == runtime.GatewayTarget(
+        api_base="https://gw.example.com", api_key="sk-test"
+    )
 
 
 def test_litellm_proxy_call_args_win_over_env(monkeypatch):
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://env.example.com")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-env")
-    _, gateway = runtime.resolve_model_route("litellm_proxy/coder", "sk-arg", "https://arg.example.com")
-    assert gateway == runtime.GatewayTarget(api_base="https://arg.example.com", api_key="sk-arg")
+    _, gateway = runtime.resolve_model_route(
+        "litellm_proxy/coder", "sk-arg", "https://arg.example.com"
+    )
+    assert gateway == runtime.GatewayTarget(
+        api_base="https://arg.example.com", api_key="sk-arg"
+    )
 
 
 def test_litellm_proxy_without_base_raises(monkeypatch):
@@ -164,7 +170,10 @@ def test_litellm_proxy_without_key_raises(monkeypatch):
 def test_plain_model_is_sdk_mode_even_with_gateway_env(monkeypatch):
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://gw.example.com")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
-    assert runtime.resolve_model_route("anthropic/claude-sonnet-4-5", None, None) == ("anthropic/claude-sonnet-4-5", None)
+    assert runtime.resolve_model_route("anthropic/claude-sonnet-4-5", None, None) == (
+        "anthropic/claude-sonnet-4-5",
+        None,
+    )
 
 
 def test_use_litellm_proxy_flag_routes_unprefixed_model(monkeypatch):
@@ -179,7 +188,9 @@ async def test_gateway_passed_to_endpoint(monkeypatch, sandbox):
     install_adapter(monkeypatch)
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://gw.example.com")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
-    await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, model="litellm_proxy/m")
+    await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, model="litellm_proxy/m"
+    )
     endpoint = FakeEndpoint.instances[0]
     assert endpoint.gateway.api_key == "sk-test"
     assert endpoint.model == "m"
@@ -191,7 +202,9 @@ async def test_gateway_passed_to_endpoint(monkeypatch, sandbox):
 
 async def test_text_and_tool_events_flow_and_done_last(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch)
-    events = await _collect(runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True))
+    events = await _collect(
+        runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True)
+    )
     kinds = [type(e).__name__ for e in events]
     assert kinds == ["Text", "ToolCall", "ToolResult", "Text", "Done"]
     assert sum(isinstance(e, Done) for e in events) == 1
@@ -246,7 +259,9 @@ async def _tool_loop(adapter, ctx, prompt) -> AsyncIterator[Event]:
 
 async def test_max_turns_stop(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch, script=_tool_loop)
-    result = await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, max_turns=3)
+    result = await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, max_turns=3
+    )
     assert result.stop_reason == "max_turns"
     assert sum(isinstance(e, ToolCall) for e in result.events) == 3
     assert "stop" in adapter_cls.instances[0].calls
@@ -260,7 +275,9 @@ async def _slow(adapter, ctx, prompt) -> AsyncIterator[Event]:
 
 async def test_timeout_stop(monkeypatch, sandbox):
     install_adapter(monkeypatch, script=_slow)
-    result = await runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, timeout=0.2)
+    result = await runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, timeout=0.2
+    )
     assert result.stop_reason == "timeout"
     assert result.text == "thinking"
 
@@ -365,7 +382,9 @@ async def test_stream_consumer_answers_approval(monkeypatch, sandbox):
 async def test_unanswered_approval_denied(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch, script=script_approval)
     events = await _collect(
-        runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True)
+        runtime.aagent(
+            Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True
+        )
     )
     allowed, reason = adapter_cls.instances[0].approvals[0]
     assert allowed is False and "not answered" in reason
@@ -424,12 +443,18 @@ async def test_structured_output_missing_json(monkeypatch, sandbox):
 
 async def test_stream_yields_done_before_output_invalid(monkeypatch, sandbox):
     install_adapter(monkeypatch, script=_answer_script("nothing"))
-    stream = runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer, stream=True)
-    seen = []
+    stream = runtime.aagent(
+        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, output=Answer, stream=True
+    )
+    seen: list[object] = []
     with pytest.raises(OutputInvalid):
-        async for event in stream:
-            seen.append(event)
+        await _drain_into(stream, seen)
     assert isinstance(seen[-1], Done)
+
+
+async def _drain_into(stream, seen: list[object]) -> None:
+    async for event in stream:
+        seen.append(event)
 
 
 def test_last_json_object():
@@ -455,7 +480,9 @@ async def test_file_changes_emitted_once(monkeypatch, sandbox, tmp_path):
     (tmp_path / "keep.txt").write_text("original\n")
     (tmp_path / "gone.txt").write_text("bye\n")
     install_adapter(monkeypatch, script=_edit_files)
-    events = await _collect(runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True))
+    events = await _collect(
+        runtime.aagent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, stream=True)
+    )
     file_events = [e for e in events if isinstance(e, FileChange)]
     assert sorted((e.path, e.kind) for e in file_events) == [
         ("gone.txt", "deleted"),
