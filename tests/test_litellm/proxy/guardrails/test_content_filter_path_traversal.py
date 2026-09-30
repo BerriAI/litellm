@@ -330,3 +330,16 @@ class TestLegacyPackageRootStaysSearchable:
 
         (tmp_path / "escaped.yaml").write_text(CUSTOM_CATEGORY_YAML)
         assert find_category_file("../../escaped", (DATA_DIR, legacy_root)) is None
+
+    def test_symlinked_category_in_the_folder_still_loads_by_name(self, legacy_root, tmp_path):
+        """A category file symlinked into the folder from elsewhere loaded before the move and must keep loading."""
+        target = tmp_path / "elsewhere" / "linked_cat.yaml"
+        target.parent.mkdir()
+        target.write_text(CUSTOM_CATEGORY_YAML.replace("custom_legacy", "linked_cat"))
+        link = pathlib.Path(legacy_root) / "categories" / "linked_cat.yaml"
+        link.symlink_to(target)
+
+        guardrail = _fresh_guardrail()
+        guardrail._load_categories([{"category": "linked_cat", "enabled": True}], (DATA_DIR, legacy_root))
+        assert "linked_cat" in guardrail.loaded_categories
+        assert "legacycopyword" in guardrail.category_keywords

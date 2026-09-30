@@ -46,6 +46,23 @@ def try_safe_join(base_dir: str, *parts: str) -> str | None:
         return None
 
 
+def join_within(base_dir: str, *parts: str) -> str | None:
+    """Join without following symlinks; None when the joined path leaves base_dir.
+
+    Only the supplied components are checked (``..`` and absolute parts are
+    rejected), so a symlink stored inside base_dir that points elsewhere is
+    still returned. Use safe_join when the target itself must stay inside.
+    """
+    for part in parts:
+        if "\x00" in part:
+            return None
+    base: Final = os.path.normpath(os.path.abspath(base_dir))
+    joined: Final = os.path.normpath(os.path.join(base, *parts))
+    if not joined.startswith(base + os.sep):
+        return None
+    return joined
+
+
 def safe_filename(filename: str) -> str:
     """
     Extract a safe filename from a user-supplied path.

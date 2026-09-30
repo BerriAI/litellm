@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from litellm.proxy.common_utils.path_utils import safe_filename, safe_join, try_safe_join
+from litellm.proxy.common_utils.path_utils import join_within, safe_filename, safe_join, try_safe_join
 
 
 class TestSafeJoin:
@@ -51,3 +51,21 @@ def test_try_safe_join_returns_none_instead_of_raising(tmp_path):
     assert inside is not None and inside.startswith(os.path.realpath(str(tmp_path)))
     assert try_safe_join(str(tmp_path), "..", "escaped.yaml") is None
     assert try_safe_join(str(tmp_path), "bad\x00name") is None
+
+
+def test_join_within_keeps_symlinks_but_rejects_traversal(tmp_path):
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("x")
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "link.yaml").symlink_to(outside)
+
+    kept = join_within(str(folder), "link.yaml")
+    assert kept == os.path.join(os.path.normpath(os.path.abspath(str(folder))), "link.yaml")
+    assert os.path.islink(kept)
+    assert join_within(str(folder), "..", "outside.yaml") is None
+    assert join_within(str(folder), "sub", "..", "..", "outside.yaml") is None
+    assert join_within(str(folder), str(outside)) is None
+    assert join_within(str(folder), "bad\x00name") is None
+    with pytest.raises(ValueError, match="escapes base directory"):
+        safe_join(str(folder), "link.yaml")

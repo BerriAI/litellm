@@ -11,7 +11,7 @@ import itertools
 import os
 from typing import Final
 
-from litellm.proxy.common_utils.path_utils import try_safe_join
+from litellm.proxy.common_utils.path_utils import join_within
 
 DATA_DIR: Final = os.path.dirname(os.path.abspath(__file__))
 CATEGORIES_DIR: Final = os.path.join(DATA_DIR, "categories")
@@ -28,10 +28,12 @@ def category_dirs(roots: tuple[str, ...] = DATA_ROOTS) -> tuple[str, ...]:
 def find_category_file(category_name: str, roots: tuple[str, ...] = DATA_ROOTS) -> str | None:
     """First ``<name>.yaml`` or ``<name>.json`` across the category folders, or None.
 
-    A name that would escape its folder (``../x``) never matches.
+    A name that would escape its folder (``../x``) never matches. A symlink
+    stored in the folder is returned as is, wherever it points, as before the
+    data move.
     """
     candidates: Final = (
-        try_safe_join(d, f"{category_name}{ext}")
+        join_within(d, f"{category_name}{ext}")
         for d, ext in itertools.product(category_dirs(roots), (".yaml", ".json"))
     )
     return next((c for c in candidates if c is not None and os.path.isfile(c)), None)
