@@ -2447,6 +2447,7 @@ async def _update_key_row_with_soft_budget(
             data=with_settings_updated_at(
                 prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
             ),
+            include={"object_permission": True},
         )
     updated_data: Final[Mapping[str, object]] = (
         updated_row.model_dump() if updated_row is not None else MappingProxyType({})

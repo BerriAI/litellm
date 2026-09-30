@@ -5442,6 +5442,7 @@ class PrismaClient:
                 response: Final = await VerificationTokenRepository(self).table.update(
                     where={"token": token},
                     data=with_settings_updated_at(db_data),
+                    include={"object_permission": True},
                 )
                 verbose_proxy_logger.debug("\033[91m" + f"DB Token Table update succeeded {response}" + "\033[0m")
                 _data: dict = {}

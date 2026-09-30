@@ -20316,6 +20316,7 @@ async def test_update_key_row_with_soft_budget_updates_budget_and_key_in_transac
     tx.litellm_verificationtoken.update.assert_awaited_once()
     update_call = tx.litellm_verificationtoken.update.await_args
     assert update_call.kwargs["where"] == {"token": result["token"]}
+    assert update_call.kwargs["include"] == {"object_permission": True}
     assert update_call.kwargs["data"]["budget_id"] == "budget-new"
     assert "soft_budget" not in update_call.kwargs["data"]
 
