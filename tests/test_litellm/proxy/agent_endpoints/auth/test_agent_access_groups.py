@@ -163,7 +163,8 @@ async def test_authoritative_group_ceiling_propagates_policy_outages(
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     if strict:
-        with pytest.raises(HTTPException):
+        with pytest.raises(HTTPException) as failure:
             await _load_access_group("group", check_db_only=True)
+        assert failure.value.status_code == 503
     else:
         assert await _load_access_group("group") is None

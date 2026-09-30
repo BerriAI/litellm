@@ -65,13 +65,20 @@ async def resolve_agent_access_group_ceiling(
     agent_id: str,
     load_access_group_ids: AccessGroupIdsLoader = _registry_access_group_ids,
     load_access_group: AccessGroupLoader = _load_access_group,
+    *,
+    check_db_only: bool = False,
 ) -> AgentAccessGroupCeiling | None:
     """``None`` when the agent has no access groups attached, so nothing is capped."""
     access_group_ids: Final = await load_access_group_ids(agent_id)
     if not access_group_ids:
         return None
 
-    loaded: Final = await asyncio.gather(*(load_access_group(group_id) for group_id in access_group_ids))
+    loaded: Final = await asyncio.gather(
+        *(
+            _load_access_group(group_id, check_db_only=True) if check_db_only else load_access_group(group_id)
+            for group_id in access_group_ids
+        )
+    )
     groups: Final = tuple(group for group in loaded if group is not None)
     return AgentAccessGroupCeiling(
         access_group_ids=access_group_ids,

@@ -490,3 +490,45 @@ async def test_managed_agent_mcp_access_is_capped_at_the_invoking_callers_grants
 
     assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == {"slack"}
     assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == ["read"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fresh", [False, True])
+@pytest.mark.parametrize("caller_kind", ["team", "user"])
+async def test_caller_mcp_revocation_uses_fresh_policy(
+    monkeypatch: pytest.MonkeyPatch, fresh: bool, caller_kind: str,
+) -> None:
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+    from litellm.types.agents import AgentCaller
+
+    cached_permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="caller-permission", mcp_servers=["slack", "linear"],
+        mcp_tool_permissions={"slack": ["read", "write"]},
+    )
+    current_permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="caller-permission", mcp_servers=["slack"],
+        mcp_tool_permissions={"slack": ["read"]},
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="caller", object_permission_id="caller-permission", object_permission=current_permission,
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="caller", teams=[], object_permission_id="caller-permission", object_permission=current_permission,
+    )
+    database: Final = MagicMock()
+    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=user)
+    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=current_permission)
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("team_id:caller", team.model_copy(update={"object_permission": cached_permission}))
+    cache.set_cache("caller", user.model_copy(update={"object_permission": cached_permission}))
+    cache.set_cache(object_permission_cache_key("caller-permission"), cached_permission)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    auth: Final = actor(("read", "write"))
+    auth.requires_fresh_policy = fresh
+    auth.agent_caller = AgentCaller(team_id="caller") if caller_kind == "team" else AgentCaller(user_id="caller")
+
+    assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == ({"slack"} if fresh else {"slack", "linear"})
+    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (["read"] if fresh else ["read", "write"])

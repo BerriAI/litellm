@@ -1034,7 +1034,7 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
     database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
     cache: Final = UserApiKeyCache()
-    cache.set_cache("access_group_id:actor-group", group)
+    cache.set_cache("access_group_id:actor-group", group.model_copy(update={"access_agent_ids": ["target"]}))
     cache.set_cache("team_id:caller-team", team.model_copy(update={"object_permission": permission}))
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)

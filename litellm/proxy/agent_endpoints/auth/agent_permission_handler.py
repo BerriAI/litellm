@@ -101,7 +101,9 @@ class AgentRequestHandler:
             return RestrictedAgentAccess(frozenset())
         caller_access: Final = await AgentRequestHandler.agent_caller_access(user_api_key_auth, strict=strict)
         own_access: Final = _intersect_agent_access(key_team_access, caller_access)
-        agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
+        agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(
+            user_api_key_auth, resolve_ceiling, strict=strict
+        )
         if agent_ceiling is None:
             return own_access
         if isinstance(own_access, UnrestrictedAgentAccess):
@@ -137,10 +139,16 @@ class AgentRequestHandler:
     async def _agent_access_group_ceiling(
         user_api_key_auth: UserAPIKeyAuth | None,
         resolve_ceiling: CeilingResolver,
+        *,
+        strict: bool = False,
     ) -> frozenset[str] | None:
         if user_api_key_auth is None or not user_api_key_auth.agent_id:
             return None
-        ceiling: Final = await resolve_ceiling(user_api_key_auth.agent_id)
+        ceiling: Final = (
+            await resolve_agent_access_group_ceiling(user_api_key_auth.agent_id, check_db_only=True)
+            if strict
+            else await resolve_ceiling(user_api_key_auth.agent_id)
+        )
         if ceiling is None:
             return None
         return _to_stable_ids(ceiling.agent_ids)

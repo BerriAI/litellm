@@ -10068,7 +10068,8 @@ async def test_authoritative_access_group_outage_does_not_use_cached_grants() ->
     cache.async_get_cache = AsyncMock()
     with pytest.raises(HTTPException) as failure:
         await get_access_object("group", client, cache, check_db_only=True)
-    assert failure.value.status_code == 404
+    assert failure.value.status_code == 503
+    assert failure.value.detail == "Access group policy is unavailable"
     cache.async_get_cache.assert_not_awaited()
 
 

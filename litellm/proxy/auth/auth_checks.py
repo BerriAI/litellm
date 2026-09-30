@@ -3407,8 +3407,12 @@ async def get_access_object(
             access_group_id,
         )
         raise HTTPException(
-            status_code=404,
-            detail={"error": f"Access group doesn't exist in db. Access group={access_group_id}. Error: {e}"},
+            status_code=503 if check_db_only else 404,
+            detail=(
+                "Access group policy is unavailable"
+                if check_db_only
+                else {"error": f"Access group doesn't exist in db. Access group={access_group_id}. Error: {e}"}
+            ),
         )
 
 
