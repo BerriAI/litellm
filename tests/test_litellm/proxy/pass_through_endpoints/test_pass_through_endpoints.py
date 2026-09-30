@@ -7870,3 +7870,20 @@ async def test_non_object_json_under_a_multipart_content_type_is_left_to_the_mul
     )
 
     assert (query_params_data, custom_body_data, file_data, stream) == (None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_another_routes_request_guardrail_does_not_gate_this_route():
+    """A proxy registers every callback globally, so this route must look only at the
+    guardrails it configured. Another route's pre_call guardrail, or a plain logger, must not
+    make this route turn a body away."""
+    body = b'[{"role": "user", "content": "hi"}]'
+    unrelated_logger = CustomLogger()
+    litellm.callbacks.append(unrelated_logger)
+    try:
+        with _registered_guardrail("someone-elses-guard", GuardrailEventHooks.pre_call):
+            upstream = await _capture_upstream_request(body, guardrails=["postcall-guard"])
+    finally:
+        litellm.callbacks.remove(unrelated_logger)
+
+    assert upstream.content == body
