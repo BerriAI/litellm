@@ -881,6 +881,7 @@ async def _live_fetch_group_limits(groups: tuple[str, ...]) -> tuple[LiteLLM_Bud
     rows: Final = tuple(
         [
             row
+            # comprehension-ok: one iteration per IN_LIST_CHUNK_SIZE slice of group names
             for start in range(0, len(unique_groups), IN_LIST_CHUNK_SIZE)
             for row in await table.find_many(
                 where={  # mutable-ok: Prisma serializes query filters from concrete dictionaries
