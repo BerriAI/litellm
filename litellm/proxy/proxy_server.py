@@ -20164,8 +20164,8 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     Namespace a toolset as its own MCP endpoint.
 
     Connecting to /toolset/<name>/mcp exposes exactly the tools defined in
-    the toolset. Access is enforced: a non-admin caller must hold the toolset
-    through its own object_permission.mcp_toolsets or its team's, or the request
+    the toolset. Access is enforced: non-admin API keys must have the toolset
+    listed in their object_permission.mcp_toolsets grant list, or the request
     will be rejected with a 403.
     """
     try:
