@@ -42,6 +42,9 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 from litellm.llms.anthropic.skills.transformation import AnthropicSkillsConfig
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.llms.mistral.files.transformation import MistralFilesConfig
+from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
+from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
@@ -4306,7 +4309,6 @@ async def test_async_text_to_speech_handler_records_upstream_response_headers():
     _assert_upstream_headers_recorded(response)
 
 
-
 async def _get_by_id_with_upstream(handler_name: str, upstream_response: httpx.Response) -> object:
     async_client: Final = AsyncHTTPHandler()
     await async_client.close()
@@ -4339,6 +4341,113 @@ async def test_get_by_id_handlers_raise_the_provider_error_status(handler_name: 
 
     with pytest.raises(BaseLLMException) as error:
         await _get_by_id_with_upstream(handler_name, upstream_response)
+
+    assert error.value.status_code == status_code
+    assert "No such object" in error.value.message
+
+
+def _clients_answering_with(upstream_response: httpx.Response) -> tuple[HTTPHandler, AsyncHTTPHandler]:
+    sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda _: upstream_response)))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: upstream_response))
+    return sync_client, async_client
+
+
+def _call_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncHTTPHandler) -> object:
+    handler: Final = BaseLLMHTTPHandler()
+    vector_store_params: Final = GenericLiteLLMParams(api_base="https://api.example.test/v1", api_key="sk-test")
+    files_params: Final = {"api_base": "https://api.example.test", "api_key": "sk-test"}
+    match name:
+        case "vector_store_retrieve":
+            return handler.vector_store_retrieve_handler(
+                vector_store_id="vs_missing",
+                vector_store_provider_config=OpenAIVectorStoreConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "vector_store_list":
+            return handler.vector_store_list_handler(
+                after=None,
+                before=None,
+                limit=None,
+                order=None,
+                vector_store_provider_config=OpenAIVectorStoreConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "vector_store_file_list":
+            return handler.vector_store_file_list_handler(
+                vector_store_id="vs_missing",
+                query_params={},
+                vector_store_files_provider_config=OpenAIVectorStoreFilesConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "vector_store_file_retrieve":
+            return handler.vector_store_file_retrieve_handler(
+                vector_store_id="vs_missing",
+                file_id="file_missing",
+                vector_store_files_provider_config=OpenAIVectorStoreFilesConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "file_retrieve":
+            return handler.retrieve_file(
+                file_id="file_missing",
+                provider_config=MistralFilesConfig(),
+                litellm_params=files_params,
+                headers={},
+                logging_obj=Mock(),
+                _is_async=is_async,
+                client=client,
+            )
+        case _:
+            return handler.list_files(
+                purpose=None,
+                provider_config=MistralFilesConfig(),
+                litellm_params=files_params,
+                headers={},
+                logging_obj=Mock(),
+                _is_async=is_async,
+                client=client,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name",
+    (
+        "vector_store_retrieve",
+        "vector_store_list",
+        "vector_store_file_list",
+        "vector_store_file_retrieve",
+        "file_retrieve",
+        "file_list",
+    ),
+)
+@pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize("status_code", (404, 503))
+async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_async: bool, status_code: int) -> None:
+    sync_client, async_client = _clients_answering_with(
+        httpx.Response(status_code, json={"error": {"message": "No such object"}})
+    )
+
+    with pytest.raises(BaseLLMException) as error:
+        result: Final = _call_lookup_handler(name, is_async, async_client if is_async else sync_client)
+        if is_async:
+            await result
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
