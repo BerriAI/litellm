@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Protocol, TypeAlias, TypedDict
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -45,6 +45,7 @@ class AgentRecordDump(TypedDict):
     extra_headers: list[str] | None
     kill_switch: ReadOnly[AgentKillSwitchConfig | None]
     access_group_ids: ReadOnly[Sequence[str] | None]
+    agent_access_groups: ReadOnly[Sequence[str] | None]
     object_permission: dict[str, object] | None
     spend: float
     tpm_limit: int | None
@@ -319,10 +320,16 @@ def _resolved_agent_param_value(
     return _MISSING_AGENT_PARAM
 
 
-def _patched_access_group_ids(agent: PatchAgentRequest) -> Mapping[str, object]:
-    if "access_group_ids" not in agent:
-        return MappingProxyType({})
-    return MappingProxyType({"access_group_ids": tuple(dict.fromkeys(agent.get("access_group_ids") or ()))})
+_AgentGroupField: TypeAlias = Literal["access_group_ids", "agent_access_groups"]
+_AGENT_GROUP_FIELDS: Final[tuple[_AgentGroupField, ...]] = ("access_group_ids", "agent_access_groups")
+
+
+def _deduped_groups(agent: AgentConfig | PatchAgentRequest, field: _AgentGroupField) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(agent.get(field) or ()))
+
+
+def _provided_group_fields(agent: AgentConfig | PatchAgentRequest) -> Mapping[str, tuple[str, ...]]:
+    return MappingProxyType({field: _deduped_groups(agent, field) for field in _AGENT_GROUP_FIELDS if field in agent})
 
 
 def _patched_kill_switch(agent: PatchAgentRequest, existing: object) -> Mapping[str, object]:
@@ -563,12 +570,12 @@ class AgentRegistry:
             static_headers_val: Final[str | None] = safe_dumps(dict(static_headers_obj)) if static_headers_obj else None
 
             extra_headers_val: Final = agent.get("extra_headers")
-            access_group_ids_val: Final = agent.get("access_group_ids")
 
             create_data: Final[dict[str, object]] = {
                 "agent_name": agent_name,
                 "litellm_params": litellm_params,
                 "agent_card_params": agent_card_params,
+                **_provided_group_fields(agent),
                 "kill_switch": serialize_agent_kill_switch(agent.get("kill_switch"), None),
                 "created_by": created_by,
                 "updated_by": created_by,
@@ -581,8 +588,6 @@ class AgentRegistry:
                 create_data["static_headers"] = static_headers_val
             if extra_headers_val is not None:
                 create_data["extra_headers"] = extra_headers_val
-            if access_group_ids_val is not None:
-                create_data["access_group_ids"] = tuple(dict.fromkeys(access_group_ids_val))
             if object_permission_id is not None:
                 create_data["object_permission_id"] = object_permission_id
 
@@ -653,7 +658,7 @@ class AgentRegistry:
 
             augment_agent: Final = {**existing_agent, **agent}
             update_data: Final[dict[str, object]] = {
-                **_patched_access_group_ids(agent),
+                **_provided_group_fields(agent),
                 **_patched_kill_switch(agent, existing_agent.get("kill_switch")),
             }
             if augment_agent.get("agent_name"):
@@ -757,7 +762,6 @@ class AgentRegistry:
                 safe_dumps(dict(static_headers_obj_u)) if static_headers_obj_u is not None else safe_dumps({})
             )
             extra_headers_val_u: Final = agent.get("extra_headers") or []
-            access_group_ids_val_u: Final = tuple(dict.fromkeys(agent.get("access_group_ids") or ()))
             kill_switch_val_u: Final = serialize_agent_kill_switch(
                 agent.get("kill_switch"), existing_row.kill_switch if existing_row is not None else None
             )
@@ -769,7 +773,7 @@ class AgentRegistry:
                 "static_headers": static_headers_val_u,
                 "extra_headers": extra_headers_val_u,
                 "kill_switch": kill_switch_val_u,
-                "access_group_ids": access_group_ids_val_u,
+                **{field: _deduped_groups(agent, field) for field in _AGENT_GROUP_FIELDS},
                 "updated_by": updated_by,
                 "updated_at": datetime.now(timezone.utc),
             }

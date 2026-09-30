@@ -263,6 +263,7 @@ class AgentConfig(TypedDict, total=False):
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
     access_group_ids: ReadOnly[Sequence[str] | None]
+    agent_access_groups: ReadOnly[Sequence[str] | None]
     kill_switch: ReadOnly[AgentKillSwitchConfig | None]
 
 
@@ -278,6 +279,7 @@ class PatchAgentRequest(TypedDict, total=False):
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
     access_group_ids: ReadOnly[Sequence[str] | None]
+    agent_access_groups: ReadOnly[Sequence[str] | None]
     kill_switch: ReadOnly[AgentKillSwitchConfig | None]
 
 
@@ -323,6 +325,7 @@ class AgentResponse(BaseModel):
     static_headers: dict[str, str] | None = None
     extra_headers: list[str] | None = None
     access_group_ids: Sequence[str] | None = None
+    agent_access_groups: Sequence[str] | None = None
     kill_switch: AgentKillSwitchConfig | None = None
     keys: list[AgentKeySummary] | None = None
     search_score: float | None = None
