@@ -330,15 +330,17 @@ pub(in crate::cache) fn configured(
     Ok((
         Some(cache.service.clone()),
         litellm_cache_response::CacheOptions {
-            caching: kwargs
-                .get_item("caching")?
-                .filter(|value| !value.is_none())
-                .map(|value| value.extract())
-                .transpose()?,
-            no_cache: boolean("no-cache")?,
-            no_store: boolean("no-store")?,
-            ttl: seconds("ttl")?,
-            max_age: seconds("s-max-age")?.or(seconds("s-maxage")?),
+            policy: litellm_cache_response::CachePolicy {
+                caching: kwargs
+                    .get_item("caching")?
+                    .filter(|value| !value.is_none())
+                    .map(|value| value.extract())
+                    .transpose()?,
+                no_cache: boolean("no-cache")?,
+                no_store: boolean("no-store")?,
+                ttl: seconds("ttl")?,
+                max_age: seconds("s-max-age")?.or(seconds("s-maxage")?),
+            },
             scope: litellm_cache_response::CacheScope::Shared,
         },
     ))

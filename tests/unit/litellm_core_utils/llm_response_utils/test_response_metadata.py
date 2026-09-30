@@ -607,8 +607,7 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     litellm.register_model(
         model_cost={
             deployment_id: {
-                "input_cost_per_second": 0.02,
-                "output_cost_per_second": 0.04,
+                "cost_per_second": 0.02,
                 "litellm_provider": "openai",
                 "mode": "chat",
             }
@@ -627,8 +626,7 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     logging_obj.update_environment_variables(
         model="gpt-5.4-nano",
         litellm_params={
-            "input_cost_per_second": 0.02,
-            "output_cost_per_second": 0.04,
+            "cost_per_second": 0.02,
             "metadata": {"model_info": {"id": deployment_id}},
         },
         optional_params={},
@@ -650,4 +648,4 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
     )
 
     assert result._response_ms == pytest.approx(2000)
-    assert result._hidden_params["response_cost"] == pytest.approx((0.02 + 0.04) * 2)
+    assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)

@@ -5,11 +5,11 @@ use litellm_host::{
     call::{HostedCompletion, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_llms_types::formats::messages::MessagesResponse;
 
 use super::{Error, MessagesCall};
 
-pub type MessagesOutput = HostedCompletion<Box<AnthropicMessagesResponse>>;
+pub type MessagesOutput = HostedCompletion<Box<MessagesResponse>>;
 
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
@@ -19,7 +19,7 @@ pub struct MessagesStreamHead {
 pub struct Messages;
 
 impl Protocol for Messages {
-    type Response = Box<AnthropicMessagesResponse>;
+    type Response = Box<MessagesResponse>;
     type Error = Error;
     type Request = MessagesCall;
     type HostCall = Infallible;
@@ -43,8 +43,14 @@ impl super::MessagesRoute {
             request,
             observers,
             move |call, _, interceptors, observers| async move {
-                self.run(call, cache_options, &interceptors, observers.as_ref())
-                    .await
+                let context = crate::context::CallContext::new(
+                    &interceptors,
+                    crate::CallOptions {
+                        cache: cache_options,
+                        observers,
+                    },
+                );
+                self.run(call, context).await
             },
         )
     }
