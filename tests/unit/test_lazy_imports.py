@@ -57,6 +57,33 @@ def test_import_litellm_does_not_load_fastapi_or_bpe_table():
     assert result.stdout.strip() == ""
 
 
+_CONCRETE_INTEGRATION_MODULES: Final = (
+    "litellm.integrations.langfuse.langfuse",
+    "litellm.integrations.datadog.datadog",
+    "litellm.integrations.opik.opik",
+    "litellm.integrations.s3",
+    "litellm.integrations.langsmith",
+    "litellm.integrations.opentelemetry",
+    "litellm.integrations.agentops",
+    "litellm.integrations.mlflow",
+)
+
+
+def test_import_litellm_does_not_load_concrete_logging_integrations():
+    probe: Final = (
+        f"import sys, litellm; print(','.join(m for m in {_CONCRETE_INTEGRATION_MODULES!r} if m in sys.modules))"
+    )
+    result: Final = subprocess.run(
+        [sys.executable, "-P", "-c", probe],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+    )
+
+    assert result.stdout.strip() == ""
+
+
 def _clear_names_from_globals(names: tuple):
     """Clear all names from litellm globals."""
     # Get the actual globals dict, not a copy
