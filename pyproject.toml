@@ -64,6 +64,7 @@ proxy = [
     "hiredis>=3.0.0,<4.0",
     "apscheduler>=3.11.2,<4.0",
     "fastapi-sso>=0.19.0,<1.0",
+    "oauthlib==4.0.0",
     "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
     "cryptography>=49.0.0,<51.0",
@@ -348,6 +349,7 @@ override-dependencies = [
 default-groups = ["dev"]
 required-version = ">=0.10.9"
 exclude-newer = "3 days"
+exclude-newer-package = { oauthlib = "2026-09-28T06:01:19Z" }
 
 [tool.uv.sources]
 litellm-proxy-extras = { workspace = true }

@@ -2,12 +2,20 @@ import asyncio
 import json
 import logging
 import os
+from base64 import b64encode
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import parse_qs
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request
+from fastapi_sso.sso.base import OpenID
+from fastapi_sso.sso.google import GoogleSSO
+from oauthlib.oauth2 import InvalidGrantError
 
 import litellm
 from litellm._uuid import uuid
@@ -313,6 +321,103 @@ def test_get_google_callback_response():
     assert result.get("sub") == "google123"
     assert result.get("given_name") == "Google"
     assert result.get("family_name") == "User"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_response", [False, True])
+async def test_google_callback_exchanges_code_and_authenticates_userinfo(
+    monkeypatch: pytest.MonkeyPatch, raw_response: bool
+) -> None:
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "synthetic-secret")
+    callback: Final = "https://gateway.example.com/sso/callback"
+    token_url: Final = "https://idp.example.com/token"
+    userinfo_url: Final = "https://idp.example.com/userinfo"
+    user: Final = {"sub": "synthetic-user", "email": "user@example.com", "email_verified": True}
+    request: Final = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("gateway.example.com", 443),
+            "path": "/sso/callback",
+            "query_string": b"code=synthetic-code&state=synthetic-state",
+            "headers": [(b"cookie", b"sso_state=synthetic-state")],
+        }
+    )
+    with respx.mock(assert_all_called=True) as provider:
+        provider.get(GoogleSSO.discovery_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "authorization_endpoint": "https://idp.example.com/authorize",
+                    "token_endpoint": token_url,
+                    "userinfo_endpoint": userinfo_url,
+                },
+            )
+        )
+        token: Final = provider.post(token_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "synthetic-access",
+                    "token_type": "Bearer",
+                    "expires_in": 3600,
+                },
+            )
+        )
+        userinfo: Final = provider.get(userinfo_url).mock(return_value=httpx.Response(200, json=user))
+
+        result: Final = await GoogleSSOHandler.get_google_callback_response(
+            request, "synthetic-client", callback, return_raw_sso_response=raw_response
+        )
+
+        expected: Final = (
+            user if raw_response else OpenID(id="synthetic-user", email="user@example.com", provider="google")
+        )
+        assert result == expected
+        assert parse_qs(token.calls.last.request.content.decode()) == {
+            "grant_type": ["authorization_code"],
+            "code": ["synthetic-code"],
+            "redirect_uri": [callback],
+            "client_id": ["synthetic-client"],
+        }
+        credentials: Final = b64encode(b"synthetic-client:synthetic-secret").decode()
+        assert token.calls.last.request.headers["authorization"] == f"Basic {credentials}"
+        assert userinfo.calls.last.request.headers["authorization"] == "Bearer synthetic-access"
+
+
+@pytest.mark.asyncio
+async def test_google_callback_propagates_token_error_without_fetching_userinfo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "synthetic-secret")
+    request: Final = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("gateway.example.com", 443),
+            "path": "/sso/callback",
+            "query_string": b"code=expired-code",
+            "headers": [],
+        }
+    )
+    with respx.mock(assert_all_called=True) as provider:
+        provider.get(GoogleSSO.discovery_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "authorization_endpoint": "https://idp.example.com/authorize",
+                    "token_endpoint": "https://idp.example.com/token",
+                    "userinfo_endpoint": "https://idp.example.com/userinfo",
+                },
+            )
+        )
+        provider.post("https://idp.example.com/token").mock(
+            return_value=httpx.Response(400, json={"error": "invalid_grant"})
+        )
+        with pytest.raises(InvalidGrantError):
+            await GoogleSSOHandler.get_google_callback_response(
+                request, "synthetic-client", "https://gateway.example.com/sso/callback"
+            )
 
 
 @pytest.mark.asyncio

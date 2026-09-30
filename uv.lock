@@ -10,8 +10,11 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-09-27T01:56:05.281818Z"
 exclude-newer-span = "P3D"
+
+[options.exclude-newer-package]
+oauthlib = "2026-09-28T06:01:19Z"
 
 [manifest]
 members = [
@@ -4582,6 +4585,7 @@ proxy = [
     { name = "litellm-enterprise" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
+    { name = "oauthlib" },
     { name = "orjson" },
     { name = "polars" },
     { name = "pydantic" },
@@ -4807,6 +4811,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'stt-nvidia-riva'", specifier = ">=1.26.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = ">=1.8.0,<2.0" },
     { name = "nvidia-riva-client", marker = "extra == 'stt-nvidia-riva'", specifier = ">=2.15.0" },
+    { name = "oauthlib", marker = "extra == 'proxy'", specifier = "==4.0.0" },
     { name = "openai", specifier = ">=2.20.0,<3.0.0" },
     { name = "opentelemetry-api", marker = "extra == 'proxy-runtime'", specifier = "==1.33.1" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'proxy-runtime'", specifier = "==1.33.1" },
@@ -6079,11 +6084,11 @@ wheels = [
 
 [[package]]
 name = "oauthlib"
-version = "3.3.1"
+version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/d8/a1bcc8ba112a627f8ffbdc212a78ce18d3ac07e91a5ca65d27918eee25a1/oauthlib-4.0.0.tar.gz", hash = "sha256:efb274799819440f95b4ab3b818869f1ce9ae26c5beacba0201d1a1b76b54f86", size = 187232, upload-time = "2026-09-28T06:01:18.77Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/f4/78229a1066068ca14fc60fb26cf7381cabe4382261392b90e5f9552722d4/oauthlib-4.0.0-py3-none-any.whl", hash = "sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd", size = 159715, upload-time = "2026-09-28T06:01:17.008Z" },
 ]
 
 [[package]]
