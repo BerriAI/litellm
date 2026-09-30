@@ -377,7 +377,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return return_headers
 
     @staticmethod
-    def get_endpoint_type(url: str) -> EndpointType:
+    def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
+        if custom_llm_provider == "typesafe":
+            return EndpointType.DECISIONS
         parsed_url: Final = urlparse(url)
         if (
             ("generateContent") in url
@@ -1093,7 +1095,9 @@ async def pass_through_request(
 
         requested_query_params: dict | None = query_params or dict(request.query_params) or None
 
-        endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(str(url))
+        endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
+            str(url), custom_llm_provider
+        )
 
         # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
         # signed via request.state; we must send those instead of re-encoding the
@@ -1180,6 +1184,7 @@ async def pass_through_request(
             user_api_key_dict=user_api_key_dict,
             data=_parsed_body,
             call_type="pass_through_endpoint",
+            endpoint_type=endpoint_type,
         )
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(

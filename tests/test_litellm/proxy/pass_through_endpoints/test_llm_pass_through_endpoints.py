@@ -7,7 +7,7 @@ import os
 import traceback
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from urllib.parse import parse_qs
@@ -7079,6 +7079,66 @@ class TestTypeSafePassthroughRoute:
             sent: Final = route.calls.last.request
             assert sent.headers["authorization"] == "Bearer typesafe-test-key"
             assert json.loads(sent.content or b"{}") == (body or {})
+
+    @pytest.mark.parametrize("provider", ("typesafe", "openrouter"))
+    @pytest.mark.parametrize("quota_scope", ("key", "project_output"))
+    @pytest.mark.parametrize("token_limit", (0, 1000))
+    def test_token_limits_preserve_decisions_cap_generation_and_enforce_quota(
+        self,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        provider: Literal["typesafe", "openrouter"],
+        quota_scope: Literal["key", "project_output"],
+        token_limit: int,
+    ) -> None:
+        from litellm.caching.caching import DualCache
+        from litellm.proxy import proxy_server
+        from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+            _PROXY_MaxParallelRequestsHandler_v3,
+            get_request_stash,
+        )
+        from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+
+        cache: Final = DualCache()
+        limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
+        monkeypatch.setattr(litellm, "callbacks", list((limiter, _PROXY_CacheControlCheck())))
+        monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+        monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
+        model: Final = "jev-latest" if provider == "typesafe" else "test-generative-model"
+        auth: Final = UserAPIKeyAuth(
+            api_key="sk-limited",
+            tpm_limit=token_limit if quota_scope == "key" else None,
+            project_id="test-project" if quota_scope == "project_output" else None,
+            project_metadata={"model_otpm_limit": {model: token_limit}} if quota_scope == "project_output" else {},
+        )
+        monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: auth)
+        body: Final = (
+            {
+                "model": model,
+                "state": "A request for help",
+                "questions": {"urgent": {"type": "noul", "instructions": "Is this urgent?"}},
+            }
+            if provider == "typesafe"
+            else {"model": model, "messages": [{"role": "user", "content": "Hello"}]}
+        )
+        endpoint: Final = "systemone" if provider == "typesafe" else "chat/completions"
+
+        def upstream_response(request: httpx.Request) -> httpx.Response:
+            expected_body: Final = body if provider == "typesafe" else {**body, "max_tokens": token_limit // 4}
+            assert json.loads(request.content) == expected_body
+            stash: Final = get_request_stash()
+            assert stash is not None
+            assert (stash.reserved_tokens if quota_scope == "key" else stash.otpm_reserved_tokens) > 0
+            return httpx.Response(200, json={"model": model})
+
+        with respx.mock(assert_all_called=False) as upstream:
+            route: Final = upstream.post(f"https://typesafe.example/base/v1/{endpoint}").mock(side_effect=upstream_response)
+            response: Final = client.post(f"/{provider}/v1/{endpoint}", json=body)
+
+        assert response.status_code == (429 if token_limit == 0 else 200), response.text
+        assert route.call_count == (0 if token_limit == 0 else 1)
 
     @pytest.mark.asyncio
     async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
