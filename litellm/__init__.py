@@ -475,6 +475,8 @@ max_end_user_budget_id: Optional[str] = None
 # pass through unchanged.
 validate_end_user_id_in_db: bool = False
 block_requests_for_models_without_pricing: bool = False
+personal_key_model_access_from_teams: bool = False
+personal_key_multi_team_access: Literal["union", "intersection"] = "union"
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
