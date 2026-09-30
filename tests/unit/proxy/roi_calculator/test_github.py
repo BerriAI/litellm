@@ -109,16 +109,12 @@ async def test_github_maps_upstream_errors_without_returning_response_secrets() 
 
 
 @pytest.mark.asyncio
-async def test_github_repository_listing_applies_search_and_reports_next_page() -> None:
+async def test_github_repository_search_starts_page_two_at_github_page_eleven() -> None:
     def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url.params["page"] == "2"
+        assert request.url.params["page"] == "11"
         assert request.url.params["affiliation"] == "owner,collaborator,organization_member"
         assert request.headers["authorization"] == "Bearer test-github-token"
-        return httpx.Response(
-            200,
-            headers=_NEXT_PAGE_HEADERS,
-            content=_REPOSITORIES_JSON,
-        )
+        return httpx.Response(200, content=_REPOSITORIES_JSON)
 
     github: Final = _github(httpx.MockTransport(respond))
     try:
@@ -127,4 +123,52 @@ async def test_github_repository_listing_applies_search_and_reports_next_page() 
         await github.close()
 
     assert repositories == (("org/backend", "private", False),)
-    assert has_more
+    assert not has_more
+
+
+@pytest.mark.asyncio
+async def test_github_repository_search_scans_until_a_later_page_match() -> None:
+    expected_pages: Final = iter(("1", "2", "3"))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        page: Final = request.url.params["page"]
+        assert page == next(expected_pages)
+        if page == "3":
+            return httpx.Response(
+                200,
+                content='[{"full_name":"org/target-repo","visibility":"private","archived":false}]',
+            )
+        return httpx.Response(200, headers=_NEXT_PAGE_HEADERS, content=_REPOSITORIES_JSON)
+
+    github: Final = _github(httpx.MockTransport(respond))
+    try:
+        repositories, has_more = await github.repositories(query="TARGET", page=1)
+    finally:
+        await github.close()
+
+    assert repositories == (("org/target-repo", "private", False),)
+    assert not has_more
+    assert next(expected_pages, None) is None
+
+
+@pytest.mark.asyncio
+async def test_github_repository_search_pages_ten_github_pages_per_search_page() -> None:
+    expected_pages: Final = iter(tuple(str(page) for page in range(1, 21)))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        page: Final = request.url.params["page"]
+        assert page == next(expected_pages)
+        return httpx.Response(200, headers=_NEXT_PAGE_HEADERS, content="[]")
+
+    github: Final = _github(httpx.MockTransport(respond))
+    try:
+        first_repositories, first_has_more = await github.repositories(query="missing", page=1)
+        second_repositories, second_has_more = await github.repositories(query="missing", page=2)
+    finally:
+        await github.close()
+
+    assert first_repositories == ()
+    assert first_has_more
+    assert second_repositories == ()
+    assert second_has_more
+    assert next(expected_pages, None) is None

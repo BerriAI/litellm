@@ -276,4 +276,56 @@ describe("ROICalculatorView", () => {
     );
     expect(screen.getByText("Sync failed")).toBeInTheDocument();
   });
+
+  it("shows a report error and ends progress when the completed report cannot load", async () => {
+    const runningStatus = {
+      ...idleStatus,
+      running: true,
+      phase: "estimating",
+      stage: "Estimating pull requests",
+      total: 1,
+    };
+    const completedStatus = { ...idleStatus, phase: "complete", done: 1, total: 1 };
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce(settings)
+      .mockResolvedValueOnce({ report: null })
+      .mockResolvedValueOnce(runningStatus)
+      .mockResolvedValueOnce(completedStatus)
+      .mockRejectedValueOnce(new Error("The report could not be loaded."));
+
+    render(<ROICalculatorView accessToken="token" />);
+
+    expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
+    expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(
+      "The report could not be loaded.",
+    );
+    expect(screen.queryByRole("progressbar", { name: "Sync progress" })).not.toBeInTheDocument();
+  });
+
+  it("clears a transient poll error when the next poll completes and loads the report", async () => {
+    const runningStatus = {
+      ...idleStatus,
+      running: true,
+      phase: "estimating",
+      stage: "Estimating pull requests",
+      total: 1,
+    };
+    const completedStatus = { ...idleStatus, phase: "complete", done: 1, total: 1 };
+    vi.mocked(apiClient.get)
+      .mockResolvedValueOnce(settings)
+      .mockResolvedValueOnce({ report: null })
+      .mockResolvedValueOnce(runningStatus)
+      .mockRejectedValueOnce(new Error("The sync status could not be loaded."))
+      .mockResolvedValueOnce(completedStatus)
+      .mockResolvedValueOnce({ report: summary });
+
+    render(<ROICalculatorView accessToken="token" />);
+
+    expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
+    expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent(
+      "The sync status could not be loaded.",
+    );
+    expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 7000 })).toBeInTheDocument();
+    expect(screen.queryByText("The sync status could not be loaded.")).not.toBeInTheDocument();
+  });
 });

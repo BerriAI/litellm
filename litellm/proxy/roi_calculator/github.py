@@ -50,6 +50,17 @@ class _RepositoryItem(_GitHubModel):
     archived: bool = False
 
 
+def _repository_values(repositories: tuple[_RepositoryItem, ...]) -> tuple[tuple[str, str, bool], ...]:
+    return tuple(
+        (
+            repository.full_name,
+            repository.visibility or ("private" if repository.private else "public"),
+            repository.archived,
+        )
+        for repository in repositories
+    )
+
+
 class _PullDetail(_GitHubModel):
     number: int
     title: str
@@ -178,6 +189,8 @@ class _GraphQLPayload(TypedDict):
 
 
 _REPOSITORIES: Final[TypeAdapter[tuple[_RepositoryItem, ...]]] = TypeAdapter(tuple[_RepositoryItem, ...])
+_REPOSITORY_SEARCH_PAGES: Final[int] = 10
+_REPOSITORY_PAGE_ERROR: Final[str] = "GitHub returned an unexpected repository list."
 _PULLS: Final[TypeAdapter[tuple[GitHubPullListItem, ...]]] = TypeAdapter(tuple[GitHubPullListItem, ...])
 _PULL_FILES: Final[TypeAdapter[tuple[_PullFile, ...]]] = TypeAdapter(tuple[_PullFile, ...])
 _REST_COMMITS: Final[TypeAdapter[tuple[_RestCommit, ...]]] = TypeAdapter(tuple[_RestCommit, ...])
@@ -243,6 +256,7 @@ async def _fetch_page(
     params: Mapping[str, str | int] | None,
     page: int,
     headers: Mapping[str, str] | None = None,
+    error_message: str = "GitHub returned an unexpected pagination response.",
 ) -> tuple[tuple[_T, ...], bool]:
     response: Final = await _request(
         client,
@@ -260,7 +274,7 @@ async def _fetch_page(
     try:
         parsed: Final[tuple[_T, ...]] = adapter.validate_python(response.json())
     except Exception:
-        raise SourceError("GitHub returned an unexpected pagination response.") from None
+        raise SourceError(error_message) from None
     return parsed, 'rel="next"' in response.headers.get("link", "")
 
 
@@ -337,35 +351,51 @@ class GitHub:
         query: str = "",
         page: int = 1,
     ) -> tuple[tuple[tuple[str, str, bool], ...], bool]:
-        response: Final = await _request(
-            self.client,
-            "GET",
-            self._url("user/repos"),
-            params=MappingProxyType(
-                {
-                    "per_page": 100,
-                    "page": page,
-                    "sort": "updated",
-                    "direction": "desc",
-                    "affiliation": "owner,collaborator,organization_member",
-                }
-            ),
-            headers=self._headers,
+        params: Final = MappingProxyType(
+            {
+                "sort": "updated",
+                "direction": "desc",
+                "affiliation": "owner,collaborator,organization_member",
+            }
         )
-        try:
-            repositories: Final[tuple[_RepositoryItem, ...]] = _REPOSITORIES.validate_python(response.json())
-        except Exception:
-            raise SourceError("GitHub returned an unexpected repository list.") from None
-        filtered: Final = tuple(
-            (
-                repository.full_name,
-                repository.visibility or ("private" if repository.private else "public"),
-                repository.archived,
+        if not query:
+            repositories, has_more = await _fetch_page(
+                self.client,
+                self._url("user/repos"),
+                _REPOSITORIES,
+                params,
+                page,
+                self._headers,
+                error_message=_REPOSITORY_PAGE_ERROR,
             )
-            for repository in repositories
-            if query.casefold() in repository.full_name.casefold()
-        )
-        return filtered, 'rel="next"' in response.headers.get("link", "")
+            return _repository_values(repositories), has_more
+
+        normalized_query: Final = query.casefold()
+        first_github_page: Final = (page - 1) * _REPOSITORY_SEARCH_PAGES + 1
+
+        async def search_pages(
+            github_page: int,
+            pages_remaining: int,
+        ) -> tuple[tuple[_RepositoryItem, ...], bool]:
+            repositories, has_more = await _fetch_page(
+                self.client,
+                self._url("user/repos"),
+                _REPOSITORIES,
+                params,
+                github_page,
+                self._headers,
+                error_message=_REPOSITORY_PAGE_ERROR,
+            )
+            matches: Final = tuple(
+                repository for repository in repositories if normalized_query in repository.full_name.casefold()
+            )
+            if pages_remaining == 1 or not has_more:
+                return matches, has_more
+            later_matches, later_has_more = await search_pages(github_page + 1, pages_remaining - 1)
+            return (*matches, *later_matches), later_has_more
+
+        matches, has_more = await search_pages(first_github_page, _REPOSITORY_SEARCH_PAGES)
+        return _repository_values(matches), has_more
 
     async def pulls(self, repo: str, start: date, end: date) -> tuple[GitHubPullListItem, ...]:
         async def pull_pages() -> AsyncIterator[GitHubPullListItem]:

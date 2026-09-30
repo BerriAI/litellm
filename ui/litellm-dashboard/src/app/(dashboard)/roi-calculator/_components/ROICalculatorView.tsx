@@ -99,11 +99,17 @@ export default function ROICalculatorView({
         .get<ROISyncStatus>("/roi-calculator/sync", { accessToken })
         .then(async (nextStatus) => {
           if (cancelled) return;
+          setError(null);
           if (!nextStatus.running && nextStatus.phase === "complete") {
-            const report = await loadReport();
-            if (cancelled) return;
-            setSummary(report);
-            if (view === "settings") setView("overview");
+            try {
+              const report = await loadReport();
+              if (cancelled) return;
+              setSummary(report);
+              setError(null);
+              if (view === "settings") setView("overview");
+            } catch (reason) {
+              if (!cancelled) setError(extractErrorMessage(reason));
+            }
           }
           if (!cancelled) setStatus(nextStatus);
         })
