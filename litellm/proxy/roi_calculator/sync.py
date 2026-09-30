@@ -245,6 +245,54 @@ class _ProcessedPull(NamedTuple):
     metadata_unavailable: bool = False
 
 
+class _RepositoryPulls(NamedTuple):
+    repo: str
+    pulls: tuple[GitHubPullListItem, ...]
+    unavailable: bool = False
+
+
+class _RepositoryBatch(NamedTuple):
+    queue: tuple[tuple[str, GitHubPullListItem], ...]
+    unavailable_repos: tuple[str, ...]
+    warnings: tuple[str, ...]
+    stage: str
+
+
+async def _read_repository(github: GitHub, repo: str, start: date, end: date) -> _RepositoryPulls:
+    try:
+        return _RepositoryPulls(repo, await github.pulls(repo, start, end))
+    except SourceError:
+        return _RepositoryPulls(repo, (), unavailable=True)
+
+
+async def _read_repositories(github: GitHub, repos: tuple[str, ...], start: date, end: date) -> _RepositoryBatch:
+    groups: Final = await asyncio.gather(*(_read_repository(github, repo, start, end) for repo in repos))
+    unavailable: Final = tuple(group.repo for group in groups if group.unavailable)
+    if len(unavailable) == len(repos):
+        raise SourceError(
+            "GitHub could not read any selected repository. No new report was published; "
+            "check repository access or try analysis again later."
+        )
+    queue: Final = tuple(chain.from_iterable(((group.repo, pull) for pull in group.pulls) for group in groups))
+    warnings: Final = (
+        (
+            (
+                f"Incomplete report: could not read {', '.join(unavailable)}. "
+                "Results include only accessible repositories. Spend-per-hour figures are unavailable until "
+                "all selected repositories can be read. Check repository access or run analysis again to retry."
+            ),
+        )
+        if unavailable
+        else ()
+    )
+    return _RepositoryBatch(
+        queue,
+        unavailable,
+        warnings,
+        "Analysis complete with unavailable repositories" if unavailable else "Analysis complete",
+    )
+
+
 def _processed_records(processed: tuple[_ProcessedPull, ...]) -> Mapping[int, ROIPullRecord]:
     if processed and all(item.metadata_unavailable for item in processed):
         raise SourceError(
@@ -384,12 +432,8 @@ class SyncManager:
             start: Final = end - timedelta(days=settings.backfill_days - 1)
             spend: Final = await spend_reader(start, end)
             self._update_status(phase="repositories", stage="Reading configured repositories")
-            pull_groups: Final = await asyncio.gather(*(github.pulls(repo, start, end) for repo in settings.repos))
-            queue: Final = tuple(
-                chain.from_iterable(
-                    ((repo, pull) for pull in pulls) for repo, pulls in zip(settings.repos, pull_groups, strict=True)
-                )
-            )
+            repositories: Final = await _read_repositories(github, settings.repos, start, end)
+            queue: Final = repositories.queue
             context: Final = cache_context(settings, estimator_models)
             previous: Final = await self._previous_report(repository)
             previous_pulls: Final[Mapping[str, ROIPullRecord]] = MappingProxyType(
@@ -500,7 +544,8 @@ class SyncManager:
                 spend=spend,
                 pulls=tuple(processed_by_index[index] for index in range(len(queue))),
                 settings_fingerprint=settings_fingerprint(settings),
-                warnings=(),
+                warnings=repositories.warnings,
+                unavailable_repos=repositories.unavailable_repos,
             )
             await github.close()
             report_json: Final[Mapping[str, object]] = _JSON_OBJECT_ADAPTER.validate_python(
@@ -514,7 +559,7 @@ class SyncManager:
                     {
                         "running": False,
                         "phase": "complete",
-                        "stage": "Analysis complete",
+                        "stage": repositories.stage,
                         "finished_at": self._clock().isoformat(),
                     }
                 )

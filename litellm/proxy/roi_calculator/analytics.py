@@ -81,6 +81,7 @@ def _summarize_person(
     key: str,
     spend: tuple[ROISpendRecord, ...],
     pulls: tuple[tuple[ROIPullRecord, str, str], ...],
+    complete_scope: bool,
 ) -> ROIPersonSummary:
     spend_rows: Final = tuple(
         row for row in spend if _person_key(normalize_email(row["email"]), "gateway:" + row["user_id"]) == key
@@ -111,11 +112,14 @@ def _summarize_person(
         pending_prs=pending_count,
         match_methods=methods,
         eligible=eligible,
-        cost_per_hour=spend_total / hours if eligible and hours > 0 and spend_total is not None else None,
+        cost_per_hour=spend_total / hours
+        if complete_scope and eligible and hours > 0 and spend_total is not None
+        else None,
     )
 
 
 def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
+    complete_scope: Final = not report.get("unavailable_repos", ())
     observed: Final = frozenset(
         normalized for normalized in (normalize_email(row["email"]) for row in report["spend"]) if normalized
     )
@@ -134,6 +138,7 @@ def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
             key,
             report["spend"],
             matched_pulls,
+            complete_scope,
         )
         for key in sorted(people_keys)
     )
@@ -181,8 +186,8 @@ def summarize(report: ROIReport, mappings: Mapping[str, str]) -> ROISummary:
         total_spend=total_spend,
         total_output_hours=total_output_hours,
         excluded_spend=max(0.0, total_spend - matched_spend),
-        cost_per_hour=matched_spend / output_hours if output_hours else None,
-        hours_per_dollar=output_hours / matched_spend if matched_spend else None,
+        cost_per_hour=matched_spend / output_hours if complete_scope and output_hours else None,
+        hours_per_dollar=output_hours / matched_spend if complete_scope and matched_spend else None,
         merged_prs=len(pull_summaries),
         estimated_prs=sum(person["estimated_prs"] for person in people),
         matched_prs=sum(pull["matched"] for pull in pull_summaries),

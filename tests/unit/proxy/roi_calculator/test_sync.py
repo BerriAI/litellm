@@ -9,6 +9,7 @@ import httpx
 import pytest
 from pydantic import TypeAdapter
 
+from litellm.proxy.roi_calculator.analytics import summarize
 from litellm.proxy.roi_calculator.estimator import CompletionCaller
 from litellm.proxy.roi_calculator.github import GitHubPullListItem
 from litellm.proxy.roi_calculator.sync import SpendReader, SyncManager, read_spend
@@ -457,3 +458,72 @@ async def test_one_unreadable_pr_preserves_other_estimates_in_report() -> None:
     assert manager.status.phase == "complete"
     assert manager.status.estimated == 1
     assert manager.status.needs_attention == 1
+
+
+def _repository_outage_transport(status: int, *, all_unavailable: bool = False) -> httpx.MockTransport:
+    baseline: Final = _transport()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/org/unavailable/pulls":
+            return httpx.Response(status, json=[] if status == 200 else {"message": "Repository unavailable"})
+        if all_unavailable and request.url.path.endswith("/pulls"):
+            return httpx.Response(status)
+        return baseline.handle_request(request)
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", (403, 404, 429))
+async def test_unavailable_repository_publishes_flagged_partial_report_and_recovers(status: int) -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    settings: Final = _settings().model_copy(update=MappingProxyType({"repos": ("org/repo", "org/unavailable")}))
+
+    assert await manager.start(
+        settings, repository, _spend_reader(), _completion(), _repository_outage_transport(status)
+    )
+    await _wait_until_finished(manager)
+
+    report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    summary: Final = summarize(report, MappingProxyType({}))
+    assert manager.status.phase == "complete"
+    assert manager.status.estimated == 1
+    assert report["unavailable_repos"] == ("org/unavailable",)
+    assert "Incomplete report" in report["warnings"][0] and "org/unavailable" in report["warnings"][0]
+    assert report["pulls"][0]["estimate"]["status"] == "estimated"
+    assert summary["metrics"]["total_output_hours"] == 4
+    assert summary["metrics"]["cost_per_hour"] is None
+    assert summary["metrics"]["hours_per_dollar"] is None
+    assert all(person["cost_per_hour"] is None for person in summary["people"])
+
+    async def unexpected_completion(request: ROICompletionRequest) -> object:
+        raise AssertionError("The healthy repository's estimate must be reused after recovery")
+
+    assert await manager.start(
+        settings, repository, _spend_reader(), unexpected_completion, _repository_outage_transport(200)
+    )
+    await _wait_until_finished(manager)
+    recovered: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert recovered["unavailable_repos"] == ()
+    assert recovered["warnings"] == ()
+    assert manager.status.reused == 1
+    assert summarize(recovered, MappingProxyType({}))["metrics"]["cost_per_hour"] == 3
+
+
+@pytest.mark.asyncio
+async def test_all_repository_outage_preserves_previous_report() -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    settings: Final = _settings().model_copy(update=MappingProxyType({"repos": ("org/repo", "org/unavailable")}))
+    assert await manager.start(settings, repository, _spend_reader(), _completion(), _repository_outage_transport(200))
+    await _wait_until_finished(manager)
+    previous: Final = repository.values["roi_calculator_report"]
+
+    assert await manager.start(
+        settings, repository, _spend_reader(), _completion(), _repository_outage_transport(403, all_unavailable=True)
+    )
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "error"
+    assert manager.status.error is not None and "No new report was published" in manager.status.error
+    assert repository.values["roi_calculator_report"] == previous

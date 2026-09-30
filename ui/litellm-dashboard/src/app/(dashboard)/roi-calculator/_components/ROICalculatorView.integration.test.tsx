@@ -157,6 +157,30 @@ describe("ROICalculatorView", () => {
     );
   });
 
+  it("shows incomplete repository results without a spend-per-hour figure", async () => {
+    const warning = "Incomplete report: could not read org/unavailable. Spend-per-hour figures are unavailable.";
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (path === "/roi-calculator/report") {
+        return Promise.resolve({
+          report: {
+            ...summary,
+            warnings: [warning],
+            metrics: { ...summary.metrics, cost_per_hour: null, hours_per_dollar: null },
+            people: summary.people.map((person) => ({ ...person, cost_per_hour: null })),
+          },
+        });
+      }
+      return Promise.resolve(idleStatus);
+    });
+
+    render(<ROICalculatorView accessToken="token" />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(warning);
+    expect(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" })).toBeInTheDocument();
+    expect(screen.queryByText("$3.00")).not.toBeInTheDocument();
+  });
+
   it("lets a view-only admin read the report without write controls", async () => {
     const runningStatus = {
       ...idleStatus,

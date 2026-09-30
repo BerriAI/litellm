@@ -205,6 +205,7 @@ class ROIReport(TypedDict):
     pulls: ReadOnly[tuple[ROIPullRecord, ...]]
     settings_fingerprint: ReadOnly[str]
     warnings: NotRequired[ReadOnly[tuple[str, ...]]]
+    unavailable_repos: NotRequired[ReadOnly[tuple[str, ...]]]
     id: NotRequired[ReadOnly[str]]
 
 
