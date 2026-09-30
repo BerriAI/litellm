@@ -23,7 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SESSION_KEY_PREFIX,
@@ -1784,11 +1784,12 @@ async def _load_bounded_registry(
     if not isinstance(cached, _RegistryNotCached):
         return cached
 
+    waited_for_another_load: Final = load_lock.locked()
     async with load_lock:
-        # The request that held the lock has since cached an answer for everyone waiting on it.
-        cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
-        if not isinstance(cached_after_wait, _RegistryNotCached):
-            return cached_after_wait
+        if waited_for_another_load:
+            cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+            if not isinstance(cached_after_wait, _RegistryNotCached):
+                return cached_after_wait
 
         return await _fetch_and_cache_registry(
             cache_key=cache_key,
@@ -2782,17 +2783,12 @@ async def _cache_team_object(
     team_table.last_refreshed_at = time.time()
 
     key: Final = f"team_id:{team_id}"
+    usage_cache: Final = None if proxy_logging_obj is None else proxy_logging_obj.internal_usage_cache.dual_cache
+    # On a shared Redis the write below replaces the team entry and the alias DEL below removes the alias entry
+    # for both caches, so the usage cache only has its own memory to clear.
+    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_cache
 
-    if proxy_logging_obj is not None:
-        try:
-            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
-        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the write
-            verbose_proxy_logger.warning(
-                "Failed to invalidate internal usage cache entry %s; "
-                "a stale team object may be served until its TTL expires: %s",
-                key,
-                e,
-            )
+    await _invalidate_usage_cache_entry(usage_cache, key, redis_shared=redis_shared, stale="team object")
 
     # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
@@ -2819,9 +2815,11 @@ async def _cache_team_object(
     if team_table.team_alias:
         alias_key: Final = f"team_alias:{team_table.team_alias}"
         try:
-            user_api_key_cache.delete_cache(key=alias_key)
-            if proxy_logging_obj is not None:
-                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+            pipelined_delete: Final = await user_api_key_cache.async_delete_cache_pre_call(alias_key)
+            if pipelined_delete is None:
+                await user_api_key_cache.async_delete_cache(key=alias_key)
+            else:
+                await pipelined_delete
         except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the mutation
             verbose_proxy_logger.warning(
                 "Failed to invalidate cached team alias entry %s; "
@@ -2829,6 +2827,30 @@ async def _cache_team_object(
                 alias_key,
                 e,
             )
+        await _invalidate_usage_cache_entry(usage_cache, alias_key, redis_shared=redis_shared, stale="team alias")
+
+
+async def _invalidate_usage_cache_entry(
+    usage_cache: DualCache | None,
+    key: str,
+    *,
+    redis_shared: bool,
+    stale: str,
+) -> None:
+    if usage_cache is None:
+        return
+    try:
+        if redis_shared:
+            usage_cache.in_memory_cache.delete_cache(key)
+        else:
+            await usage_cache.async_delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the write
+        verbose_proxy_logger.warning(
+            "Failed to invalidate internal usage cache entry %s; a stale %s may be served until its TTL expires: %s",
+            key.replace("\r", "").replace("\n", ""),
+            stale,
+            e,
+        )
 
 
 async def invalidate_team_member_spend_state(
