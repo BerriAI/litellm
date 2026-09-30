@@ -32,7 +32,11 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm._uuid import uuid
-from litellm.batches.batch_utils import _handle_completed_batch, batch_cost_is_final
+from litellm.batches.batch_utils import (
+    BatchResultFiles,
+    _handle_completed_batch_with_files,
+    batch_cost_is_final,
+)
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.caching.redis_batch import flush_post_call_redis_batches
@@ -3219,9 +3223,12 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_models = kwargs.get("batch_models", None)
             batch_successful_requests: Final = kwargs.get("batch_successful_requests", None)
             batch_failed_requests: Final = kwargs.get("batch_failed_requests", None)
+            batch_output_file_content: Final = kwargs.get("batch_output_file_content", None)
+            batch_error_file_content: Final = kwargs.get("batch_error_file_content", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
 
             should_compute_batch_data: Final = not has_explicit_batch_data and batch_cost_is_final(result)
+            result_files: BatchResultFiles | None = None  # rebind-ok: one batch-data branch below supplies the bytes
             if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost
                 result._hidden_params["batch_models"] = batch_models
@@ -3241,15 +3248,21 @@ class Logging(LiteLLMLoggingBaseClass):
                         total_cost=batch_cost,
                         cost_for_built_in_tools_cost_usd_dollar=0.0,
                     )
+                if batch_output_file_content is not None or batch_error_file_content is not None:
+                    result_files = BatchResultFiles(
+                        output=batch_output_file_content if isinstance(batch_output_file_content, bytes) else None,
+                        error=batch_error_file_content if isinstance(batch_error_file_content, bytes) else None,
+                    )
 
             elif should_compute_batch_data:
-                batch_result: Final = await _handle_completed_batch(
+                batch_result, fetched_result_files = await _handle_completed_batch_with_files(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
                     model_name=self.get_deployment_model_for_cost(),
                     litellm_params=self.litellm_params,
                     model_info=self.get_router_deployment_model_info(),
                 )
+                result_files = fetched_result_files
 
                 result._hidden_params["response_cost"] = batch_result.cost
                 result._hidden_params["batch_models"] = batch_result.models
@@ -3266,14 +3279,21 @@ class Logging(LiteLLMLoggingBaseClass):
             if litellm.store_batch_line_items_in_callbacks and (has_explicit_batch_data or should_compute_batch_data):
                 from litellm.batches.batch_line_item_logging import log_batch_line_items
 
-                await log_batch_line_items(
-                    batch=result,
-                    custom_llm_provider=self.custom_llm_provider,
-                    parent=self,
-                    model_name=self.get_deployment_model_for_cost(),
-                    litellm_params=self.litellm_params,
-                    model_info=self.get_router_deployment_model_info(),
-                )
+                try:
+                    await log_batch_line_items(
+                        batch=result,
+                        custom_llm_provider=self.custom_llm_provider,
+                        parent=self,
+                        model_name=self.get_deployment_model_for_cost(),
+                        litellm_params=self.litellm_params,
+                        model_info=self.get_router_deployment_model_info(),
+                        result_files=result_files,
+                    )
+                except Exception:  # noqa: BLE001  # line-item logging (claim step included) must never reach the aggregate aretrieve_batch path
+                    verbose_logger.exception(
+                        "batch line item logging failed for batch_id=%s; aggregate logging unaffected",
+                        result.id,
+                    )
 
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(

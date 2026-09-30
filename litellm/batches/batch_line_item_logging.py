@@ -9,6 +9,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.batches.batch_utils import (
+    BatchResultFiles,
     _batch_response_was_successful,  # pyright: ignore[reportPrivateUsage]  # batch-internal helper shared with the aggregate cost path by design
     _fetch_batch_managed_file_content,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # same reuse; helper is untyped upstream
     _get_response_from_batch_job_output_file,  # pyright: ignore[reportPrivateUsage]  # same reuse
@@ -422,6 +423,7 @@ async def log_batch_line_items(
     model_name: str | None,
     litellm_params: dict[str, object] | None,  # mutable-ok: the logging object's shared litellm_params dict
     model_info: ModelInfo | None,
+    result_files: BatchResultFiles | None = None,
     claim_cache: DualCache = batch_line_item_claim_cache,
 ) -> int:
     """Emit one callback event per JSONL line of a completed batch (request
@@ -429,7 +431,9 @@ async def log_batch_line_items(
     ``litellm.store_batch_line_items_in_callbacks`` flag. The aggregate
     aretrieve_batch event still bills the batch, so per-line events carry
     ``batch_parent_id`` and never update spend themselves. Any failure here
-    is logged and swallowed: aggregate accounting must be unaffected."""
+    is logged and swallowed: aggregate accounting must be unaffected.
+    ``result_files`` carries the output/error bytes the aggregate path already
+    fetched, so they are reused instead of refetched."""
     line_provider: Final = _supported_line_provider(custom_llm_provider)
     if line_provider is None:
         verbose_logger.warning(
@@ -468,7 +472,11 @@ async def log_batch_line_items(
         input_file_content: Final = await _fetch_managed_file_or_empty(batch.input_file_id, line_provider, fetch_params)
         requests_by_id: Final = _requests_by_custom_id(input_file_content)
 
-        output_content: Final = await _fetch_managed_file_or_empty(batch.output_file_id, line_provider, fetch_params)
+        output_content: Final = (
+            result_files.output
+            if result_files is not None and result_files.output is not None
+            else await _fetch_managed_file_or_empty(batch.output_file_id, line_provider, fetch_params)
+        )
         first_row: Final = next(_output_entries(output_content), None)
         if _uses_native_vertex_output(line_provider, model_name, first_row):
             verbose_logger.warning(
@@ -476,7 +484,11 @@ async def log_batch_line_items(
                 batch.id,
             )
             return 0
-        error_content: Final = await _fetch_managed_file_or_empty(batch.error_file_id, line_provider, fetch_params)
+        error_content: Final = (
+            result_files.error
+            if result_files is not None and result_files.error is not None
+            else await _fetch_managed_file_or_empty(batch.error_file_id, line_provider, fetch_params)
+        )
         for content in (output_content, error_content):
             for entry in _output_entries(content):
                 try:

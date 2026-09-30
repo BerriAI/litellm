@@ -26,6 +26,7 @@ from litellm.batches.batch_line_item_logging import (
     batch_line_item_claim_cache,
     log_batch_line_items,
 )
+from litellm.batches.batch_utils import BatchResultFiles
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -1240,3 +1241,49 @@ async def test_line_items_failed_fanout_does_not_delete_another_workers_claim(re
     assert fake._store.get(key) == "other-worker"
     assert len(recorder.success_events) == 0
     assert len(recorder.failure_events) == 0
+
+
+@pytest.mark.asyncio
+async def test_supplied_result_files_skip_the_output_and_error_fetch(recorder):
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        emitted: Final = await log_batch_line_items(
+            batch=_batch(),
+            custom_llm_provider="openai",
+            parent=_parent_logging(),
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            result_files=BatchResultFiles(output=OUTPUT_JSONL, error=ERROR_JSONL),
+            claim_cache=DualCache(),
+        )
+
+    assert emitted == 2
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 1
+    assert file_mock.await_count == 1
+    assert file_mock.await_args.kwargs["file_id"] == "input-file-1"
+
+
+@pytest.mark.asyncio
+async def test_empty_result_files_fall_back_to_fetching_everything(recorder):
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        emitted: Final = await log_batch_line_items(
+            batch=_batch(),
+            custom_llm_provider="openai",
+            parent=_parent_logging(),
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            result_files=BatchResultFiles(output=None, error=None),
+            claim_cache=DualCache(),
+        )
+
+    assert emitted == 2
+    fetched: Final = sorted(call.kwargs["file_id"] for call in file_mock.await_args_list)
+    assert fetched == ["error-file-1", "input-file-1", "output-file-1"]
