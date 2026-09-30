@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, TypeAlias
+
+# A decoded JSON document: what json.loads / model_json_schema() produce.
+JSONValue: TypeAlias = "dict[str, JSONValue] | list[JSONValue] | str | int | float | bool | None"
 
 SKILL_MANIFEST: Final = "SKILL.md"
 _JSON_DECODER: Final = json.JSONDecoder()
@@ -50,7 +53,7 @@ def structured_output_instruction(schema: Mapping[str, Any]) -> str:
     )
 
 
-def strict_json_schema(schema: Any) -> Any:
+def strict_json_schema(schema: JSONValue) -> JSONValue:
     """Make a JSON schema acceptable to OpenAI strict structured outputs.
 
     Every object gets `additionalProperties: false` and all of its properties required,
