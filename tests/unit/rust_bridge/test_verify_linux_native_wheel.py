@@ -23,13 +23,28 @@ class _CommandRunner(Protocol):
     ) -> subprocess.CompletedProcess[str]: ...
 
 
+class _SizeLimits(Protocol):
+    @property
+    def native_bytes(self) -> int: ...
+
+    @property
+    def wheel_bytes(self) -> int: ...
+
+
+class _SizeLimitsFactory(Protocol):
+    def __call__(self, *, native_bytes: int, wheel_bytes: int) -> _SizeLimits: ...
+
+
 class _VerifierModule(Protocol):
+    DEFAULT_SIZE_LIMITS: _SizeLimits
+    SizeLimits: _SizeLimitsFactory
     main: Callable[
         [
             Sequence[str] | None,
             Mapping[str, str] | None,
             Callable[[Path], ModuleType | None],
             _CommandRunner,
+            _SizeLimits,
         ],
         int,
     ]
@@ -106,6 +121,7 @@ def _run_verifier(
     wheel: Path,
     *,
     exposes_panic: bool = False,
+    size_limits: _SizeLimits = verifier.DEFAULT_SIZE_LIMITS,
 ) -> int:
     native_module: Final = (
         _NativeModuleWithPanicHook("litellm.rust_bridge._native")
@@ -122,6 +138,7 @@ def _run_verifier(
         environment,
         _fake_load_native_module,
         _fake_subprocess_run,
+        size_limits,
     )
 
 
@@ -190,6 +207,29 @@ def test_rejects_duplicate_wheel_metadata_file(tmp_path: Path) -> None:
         )
 
     assert _run_verifier(wheel) == 1
+
+
+@pytest.mark.parametrize("headroom", (0, -1), ids=("at-limit", "one-byte-over"))
+def test_compressed_wheel_size_budget(tmp_path: Path, headroom: int) -> None:
+    wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
+    limits: Final = verifier.SizeLimits(
+        native_bytes=verifier.DEFAULT_SIZE_LIMITS.native_bytes,
+        wheel_bytes=wheel.stat().st_size + headroom,
+    )
+
+    assert _run_verifier(wheel, size_limits=limits) == (0 if headroom == 0 else 1)
+
+
+@pytest.mark.parametrize("headroom", (0, -1), ids=("at-limit", "one-byte-over"))
+def test_native_extension_size_budget(tmp_path: Path, headroom: int) -> None:
+    native_bytes: Final = b"synthetic native extension"
+    wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG, native_bytes=native_bytes)
+    limits: Final = verifier.SizeLimits(
+        native_bytes=len(native_bytes) + headroom,
+        wheel_bytes=verifier.DEFAULT_SIZE_LIMITS.wheel_bytes,
+    )
+
+    assert _run_verifier(wheel, size_limits=limits) == (0 if headroom == 0 else 1)
 
 
 def test_rejects_production_module_exposing_panic_hook(tmp_path: Path) -> None:

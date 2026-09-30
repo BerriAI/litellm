@@ -7,6 +7,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import product
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType, ModuleType
@@ -15,6 +16,15 @@ from typing import Final, Protocol
 EXPECTED_PYTHON_TAG: Final = "cp310"
 EXPECTED_ABI_TAG: Final = "abi3"
 EXPECTED_PLATFORM_TAG: Final = "linux_x86_64"
+
+
+@dataclass(frozen=True, slots=True)
+class SizeLimits:
+    native_bytes: int
+    wheel_bytes: int
+
+
+DEFAULT_SIZE_LIMITS: Final = SizeLimits(native_bytes=45_000_000, wheel_bytes=30_000_000)
 
 
 class CommandRunner(Protocol):
@@ -70,6 +80,7 @@ def main(
     environment: Mapping[str, str] | None = None,
     load_native_module: Callable[[Path], ModuleType | None] = _load_native_module,
     run_command: CommandRunner = _run_command,
+    size_limits: SizeLimits = DEFAULT_SIZE_LIMITS,
 ) -> int:
     arguments: Final = tuple(sys.argv if argv is None else argv)
     resolved_environment: Final = os.environ if environment is None else environment
@@ -165,6 +176,7 @@ def main(
         return 1
 
     maturin_version: Final = maturin_match.group(1)
+    compressed_wheel_size: Final = wheel.stat().st_size
     native_percentage: Final = native_member.file_size / uncompressed_wheel_size * 100
     size_report: Final = "\n".join(
         (
@@ -181,7 +193,7 @@ def main(
             "",
             "| Artifact | Size |",
             "| --- | ---: |",
-            f"| Compressed wheel | {wheel.stat().st_size / 1_000_000:.2f} MB |",
+            f"| Compressed wheel | {compressed_wheel_size / 1_000_000:.2f} MB |",
             f"| Uncompressed wheel | {uncompressed_wheel_size / 1_000_000:.2f} MB |",
             f"| Native extension | {native_member.file_size / 1_000_000:.2f} MB |",
             f"| Native share | {native_percentage:.2f}% |",
@@ -214,8 +226,9 @@ def main(
     native_module: Final = load_native_module(native_path)
     native_module_loads: Final = native_module is not None
     panic_test_hook_absent: Final = native_module is not None and not hasattr(native_module, "_panic_for_test")
-    native_size_limit: Final = 45_000_000
+    native_size_limit: Final = size_limits.native_bytes
     native_size_within_limit: Final = native_member.file_size <= native_size_limit
+    wheel_size_within_limit: Final = compressed_wheel_size <= size_limits.wheel_bytes
     validations: Final = (
         (f"Python tag is {EXPECTED_PYTHON_TAG}", python_tag == EXPECTED_PYTHON_TAG),
         (f"ABI tag is {EXPECTED_ABI_TAG}", abi_tag == EXPECTED_ABI_TAG),
@@ -232,6 +245,7 @@ def main(
         ("Native module loads", native_module_loads),
         ("Production module omits the panic test hook", panic_test_hook_absent),
         (f"Native extension does not exceed {native_size_limit / 1_000_000:.0f} MB", native_size_within_limit),
+        (f"Compressed wheel does not exceed {size_limits.wheel_bytes / 1_000_000:.0f} MB", wheel_size_within_limit),
         ("Tokenizer vocabularies are not duplicated in the native extension", not duplicated_vocabularies),
         ("Wheel contents are valid", not unexpected_members),
     )
@@ -279,6 +293,11 @@ def main(
                 not native_size_within_limit,
                 f"native extension exceeds {native_size_limit / 1_000_000:.0f} MB: "
                 f"{native_member.file_size / 1_000_000:.2f} MB",
+            ),
+            (
+                not wheel_size_within_limit,
+                f"compressed wheel exceeds {size_limits.wheel_bytes / 1_000_000:.0f} MB: "
+                f"{compressed_wheel_size / 1_000_000:.2f} MB",
             ),
             (bool(unexpected_members), f"wheel contains unexpected build artifacts: {', '.join(unexpected_members)}"),
         )

@@ -4,12 +4,11 @@ import base64
 import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
 import httpx
-import tiktoken
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -29,7 +28,7 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.rust_bridge.tokenizer import get_encoding
@@ -53,6 +52,9 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import Message, SelectTokenizerResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
 
 
 def get_modified_max_tokens(
@@ -649,19 +651,21 @@ def _get_exact_count_function(
         return _get_tiktoken_count_function(encode_length)
 
 
-def _encoding_count(encoding: Encoding, text: str) -> int:
+def _encoding_count(encoding: "Encoding", text: str) -> int:
     if isinstance(encoding, OpenAIEncoding):
         return encoding.count(text)
     return len(encoding.encode(text, disallowed_special=()))
 
 
-def openai_tokenizer_encoding(model: str) -> Encoding:
+def openai_tokenizer_encoding(model: str) -> "Encoding":
     """The encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
     return get_encoding(openai_tokenizer_encoding_name(model))
 
 
 def openai_tokenizer_encoding_name(model: str) -> str:
     """The tiktoken encoding name for `model`, without loading the encoding."""
+    import tiktoken
+
     from litellm.utils import print_verbose
 
     model_to_use: Final = _fix_model_name(model)

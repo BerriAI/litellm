@@ -1415,7 +1415,6 @@ from .exceptions import (
     ModelNotMappedError as ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
 from .router import Router
 from .assistants.main import *
 from .batches.main import *
@@ -2339,6 +2338,17 @@ def __getattr__(name: str) -> Any:
 
             _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
         return _globals["bedrock_tool_name_mappings"]
+
+    # Lazy load the proxy CLI entry point so `import litellm` does not pull in click or the proxy package
+    if name == "run_server":
+        from ._lazy_imports import get_litellm_globals
+
+        _globals = get_litellm_globals()
+        if "run_server" not in _globals:
+            from .proxy.proxy_cli import run_server as _run_server
+
+            _globals["run_server"] = _run_server
+        return _globals["run_server"]
 
     # Lazy load AzureOpenAIError exception class
     if name == "AzureOpenAIError":

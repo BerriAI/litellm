@@ -58,6 +58,7 @@ from litellm.utils import (
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.router import Router
     from litellm.types.utils import TokenCountResponse
 
@@ -107,7 +108,6 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
-from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -9357,16 +9357,16 @@ async def acount_tokens(
 
 
 # Cache for encoding to avoid repeated __getattr__ calls
-_encoding_cache: Tokenizer | None = None
+_encoding_cache: "Tokenizer | None" = None
 
 
-def _load_module_encoding() -> Tokenizer:
+def _load_module_encoding() -> "Tokenizer":
     import sys
 
     return sys.modules[__name__].encoding
 
 
-def _get_encoding() -> Tokenizer:
+def _get_encoding() -> "Tokenizer":
     """Get encoding, loading it lazily if needed."""
     global _encoding_cache
     if _encoding_cache is None:
@@ -9375,13 +9375,13 @@ def _get_encoding() -> Tokenizer:
     return _encoding_cache
 
 
-def _load_default_encoding() -> Tokenizer:
+def _load_default_encoding() -> "Tokenizer":
     from litellm._lazy_imports import _get_default_encoding
 
     return _get_default_encoding()
 
 
-def __getattr__(name: str) -> Tokenizer:
+def __getattr__(name: str) -> "Tokenizer":
     """Lazy import handler for main module"""
     if name == "encoding":
         _encoding: Final = _load_default_encoding()

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from importlib import resources
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # native class is validated at the binding boundary
 
-import tiktoken
-from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
-
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext
 
 if TYPE_CHECKING:
+    import tiktoken
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
+
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
 
 
@@ -37,10 +39,18 @@ def _native_tiktoken(factory: type[NativeTokenizer], name: str) -> NativeTokeniz
 
 
 @lru_cache(maxsize=1)
-def _native_anthropic(factory: type[NativeTokenizer]) -> NativeTokenizer:
-    from litellm.utils import claude_json_str
+def anthropic_tokenizer_json() -> str:
+    """The packaged Anthropic `tokenizer.json`, read from disk on first use and held for the process."""
+    return (
+        resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("anthropic_tokenizer.json")
+        .read_text(encoding="utf-8")
+    )
 
-    return factory.from_json(claude_json_str)
+
+@lru_cache(maxsize=1)
+def _native_anthropic(factory: type[NativeTokenizer]) -> NativeTokenizer:
+    return factory.from_json(anthropic_tokenizer_json())
 
 
 @lru_cache(maxsize=8)
@@ -62,9 +72,23 @@ def native_anthropic() -> NativeTokenizer | None:
 
 
 def _python_encoding(name: str) -> tiktoken.Encoding:
+    import tiktoken
+
     from litellm.litellm_core_utils.default_encoding import encoding
 
     return encoding if name == encoding.name else tiktoken.get_encoding(name)
+
+
+def _python_huggingface(json: str) -> PythonHuggingFaceTokenizer:
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
+
+    return PythonHuggingFaceTokenizer.from_str(json)
+
+
+def _python_pretrained(identifier: str, revision: str, token: str | None) -> PythonHuggingFaceTokenizer:
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
+
+    return PythonHuggingFaceTokenizer.from_pretrained(identifier, revision=revision, token=token)
 
 
 def get_encoding(name: str) -> Encoding:
@@ -78,13 +102,11 @@ def get_encoding(name: str) -> Encoding:
 
 def anthropic() -> HuggingFace:
     """The packaged Anthropic tokenizer on the selected backend."""
-    from litellm.utils import claude_json_str
-
     return runtime.run(
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(_native_anthropic(factory)),
-        python=lambda: PythonHuggingFaceTokenizer.from_str(claude_json_str),
+        python=lambda: _python_huggingface(anthropic_tokenizer_json()),
     )
 
 
@@ -93,7 +115,7 @@ def from_str(json: str) -> HuggingFace:
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(factory.from_json(json)),
-        python=lambda: PythonHuggingFaceTokenizer.from_str(json),
+        python=lambda: _python_huggingface(json),
     )
 
 
@@ -104,5 +126,5 @@ def from_pretrained(identifier: str, revision: str = "main", token: str | None =
         native=lambda factory: HuggingFaceTokenizer(
             factory.from_pretrained(identifier, revision=revision, token=token)
         ),
-        python=lambda: PythonHuggingFaceTokenizer.from_pretrained(identifier, revision=revision, token=token),
+        python=lambda: _python_pretrained(identifier, revision, token),
     )

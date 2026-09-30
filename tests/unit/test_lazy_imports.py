@@ -1,5 +1,6 @@
 """Simple tests for lazy import functionality."""
 
+import importlib
 import os
 import subprocess
 import sys
@@ -41,12 +42,29 @@ from litellm._lazy_imports import (
 )
 
 
-def test_import_litellm_does_not_load_fastapi_or_bpe_table():
+NOT_LOADED_BY_IMPORT_LITELLM: Final = (
+    "fastapi",
+    "starlette",
+    "litellm.litellm_core_utils.default_encoding",
+    "tiktoken",
+    "tokenizers",
+    "boto3",
+    "botocore",
+    "jsonschema",
+    "litellm.proxy.proxy_cli",
+    "pydantic_settings",
+    "yaml",
+    "requests",
+)
+
+
+def test_import_litellm_does_not_load_heavy_optional_modules():
     result: Final = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import sys, litellm; print(','.join(m for m in ('fastapi','starlette','litellm.litellm_core_utils.default_encoding') if m in sys.modules))",
+            "import sys, litellm; print(','.join(m for m in sys.argv[1:] if m in sys.modules))",
+            *NOT_LOADED_BY_IMPORT_LITELLM,
         ],
         check=True,
         capture_output=True,
@@ -55,6 +73,10 @@ def test_import_litellm_does_not_load_fastapi_or_bpe_table():
     )
 
     assert result.stdout.strip() == ""
+
+
+def test_run_server_resolves_to_the_proxy_cli_command():
+    assert litellm.run_server is importlib.import_module("litellm.proxy.proxy_cli").run_server
 
 
 def _clear_names_from_globals(names: tuple):

@@ -89,7 +89,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
+from litellm.litellm_core_utils.tokenizer import strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -272,21 +272,6 @@ _BACKFILL_MODES: Final = frozenset({"chat", "responses"})
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-
-try:
-    # Python 3.9+
-    with (
-        resources.files("litellm.litellm_core_utils.tokenizers")
-        .joinpath("anthropic_tokenizer.json")
-        .open("r", encoding="utf-8") as f
-    ):
-        json_data = json.load(f)
-except (ImportError, AttributeError, TypeError):
-    with resources.open_text("litellm.litellm_core_utils.tokenizers", "anthropic_tokenizer.json") as f:
-        json_data = json.load(f)
-
-# Convert to str (if necessary)
-claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
@@ -370,6 +355,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.rules import Rules
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.litellm_core_utils.thread_pool_executor import BoundedLoggingThreadPoolExecutor
+    from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
@@ -2452,7 +2438,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
     if tokenizer_json["type"] == "openai_tokenizer":
         openai_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
-            Encoding, tokenizer_json["tokenizer"]
+            "Encoding", tokenizer_json["tokenizer"]
         )
         return openai_tokenizer.encode(text, disallowed_special=())
     encoded: Final = tokenizer_json["tokenizer"].encode(text)
@@ -2477,7 +2463,7 @@ def decode(
     if tokenizer_json["type"] == "huggingface_tokenizer":
         ids: Final = strip_special_tokens(tokenizer_json["tokenizer"], tokens) if skip_special_tokens else tokens
         hf_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
-            HuggingFace, tokenizer_json["tokenizer"]
+            "HuggingFace", tokenizer_json["tokenizer"]
         )
         return hf_tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
     return tokenizer_json["tokenizer"].decode(tokens)
@@ -10337,5 +10323,8 @@ def __getattr__(name: str) -> Any:
     if name in registry:
         handler_func: Final = registry[name]
         return handler_func(name)
+
+    if name == "claude_json_str":
+        return tokenizer_dispatch.anthropic_tokenizer_json()
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

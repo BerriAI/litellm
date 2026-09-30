@@ -14,16 +14,15 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
-
-import tiktoken
-from tokenizers import AddedToken
-from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
+    import tiktoken
+    from tokenizers import AddedToken
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
     from litellm.rust_bridge._native import HuggingFaceEncoding
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
@@ -282,6 +281,8 @@ class HuggingFaceTokenizer:
         return self._native.get_vocab_size(with_added_tokens)
 
     def get_added_tokens_decoder(self) -> dict[int, AddedToken]:  # mutable-ok: [LIT001, LIT002] SDK return type
+        from tokenizers import AddedToken
+
         return {  # mutable-ok: [LIT002] SDK returns a dict
             token_id: AddedToken(
                 content, single_word=single_word, lstrip=lstrip, rstrip=rstrip, normalized=normalized, special=special
@@ -374,9 +375,31 @@ def _batch_input(
     return (item[0], item[1])
 
 
-Encoding: TypeAlias = tiktoken.Encoding | OpenAIEncoding
-HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
-Tokenizer: TypeAlias = Encoding | HuggingFace
+if TYPE_CHECKING:
+    Encoding: TypeAlias = tiktoken.Encoding | OpenAIEncoding
+    HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
+    Tokenizer: TypeAlias = Encoding | HuggingFace
+
+_LAZY_UNIONS: Final = frozenset(("Encoding", "HuggingFace", "Tokenizer"))
+
+
+def __getattr__(name: str) -> UnionType:
+    """The `Encoding`, `HuggingFace` and `Tokenizer` unions, built on first runtime use so that importing this
+    module does not load `tiktoken` or `tokenizers`."""
+    if name not in _LAZY_UNIONS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import tiktoken
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
+
+    encoding: Final = tiktoken.Encoding | OpenAIEncoding
+    huggingface: Final = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
+    match name:
+        case "Encoding":
+            return encoding
+        case "HuggingFace":
+            return huggingface
+        case _:
+            return encoding | huggingface
 
 
 class _AddedToken(Protocol):

@@ -1,3 +1,4 @@
+from importlib import resources
 from typing import Final
 
 import pytest
@@ -10,6 +11,19 @@ from litellm.utils import claude_json_str
 from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
 
 TEXTS: Final = ("hello <|endoftext|> world", "café 漢字 🙂", "  def f():\n    return 1\n", "<SOS>hello<EOT> again")
+
+
+def test_claude_json_str_is_the_packaged_anthropic_tokenizer() -> None:
+    packaged: Final = (
+        resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("anthropic_tokenizer.json")
+        .read_text(encoding="utf-8")
+    )
+
+    assert tokenizer.anthropic_tokenizer_json() == packaged
+    assert tokenizer.anthropic_tokenizer_json() is tokenizer.anthropic_tokenizer_json()
+    assert claude_json_str == packaged
+    assert tokenizer.anthropic().encode("hello world").ids == Tokenizer.from_str(packaged).encode("hello world").ids
 
 
 @pytest.mark.parametrize("name", ("cl100k_base", "o200k_base"))
