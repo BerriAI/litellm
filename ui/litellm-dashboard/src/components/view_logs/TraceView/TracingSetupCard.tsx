@@ -1,8 +1,9 @@
 "use client";
 
-import { Info } from "lucide-react";
+import { Copy } from "lucide-react";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { copyToClipboard } from "@/utils/dataUtils";
 
 export const TRACING_SETUP_SNIPPET = `# proxy config
 general_settings:
@@ -13,21 +14,31 @@ export LANGSMITH_TRACING=true LANGSMITH_TRACING_MODE=otel
 export OTEL_EXPORTER_OTLP_ENDPOINT=<proxy url>
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <litellm key>"`;
 
-/** Shown when GET /v1/traces answers 501 (agent tracing not configured on this proxy). */
+/** Shown when GET /v1/traces answers 501: one sentence and the snippet. */
 export function TracingSetupCard({ detail }: { detail?: string }) {
   return (
-    <Alert className="mb-4" data-testid="tracing-setup-card">
-      <Info />
-      <AlertTitle>Agent tracing is not enabled</AlertTitle>
-      <AlertDescription>
-        <p>
-          Point your agent&apos;s OpenTelemetry exporter at this proxy to see agent runs here, joined to their LLM
-          request logs.{detail ? ` (${detail})` : ""}
-        </p>
-        <pre className="mt-2 w-full overflow-x-auto rounded-md border bg-muted px-3 py-2 font-mono text-xs text-foreground">
+    <div data-testid="tracing-setup-card" className="text-[13px]">
+      <div className="font-medium">Agent tracing is not enabled</div>
+      <p className="mt-1 text-muted-foreground">
+        Point your agent&apos;s OpenTelemetry exporter at this proxy to see each run next to its LLM requests.
+      </p>
+      <div className="relative mt-3">
+        <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2.5 pr-10 font-mono text-xs leading-relaxed">
           {TRACING_SETUP_SNIPPET}
         </pre>
-      </AlertDescription>
-    </Alert>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Copy setup snippet"
+          className="absolute top-1.5 right-1.5 text-muted-foreground"
+          onClick={() => void copyToClipboard(TRACING_SETUP_SNIPPET)}
+        >
+          <Copy />
+        </Button>
+      </div>
+      {detail && detail !== "Agent tracing is not enabled" && (
+        <p className="mt-2 text-xs text-muted-foreground">{detail}</p>
+      )}
+    </div>
   );
 }

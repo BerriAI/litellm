@@ -25,7 +25,16 @@ import { useLogDetailRouting } from "./logDetailRouting";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
-import { AgentTracesSection, LogsViewSwitch, type LogsView } from "./TraceView/AgentTracesSection";
+import {
+  AgentTracesSection,
+  LogsViewSwitch,
+  readStoredLogsView,
+  resolveLogsView,
+  storeLogsView,
+  TracingSetupLink,
+  type LogsView,
+} from "./TraceView/AgentTracesSection";
+import { useAgentTraces } from "./TraceView/useAgentTraces";
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
@@ -54,7 +63,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
-  const [logsView, setLogsView] = useState<LogsView>("all");
+  const [storedLogsView, setStoredLogsView] = useState<LogsView | null>(readStoredLogsView);
 
   const {
     logId: urlLogId,
@@ -82,6 +91,20 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
   }, [excludeInternalHealthChecks]);
 
+  const traces = useAgentTraces({
+    accessToken,
+    startTime,
+    endTime,
+    isCustomDate,
+    isLiveTail,
+    enabled: isActive,
+  });
+  const logsView = resolveLogsView(storedLogsView, traces);
+  const handleLogsViewChange = useCallback((view: LogsView) => {
+    storeLogsView(view);
+    setStoredLogsView(view);
+  }, []);
+
   const searchTerm = useMemo(() => {
     const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.SEARCH);
     return typeof entry?.value === "string" ? entry.value : "";
@@ -98,7 +121,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     userRole,
     userID,
     columnFilters: queryColumnFilters,
-    activeTab: isActive && logsView !== "traces" ? "request logs" : "inactive",
+    activeTab: isActive && logsView === "requests" ? "request logs" : "inactive",
     isLiveTail,
     excludeInternalHealthChecks,
     startTime,
@@ -309,27 +332,27 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   return (
     <AutoRouterModelGroupsProvider>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Request Logs</h1>
-        <LogsViewSwitch value={logsView} onChange={setLogsView} />
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <h1 className="text-xl font-semibold">Logs</h1>
+        <div className="flex items-center gap-4">
+          {traces.notEnabledDetail !== null && <TracingSetupLink detail={traces.notEnabledDetail} />}
+          <LogsViewSwitch
+            value={logsView}
+            onChange={handleLogsViewChange}
+            showRuns={traces.notEnabledDetail === null}
+          />
+        </div>
       </div>
 
-      {isLiveTail && pagination.pageIndex === 0 && <LiveTailBanner onStop={() => setIsLiveTail(false)} />}
+      {logsView === "requests" && isLiveTail && pagination.pageIndex === 0 && (
+        <LiveTailBanner onStop={() => setIsLiveTail(false)} />
+      )}
 
-      {logsView === "traces" && <div className="mb-3">{logsToolbar}</div>}
+      {logsView === "runs" && (
+        <AgentTracesSection traces={traces} accessToken={accessToken} toolbar={logsToolbar} onOpenRequestLog={openLog} />
+      )}
 
-      <AgentTracesSection
-        view={logsView}
-        accessToken={accessToken}
-        isActive={isActive}
-        startTime={startTime}
-        endTime={endTime}
-        isCustomDate={isCustomDate}
-        isLiveTail={isLiveTail}
-        onOpenRequestLog={openLog}
-      />
-
-      {logsView !== "traces" && (
+      {logsView === "requests" && (
         <RequestLogsTable
           data={rows}
           rowCount={rowCount}

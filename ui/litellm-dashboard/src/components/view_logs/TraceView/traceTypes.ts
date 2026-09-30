@@ -68,6 +68,8 @@ export interface TraceSummary {
   status: SpanStatus;
   span_count: number;
   agent_count: number;
+  /** Agent spans (researcher ×200 counts 200). Older proxies omit it. */
+  agent_invocations?: number;
   llm_calls: number;
   tool_calls: number;
   /** Spans with an error status; > 0 means the run shows as failed. */

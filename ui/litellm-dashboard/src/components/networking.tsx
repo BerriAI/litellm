@@ -2124,6 +2124,13 @@ export const agentTraceListCall = async ({
 export const agentTraceCall = async (accessToken: string, traceId: string): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, { accessToken });
 
+/** Absolute URL of a trace (or one of its spans) as markdown, for pasting into a coding agent. */
+export const agentTraceMarkdownUrl = (traceId: string, spanId?: string): string => {
+  const base = getProxyBaseUrl().replace(/\/$/, "");
+  const span = spanId ? `&span_id=${encodeURIComponent(spanId)}` : "";
+  return `${base}/v1/traces/${encodeURIComponent(traceId)}?format=md${span}`;
+};
+
 export const agentTraceSpanCall = async (accessToken: string, traceId: string, spanId: string): Promise<SpanDetail> =>
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,

@@ -1,42 +1,67 @@
 /**
- * Pure helpers for the agent trace views. No React in here: everything the tree,
- * steps and graph views compute lives here so it can be unit-tested directly.
+ * Pure helpers for the agent trace views. No React in here: the outline the drawer
+ * renders is computed here so it can be unit-tested against real traces.
  */
-import type { AgentNode, Span, SpanStatus, Trace, TraceMessage, TraceSummary } from "./traceTypes";
+import type { Span, SpanType, Trace, TraceMessage, TraceSummary } from "./traceTypes";
 
 /* ------------------------------------------------------------------ */
 /*  Formatting                                                         */
 /* ------------------------------------------------------------------ */
 
+/** Short human durations: "<1ms", "840ms", "8.3s", "1m 29s". */
 export const fmtMs = (ms: number): string => {
-  if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
-  if (ms >= 1000) return `${(ms / 1000).toFixed(2)}s`;
-  return `${Math.max(ms, 0).toFixed(ms < 10 ? 1 : 0)}ms`;
+  if (ms < 1) return "<1ms";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(ms / 60_000);
+  return `${minutes}m ${Math.round((ms % 60_000) / 1000)}s`;
 };
 
+/** "$1.14", "$0.128", "$0.0029", "$0". */
 export const fmtCost = (cost: number | null | undefined): string => {
   if (cost == null) return "—";
   if (cost === 0) return "$0";
-  return cost < 0.001 ? `$${cost.toFixed(5)}` : `$${cost.toFixed(4)}`;
+  if (cost >= 1) return `$${cost.toFixed(2)}`;
+  if (cost >= 0.01) return `$${cost.toFixed(3)}`;
+  return `$${Number(cost.toPrecision(2))}`;
 };
 
 export const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-export const shortId = (id: string, length = 16): string => (id.length > length ? `${id.slice(0, length)}…` : id);
-
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-/** "◆ Agent · 7 LLM · 26 tool" or "◆ 2 agents · 7 LLM · 26 tool". */
-export const agentBadgeLabel = (summary: Pick<TraceSummary, "agent_count" | "llm_calls" | "tool_calls">): string => {
-  const agents = summary.agent_count > 1 ? plural(summary.agent_count, "agent") : "Agent";
-  return `◆ ${agents} · ${summary.llm_calls} LLM · ${summary.tool_calls} tool`;
-};
+/** "just now", "2m ago", "3h ago", "4d ago". */
+export function fmtRelative(iso: string, now: number = Date.now()): string {
+  const seconds = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
+  if (seconds < 45) return "just now";
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m ago`;
+  if (seconds < 86_400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86_400)}d ago`;
+}
 
-/** LLM spans are labelled by model group (what the caller asked for); everything else by span name. */
-export const spanLabel = (span: Span): string =>
-  span.type === "llm" ? span.litellm?.model_group || span.model || span.litellm?.model || span.name : span.name;
+/** "claude-sonnet-4-5" / "openai/claude-haiku-4-5-20251001" -> "sonnet-4-5" / "haiku-4-5". */
+export const shortModel = (model: string): string =>
+  model
+    .replace(/^.*\//, "")
+    .replace(/^claude-/, "")
+    .replace(/-\d{8}$/, "");
+
+/** Exception text without the glued-on Python traceback header. */
+export const cleanError = (error: string | null | undefined): string =>
+  (error ?? "").split("Traceback (most recent call last)")[0].trim();
 
 export const spanSpend = (span: Span): number => span.litellm?.spend ?? 0;
+
+/** LLM decisions + tool calls: what the list row and the header call "steps". */
+export const stepCount = (summary: Pick<TraceSummary, "llm_calls" | "tool_calls">): number =>
+  summary.llm_calls + summary.tool_calls;
+
+/** `14 steps · 48.2s · $0.21 · 3 errors` for a trace list row. */
+export function traceRowMeta(summary: TraceSummary): string {
+  const parts = [plural(stepCount(summary), "step"), fmtMs(summary.duration_ms), fmtCost(summary.spend)];
+  if (summary.error_count > 0) parts.push(plural(summary.error_count, "error"));
+  return parts.join(" · ");
+}
 
 /* ------------------------------------------------------------------ */
 /*  Visible tree (framework spans hidden + children re-parented)       */
@@ -64,6 +89,12 @@ const byStart = (a: Span, b: Span): number => a.start_offset_ms - b.start_offset
 
 export const indexSpans = (spans: readonly Span[]): Map<string, Span> => new Map(spans.map((s) => [s.span_id, s]));
 
+/** Exporters occasionally send the same span twice; keep the first copy. */
+export function dedupeSpans(spans: readonly Span[]): Span[] {
+  const seen = new Set<string>();
+  return spans.filter((s) => !seen.has(s.span_id) && Boolean(seen.add(s.span_id)));
+}
+
 const pushChild = (children: ChildrenMap, key: string, span: Span): void => {
   const list = children.get(key);
   if (list) list.push(span);
@@ -71,11 +102,10 @@ const pushChild = (children: ChildrenMap, key: string, span: Span): void => {
 };
 
 /**
- * Children map for the waterfall. With `showFramework` off, framework spans are
- * dropped and their children attach to the nearest visible ancestor. Spans whose
- * parent is missing from the trace attach to the root level.
+ * Children map with framework spans dropped (unless `showFramework`) and their
+ * children attached to the nearest visible ancestor. Orphans attach to the root level.
  */
-export function buildVisibleTree(spans: readonly Span[], showFramework: boolean): VisibleTree {
+export function buildVisibleTree(spans: readonly Span[], showFramework = false): VisibleTree {
   const byId = indexSpans(spans);
   const hidden = (span: Span) => !showFramework && isFrameworkSpan(span);
   const visibleParentKey = (span: Span): string => {
@@ -113,37 +143,17 @@ export function subtreeStats(spans: readonly Span[]): Map<string, SubtreeStats> 
     const cached = stats.get(span.span_id);
     if (cached) return cached;
     const own: SubtreeStats = { spend: spanSpend(span), errors: span.status === "error" ? 1 : 0 };
+    stats.set(span.span_id, own);
     for (const child of raw.get(span.span_id) ?? []) {
       const childStats = visit(child);
       own.spend += childStats.spend;
       own.errors += childStats.errors;
     }
-    stats.set(span.span_id, own);
     return own;
   };
   spans.forEach(visit);
   return stats;
 }
-
-/* ------------------------------------------------------------------ */
-/*  Sibling agent grouping (auto-collapse of fan-out)                  */
-/* ------------------------------------------------------------------ */
-
-/** A parent with more than this many same-named agent children renders them as one group row. */
-export const GROUP_THRESHOLD = 10;
-/** Group rows expand this many invocations at a time. */
-export const GROUP_PAGE_SIZE = 20;
-
-export interface SpanGroup {
-  key: string;
-  name: string;
-  spans: Span[];
-  spend: number;
-  p50Ms: number;
-  errors: number;
-}
-
-export type TreeItem = { kind: "span"; span: Span } | { kind: "group"; group: SpanGroup };
 
 export const median = (values: readonly number[]): number => {
   if (values.length === 0) return 0;
@@ -152,201 +162,491 @@ export const median = (values: readonly number[]): number => {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 };
 
-export const groupKey = (parentKey: string, name: string): string => `${parentKey}::${name}`;
+/* ------------------------------------------------------------------ */
+/*  Outline tree: passthrough tools, agent folds, failure groups       */
+/* ------------------------------------------------------------------ */
 
-const buildGroup = (parentKey: string, name: string, members: Span[], stats: Map<string, SubtreeStats>): SpanGroup => ({
-  key: groupKey(parentKey, name),
-  name,
-  spans: members,
-  spend: members.reduce((sum, s) => sum + (stats.get(s.span_id)?.spend ?? 0), 0),
-  p50Ms: median(members.map((s) => s.duration_ms)),
-  errors: members.filter((s) => (stats.get(s.span_id)?.errors ?? 0) > 0).length,
-});
+/** More than this many same-named sibling agents fold into one `researcher ×200` row. */
+export const FOLD_THRESHOLD = 5;
+/** Folded invocations reveal this many at a time. */
+export const FOLD_PAGE_SIZE = 20;
 
-/**
- * Collapse runs of same-named agent siblings (more than `threshold`) into one group
- * item, placed where the first member would have been. Other children pass through.
- */
-export function groupSiblingAgents(
+export interface SpanNode {
+  kind: "span";
+  span: Span;
+  /** The tool span that launched this subagent (`task`), when it was collapsed into it. */
+  via?: Span;
+  children: OutlineNode[];
+}
+
+export interface AgentFoldNode {
+  kind: "agents";
+  key: string;
+  name: string;
+  invocations: SpanNode[];
+  spend: number;
+  /** Invocations with at least one failed span inside. */
+  failed: number;
+  p50Ms: number;
+}
+
+export interface FailureGroupNode {
+  kind: "failures";
+  key: string;
+  /** The failing tool. */
+  name: string;
+  failures: number;
+  /** The failed calls plus the LLM retries between them, in order. */
+  nodes: OutlineNode[];
+}
+
+export type OutlineNode = SpanNode | AgentFoldNode | FailureGroupNode;
+
+const isAgentNode = (node: OutlineNode): node is SpanNode => node.kind === "span" && node.span.type === "agent";
+
+/** Replace runs of more than `threshold` same-named agent siblings with one fold node at the first one's slot. */
+export function foldSiblingAgents(
   parentKey: string,
-  children: readonly Span[],
+  nodes: readonly OutlineNode[],
   stats: Map<string, SubtreeStats>,
-  threshold = GROUP_THRESHOLD,
-): TreeItem[] {
-  const agentsByName = new Map<string, Span[]>();
-  for (const child of children) {
-    if (child.type !== "agent") continue;
-    const list = agentsByName.get(child.name);
-    if (list) list.push(child);
-    else agentsByName.set(child.name, [child]);
+  threshold = FOLD_THRESHOLD,
+): OutlineNode[] {
+  const byName = new Map<string, SpanNode[]>();
+  for (const node of nodes) {
+    if (!isAgentNode(node)) continue;
+    const list = byName.get(node.span.name);
+    if (list) list.push(node);
+    else byName.set(node.span.name, [node]);
   }
-  const grouped = new Set([...agentsByName].filter(([, list]) => list.length > threshold).map(([name]) => name));
+  const folded = new Set([...byName].filter(([, list]) => list.length > threshold).map(([name]) => name));
+  if (folded.size === 0) return [...nodes];
   const emitted = new Set<string>();
-  const items: TreeItem[] = [];
-  for (const child of children) {
-    if (child.type !== "agent" || !grouped.has(child.name)) {
-      items.push({ kind: "span", span: child });
+  const out: OutlineNode[] = [];
+  for (const node of nodes) {
+    if (!isAgentNode(node) || !folded.has(node.span.name)) {
+      out.push(node);
       continue;
     }
-    if (emitted.has(child.name)) continue;
-    emitted.add(child.name);
-    items.push({ kind: "group", group: buildGroup(parentKey, child.name, agentsByName.get(child.name) ?? [], stats) });
+    const name = node.span.name;
+    if (emitted.has(name)) continue;
+    emitted.add(name);
+    const invocations = byName.get(name) ?? [];
+    out.push({
+      kind: "agents",
+      key: `${parentKey}::agents::${name}`,
+      name,
+      invocations,
+      spend: invocations.reduce((sum, n) => sum + (stats.get(n.span.span_id)?.spend ?? 0), 0),
+      failed: invocations.filter((n) => (stats.get(n.span.span_id)?.errors ?? 0) > 0).length,
+      p50Ms: median(invocations.map((n) => n.span.duration_ms)),
+    });
   }
-  return items;
+  return out;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Flattening the tree into rows                                      */
-/* ------------------------------------------------------------------ */
+const isFailedLeafTool = (node: OutlineNode | undefined, name?: string): node is SpanNode =>
+  node?.kind === "span" &&
+  node.span.type === "tool" &&
+  node.span.status === "error" &&
+  node.children.length === 0 &&
+  (name === undefined || node.span.name === name);
 
-export interface TreeUiState {
-  /** Span ids whose children are hidden. */
-  collapsed: ReadonlySet<string>;
-  /** Group key -> how many invocations are revealed (0 = just the summary row). */
-  groupShown: Readonly<Record<string, number>>;
-}
+const isLlmNode = (node: OutlineNode | undefined): node is SpanNode =>
+  node?.kind === "span" && node.span.type === "llm";
 
-export type TreeRow =
-  | { kind: "span"; span: Span; depth: number; hasChildren: boolean; isCollapsed: boolean }
-  | { kind: "group"; group: SpanGroup; depth: number; shown: number }
-  | { kind: "more"; group: SpanGroup; depth: number; shown: number };
-
-interface FlattenContext {
-  children: ChildrenMap;
-  stats: Map<string, SubtreeStats>;
-  ui: TreeUiState;
-  rows: TreeRow[];
-}
-
-function pushSpanRow(ctx: FlattenContext, span: Span, depth: number): void {
-  const hasChildren = (ctx.children.get(span.span_id)?.length ?? 0) > 0;
-  const isCollapsed = ctx.ui.collapsed.has(span.span_id);
-  ctx.rows.push({ kind: "span", span, depth, hasChildren, isCollapsed });
-  if (hasChildren && !isCollapsed) walkChildren(ctx, span.span_id, depth + 1);
-}
-
-function pushGroupRows(ctx: FlattenContext, group: SpanGroup, depth: number): void {
-  const shown = Math.min(ctx.ui.groupShown[group.key] ?? 0, group.spans.length);
-  ctx.rows.push({ kind: "group", group, depth, shown });
-  if (shown === 0) return;
-  group.spans.slice(0, shown).forEach((span) => pushSpanRow(ctx, span, depth + 1));
-  if (shown < group.spans.length) ctx.rows.push({ kind: "more", group, depth: depth + 1, shown });
-}
-
-function walkChildren(ctx: FlattenContext, parentKey: string, depth: number): void {
-  for (const item of groupSiblingAgents(parentKey, ctx.children.get(parentKey) ?? [], ctx.stats)) {
-    if (item.kind === "span") pushSpanRow(ctx, item.span, depth);
-    else pushGroupRows(ctx, item.group, depth);
+/** End (exclusive) of a failure run of tool `name` starting at `start`: failed calls, optionally each preceded by the LLM retry that made it. */
+function failureRunEnd(nodes: readonly OutlineNode[], start: number, name: string): number {
+  let i = start;
+  let end = start;
+  while (i < nodes.length) {
+    if (isFailedLeafTool(nodes[i], name)) {
+      end = ++i;
+    } else if (isLlmNode(nodes[i]) && isFailedLeafTool(nodes[i + 1], name)) {
+      i += 1;
+    } else {
+      break;
+    }
   }
+  return end;
 }
-
-/** Depth-first rows for the waterfall, honouring collapsed spans and group pagination. */
-export function flattenTree(children: ChildrenMap, stats: Map<string, SubtreeStats>, ui: TreeUiState): TreeRow[] {
-  const ctx: FlattenContext = { children, stats, ui, rows: [] };
-  walkChildren(ctx, ROOT_KEY, 0);
-  return ctx.rows;
-}
-
-/** Ids of the span rows, in render order (drives J/K navigation). */
-export const spanRowIds = (rows: readonly TreeRow[]): string[] =>
-  rows.flatMap((row) => (row.kind === "span" ? [row.span.span_id] : []));
 
 /**
- * Tree UI state with `spanId` guaranteed visible: its visible ancestors are
- * expanded and any group containing it (or an ancestor) reveals enough pages.
+ * Fold repeated failures of the same tool into one `verify_claim ×4 failed` node, in
+ * place: back-to-back failed calls, or a retry loop (LLM -> failed call, again and again).
  */
-export function revealSpan(
-  children: ChildrenMap,
-  stats: Map<string, SubtreeStats>,
-  ui: TreeUiState,
-  spanId: string,
-): TreeUiState {
-  const parentOf = new Map<string, string>();
-  children.forEach((list, key) => list.forEach((s) => parentOf.set(s.span_id, key)));
-  if (!parentOf.has(spanId)) return ui;
-  const collapsed = new Set(ui.collapsed);
-  const groupShown = { ...ui.groupShown };
-  let current = spanId;
-  while (parentOf.has(current)) {
-    const parentKey = parentOf.get(current) as string;
-    collapsed.delete(parentKey);
-    const items = groupSiblingAgents(parentKey, children.get(parentKey) ?? [], stats);
-    for (const item of items) {
-      if (item.kind !== "group") continue;
-      const index = item.group.spans.findIndex((s) => s.span_id === current);
-      if (index < 0) continue;
-      const needed = Math.ceil((index + 1) / GROUP_PAGE_SIZE) * GROUP_PAGE_SIZE;
-      groupShown[item.group.key] = Math.max(groupShown[item.group.key] ?? 0, needed);
+export function groupFailedToolCalls(parentKey: string, nodes: readonly OutlineNode[]): OutlineNode[] {
+  const out: OutlineNode[] = [];
+  let i = 0;
+  while (i < nodes.length) {
+    const node = nodes[i];
+    const startsAt = isFailedLeafTool(node) ? node : isLlmNode(node) && isFailedLeafTool(nodes[i + 1]) ? nodes[i + 1] : null;
+    if (startsAt && startsAt.kind === "span") {
+      const end = failureRunEnd(nodes, i, startsAt.span.name);
+      const members = nodes.slice(i, end);
+      const failures = members.filter((m) => isFailedLeafTool(m)).length;
+      if (failures > 1) {
+        out.push({
+          kind: "failures",
+          key: `${parentKey}::failures::${startsAt.span.span_id}`,
+          name: startsAt.span.name,
+          failures,
+          nodes: members,
+        });
+        i = end;
+        continue;
+      }
     }
-    current = parentKey;
+    out.push(node);
+    i++;
   }
-  return { collapsed, groupShown };
+  return out;
+}
+
+/** The outline's nodes under the root agent (framework hidden, subagent launches collapsed, folds applied). */
+export function buildOutlineTree(spans: readonly Span[]): { root: Span | null; nodes: OutlineNode[] } {
+  const unique = dedupeSpans(spans);
+  const { children } = buildVisibleTree(unique, false);
+  const stats = subtreeStats(unique);
+  const toNode = (span: Span): SpanNode => {
+    const kids = (children.get(span.span_id) ?? []).map(toNode);
+    // A tool whose only job was to launch a subagent (Deep Agents `task`) renders as the subagent.
+    if (span.type === "tool" && kids.length === 1 && kids[0].span.type === "agent" && !kids[0].via) {
+      return { ...kids[0], via: span };
+    }
+    const shaped = groupFailedToolCalls(span.span_id, foldSiblingAgents(span.span_id, kids, stats));
+    return { kind: "span", span, children: shaped };
+  };
+  const top = children.get(ROOT_KEY) ?? [];
+  const root = top.find((s) => s.parent_span_id === null) ?? top[0] ?? null;
+  if (!root) return { root: null, nodes: [] };
+  const rootNode = toNode(root);
+  const others = top.filter((s) => s !== root).map(toNode);
+  return { root, nodes: [...rootNode.children, ...others] };
 }
 
 /* ------------------------------------------------------------------ */
-/*  Steps view                                                         */
+/*  Human labels                                                       */
 /* ------------------------------------------------------------------ */
 
-export interface TraceStep {
-  span: Span;
-  /** 1-based, in time order (stable when re-sorted by cost). */
-  number: number;
-  /** Nearest enclosing non-root agent span name, e.g. "researcher". */
-  subagent: string | null;
-  /** Nesting level of subagents (0 = root agent). */
-  depth: number;
-  /** For LLM steps: the tools the agent ran right after this decision. */
-  toolNames: string[];
-}
+/** What a sibling node looks like as a call made by the LLM step before it. */
+const callName = (node: OutlineNode): { name: string; count: number } => {
+  if (node.kind === "agents") return { name: node.name, count: node.invocations.length };
+  if (node.kind === "failures") return { name: node.name, count: node.failures };
+  if (node.via) return { name: `${node.via.name}(${node.span.name})`, count: 1 };
+  return { name: node.span.name, count: 1 };
+};
 
-const isStepSpan = (span: Span): boolean =>
-  span.type === "llm" || span.type === "tool" || (span.type === "agent" && span.parent_span_id !== null);
-
-interface AgentContext {
-  subagent: string | null;
-  depth: number;
-  invocationId: string | null;
-}
-
-function agentContext(span: Span, byId: Map<string, Span>): AgentContext {
-  let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
-  let subagent: string | null = null;
-  let invocationId: string | null = null;
-  let depth = 0;
-  while (parent) {
-    if (parent.type === "agent") {
-      invocationId ??= parent.span_id;
-      if (parent.parent_span_id !== null) {
-        subagent ??= parent.name;
-        depth++;
-      }
-    }
-    parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
+/** `task(researcher) ×4, write_file`: consecutive duplicates collapsed. */
+export function summarizeCalls(names: readonly { name: string; count: number }[]): string {
+  const merged: { name: string; count: number }[] = [];
+  for (const entry of names) {
+    const last = merged.at(-1);
+    if (last && last.name === entry.name) last.count += entry.count;
+    else merged.push({ ...entry });
   }
-  return { subagent, depth, invocationId };
+  return merged.map((m) => (m.count > 1 ? `${m.name} ×${m.count}` : m.name)).join(", ");
 }
 
-/** Every LLM decision, tool call and subagent invocation, in time order. */
-export function stepsFromSpans(spans: readonly Span[]): TraceStep[] {
-  const byId = indexSpans(spans);
-  const ordered = spans.filter(isStepSpan).sort(byStart);
-  const contexts = ordered.map((span) => agentContext(span, byId));
-  return ordered.map((span, i) => {
-    const toolNames: string[] = [];
-    if (span.type === "llm") {
-      for (let j = i + 1; j < ordered.length; j++) {
-        if (contexts[j].invocationId !== contexts[i].invocationId) continue;
-        if (ordered[j].type === "llm") break;
-        if (ordered[j].type === "tool") toolNames.push(ordered[j].name);
-      }
+/** Calls the LLM at `index` made: the siblings after it, up to the next LLM step. */
+export function callsAfter(nodes: readonly OutlineNode[], index: number): { name: string; count: number }[] {
+  const calls: { name: string; count: number }[] = [];
+  for (let i = index + 1; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (node.kind === "span" && node.span.type === "llm") break;
+    calls.push(callName(node));
+  }
+  return calls;
+}
+
+const LABEL_MAX_CHARS = 60;
+const clip = (text: string, max = LABEL_MAX_CHARS): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/**
+ * The outline label for a span. LLM steps read as the decision they made
+ * (`→ task(researcher) ×4`), or `Answer` when no call followed.
+ */
+export function humanLabel(span: Span, calls: readonly { name: string; count: number }[] = []): string {
+  if (span.type === "llm") {
+    if (calls.length > 0) return clip(`→ ${summarizeCalls(calls)}`);
+    return "Answer";
+  }
+  return span.name;
+}
+
+/** First line of a span's input as plain text. */
+export const firstLine = (text: string): string => text.split("\n").find((l) => l.trim())?.trim() ?? "";
+
+/** `customer_id="acme-404"` from a tool's JSON args preview. */
+export function argsPreview(preview: string): string {
+  const parsed = parseJson(preview);
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return Object.entries(parsed as Record<string, unknown>)
+      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+      .join(" ");
+  }
+  return preview.replace(/^\{/, "").replace(/\}$/, "");
+}
+
+/* ------------------------------------------------------------------ */
+/*  Outline rows (flattened, for rendering + keyboard nav)             */
+/* ------------------------------------------------------------------ */
+
+export type OutlineGlyph = SpanType | "input" | "output";
+
+export interface OutlineRow {
+  id: string;
+  kind: "input" | "output" | "span" | "agents" | "failures" | "more";
+  depth: number;
+  glyph: OutlineGlyph;
+  label: string;
+  /** Faint inline text after the label (tool args, subagent task). */
+  detail?: string;
+  /** Faint right-hand text (model · tokens, steps, spend). */
+  meta?: string;
+  /** Right-hand text shown in red (e.g. "3 failed"). */
+  metaError?: string;
+  durationMs?: number;
+  /** Label renders red. */
+  error: boolean;
+  span?: Span;
+  via?: Span;
+  fold?: AgentFoldNode;
+  failures?: FailureGroupNode;
+  hasChildren: boolean;
+  /** Collapsed by default? (Folds, failure groups and folded invocations are.) */
+  defaultOpen: boolean;
+  /** Row ids that must all be open for this row to show. */
+  ancestors: string[];
+  /** For folded invocations and "Show more": which fold page it belongs to. */
+  page?: { fold: string; index: number };
+}
+
+export interface OutlineUiState {
+  /** Row id -> open, overriding the row's default. */
+  open: Readonly<Record<string, boolean>>;
+  /** Fold row id -> how many invocations are revealed. */
+  shown: Readonly<Record<string, number>>;
+}
+
+export const EMPTY_OUTLINE_UI: OutlineUiState = { open: {}, shown: {} };
+
+export const INPUT_ROW_ID = "input";
+export const OUTPUT_ROW_ID = "output";
+
+const countSteps = (nodes: readonly OutlineNode[]): number =>
+  nodes.reduce((sum, node) => {
+    if (node.kind === "agents") return sum + node.invocations.reduce((s, inv) => s + countSteps(inv.children), 0);
+    if (node.kind === "failures") return sum + countSteps(node.nodes);
+    if (node.span.type === "agent") return sum + countSteps(node.children);
+    return sum + 1 + countSteps(node.children);
+  }, 0);
+
+interface FlattenContext {
+  rows: OutlineRow[];
+  stats: Map<string, SubtreeStats>;
+}
+
+function spanRow(
+  node: SpanNode,
+  depth: number,
+  ancestors: string[],
+  calls: { name: string; count: number }[],
+  ctx: FlattenContext,
+  invocationIndex?: number,
+): OutlineRow {
+  const { span } = node;
+  const row: OutlineRow = {
+    id: span.span_id,
+    kind: "span",
+    depth,
+    glyph: span.type,
+    label: humanLabel(span, calls),
+    durationMs: span.duration_ms,
+    error: span.status === "error",
+    span,
+    via: node.via,
+    hasChildren: node.children.length > 0,
+    defaultOpen: invocationIndex === undefined,
+    ancestors,
+  };
+  if (span.type === "llm") {
+    const model = span.litellm?.model_group || span.model || span.litellm?.model;
+    const tokens = span.input_tokens + span.output_tokens;
+    row.meta = [model ? shortModel(model) : null, tokens ? `${fmtTok(tokens)} tok` : null].filter(Boolean).join(" · ");
+  } else if (span.type === "tool") {
+    row.detail = argsPreview(span.input_preview);
+  } else if (span.type === "agent") {
+    if (invocationIndex !== undefined) {
+      row.label = `#${invocationIndex + 1}`;
+    } else {
+      row.label = span.name;
     }
-    return { span, number: i + 1, subagent: contexts[i].subagent, depth: contexts[i].depth, toolNames };
+    row.detail = firstLine(previewText(span.input_preview));
+    const steps = countSteps(node.children);
+    row.meta = plural(steps, "step");
+    const errors = ctx.stats.get(span.span_id)?.errors ?? 0;
+    if (errors > 0 && span.status !== "error") row.metaError = `${errors} failed`;
+  }
+  return row;
+}
+
+function walk(nodes: readonly OutlineNode[], depth: number, ancestors: string[], ctx: FlattenContext): void {
+  nodes.forEach((node, index) => {
+    if (node.kind === "span") {
+      const calls = node.span.type === "llm" ? callsAfter(nodes, index) : [];
+      const row = spanRow(node, depth, ancestors, calls, ctx);
+      ctx.rows.push(row);
+      walk(node.children, depth + 1, [...ancestors, row.id], ctx);
+      return;
+    }
+    if (node.kind === "failures") {
+      const id = `failures:${node.key}`;
+      ctx.rows.push({
+        id,
+        kind: "failures",
+        depth,
+        glyph: "tool",
+        label: `${node.name} ×${node.failures} failed`,
+        error: true,
+        failures: node,
+        hasChildren: true,
+        defaultOpen: false,
+        ancestors,
+      });
+      walk(node.nodes, depth + 1, [...ancestors, id], ctx);
+      return;
+    }
+    const id = `agents:${node.key}`;
+    ctx.rows.push({
+      id,
+      kind: "agents",
+      depth,
+      glyph: "agent",
+      label: `${node.name} ×${node.invocations.length}`,
+      meta: fmtCost(node.spend),
+      metaError: node.failed > 0 ? `${node.failed} failed` : undefined,
+      error: false,
+      fold: node,
+      hasChildren: true,
+      defaultOpen: false,
+      ancestors,
+    });
+    node.invocations.forEach((inv, i) => {
+      const row = spanRow(inv, depth + 1, [...ancestors, id], [], ctx, i);
+      row.page = { fold: id, index: i };
+      ctx.rows.push(row);
+      walk(inv.children, depth + 2, [...ancestors, id, row.id], ctx);
+    });
+    ctx.rows.push({
+      id: `more:${node.key}`,
+      kind: "more",
+      depth: depth + 1,
+      glyph: "agent",
+      label: "Show more",
+      error: false,
+      hasChildren: false,
+      defaultOpen: false,
+      ancestors: [...ancestors, id],
+      page: { fold: id, index: node.invocations.length },
+    });
   });
 }
 
-/** Most expensive first; ties keep time order. */
-export const sortStepsByCost = (steps: readonly TraceStep[]): TraceStep[] =>
-  [...steps].sort((a, b) => spanSpend(b.span) - spanSpend(a.span) || a.number - b.number);
+/**
+ * Every outline row with nothing collapsed: Input, the steps depth-first in time
+ * order, Output. Visibility is applied separately by `visibleOutlineRows`.
+ */
+export function buildOutline(trace: Trace): OutlineRow[] {
+  const spans = dedupeSpans(trace.spans);
+  const { root, nodes } = buildOutlineTree(spans);
+  const ctx: FlattenContext = { rows: [], stats: subtreeStats(spans) };
+  const input = firstLine(previewText(trace.summary.input_preview || root?.input_preview || ""));
+  ctx.rows.push({
+    id: INPUT_ROW_ID,
+    kind: "input",
+    depth: 0,
+    glyph: "input",
+    label: "Input",
+    detail: input,
+    error: false,
+    span: root ?? undefined,
+    hasChildren: false,
+    defaultOpen: true,
+    ancestors: [],
+  });
+  walk(nodes, 0, [], ctx);
+  ctx.rows.push({
+    id: OUTPUT_ROW_ID,
+    kind: "output",
+    depth: 0,
+    glyph: "output",
+    label: "Output",
+    durationMs: trace.summary.duration_ms,
+    error: false,
+    span: root ?? undefined,
+    hasChildren: false,
+    defaultOpen: true,
+    ancestors: [],
+  });
+  return ctx.rows;
+}
+
+export const isRowOpen = (row: OutlineRow, ui: OutlineUiState): boolean => ui.open[row.id] ?? row.defaultOpen;
+
+/** Rows currently on screen: every ancestor open, fold pages respected, "Show more" only while some are hidden. */
+export function visibleOutlineRows(rows: readonly OutlineRow[], ui: OutlineUiState): OutlineRow[] {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const shownFor = (fold: string) => ui.shown[fold] ?? FOLD_PAGE_SIZE;
+  return rows.filter((row) => {
+    if (!row.ancestors.every((id) => isRowOpen(byId.get(id) as OutlineRow, ui))) return false;
+    if (row.page) {
+      const shown = shownFor(row.page.fold);
+      if (row.kind === "more") return shown < row.page.index;
+      if (row.page.index >= shown) return false;
+    }
+    // Rows nested under a folded invocation are hidden when that invocation is off-page.
+    return row.ancestors.every((id) => {
+      const ancestor = byId.get(id) as OutlineRow;
+      return !ancestor.page || ancestor.page.index < shownFor(ancestor.page.fold);
+    });
+  });
+}
+
+/** Visible rows for a trace: the flat list the outline renders and J/K walks. */
+export const outlineRows = (trace: Trace, ui: OutlineUiState = EMPTY_OUTLINE_UI): OutlineRow[] =>
+  visibleOutlineRows(buildOutline(trace), ui);
+
+/** UI state with `rowId` visible: its ancestors opened and fold pages advanced. */
+export function revealRow(rows: readonly OutlineRow[], ui: OutlineUiState, rowId: string): OutlineUiState {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const target = byId.get(rowId);
+  if (!target) return ui;
+  const open = { ...ui.open };
+  const shown = { ...ui.shown };
+  for (const row of [target, ...target.ancestors.map((id) => byId.get(id) as OutlineRow)]) {
+    if (row !== target) open[row.id] = true;
+    if (row.page) {
+      const needed = Math.ceil((row.page.index + 1) / FOLD_PAGE_SIZE) * FOLD_PAGE_SIZE;
+      shown[row.page.fold] = Math.max(shown[row.page.fold] ?? FOLD_PAGE_SIZE, needed);
+    }
+  }
+  return { open, shown };
+}
+
+/** Rows the drawer can select (everything but "Show more"). */
+export const selectableIds = (rows: readonly OutlineRow[]): string[] =>
+  rows.filter((r) => r.kind !== "more").map((r) => r.id);
+
+/** Where the drawer opens: the requested span, else the first failure, else Output. */
+export function initialOutlineSelection(
+  rows: readonly OutlineRow[],
+  initialSpanId?: string | null,
+): { selectedId: string; ui: OutlineUiState } {
+  const requested = initialSpanId ? rows.find((r) => r.id === initialSpanId) : undefined;
+  const target = requested ?? rows.find((r) => r.error) ?? rows.find((r) => r.id === OUTPUT_ROW_ID);
+  const selectedId = target?.id ?? OUTPUT_ROW_ID;
+  return { selectedId, ui: revealRow(rows, EMPTY_OUTLINE_UI, selectedId) };
+}
 
 /* ------------------------------------------------------------------ */
 /*  Trace-level rollups                                                */
@@ -362,101 +662,6 @@ export const traceHasErrors = (trace: Trace): boolean =>
 export function firstErrorSpan(spans: readonly Span[]): Span | null {
   const failed = spans.filter((s) => s.status === "error").sort(byStart);
   return failed.find((s) => s.parent_span_id !== null) ?? failed[0] ?? null;
-}
-
-export const totalCacheRead = (spans: readonly Span[]): number =>
-  spans.reduce((sum, s) => sum + (s.litellm?.cache_read_tokens ?? 0), 0);
-
-export const agentsWithErrors = (spans: readonly Span[]): Set<string> =>
-  new Set(spans.filter((s) => s.status === "error").map((s) => s.agent));
-
-export const invocationsOf = (spans: readonly Span[], agentName: string): Span[] =>
-  spans.filter((s) => s.type === "agent" && s.name === agentName).sort(byStart);
-
-export const llmSpans = (spans: readonly Span[]): Span[] => spans.filter((s) => s.type === "llm").sort(byStart);
-
-export const statusTone = (status: SpanStatus): "success" | "error" | "neutral" => {
-  if (status === "error") return "error";
-  return status === "ok" ? "success" : "neutral";
-};
-
-/* ------------------------------------------------------------------ */
-/*  Agent graph layout                                                 */
-/* ------------------------------------------------------------------ */
-
-export const GRAPH_NODE_HEIGHT = 48;
-export const GRAPH_MIN_NODE_WIDTH = 132;
-export const GRAPH_MAX_NODE_WIDTH = 232;
-const GRAPH_COLUMN_GAP = 96;
-const GRAPH_ROW_GAP = 28;
-const GRAPH_PADDING = 16;
-
-export interface GraphNode {
-  agent: AgentNode;
-  x: number;
-  y: number;
-  width: number;
-}
-
-export interface GraphEdge {
-  from: GraphNode;
-  to: GraphNode;
-  label: string;
-}
-
-export interface GraphLayout {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  width: number;
-  height: number;
-}
-
-function agentDepths(agents: readonly AgentNode[]): Map<string, number> {
-  const byName = new Map(agents.map((a) => [a.name, a]));
-  const depths = new Map<string, number>();
-  const depthOf = (agent: AgentNode, seen: Set<string>): number => {
-    const known = depths.get(agent.name);
-    if (known !== undefined) return known;
-    const parent = agent.parent_agent ? byName.get(agent.parent_agent) : undefined;
-    const depth = parent && !seen.has(parent.name) ? depthOf(parent, new Set([...seen, agent.name])) + 1 : 0;
-    depths.set(agent.name, depth);
-    return depth;
-  };
-  agents.forEach((a) => depthOf(a, new Set([a.name])));
-  return depths;
-}
-
-/** Left-to-right layered layout: one column per nesting level, node width by spend. */
-export function layoutAgentGraph(agents: readonly AgentNode[]): GraphLayout {
-  const depths = agentDepths(agents);
-  const maxSpend = Math.max(0, ...agents.map((a) => a.spend));
-  const columnWidth = GRAPH_MAX_NODE_WIDTH + GRAPH_COLUMN_GAP;
-  const rowsPerColumn = new Map<number, number>();
-  const nodes: GraphNode[] = agents.map((agent) => {
-    const depth = depths.get(agent.name) ?? 0;
-    const row = rowsPerColumn.get(depth) ?? 0;
-    rowsPerColumn.set(depth, row + 1);
-    const share = maxSpend > 0 ? agent.spend / maxSpend : 0;
-    return {
-      agent,
-      x: GRAPH_PADDING + depth * columnWidth,
-      y: GRAPH_PADDING + row * (GRAPH_NODE_HEIGHT + GRAPH_ROW_GAP),
-      width: Math.round(GRAPH_MIN_NODE_WIDTH + share * (GRAPH_MAX_NODE_WIDTH - GRAPH_MIN_NODE_WIDTH)),
-    };
-  });
-  const byName = new Map(nodes.map((n) => [n.agent.name, n]));
-  const edges: GraphEdge[] = nodes.flatMap((node) => {
-    const parent = node.agent.parent_agent ? byName.get(node.agent.parent_agent) : undefined;
-    return parent ? [{ from: parent, to: node, label: `×${node.agent.invocations}` }] : [];
-  });
-  const columns = Math.max(1, ...[...rowsPerColumn.keys()].map((d) => d + 1));
-  const rows = Math.max(1, ...rowsPerColumn.values());
-  return {
-    nodes,
-    edges,
-    width: GRAPH_PADDING * 2 + (columns - 1) * columnWidth + GRAPH_MAX_NODE_WIDTH,
-    height: GRAPH_PADDING * 2 + rows * GRAPH_NODE_HEIGHT + (rows - 1) * GRAPH_ROW_GAP,
-  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -478,7 +683,7 @@ const isMessage = (value: unknown): value is TraceMessage =>
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */
 export function parseMessages(value: string): TraceMessage[] | null {
   const parsed = parseJson(value);
-  if (Array.isArray(parsed)) return parsed.every(isMessage) ? parsed : null;
+  if (Array.isArray(parsed)) return parsed.length > 0 && parsed.every(isMessage) ? parsed : null;
   return isMessage(parsed) ? [parsed] : null;
 }
 
@@ -489,11 +694,17 @@ export const prettyPayload = (value: string): string => {
   return JSON.stringify(parsed, null, 2);
 };
 
+/** Compact JSON for short args, pretty for long ones. */
+export const compactPayload = (value: string, maxInline = 100): string => {
+  const parsed = parseJson(value);
+  if (parsed === null || typeof parsed === "string") return typeof parsed === "string" ? parsed : value;
+  const compact = JSON.stringify(parsed);
+  return compact.length <= maxInline ? compact : JSON.stringify(parsed, null, 2);
+};
+
 /* ------------------------------------------------------------------ */
 /*  List view helpers                                                  */
 /* ------------------------------------------------------------------ */
-
-export const traceStartMs = (summary: TraceSummary): number => Date.parse(summary.start_time);
 
 const PREVIEW_USER_CONTENT = /"role":\s*"(?:user|human)",\s*"content":\s*"((?:[^"\\]|\\.)*)/;
 
@@ -517,19 +728,20 @@ export function previewText(preview: string): string {
 export const traceDisplayName = (summary: Pick<TraceSummary, "name" | "service">): string =>
   summary.name || summary.service || "(unnamed trace)";
 
-export interface TimedItem<T> {
-  at: number;
-  item: T;
-}
+/** The list row / drawer title: first line of what was asked, else the agent name. */
+export const traceTitle = (summary: Pick<TraceSummary, "name" | "service" | "input_preview">): string =>
+  firstLine(previewText(summary.input_preview)) || traceDisplayName(summary);
 
-/** Merge two newest-first lists into one newest-first list. */
-export function interleaveByTime<A, B>(
-  a: readonly TimedItem<A>[],
-  b: readonly TimedItem<B>[],
-): ({ kind: "a"; at: number; item: A } | { kind: "b"; at: number; item: B })[] {
-  const merged: ({ kind: "a"; at: number; item: A } | { kind: "b"; at: number; item: B })[] = [
-    ...a.map((x) => ({ kind: "a" as const, ...x })),
-    ...b.map((x) => ({ kind: "b" as const, ...x })),
-  ];
-  return merged.sort((x, y) => y.at - x.at);
-}
+/* ------------------------------------------------------------------ */
+/*  Copy for agent                                                     */
+/* ------------------------------------------------------------------ */
+
+const curlLine = (url: string): string => `curl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
+
+/** Paste-ready instruction for Claude / Codex that fetches the whole trace as markdown. */
+export const copyForAgentText = (url: string, failed: boolean): string =>
+  `Read this LiteLLM agent trace and explain what happened${failed ? " and why it failed" : ""}:\n${curlLine(url)}`;
+
+/** Same, for one step. */
+export const copyStepText = (url: string): string =>
+  `Read this step of a LiteLLM agent trace and explain what it did:\n${curlLine(url)}`;
