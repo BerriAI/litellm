@@ -32,7 +32,9 @@ const STATE: SpanTreeState = {
   groupRevealCounts: {},
 };
 
-const span = (overrides: Partial<Span> & Pick<Span, "span_id">): Span => ({
+type SpanOverrides = Partial<Span> & Pick<Span, "span_id">;
+
+const span = (overrides: SpanOverrides): Span => ({
   parent_span_id: null,
   name: overrides.span_id,
   type: "chain",
@@ -84,12 +86,27 @@ describe("formatting", () => {
 
 describe("buildVisibleTree / isFrameworkSpan", () => {
   it("hides framework spans and re-parents their children", () => {
+    const middleware: SpanOverrides = {
+      span_id: "mw",
+      parent_span_id: "root",
+      type: "framework",
+      name: "X.wrap_model_call",
+    };
+    const modelNode: SpanOverrides = { span_id: "model", parent_span_id: "mw", type: "chain", name: "model" };
+    const llmCall: SpanOverrides = { span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 };
+    const planner: SpanOverrides = {
+      span_id: "step",
+      parent_span_id: "root",
+      type: "chain",
+      name: "planner",
+      start_offset_ms: 1,
+    };
     const spans = [
       span({ span_id: "root", type: "agent" }),
-      span({ span_id: "mw", parent_span_id: "root", type: "framework", name: "X.wrap_model_call" }),
-      span({ span_id: "model", parent_span_id: "mw", type: "chain", name: "model" }),
-      span({ span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 }),
-      span({ span_id: "step", parent_span_id: "root", type: "chain", name: "planner", start_offset_ms: 1 }),
+      span(middleware),
+      span(modelNode),
+      span(llmCall),
+      span(planner),
     ];
     const compact = buildVisibleTree(spans, false);
     expect(compact.children.get(ROOT_KEY)?.map((s) => s.span_id)).toEqual(["root"]);
@@ -132,16 +149,17 @@ describe("buildTreeRows", () => {
 
   it("folds as few as 3 failed siblings of the same tool into a failure group", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const failing = [0, 1, 2].map((i) =>
-      span({
+    const failing = [0, 1, 2].map((i) => {
+      const failedGrep: SpanOverrides = {
         span_id: `t${i}`,
         parent_span_id: "p",
         type: "tool",
         name: "grep_code",
         status: "error",
         start_offset_ms: i,
-      }),
-    );
+      };
+      return span(failedGrep);
+    });
     const rows = buildTreeRows([parent, ...failing], STATE);
     const group = groups(rows)[0];
     expect(group).toMatchObject({ name: "grep_code", failedCount: 3, isFailureGroup: true });
@@ -149,15 +167,16 @@ describe("buildTreeRows", () => {
 
   it("never folds same-named calls from different agents into one group", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const calls = [0, 1, 2, 3, 4, 5].map((i) =>
-      span({
+    const calls = [0, 1, 2, 3, 4, 5].map((i) => {
+      const call: SpanOverrides = {
         span_id: `c${i}`,
         parent_span_id: "p",
         type: "llm",
         name: "ChatOpenAI",
         agent: i < 3 ? "planner" : "critic",
-      }),
-    );
+      };
+      return span(call);
+    });
     const rows = buildTreeRows([parent, ...calls], STATE);
     expect(groups(rows)).toHaveLength(0);
     expect(spanRows(rows).filter((r) => r.span.name === "ChatOpenAI")).toHaveLength(6);
@@ -165,17 +184,25 @@ describe("buildTreeRows", () => {
 
   it("leaves 5 healthy same-named siblings unfolded", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = [0, 1, 2, 3, 4].map((i) =>
-      span({ span_id: `k${i}`, parent_span_id: "p", type: "tool", name: "search" }),
-    );
+    const kids = [0, 1, 2, 3, 4].map((i) => {
+      const search: SpanOverrides = { span_id: `k${i}`, parent_span_id: "p", type: "tool", name: "search" };
+      return span(search);
+    });
     expect(groups(buildTreeRows([parent, ...kids], STATE))).toHaveLength(0);
   });
 
   it("pages expanded groups 20 at a time with a load-more row", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = Array.from({ length: 45 }, (_, i) =>
-      span({ span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker", start_offset_ms: i }),
-    );
+    const kids = Array.from({ length: 45 }, (_, i) => {
+      const worker: SpanOverrides = {
+        span_id: `k${i}`,
+        parent_span_id: "p",
+        type: "agent",
+        name: "worker",
+        start_offset_ms: i,
+      };
+      return span(worker);
+    });
     const all = [parent, ...kids];
     const id = groupRowId("p", kids[0]);
     const page1 = buildTreeRows(all, { ...STATE, expandedGroupIds: new Set([id]) });
@@ -209,16 +236,14 @@ describe("revealSpanInState", () => {
 describe("errorSource", () => {
   it("blames the tool, LiteLLM, or the model", () => {
     expect(errorSource(span({ span_id: "a", status: "ok" }))).toBeNull();
-    expect(errorSource(span({ span_id: "t", type: "tool", status: "error", error: "boom" }))).toBe("tool");
-    expect(errorSource(span({ span_id: "l", type: "llm", status: "error", error: "429 Rate limit exceeded" }))).toBe(
-      "litellm",
-    );
-    expect(errorSource(span({ span_id: "g", type: "llm", status: "error", error: "Blocked by guardrail" }))).toBe(
-      "litellm",
-    );
-    expect(errorSource(span({ span_id: "m", type: "llm", status: "error", error: "context length exceeded" }))).toBe(
-      "model",
-    );
+    const failure = (span_id: string, type: Span["type"], error: string): Span => {
+      const failed: SpanOverrides = { span_id, type, error, status: "error" };
+      return span(failed);
+    };
+    expect(errorSource(failure("t", "tool", "boom"))).toBe("tool");
+    expect(errorSource(failure("l", "llm", "429 Rate limit exceeded"))).toBe("litellm");
+    expect(errorSource(failure("g", "llm", "Blocked by guardrail"))).toBe("litellm");
+    expect(errorSource(failure("m", "llm", "context length exceeded"))).toBe("model");
   });
 
   it("classifies the swarm's failing lookup_benchmark calls as tool errors", () => {
