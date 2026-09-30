@@ -199,7 +199,7 @@ def get_str_from_messages_with_tools(messages: object) -> str:
     """
     ``get_str_from_messages`` that also keeps each conversation's tool calls and tool results, so agent turns
     that differ only in their tool exchange (Anthropic ``tool_use`` / ``tool_result``, OpenAI ``tool_calls``)
-    produce different text. Each result is tagged with the position of the call it answers, since call ids are
+    produce different text. Each result is encoded with the position of the call it answers, since call ids are
     random per session
     """
     message_mappings: Final = tuple(_str_mappings(messages))
@@ -211,9 +211,9 @@ def tool_call_str(name: object, arguments: object) -> str:
     return f'{{"name":{_compact_json(name)},"arguments":{_compact_json(arguments)}}}'
 
 
-def tool_result_str(call_id: object, call_ordinals: Mapping[str, int]) -> str:
+def tool_result_str(call_id: object, call_ordinals: Mapping[str, int], output: str) -> str:
     ordinal: Final = call_ordinals.get(call_id) if isinstance(call_id, str) else None
-    return "" if ordinal is None else f'{{"result_of_call":{ordinal}}}'
+    return f'{{"result_of_call":{_compact_json(ordinal)},"output":{_compact_json(output)}}}'
 
 
 def tool_call_ordinals(call_ids: Iterable[object]) -> Mapping[str, int]:
@@ -234,12 +234,13 @@ def _message_tool_call_ids(messages: Iterable[Mapping[str, object]]) -> Iterator
 
 
 def _message_str_with_tools(message: Mapping[str, object], call_ordinals: Mapping[str, int]) -> str:
-    result_tag: Final = (
-        tool_result_str(message.get("tool_call_id"), call_ordinals) if message.get("role") == "tool" else ""
-    )
+    content: Final = _content_str_with_tools(message.get("content"), call_ordinals)
     return (
-        result_tag
-        + _content_str_with_tools(message.get("content"), call_ordinals)
+        (
+            tool_result_str(message.get("tool_call_id"), call_ordinals, content)
+            if message.get("role") == "tool"
+            else content
+        )
         + "".join(_openai_tool_call_str(tool_call) for tool_call in _str_mappings(message.get("tool_calls")))
         + extract_search_results_text(message.get("search_results"))
     )
@@ -256,8 +257,8 @@ def _block_str_with_tools(block: Mapping[str, object], call_ordinals: Mapping[st
     if block_type == "tool_use":
         return tool_call_str(block.get("name"), block.get("input"))
     if block_type == "tool_result":
-        return tool_result_str(block.get("tool_use_id"), call_ordinals) + _content_str_with_tools(
-            block.get("content"), call_ordinals
+        return tool_result_str(
+            block.get("tool_use_id"), call_ordinals, _content_str_with_tools(block.get("content"), call_ordinals)
         )
     text: Final = block.get("text")
     return text if isinstance(text, str) else ""

@@ -272,10 +272,14 @@ class RedisSemanticCache(BaseCache):
             return None
 
         responses_input: Final = kwargs.get("input")
-        prompt_parts: Final[list[str]] = []
-        cls._collect_responses_input_text(responses_input, prompt_parts, cls._responses_call_ordinals(responses_input))
-        prompt: Final = "\n".join(prompt_parts).strip()
+        prompt: Final = cls._responses_input_prompt(responses_input, cls._responses_call_ordinals(responses_input))
         return prompt or None
+
+    @classmethod
+    def _responses_input_prompt(cls, value: object, call_ordinals: Mapping[str, int]) -> str:
+        prompt_parts: Final[list[str]] = []
+        cls._collect_responses_input_text(value, prompt_parts, call_ordinals)
+        return "\n".join(prompt_parts).strip()
 
     @classmethod
     def _collect_responses_input_text(
@@ -341,16 +345,17 @@ class RedisSemanticCache(BaseCache):
             if isinstance(item, dict) and item.get("type") == "function_call"
         )
 
-    @staticmethod
-    def _function_call_as_prompt(value: object, call_ordinals: Mapping[str, int]) -> object:
+    @classmethod
+    def _function_call_as_prompt(cls, value: object, call_ordinals: Mapping[str, int]) -> object:
         if not isinstance(value, dict):
             return value
         if value.get("type") == "function_call":
             return tool_call_str(value.get("name"), value.get("arguments"))
-        result_tag: Final = (
-            tool_result_str(value.get("call_id"), call_ordinals) if value.get("type") == "function_call_output" else ""
+        if value.get("type") != "function_call_output":
+            return value
+        return tool_result_str(
+            value.get("call_id"), call_ordinals, cls._responses_input_prompt(value.get("output"), call_ordinals)
         )
-        return (result_tag, value.get("output")) if result_tag else value
 
     @staticmethod
     def _coerce_response_input_value(value: object) -> object:

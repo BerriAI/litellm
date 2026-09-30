@@ -84,7 +84,7 @@ impl Embedder for PreparedEmbedding {
 }
 
 /// `get_str_from_messages_with_tools`: every message's content text, tool calls and tool results,
-/// then its OpenAI `tool_calls`, then its search results. Each tool result is tagged with the
+/// then its OpenAI `tool_calls`, then its search results. Each tool result is encoded with the
 /// position of the call it answers.
 pub fn str_from_messages(messages: &[Value]) -> String {
     let messages: Vec<_> = messages.iter().filter_map(Value::as_object).collect();
@@ -107,12 +107,16 @@ pub fn str_from_messages(messages: &[Value]) -> String {
     let mut text = String::new();
     for message in messages {
         if message.get("role").and_then(Value::as_str) == Some("tool") {
-            text.push_str(&tool_result_tag(
+            let mut output = String::new();
+            push_content_text(&mut output, message.get("content"), &call_ordinals);
+            text.push_str(&tool_result_json(
                 message.get("tool_call_id"),
                 &call_ordinals,
+                &output,
             ));
+        } else {
+            push_content_text(&mut text, message.get("content"), &call_ordinals);
         }
-        push_content_text(&mut text, message.get("content"), &call_ordinals);
         if let Some(Value::Array(tool_calls)) = message.get("tool_calls") {
             for tool_call in tool_calls.iter().filter_map(Value::as_object) {
                 let function = tool_call.get("function");
@@ -142,8 +146,13 @@ fn push_content_text(
                         text.push_str(&tool_call_json(block.get("name"), block.get("input")));
                     }
                     Some("tool_result") => {
-                        text.push_str(&tool_result_tag(block.get("tool_use_id"), call_ordinals));
-                        push_content_text(text, block.get("content"), call_ordinals);
+                        let mut output = String::new();
+                        push_content_text(&mut output, block.get("content"), call_ordinals);
+                        text.push_str(&tool_result_json(
+                            block.get("tool_use_id"),
+                            call_ordinals,
+                            &output,
+                        ));
                     }
                     _ => {
                         if let Some(block_text) = block.get("text").and_then(Value::as_str) {
@@ -167,14 +176,21 @@ fn tool_call_ordinals<'a>(call_ids: impl Iterator<Item = &'a Value>) -> HashMap<
     ordinals
 }
 
-/// `tool_result_str`: `{"result_of_call":N}` for a result answering a known call, else empty.
-fn tool_result_tag(call_id: Option<&Value>, call_ordinals: &HashMap<&str, usize>) -> String {
-    call_id
+/// `tool_result_str`: `{"result_of_call":N,"output":...}`, with a `null` position when the result
+/// answers no known call.
+fn tool_result_json(
+    call_id: Option<&Value>,
+    call_ordinals: &HashMap<&str, usize>,
+    output: &str,
+) -> String {
+    let ordinal = call_id
         .and_then(Value::as_str)
-        .and_then(|call_id| call_ordinals.get(call_id))
-        .map_or_else(String::new, |ordinal| {
-            format!("{{\"result_of_call\":{ordinal}}}")
-        })
+        .and_then(|call_id| call_ordinals.get(call_id));
+    format!(
+        "{{\"result_of_call\":{},\"output\":{}}}",
+        compact_json(&json!(ordinal)),
+        compact_json(&Value::String(output.to_owned())),
+    )
 }
 
 /// `tool_call_str`: the compact `{"name":...,"arguments":...}` a tool call contributes.
@@ -258,14 +274,16 @@ fn collect_input_text(
                 return;
             }
             if map.get("type").and_then(Value::as_str) == Some("function_call_output") {
-                let tag = tool_result_tag(map.get("call_id"), call_ordinals);
-                if !tag.is_empty() {
-                    parts.push(tag);
-                    if let Some(output) = map.get("output") {
-                        collect_input_text(output, parts, call_ordinals);
-                    }
-                    return;
+                let mut output_parts = Vec::new();
+                if let Some(output) = map.get("output") {
+                    collect_input_text(output, &mut output_parts, call_ordinals);
                 }
+                parts.push(tool_result_json(
+                    map.get("call_id"),
+                    call_ordinals,
+                    python_strip(&output_parts.join("\n")),
+                ));
+                return;
             }
             if let Some(content) = map.get("content").filter(|content| !content.is_null()) {
                 collect_input_text(content, parts, call_ordinals);
