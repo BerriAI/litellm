@@ -1430,9 +1430,9 @@ class LiteLLMCompletionResponsesConfig:
             )
             input_item_cache_control = input_item.get("cache_control")
             if input_item_cache_control:
-                msg["cache_control"] = cast(
+                msg["cache_control"] = cast(  # cast-ok: Responses input uses the shared cache-control shape
                     "ChatCompletionCachedContent", input_item_cache_control
-                )  # cast-ok: Responses input uses the shared cache-control shape
+                )
                 # Also set on the last content block for providers (Anthropic, Bedrock) that read cache_control there.
                 if isinstance(msg["content"], list) and len(msg["content"]) > 0:
                     last_element = msg["content"][-1]
@@ -1658,9 +1658,9 @@ class LiteLLMCompletionResponsesConfig:
         )
         output_cache_control = tool_call_output.get("cache_control")
         if output_cache_control:
-            tool_output_message["cache_control"] = cast(
+            tool_output_message["cache_control"] = cast(  # cast-ok: Responses input uses the shared cache-control shape
                 "ChatCompletionCachedContent", output_cache_control
-            )  # cast-ok: Responses input uses the shared cache-control shape
+            )
 
         _tool_use_definition: Final = TOOL_CALLS_CACHE.get_cache(
             key=tool_call_output.get("call_id") or "",
@@ -1759,9 +1759,9 @@ class LiteLLMCompletionResponsesConfig:
         )
         function_call_cache_control = function_call.get("cache_control")
         if function_call_cache_control:
-            chat_completion_response_message["cache_control"] = cast(
+            chat_completion_response_message["cache_control"] = cast(  # cast-ok: Responses input uses the shared cache-control shape
                 "ChatCompletionCachedContent", function_call_cache_control
-            )  # cast-ok: Responses input uses the shared cache-control shape
+            )
 
         return [chat_completion_response_message]
 
