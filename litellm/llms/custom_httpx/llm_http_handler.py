@@ -6000,7 +6000,7 @@ class BaseLLMHTTPHandler:
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         if error_response and hasattr(error_response, "text"):
-            error_text = getattr(error_response, "text", error_text)
+            error_text = getattr(error_response, "text", None) or error_text
         if error_headers:
             error_headers = dict(error_headers)
         else:
