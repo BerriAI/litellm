@@ -849,12 +849,11 @@ def test_concurrent_mixed_requests_scan_each_prompt_once(
     assert sorted(scans) == sorted(expected), scans
     assert len(_provider_calls(provider)) == 30
     for model_group in (chat_model, messages_model, responses_model):
-        wanted: Final = 10
         rows: Final = eventually(
             lambda group=model_group: read_rows(
                 'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (group,)
             ),
-            lambda values: len(values) == wanted,
+            lambda values: len(values) == 10,
             seconds=70,
         )
         for row in rows:
