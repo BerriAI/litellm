@@ -749,6 +749,7 @@ _FULL_DB_ROW = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "models": ["allowed-model"],
     "budget_id": "b1",
     "object_permission_id": "p1",
     "litellm_budget_table": {
@@ -794,6 +795,7 @@ _EXPECTED_CUSTOMER = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "models": ["allowed-model"],
     "budget_id": "b1",
     "litellm_budget_table": {
         "budget_id": "b1",
@@ -857,10 +859,21 @@ def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
     assert response.json() == _EXPECTED_CUSTOMER
 
 
+def test_customer_new_forwards_models_to_db(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/new",
+        json={"user_id": "c1", "models": ["allowed-model"]},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert mock_prisma_client.db.litellm_endusertable.create.call_args.kwargs["data"]["models"] == ["allowed-model"]
+
+
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
-def test_customer_new_rejects_a_duration_that_never_advances(
-    mock_prisma_client, mock_user_api_key_auth, bad_duration
-):
+def test_customer_new_rejects_a_duration_that_never_advances(mock_prisma_client, mock_user_api_key_auth, bad_duration):
     """A zero-length window resets to "now", leaving the customer's budget row
     permanently due for the reset job to re-read every tick."""
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
@@ -903,6 +916,23 @@ def test_char_update_body(mock_prisma_client, mock_user_api_key_auth):
     )
     assert response.status_code == 200
     assert response.json() == _EXPECTED_CUSTOMER
+    assert "models" not in mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]
+
+
+def test_customer_update_clears_models_allowlist(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False})
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "models": []},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["models"] == []
 
 
 def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):

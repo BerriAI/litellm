@@ -61,6 +61,7 @@ from litellm.proxy.auth.auth_checks import (
     _check_agent_caller_model_access,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
+    _restricted_end_user_where,
     get_key_object,
     get_user_object,
     invalidate_team_member_spend_state,
@@ -7096,6 +7097,7 @@ _RESTRICTED_END_USER_WHERE = {
         {"allowed_model_region": {"not": None}},
         {"default_model": {"not": None}},
         {"object_permission_id": {"not": None}},
+        {"models": {"is_empty": False}},
     ]
 }
 
@@ -8812,6 +8814,50 @@ async def _run_common_checks(
         valid_token=UserAPIKeyAuth(token="test-token"),
         request=MagicMock(spec=Request),
     )
+
+
+async def _common_checks_for_customer_model(*, model: str, customer_models: list[str]) -> bool:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    return await common_checks(
+        request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        team_object=None,
+        user_object=None,
+        end_user_object=LiteLLM_EndUserTable(
+            user_id="customer-1",
+            blocked=False,
+            models=customer_models,
+        ),
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=UserAPIKeyAuth(token="test-token"),
+        request=MagicMock(spec=Request),
+        skip_budget_checks=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_denies_model_outside_customer_allowlist() -> None:
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _common_checks_for_customer_model(model="b", customer_models=["a"])
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
+
+
+@pytest.mark.parametrize(
+    ("model", "customer_models"),
+    [
+        ("a", ["a"]),
+        ("b", []),
+    ],
+)
+@pytest.mark.asyncio
+async def test_common_checks_allows_customer_allowlist_models(model: str, customer_models: list[str]) -> None:
+    assert await _common_checks_for_customer_model(model=model, customer_models=customer_models) is True
 
 
 @pytest.mark.asyncio

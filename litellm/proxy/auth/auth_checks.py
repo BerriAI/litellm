@@ -1077,6 +1077,16 @@ async def common_checks(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
+    if _model and end_user_object is not None and end_user_object.models:
+        with tracer.trace("litellm.proxy.auth.common_checks.can_customer_call_model"):
+            _can_object_call_model(
+                model=_model,
+                llm_router=llm_router,
+                models=end_user_object.models,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                object_type="customer",
+            )
+
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
     with tracer.trace("litellm.proxy.auth.common_checks.run_project_checks"):
         await _run_project_checks(
@@ -1679,7 +1689,13 @@ def _column_is_set(column: str) -> Mapping[str, object]:
 
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}  # mutable-ok: prisma needs dict/list
+    return {
+        "OR": [  # mutable-ok: prisma filter requires mutable dict/list
+            {"blocked": True},  # mutable-ok: prisma filter requires mutable dict/list
+            *map(_column_is_set, _RESTRICTED_COLUMNS),
+            {"models": {"is_empty": False}},  # mutable-ok: prisma filter requires mutable dict/list
+        ]
+    }
 
 
 class _RegistryNotCached:
@@ -1834,8 +1850,8 @@ async def _end_user_is_known_unrestricted(
     True when the cached registry proves the id restricts nothing, so its row need not be read.
 
     Every field ``get_end_user_object`` callers consume (budget, spend under that budget, region,
-    default model, object permission, blocked) is part of the registry predicate, so an id outside
-    it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
+    default model, models, object permission, blocked) is part of the registry predicate, so an id
+    outside it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
     the row is meaningful: ``max_end_user_budget_id`` or the key's ``end_user_budget_id`` grafts a
     default budget onto any row that exists, ``validate_end_user_id_in_db`` rejects ids that resolve
     to no row, and a token-supplied ``end_user_max_budget`` (a ``user_custom_auth`` callable can set
@@ -4369,7 +4385,7 @@ def _can_object_call_model(
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
-    object_type: Literal["user", "team", "key", "org", "project", "agent"] = "user",
+    object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
     """
