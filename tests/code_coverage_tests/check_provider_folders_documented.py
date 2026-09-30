@@ -28,6 +28,11 @@ EXCLUDED_FOLDERS = {
     "pass_through",
     "openai_like",  # This is a generic handler, not a specific provider
     "aiohttp_openai",  # Internal implementation detail for async HTTP
+    # Agent-harness configs for litellm.agent(), not LLM providers; documented under docs/harness
+    "claude_code",
+    "codex",
+    "opencode",
+    "deepagents",
 }
 
 
