@@ -56,7 +56,6 @@ _OPENAI_UNSCANNABLE_TYPES: Final = frozenset(
     {"file", "input_file", "input_audio", "video_url", "audio_url", "document", "container_upload"}
 )
 _ANTHROPIC_UNSCANNABLE_TYPES: Final = frozenset({"document", "container_upload"})
-_TEXT_DOCUMENT_SOURCE_TYPES: Final = frozenset({"text", "content"})
 _CONVERSE_UNSCANNABLE_KEYS: Final = ("document", "video", "audio")
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 _MAX_IMAGE_BASE64_CHARS: Final = -(-_MAX_IMAGE_BYTES // 3) * 4
@@ -201,8 +200,26 @@ def _classify_anthropic_block(block: Mapping[str, object]) -> _Classified:
 
 def _is_text_document(block: Mapping[str, object]) -> bool:
     source: Final = block.get("source")
-    source_type: Final = source.get("type") if _is_mapping(source) else None
-    return isinstance(source_type, str) and source_type in _TEXT_DOCUMENT_SOURCE_TYPES
+    if not _is_mapping(source):
+        return False
+    content: Final = source.get("content")
+    return source.get("type") == "text" or (
+        source.get("type") == "content"
+        and (isinstance(content, str) or _all_blocks(content, lambda inner: inner.get("type") == "text"))
+    )
+
+
+def _is_converse_text_document(document: object) -> bool:
+    source: Final = document.get("source") if _is_mapping(document) else None
+    if not _is_mapping(source):
+        return False
+    return isinstance(source.get("text"), str) or _all_blocks(
+        source.get("content"), lambda inner: set(inner) == {"text"}
+    )
+
+
+def _all_blocks(value: object, predicate: Callable[[Mapping[str, object]], bool]) -> bool:
+    return _is_list(value) and all(_is_mapping(inner) and predicate(inner) for inner in value)
 
 
 def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
@@ -215,6 +232,8 @@ def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
             return _Unscannable("image (no inline bytes)")
         mime: Final = f"image/{image_format}" if isinstance(image_format, str) else None
         return _classify_base64(mime, encoded, "image")
+    if _is_converse_text_document(block.get("document")):
+        return None
     for key in _CONVERSE_UNSCANNABLE_KEYS:
         if block.get(key) is not None:
             return _Unscannable(key)

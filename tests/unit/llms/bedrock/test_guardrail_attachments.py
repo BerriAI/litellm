@@ -447,3 +447,29 @@ def test_oversize_base64_is_refused_by_length_before_decoding():
     found = find_request_attachments(data, CallTypes.acompletion.value, False, False)
 
     assert found.unscannable == ("image_url (over 4 MB)",)
+
+
+def test_content_source_document_with_an_image_is_refused():
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_B64}}
+    block = {"type": "document", "source": {"type": "content", "content": [TEXT, image]}}
+
+    found = find_request_attachments(_chat(block), CallTypes.anthropic_messages.value, False, False)
+
+    assert found.unscannable == ("document",)
+
+
+@pytest.mark.parametrize(
+    "source, unscannable",
+    [
+        pytest.param({"text": "The grass is purple."}, (), id="text"),
+        pytest.param({"content": [{"text": "a"}, {"text": "b"}]}, (), id="content"),
+        pytest.param({"content": [{"text": "a"}, {"image": {}}]}, ("document",), id="content-with-image"),
+        pytest.param({"bytes": PDF_B64}, ("document",), id="bytes"),
+    ],
+)
+def test_converse_text_source_document_is_not_an_attachment(source, unscannable):
+    data = _converse({"document": {"format": "txt", "name": "doc", "source": source}})
+
+    found = find_request_attachments(data, CallTypes.allm_passthrough_route.value, False, False)
+
+    assert found.unscannable == unscannable

@@ -2566,12 +2566,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Documents, files, audio, video, and images sent by URL, by file id or in another format block the
         request unless ``skip_unscannable_attachments`` is set. ``checks`` mode calls the text-only
         InvokeGuardrailChecks API, so there every image counts as unscannable too. A failed ApplyGuardrail
-        call raises the same error the text scan of the same hook raises. A subclass that overrides
-        ``apply_guardrail`` or ``make_bedrock_api_request`` skips this scan.
+        call raises the same error the text scan of the same hook raises. A guardrail whose
+        ``apply_guardrail`` or ``make_bedrock_api_request`` is replaced, by a subclass or on the
+        instance, skips this scan.
         """
         if (
-            type(self).apply_guardrail is not BedrockGuardrail.apply_guardrail
-            or type(self).make_bedrock_api_request is not BedrockGuardrail.make_bedrock_api_request
+            getattr(self.apply_guardrail, "__func__", None) is not BedrockGuardrail.apply_guardrail
+            or getattr(self.make_bedrock_api_request, "__func__", None) is not BedrockGuardrail.make_bedrock_api_request
         ):
             return
         attachments: Final = find_request_attachments(
