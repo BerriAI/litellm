@@ -758,6 +758,27 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             ),
         )
 
+    def get_request_object_key(
+        self,
+        start_time: datetime,
+        response_id: str,
+        team_alias: str | None,
+        key_alias: str | None,
+    ) -> str:
+        """
+        Object key a request's log is written to. Cold storage reads it back by this same key.
+        """
+        enabled_aliases: Final = (
+            team_alias if self.s3_use_team_prefix else None,
+            key_alias if self.s3_use_key_prefix else None,
+        )
+        return get_s3_object_key(
+            s3_path=cast(str | None, self.s3_path) or "",
+            prefix="".join(f"{alias}/" for alias in enabled_aliases if alias),
+            start_time=start_time,
+            s3_file_name=f"time-{start_time.strftime('%H-%M-%S-%f')}_{response_id}",
+        )
+
     def create_s3_batch_logging_element(
         self,
         start_time: datetime,
@@ -780,34 +801,12 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         if self.s3_strip_base64_files:
             standard_logging_payload = self._strip_base64_from_messages_sync(standard_logging_payload)
 
-        # Base prefix (default empty)
-        prefix_components: Final = []
-        if self.s3_use_team_prefix:
-            team_alias: Final = standard_logging_payload.get("metadata", {}).get("user_api_key_team_alias", None)
-            if team_alias:
-                prefix_components.append(team_alias)
-        if self.s3_use_key_prefix:
-            user_api_key_alias: Final = standard_logging_payload.get("metadata", {}).get("user_api_key_alias", None)
-            if user_api_key_alias:
-                prefix_components.append(user_api_key_alias)
-
-        # Construct full prefix path
-        prefix_path = "/".join(prefix_components)
-        if prefix_path:
-            prefix_path += "/"
-
-        s3_file_name: Final = litellm.utils.get_logging_id(start_time, standard_logging_payload) or ""
-        verbose_logger.debug(
-            "Creating s3 file with prefix_components=%s,prefix_path=%s and %s",
-            prefix_components,
-            prefix_path,
-            s3_file_name,
-        )
-        s3_object_key: Final = get_s3_object_key(
-            s3_path=cast(str | None, self.s3_path) or "",
-            prefix=prefix_path,
+        metadata: Final = standard_logging_payload.get("metadata", {})
+        s3_object_key: Final = self.get_request_object_key(
             start_time=start_time,
-            s3_file_name=s3_file_name,
+            response_id=standard_logging_payload["id"],
+            team_alias=metadata.get("user_api_key_team_alias"),
+            key_alias=metadata.get("user_api_key_alias"),
         )
         verbose_logger.debug("s3_object_key=%s", s3_object_key)
 

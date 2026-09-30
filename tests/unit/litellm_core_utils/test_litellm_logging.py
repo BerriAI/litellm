@@ -3194,136 +3194,51 @@ def test_get_masked_values():
     assert masked_values["vertex_credentials"] == "{s****y}"
 
 
-@pytest.mark.asyncio
-async def test_e2e_generate_cold_storage_object_key_successful():
-    """
-    Test end-to-end generation of cold storage object key when cold storage is properly configured.
-    """
-    from datetime import datetime, timezone
-    from unittest.mock import patch
-
+@pytest.mark.parametrize(
+    ("use_team_prefix", "use_key_prefix", "team_alias", "key_alias", "expected_key"),
+    [
+        (True, True, "team-a", "key-a", "logs/team-a/key-a/2026-09-29/time-07-14-26-037602_msg_01.json"),
+        (True, True, None, "key-a", "logs/key-a/2026-09-29/time-07-14-26-037602_msg_01.json"),
+        (True, False, "team-a", "key-a", "logs/team-a/2026-09-29/time-07-14-26-037602_msg_01.json"),
+        (False, True, "team-a", "key-a", "logs/key-a/2026-09-29/time-07-14-26-037602_msg_01.json"),
+        (False, False, "team-a", "key-a", "logs/2026-09-29/time-07-14-26-037602_msg_01.json"),
+    ],
+)
+def test_cold_storage_object_key_matches_the_key_s3_v2_writes_to(
+    use_team_prefix: bool,
+    use_key_prefix: bool,
+    team_alias: str | None,
+    key_alias: str | None,
+    expected_key: str,
+):
+    from litellm.integrations.s3_v2 import S3Logger
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.types.utils import StandardLoggingPayload
 
-    # Create test data
-    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
-    response_id = "chatcmpl-test-12345"
-    team_alias = "test-team"
+    start_time: Final = datetime.datetime(2026, 9, 29, 7, 14, 26, 37602)
+    metadata: Final = {"user_api_key_team_alias": team_alias, "user_api_key_alias": key_alias}
+    with patch("asyncio.create_task"):
+        s3_logger: Final = S3Logger(
+            s3_bucket_name="bucket",
+            s3_region_name="us-east-1",
+            s3_path="logs",
+            s3_use_team_prefix=use_team_prefix,
+            s3_use_key_prefix=use_key_prefix,
+        )
+    written: Final = s3_logger.create_s3_batch_logging_element(
+        start_time, StandardLoggingPayload(id="msg_01", metadata=metadata, messages=[])
+    )
 
     with (
-        patch("litellm.cold_storage_custom_logger", return_value="s3"),
-        patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key,
+        patch.object(litellm, "cold_storage_custom_logger", "s3_v2"),
+        patch.object(litellm, "callbacks", [s3_logger]),
     ):
-        # Mock the S3 object key generation to return a predictable result
-        mock_get_s3_key.return_value = "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
-
-        # Call the function
-        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
-            start_time=start_time, response_id=response_id, team_alias=team_alias
+        standard_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+            metadata=metadata, start_time=start_time, response_id="msg_01"
         )
 
-        # Verify the S3 function was called with correct parameters
-        mock_get_s3_key.assert_called_once_with(
-            s3_path="",  # Empty path as default
-            prefix="",  # No prefix for cold storage
-            start_time=start_time,
-            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
-        )
-
-        # Verify the result
-        assert result == "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
-        assert result is not None
-        assert isinstance(result, str)
-
-
-@pytest.mark.asyncio
-async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path():
-    """
-    Test that _generate_cold_storage_object_key uses s3_path from custom logger instance.
-    """
-    from datetime import datetime, timezone
-    from unittest.mock import MagicMock, patch
-
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-
-    # Create test data
-    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
-    response_id = "chatcmpl-test-12345"
-
-    # Create mock custom logger with s3_path
-    mock_custom_logger = MagicMock()
-    mock_custom_logger.s3_path = "storage"
-
-    with (
-        patch("litellm.cold_storage_custom_logger", "s3_v2"),
-        patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger,
-        patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key,
-    ):
-        # Setup mocks
-        mock_get_logger.return_value = mock_custom_logger
-        mock_get_s3_key.return_value = "storage/2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
-
-        # Call the function
-        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
-            start_time=start_time, response_id=response_id
-        )
-
-        # Verify logger was queried correctly
-        mock_get_logger.assert_called_once_with("s3_v2")
-
-        # Verify the S3 function was called with the custom logger's s3_path
-        mock_get_s3_key.assert_called_once_with(
-            s3_path="storage",  # Should use custom logger's s3_path
-            prefix="",
-            start_time=start_time,
-            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
-        )
-
-        # Verify the result
-        assert result == "storage/2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
-
-
-@pytest.mark.asyncio
-async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
-    """
-    Test that _generate_cold_storage_object_key falls back to empty s3_path when logger has no s3_path.
-    """
-    from datetime import datetime, timezone
-    from unittest.mock import MagicMock, patch
-
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-
-    # Create test data
-    start_time = datetime(2025, 1, 15, 10, 30, 45, 123456, timezone.utc)
-    response_id = "chatcmpl-test-12345"
-
-    # Create mock custom logger without s3_path
-    mock_custom_logger = MagicMock()
-    mock_custom_logger.s3_path = None  # or could be missing attribute
-
-    with (
-        patch("litellm.cold_storage_custom_logger", "s3_v2"),
-        patch("litellm.logging_callback_manager.get_active_custom_logger_for_callback_name") as mock_get_logger,
-        patch("litellm.integrations.s3.get_s3_object_key") as mock_get_s3_key,
-    ):
-        # Setup mocks
-        mock_get_logger.return_value = mock_custom_logger
-        mock_get_s3_key.return_value = "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
-
-        # Call the function
-        result = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
-            start_time=start_time, response_id=response_id
-        )
-
-        # Verify the S3 function was called with empty s3_path (fallback)
-        mock_get_s3_key.assert_called_once_with(
-            s3_path="",  # Should fall back to empty string
-            prefix="",
-            start_time=start_time,
-            s3_file_name="time-10-30-45-123456_chatcmpl-test-12345",
-        )
-
-        # Verify the result
-        assert result == "2025-01-15/time-10-30-45-123456_chatcmpl-test-12345.json"
+    assert written is not None
+    assert (written.s3_object_key, standard_metadata["cold_storage_object_key"]) == (expected_key, expected_key)
 
 
 @pytest.mark.asyncio
