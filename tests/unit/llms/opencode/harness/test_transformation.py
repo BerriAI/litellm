@@ -430,7 +430,7 @@ def test_session_setup_env_and_persisted_xdg():
 def test_session_setup_errors():
     with pytest.raises(HarnessError):
         setup_for(make_ctx(endpoint=None))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="needs model="):
         setup_for(make_ctx(model=None, endpoint=FakeEndpoint(model=None)))
 
 
