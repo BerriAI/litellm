@@ -1,109 +1,109 @@
-import { screen, within } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import researchTrace from "./__fixtures__/research_trace.json";
 import swarmTrace from "./__fixtures__/swarm_trace.json";
-import { initialTraceView, TraceDrawer } from "./TraceDrawer";
-import type { SpanDetail, Trace } from "./traceTypes";
+import { agentHandoffText, initialRunSelection, RunView } from "./TraceDrawer";
+import type { Trace } from "./traceTypes";
+import { traceDisplayName } from "./traceUtils";
 
 vi.mock("../../networking", () => ({
   agentTraceCall: vi.fn(),
   agentTraceSpanCall: vi.fn(),
+  getProxyBaseUrl: () => "http://proxy.test/",
 }));
 
-import { agentTraceCall, agentTraceSpanCall } from "../../networking";
+// DetailPane is built separately; render a stub that exposes which row is selected.
+vi.mock("./DetailPane", () => ({
+  DetailPane: ({ row, onClose }: { row?: { id: string }; onClose: () => void }) => (
+    <div data-testid="detail-pane" data-row-id={row?.id}>
+      <button type="button" onClick={onClose}>
+        close detail
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) }));
+
+import { copyToClipboard } from "@/utils/dataUtils";
+
+import { agentTraceCall } from "../../networking";
 
 const swarm = swarmTrace as Trace;
 const research = researchTrace as Trace;
 
-const spanDetail = (spanId: string): SpanDetail => ({
-  span_id: spanId,
-  input: JSON.stringify([{ role: "user", content: "Compare ClickHouse and Postgres ingest" }]),
-  output: JSON.stringify({
-    role: "assistant",
-    content: "Calling tools",
-    tool_calls: [{ name: "lookup_benchmark", args: { db: "clickhouse" } }],
-  }),
-  attributes: { "gen_ai.system": "openai" },
-});
-
-const renderDrawer = (trace: Trace, props: Partial<React.ComponentProps<typeof TraceDrawer>> = {}) => {
+const renderRun = (trace: Trace) => {
   vi.mocked(agentTraceCall).mockResolvedValue(trace);
-  return renderWithProviders(
-    <TraceDrawer open traceId={trace.summary.trace_id} accessToken="sk-test" onClose={vi.fn()} {...props} />,
-  );
+  return renderWithProviders(<RunView traceId={trace.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
 };
 
-describe("TraceDrawer", () => {
+const rootSpanId = (trace: Trace): string => trace.spans.find((s) => s.parent_span_id === null)?.span_id ?? "";
+
+describe("RunView", () => {
   beforeEach(() => {
     testQueryClient.clear();
-    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, spanId) => spanDetail(spanId));
+    vi.mocked(copyToClipboard).mockClear();
   });
 
-  it("opens a healthy trace on the Steps view with the stats strip", async () => {
-    renderDrawer(research);
+  it("shows a one-line run header: agent name, trace id, duration and steps", async () => {
+    renderRun(research);
 
-    expect(await screen.findByRole("heading", { name: "research_lead" })).toBeInTheDocument();
-    const stats = screen.getByLabelText("Trace stats");
-    expect(stats).toHaveTextContent("40.20s");
-    expect(stats).toHaveTextContent("LLM calls21");
-    expect(stats).toHaveTextContent("Tool calls25");
-    expect(stats).not.toHaveTextContent("Cost");
-    expect(screen.getByRole("button", { name: "Steps" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("list", { name: "Trace steps" })).toBeInTheDocument();
+    const header = await screen.findByRole("banner");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+    expect(header).toHaveTextContent(research.summary.trace_id);
+    expect(header).toHaveTextContent("duration 40.20s");
+    expect(header).toHaveTextContent(`steps ${research.summary.span_count}`);
+    expect(header).not.toHaveTextContent("failed");
   });
 
-  it("opens a failed trace on the Tree view with the first failed span selected", async () => {
-    renderDrawer(swarm);
+  it("folds researcher ×12 in the span tree", async () => {
+    renderRun(swarm);
 
-    const tree = await screen.findByRole("tree", { name: "Span tree" });
-    expect(screen.getByRole("button", { name: "Tree" })).toHaveAttribute("aria-pressed", "true");
-    const selected = within(tree).getByRole("treeitem", { selected: true });
-    expect(selected).toHaveTextContent("lookup_benchmark");
-    // the 12 researcher invocations collapse into one group row
-    expect(within(tree).getByText(/researcher ×12 · p50/)).toBeInTheDocument();
+    const tree = await screen.findByRole("tree", { name: "Spans in time order" });
+    expect(tree).toHaveTextContent("researcher×12");
+    expect(screen.getByRole("banner")).toHaveTextContent(`failed ${swarm.summary.error_count}`);
   });
 
-  it("hides framework spans until the toggle is checked", async () => {
+  it("opens a failed run on its first failed span", async () => {
+    renderRun(swarm);
+
+    const pane = await screen.findByTestId("detail-pane");
+    const { selectedId } = initialRunSelection(swarm);
+    expect(selectedId).not.toBe(rootSpanId(swarm));
+    expect(pane).toHaveAttribute("data-row-id", selectedId);
+    expect(swarm.spans.find((s) => s.span_id === selectedId)?.status).toBe("error");
+  });
+
+  it("opens a healthy run on the root span", async () => {
+    renderRun(research);
+    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", rootSpanId(research));
+  });
+
+  it("moves the selection with J / K and closes the detail pane with Esc", async () => {
     const user = userEvent.setup();
-    renderDrawer(research);
-    await user.click(await screen.findByRole("button", { name: "Tree" }));
+    renderRun(research);
 
-    const total = research.spans.length;
-    expect(screen.getByText(new RegExp(`^\\d+ of ${total} spans$`))).not.toHaveTextContent(new RegExp(`^${total} of`));
-    await user.click(screen.getByRole("checkbox"));
-    expect(screen.getByText(`${total} of ${total} spans`)).toBeInTheDocument();
-  });
-
-  it("moves the selection with J and K", async () => {
-    const user = userEvent.setup();
-    renderDrawer(research);
-    const steps = await screen.findByRole("list", { name: "Trace steps" });
-    const items = within(steps).getAllByRole("listitem");
-    expect(items[0]).toHaveAttribute("aria-current", "step");
+    const pane = await screen.findByTestId("detail-pane");
+    const root = rootSpanId(research);
+    expect(pane).toHaveAttribute("data-row-id", root);
     await user.keyboard("j");
-    expect(items[1]).toHaveAttribute("aria-current", "step");
+    expect(screen.getByTestId("detail-pane").getAttribute("data-row-id")).not.toBe(root);
     await user.keyboard("k");
-    expect(items[0]).toHaveAttribute("aria-current", "step");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("detail-pane")).not.toBeInTheDocument();
   });
 
-  it("jumps from an agent graph invocation to the tree focused on that span", async () => {
+  it("copies a curl one-liner for Claude / Codex", async () => {
     const user = userEvent.setup();
-    renderDrawer(swarm);
-    await user.click(await screen.findByRole("button", { name: "Graph" }));
-    await user.click(screen.getByRole("button", { name: "Agent critic" }));
-    await user.click(within(screen.getByRole("list", { name: "critic invocations" })).getByRole("button"));
+    renderRun(research);
 
-    const tree = screen.getByRole("tree", { name: "Span tree" });
-    expect(within(tree).getByRole("treeitem", { selected: true })).toHaveTextContent("critic");
-  });
-});
-
-describe("initialTraceView", () => {
-  it("prefers an explicitly requested span", () => {
-    const llm = swarm.spans.find((s) => s.type === "llm") as Trace["spans"][number];
-    expect(initialTraceView(swarm, llm.span_id)).toEqual({ mode: "steps", selectedId: llm.span_id });
+    await user.click(await screen.findByRole("button", { name: /copy for agent/i }));
+    expect(copyToClipboard).toHaveBeenCalledWith(agentHandoffText(research.summary.trace_id), "Command copied");
+    expect(agentHandoffText("t1")).toContain('"http://proxy.test/v1/traces/t1?format=md"');
+    expect(agentHandoffText("t1", "s1")).toContain("&span_id=s1");
   });
 });
