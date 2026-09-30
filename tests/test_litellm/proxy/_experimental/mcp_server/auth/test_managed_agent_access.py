@@ -532,3 +532,28 @@ async def test_caller_mcp_revocation_uses_fresh_policy(
 
     assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == ({"slack"} if fresh else {"slack", "linear"})
     assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == (["read"] if fresh else ["read", "write"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fresh", [False, True])
+async def test_caller_team_outage_cannot_remove_authoritative_server_ceiling(
+    monkeypatch: pytest.MonkeyPatch, fresh: bool,
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.agents import AgentCaller
+
+    database: Final = MagicMock()
+    database.writer_db.litellm_teamtable.find_unique = AsyncMock(side_effect=RuntimeError("writer unavailable"))
+    database.db.litellm_teamtable.find_unique = AsyncMock(side_effect=RuntimeError("reader unavailable"))
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    auth: Final = actor(("read",))
+    auth.agent_caller = AgentCaller(team_id="caller")
+    auth.requires_fresh_policy = fresh
+
+    if fresh:
+        with pytest.raises(HTTPException) as failure:
+            await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert failure.value.status_code == 503
+    else:
+        assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == {"slack", "linear"}

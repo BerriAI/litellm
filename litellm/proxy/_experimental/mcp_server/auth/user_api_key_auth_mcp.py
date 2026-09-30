@@ -2755,7 +2755,9 @@ class MCPRequestHandler:
             )
             return list(servers)
         except Exception as e:
-            if isinstance(e, UnloadableEntitlementError):
+            if isinstance(e, UnloadableEntitlementError) or (
+                user_api_key_auth is not None and user_api_key_auth.requires_fresh_policy
+            ):
                 raise
             verbose_logger.warning("Failed to get allowed MCP servers for team: %s", e)
             return []
