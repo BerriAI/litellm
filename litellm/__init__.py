@@ -2314,6 +2314,12 @@ def __getattr__(name: str) -> Any:
         handler_func: Final = registry[name]
         return handler_func(name)
 
+    # litellm.harness: imported on first access (it is not needed for completion calls)
+    if name == "harness":
+        import importlib
+
+        return importlib.import_module("litellm.harness")
+
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
         from ._lazy_imports import get_litellm_globals
