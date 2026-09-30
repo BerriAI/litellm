@@ -178,3 +178,22 @@ def test_view_only_admin_cannot_ingest_traces(client, receiver):
     response = client.post("/v1/traces", content=b"{}")
     assert response.status_code == 403
     receiver.ingest.assert_not_called()
+
+
+def test_markdown_export_is_scoped_text_markdown_and_404s_when_missing(client, receiver):
+    receiver.get_trace_markdown = AsyncMock(return_value=None)
+    assert client.get("/v1/traces/t1?format=md").status_code == 404
+
+    receiver.get_trace_markdown = AsyncMock(return_value="# Agent trace: lead\n")
+    response = client.get("/v1/traces/t1?format=md&span_id=s1&trace_ref=run-one")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert response.text == "# Agent trace: lead\n"
+    receiver.get_trace_markdown.assert_awaited_once_with(
+        "t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "s1", "run-one"
+    )
+    receiver.get_trace.assert_not_awaited()
+
+
+def test_markdown_export_rejects_unknown_formats(client, receiver):
+    assert client.get("/v1/traces/t1?format=html").status_code == 422
