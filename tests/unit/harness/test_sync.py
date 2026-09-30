@@ -110,5 +110,5 @@ async def test_run_inside_event_loop_raises(monkeypatch, sandbox):
 
 def test_run_inside_asyncio_run_raises(monkeypatch, sandbox):
     install_adapter(monkeypatch)
-    with pytest.raises(RuntimeError, match="await litellm.aagent"):
+    with pytest.raises(RuntimeError, match=r"await litellm\.aagent"):
         asyncio.run(_call_run_in_loop(sandbox))
