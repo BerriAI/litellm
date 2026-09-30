@@ -46,6 +46,7 @@ from litellm.integrations.custom_guardrail import guardrail_request_data_with_st
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
+from litellm.llms.bedrock.passthrough.transformation import is_bedrock_streaming_endpoint
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_callback_params,
@@ -877,12 +878,6 @@ BEDROCK_ENDPOINT_ACTIONS: Final = {
     "count-tokens",
 }
 
-BEDROCK_STREAMING_ACTIONS: Final = {"invoke-with-response-stream", "converse-stream"}
-
-
-def _is_bedrock_streaming_endpoint(endpoint: str) -> bool:
-    return endpoint.partition("?")[0].rstrip("/").rsplit("/", 1)[-1] in BEDROCK_STREAMING_ACTIONS
-
 
 def is_bedrock_count_tokens_endpoint(endpoint: str) -> bool:
     return "count_tokens" in endpoint or "count-tokens" in endpoint
@@ -1009,7 +1004,7 @@ async def handle_bedrock_passthrough_router_model(
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     # Detect streaming based on endpoint
-    is_streaming: Final = _is_bedrock_streaming_endpoint(endpoint)
+    is_streaming: Final = is_bedrock_streaming_endpoint(endpoint)
 
     verbose_proxy_logger.debug(
         "Bedrock router passthrough: model='%s', endpoint='%s', streaming=%s", model, endpoint, is_streaming
@@ -1222,7 +1217,7 @@ async def bedrock_llm_proxy_route(
         "Bedrock passthrough: Using direct Bedrock model '%s' for endpoint '%s'", model, endpoint
     )
 
-    is_streaming: Final = _is_bedrock_streaming_endpoint(endpoint)
+    is_streaming: Final = is_bedrock_streaming_endpoint(endpoint)
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
         MappingProxyType(
             {

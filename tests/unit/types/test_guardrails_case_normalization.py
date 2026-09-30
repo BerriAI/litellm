@@ -249,8 +249,9 @@ class TestStreamScopeValidation:
         result: Final = stored_stream_scope(value)
 
         assert result == expected
-        if value == "sometimes":
-            assert "sometimes" in caplog.text
+        if expected is None:
+            assert f"Ignoring invalid stored stream_scope value of type {type(value).__name__}" in caplog.text
+            assert "sometimes" not in caplog.text
 
     def test_tolerated_stream_scope_rewrites_only_the_scope_field(self) -> None:
         params: Final = {

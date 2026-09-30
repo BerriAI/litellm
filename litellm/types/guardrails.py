@@ -917,20 +917,22 @@ class GuardrailEventHooks(str, Enum):
 
 GUARDRAIL_EVENT_HOOK_VALUES: Final = frozenset(member.value for member in GuardrailEventHooks)
 
+_GUARDRAIL_STREAM_SCOPES: Final[Mapping[str, GuardrailStreamScope]] = MappingProxyType(
+    {
+        "streaming": "streaming",
+        "non_streaming": "non_streaming",
+        "both": "both",
+    }
+)
+
 
 def _as_guardrail_stream_scope(value: object) -> GuardrailStreamScope:
     if not isinstance(value, str):
         raise ValueError(f"stream_scope values must be strings, got {type(value).__name__}")
-    lowered: Final = value.lower()
-    match lowered:
-        case "streaming":
-            return "streaming"
-        case "non_streaming":
-            return "non_streaming"
-        case "both":
-            return "both"
-        case _:
-            raise ValueError(f"stream_scope must be one of both, streaming, non_streaming, got {value!r}")
+    scope: Final = _GUARDRAIL_STREAM_SCOPES.get(value.lower())
+    if scope is None:
+        raise ValueError(f"stream_scope must be one of both, streaming, non_streaming, got {value!r}")
+    return scope
 
 
 def _validated_stream_scope_hook(key: object) -> str:
@@ -958,7 +960,7 @@ def stored_stream_scope(value: object) -> GuardrailStreamScope | dict[str, Guard
     try:
         return coerce_stream_scope(value)
     except ValueError:
-        verbose_logger.warning("Ignoring invalid stored stream_scope value %r", value)
+        verbose_logger.warning("Ignoring invalid stored stream_scope value of type %s", type(value).__name__)
         return None
 
 
