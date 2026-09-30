@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from prisma.models import LiteLLM_AgentsTable
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
@@ -138,6 +140,61 @@ def test_update_agent_not_found(
 
     assert response.status_code == 404
     assert "Agent with ID missing-agent not found" in response.json()["detail"]
+
+
+class _AgentPersistence:
+    def __init__(self, row: LiteLLM_AgentsTable) -> None:
+        self.row = row
+
+    async def find_unique(self, **kwargs: object) -> LiteLLM_AgentsTable:
+        return self.row
+
+    async def update(self, *, data: Mapping[str, object], **kwargs: object) -> LiteLLM_AgentsTable:
+        from tests.test_litellm.proxy.agent_endpoints.test_agent_registry import _stored_agent_row
+
+        self.row = _stored_agent_row({**self.row.model_dump(), **data})
+        return self.row
+
+
+@pytest.mark.parametrize("method", ["PUT", "PATCH"])
+@pytest.mark.parametrize("cardless", [False, True])
+def test_identity_settings_edit_preserves_runtime_configuration_on_readback(
+    monkeypatch: pytest.MonkeyPatch, method: str, cardless: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from tests.test_litellm.proxy.agent_endpoints.test_agent_registry import _stored_agent_row
+
+    runtime: Final = {
+        "agent_card_params": {} if cardless else _sample_agent_card_params(),
+        "litellm_params": {"make_public": False, "model": "a2a/runtime"},
+        "static_headers": {"X-Runtime": "configured"},
+        "extra_headers": ["X-Trace"],
+        "access_group_ids": ["runtime-group"],
+        "kill_switch": {"url": "https://runtime.example/stop", "method": "POST"},
+    }
+    row: Final = _stored_agent_row(runtime)
+    table: Final = _AgentPersistence(row)
+    database: Final = SimpleNamespace(
+        litellm_agentstable=table,
+        litellm_verificationtoken=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database, writer_db=database))
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", AgentRegistry())
+
+    response: Final = client.request(
+        method, "/v1/agents/agent-123", json={"agent_name": "Renamed agent", "enabled": False}
+    )
+    assert response.status_code == 200, response.text
+    readback: Final = client.get("/v1/agents/agent-123")
+    assert readback.status_code == 200, readback.text
+    stored: Final = AgentResponse.model_validate(table.row.model_dump())
+    expected: Final = AgentResponse.model_validate(row.model_dump()).model_copy(
+        update={"agent_name": "Renamed agent", "enabled": False}
+    )
+    preserved: Final = {*runtime, "agent_name", "enabled", "agent_id"}
+    assert stored.model_dump(include=preserved) == expected.model_dump(include=preserved)
+    assert {key: readback.json()[key] for key in preserved} == expected.model_dump(mode="json", include=preserved)
 
 
 def test_get_agent_by_id_not_found(

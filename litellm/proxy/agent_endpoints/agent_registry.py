@@ -793,6 +793,13 @@ class AgentRegistry:
         """
         Update an agent in the database
         """
+        if "agent_card_params" not in agent:
+            return await self.patch_agent_in_db(
+                agent_id=agent_id,
+                agent=PatchAgentRequest(**agent),
+                prisma_client=prisma_client,
+                updated_by=updated_by,
+            )
         try:
             agent_name: Final = agent.get("agent_name")
 

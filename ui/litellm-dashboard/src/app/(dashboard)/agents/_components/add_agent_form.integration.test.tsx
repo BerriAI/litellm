@@ -96,6 +96,28 @@ describe("AddAgentForm submit payload", () => {
       .mockResolvedValue({} as never);
   });
 
+  it("clears the provider error when reselecting Entra successfully loads trusted tenants", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const tenant = "11111111-1111-4111-8111-111111111111";
+    vi.mocked(networking.apiClient.get)
+      .mockReset()
+      .mockRejectedValueOnce(new Error("temporarily unavailable"))
+      .mockResolvedValue([`https://login.microsoftonline.com/${tenant}/v2.0`]);
+    renderForm();
+    await user.click(await screen.findByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not load the gateway's trusted identity providers",
+    );
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "No explicit identity binding" }));
+    await user.click(screen.getByLabelText("Identity Provider"));
+    await user.click(await screen.findByRole("option", { name: "Microsoft Entra ID" }));
+    await user.click(screen.getByLabelText("Trusted Entra Tenant"));
+    expect(await screen.findByRole("option", { name: tenant })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("registers a readable agent with an explicit Entra identity and no virtual key", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     const tenant = "11111111-1111-4111-8111-111111111111";

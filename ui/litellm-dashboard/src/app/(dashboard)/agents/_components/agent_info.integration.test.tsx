@@ -191,6 +191,7 @@ describe("AgentInfoView update payload", () => {
     await save(user);
     expect(patchedPayload().agent_name).toBe("Renamed agent");
     expect(patchedPayload()).not.toHaveProperty("litellm_params");
+    expect(patchedPayload().agent_card_params === undefined).toBe(card === "empty");
     expect(patchedPayload().identity).toMatchObject(identity);
     expect(patchedPayload().access_group_ids).toEqual(["ag-entra"]);
     expect(networking.patchAgentCall).toHaveBeenCalledWith(

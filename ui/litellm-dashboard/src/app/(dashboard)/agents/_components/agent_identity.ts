@@ -3,7 +3,10 @@ import type { components } from "@/lib/http/schema";
 import type { AgentFormValues, AgentRequestPayload } from "./AgentFormKit";
 
 export type EntraAgentIdentity = components["schemas"]["EntraIdentityConfig"];
-type AgentIdentityState = Pick<components["schemas"]["AgentResponse"], "identity" | "enabled" | "execution_mode">;
+type AgentIdentityState = Pick<
+  components["schemas"]["AgentResponse"],
+  "identity" | "enabled" | "execution_mode" | "agent_card_params"
+>;
 
 export const IDENTITY_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -90,10 +93,13 @@ export const withAgentIdentity = (
   values: AgentFormValues,
   existing?: Partial<AgentIdentityState>,
 ): AgentRequestPayload => {
+  const { agent_card_params, ...settings } = payload;
+  const hasCard = !existing || Object.keys(existing.agent_card_params ?? {}).length > 0;
   const identityFields = buildIdentityParams(values, existing?.identity);
   const managed = values.identity_provider === "microsoft_entra" || Boolean(readAgentIdentity(existing?.identity));
   return {
-    ...payload,
+    ...settings,
+    ...(hasCard && agent_card_params ? { agent_card_params } : {}),
     ...identityFields,
     ...(managed && values.execution_mode !== undefined ? { execution_mode: values.execution_mode } : {}),
     ...(managed && values.enabled !== undefined ? { enabled: values.enabled } : {}),

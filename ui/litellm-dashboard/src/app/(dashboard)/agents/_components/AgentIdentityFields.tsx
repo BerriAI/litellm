@@ -33,13 +33,15 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
     apiClient
       .get<string[]>("/v1/agents/identity/providers", { accessToken })
       .then((issuers) => {
-        if (active)
+        if (active) {
+          setError(null);
           setTenants(
             issuers.flatMap((issuer) => {
               const tenant = entraTenantFromIssuer(issuer);
               return tenant ? [tenant] : [];
             }),
           );
+        }
       })
       .catch(() => {
         if (active) setError("Could not load the gateway's trusted identity providers");

@@ -1236,7 +1236,7 @@ def _stored_agent_row(values: Mapping[str, object] | SimpleNamespace) -> LiteLLM
             "execution_mode": "autonomous",
             **{
                 key: json.dumps(value)
-                if key in ("litellm_params", "agent_card_params", "kill_switch") and not isinstance(value, str)
+                if key in ("litellm_params", "agent_card_params", "kill_switch", "static_headers") and not isinstance(value, str)
                 else value
                 for key, value in fields.items()
             },
