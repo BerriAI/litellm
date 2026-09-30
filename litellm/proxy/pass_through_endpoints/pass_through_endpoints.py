@@ -3764,12 +3764,15 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    existing: Final = tuple(response.field_value) if isinstance(response.field_value, list) else ()
+    if response.field_value is None:
+        response.field_value = [data_dict]
+    elif isinstance(response.field_value, list):
+        response.field_value.append(data_dict)
 
     ## Update db
     updated_data: Final = ConfigFieldUpdate(
         field_name="pass_through_endpoints",
-        field_value=[*existing, data_dict],  # mutable-ok: the delete path pops from this general_settings list
+        field_value=response.field_value,
         config_type="general_settings",
     )
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)

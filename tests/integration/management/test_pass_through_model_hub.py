@@ -336,6 +336,42 @@ def test_two_pass_throughs_sharing_a_display_name_are_two_rows(gateway: Gateway)
         assert sorted(string_value(row["pass_through_path"]) for row in twins) == sorted((first.path, second.path))
 
 
+def test_concurrent_creates_each_survive(gateway: Gateway) -> None:
+    display_name: Final = f"Burst {uuid.uuid4().hex[:6]}"
+    paths: Final = tuple(f"/integration-nlp-{uuid.uuid4().hex[:8]}" for _index in range(8))
+
+    def create(path: str) -> httpx.Response:
+        body: dict[str, JsonValue] = {
+            "path": path,
+            "target": gateway.upstream_url,
+            "display_name": display_name,
+            "show_in_model_hub": True,
+        }
+        return gateway.request("POST", "/config/pass_through_endpoint", body)
+
+    with ThreadPoolExecutor(len(paths)) as pool:
+        created: Final = tuple(pool.map(create, paths))
+    try:
+        assert all(response.status_code == 200 for response in created), [r.text for r in created]
+        listed: Final = gateway.request("GET", "/config/pass_through_endpoint")
+        stored: Final = tuple(
+            string_value(object_value(ep)["path"])
+            for ep in listed.json()["endpoints"]
+            if object_value(ep)["path"] in paths
+        )
+        assert sorted(stored) == sorted(paths), listed.text
+        published: Final = tuple(row for row in hub_rows(gateway) if row["model_group"] == display_name)
+        assert sorted(string_value(row["pass_through_path"]) for row in published) == sorted(paths)
+    finally:
+        for endpoint_id in endpoint_ids(gateway, paths):
+            gateway.request("DELETE", "/config/pass_through_endpoint", params={"endpoint_id": endpoint_id})
+
+
+def endpoint_ids(gateway: Gateway, paths: tuple[str, ...]) -> tuple[str, ...]:
+    endpoints: Final = gateway.request("GET", "/config/pass_through_endpoint").json()["endpoints"]
+    return tuple(string_value(object_value(ep)["id"]) for ep in endpoints if object_value(ep)["path"] in paths)
+
+
 def test_a_config_file_pass_through_is_listed_once_and_owns_its_key(gateway: Gateway, tmp_path: Path) -> None:
     display_name: Final = f"Config NLP {uuid.uuid4().hex[:6]}"
     path: Final = f"/integration-config-nlp-{uuid.uuid4().hex[:8]}"
