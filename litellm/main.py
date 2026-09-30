@@ -120,8 +120,8 @@ from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import (
-    JSONProviderRegistry,
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
+    JSONProviderRegistry,
 )
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
