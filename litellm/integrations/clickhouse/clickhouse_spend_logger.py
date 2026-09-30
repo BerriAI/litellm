@@ -1,6 +1,7 @@
 import re
 from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -38,22 +39,24 @@ class _SpendPayload(BaseModel):
 
 
 def spend_log_row_from_payload(payload: _SpendPayload) -> Mapping[str, object]:
-    return {
-        "request_id": payload.id,
-        "response_id": _CACHE_HIT_SUFFIX.sub("", payload.id),
-        "call_type": payload.call_type,
-        "api_key": payload.metadata.user_api_key_hash or "",
-        "team_id": payload.metadata.user_api_key_team_id or "",
-        "model": payload.model or "",
-        "spend": payload.response_cost or 0.0,
-        "prompt_tokens": payload.prompt_tokens,
-        "completion_tokens": payload.completion_tokens,
-        "total_tokens": payload.total_tokens,
-        "start_time": int(payload.startTime * 1000),
-        "end_time": int(payload.endTime * 1000),
-        "status": payload.status,
-        "cache_hit": payload.cache_hit is True,
-    }
+    return MappingProxyType(
+        {
+            "request_id": payload.id,
+            "response_id": _CACHE_HIT_SUFFIX.sub("", payload.id),
+            "call_type": payload.call_type,
+            "api_key": payload.metadata.user_api_key_hash or "",
+            "team_id": payload.metadata.user_api_key_team_id or "",
+            "model": payload.model or "",
+            "spend": payload.response_cost or 0.0,
+            "prompt_tokens": payload.prompt_tokens,
+            "completion_tokens": payload.completion_tokens,
+            "total_tokens": payload.total_tokens,
+            "start_time": int(payload.startTime * 1000),
+            "end_time": int(payload.endTime * 1000),
+            "status": payload.status,
+            "cache_hit": payload.cache_hit is True,
+        }
+    )
 
 
 class ClickHouseSpendLogger(ClickHouseBatchLogger):
@@ -67,7 +70,7 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
             payload: Final = _SpendPayload.model_validate(kwargs.get("standard_logging_object"))
             if payload.call_type.startswith("/v1/traces"):
                 return
-            self.enqueue([dict(spend_log_row_from_payload(payload))])
+            self.enqueue((spend_log_row_from_payload(payload),))
         except (ValidationError, RuntimeError, ValueError) as error:
             verbose_logger.warning("ClickHouse spend logging failed: %s", error)
 

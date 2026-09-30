@@ -10,6 +10,7 @@ gzip JSONEachRow insert, either every `CLICKHOUSE_FLUSH_INTERVAL_SECONDS` or as 
 
 import asyncio
 import os
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from litellm._logging import verbose_logger
@@ -53,7 +54,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
         """Backpressure signal: producers should reject (429) instead of enqueueing."""
         return len(self.log_queue) >= CLICKHOUSE_MAX_BUFFERED_ROWS
 
-    def enqueue(self, rows: list[dict[str, Any]]) -> None:
+    def enqueue(self, rows: Sequence[Mapping[str, object]]) -> None:
         """Never awaits ClickHouse. Kicks off an early flush once a full batch is queued."""
         self.start()
         self.log_queue.extend(rows)

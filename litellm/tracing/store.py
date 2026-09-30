@@ -202,11 +202,13 @@ def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
 
 
 def _agent_spend(spans: Sequence[Span], agent_name: str) -> float | None:
-    by_request: Final = {
-        span["litellm_request_id"]: span["spend"]
-        for span in spans
-        if span["type"] == "llm" and span["agent"] == agent_name and span["litellm_request_id"]
-    }
+    by_request: Final = MappingProxyType(
+        {
+            span["litellm_request_id"]: span["spend"]
+            for span in spans
+            if span["type"] == "llm" and span["agent"] == agent_name and span["litellm_request_id"]
+        }
+    )
     return (
         sum(cost for cost in by_request.values() if cost is not None)
         if by_request and all(cost is not None for cost in by_request.values())
