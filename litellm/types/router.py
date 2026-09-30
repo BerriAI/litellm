@@ -345,6 +345,7 @@ class CredentialLiteLLMParams(BaseModel):
 
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
+    bucket_name: str | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
@@ -605,6 +606,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## CUSTOM PRICING ##
     input_cost_per_token: float | None
     output_cost_per_token: float | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]

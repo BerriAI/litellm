@@ -1225,7 +1225,7 @@ async def _start_supervisor(
         try:
             result: Final = await transport.request("POST", live_session_path(handle.session_id, "hangup"))
             result.raise_for_status()
-        except Exception:
+        except Exception:  # noqa: BLE001  # whatever hung up failed, the reservation must go back
             await invalidate_budget_reservation_counters(budget_reservation=auth.budget_reservation)
         finally:
             if state.connection is not None:
@@ -1598,7 +1598,7 @@ async def websocket_live_session(websocket: WebSocket, session_id: str | None = 
         except RuntimeError:
             # The peer may have closed the socket before the rejection response.
             return
-    except Exception:
+    except Exception:  # noqa: BLE001  # an unexpected failure still gets the client a 1011 close
         try:
             await websocket.close(code=1011, reason="Live upstream connection failed")
         except RuntimeError:

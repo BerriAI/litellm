@@ -2016,7 +2016,7 @@ def test_completion_cost_extracts_service_tier_from_usage(_local_model_cost_map)
 
 
 def test_completion_cost_service_tier_priority(_local_model_cost_map):
-    """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
+    """Test that the served tier wins over the requested tier: response > usage > request."""
     from litellm import completion_cost
 
     # Test with gpt-5-nano which has flex pricing
@@ -2033,7 +2033,7 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
     )
     setattr(response, "service_tier", "priority")
 
-    # Test that optional_params takes priority over response and usage
+    # A request-level tier loses to the tier the response actually served
     cost_from_params = completion_cost(
         completion_response=response,
         model=model,
@@ -2041,20 +2041,18 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
         optional_params={"service_tier": "flex"},
     )
 
-    # Test that response takes priority over usage when optional_params is not provided
-    completion_cost(
+    # Response takes priority over usage
+    cost_served_priority = completion_cost(
         completion_response=response,
         model=model,
         custom_llm_provider="openai",
     )
 
-    # Test that usage is used when neither optional_params nor response have service_tier
-    # Create a new response without service_tier attribute
+    # Create a new response without service_tier attribute so it falls back to usage
     response_no_tier = ModelResponse(
         usage=usage,
         model=model,
     )
-    # Don't set service_tier on response, so it will fall back to usage
 
     cost_from_usage = completion_cost(
         completion_response=response_no_tier,
@@ -2062,12 +2060,13 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
         custom_llm_provider="openai",
     )
 
-    # All should use flex pricing (from different sources)
     assert cost_from_params > 0, "Cost from params should be greater than 0"
     assert cost_from_usage > 0, "Cost from usage should be greater than 0"
 
-    # Costs should be similar (all using flex)
-    assert abs(cost_from_params - cost_from_usage) < 1e-6, "Costs from params and usage should be similar (both flex)"
+    # Requested flex is ignored once the response reports served priority
+    assert cost_from_params == pytest.approx(cost_served_priority), (
+        "request-level service_tier must defer to the served tier on the response"
+    )
 
 
 def test_completion_cost_service_tier_for_bedrock(_local_model_cost_map):
@@ -3105,9 +3104,9 @@ def test_completion_cost_logs_cache_and_reasoning_breakdown_for_custom_pricing()
 @pytest.mark.parametrize("custom_llm_provider", ["together_ai", "openai", "anthropic", "bedrock", "azure"])
 def test_cost_per_token_per_second_pricing(monkeypatch, custom_llm_provider: str):
     """
-    Models priced by duration (input/output_cost_per_second) with no per-token rates
+    Models priced by input/output duration rates with no per-token rates
     must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token,
-    whether or not the provider has its own cost calculator.
+    using only the input rate even when both are set, whether or not the provider has its own calculator.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
@@ -3132,11 +3131,40 @@ def test_cost_per_token_per_second_pricing(monkeypatch, custom_llm_provider: str
         response_time_ms=1500.0,
     )
 
-    assert prompt_cost == pytest.approx(0.02 * 1.5)
-    assert completion_cost_value == pytest.approx(0.04 * 1.5)
+    assert (prompt_cost, completion_cost_value) == pytest.approx((0.02 * 1.5, 0.0))
 
 
-def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(monkeypatch):
+def test_azure_chat_uses_token_rates_when_output_cost_per_second_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "test-azure-chat-token-and-output-second-pricing"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "output_cost_per_second": 0.4,
+                "litellm_provider": "azure",
+                "mode": "chat",
+            }
+        }
+    )
+
+    cost: Final = cost_per_token(
+        model=model,
+        custom_llm_provider="azure",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert cost == pytest.approx((10 * 1e-6, 20 * 2e-6))
+
+
+def test_cost_per_token_ignores_cost_per_second_when_token_pricing_is_set(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -3146,8 +3174,7 @@ def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(m
             model: {
                 "input_cost_per_token": 1e-6,
                 "output_cost_per_token": 2e-6,
-                "input_cost_per_second": 0.02,
-                "output_cost_per_second": 0.04,
+                "cost_per_second": 0.02,
                 "litellm_provider": "openai",
                 "mode": "chat",
             }
@@ -3164,6 +3191,39 @@ def test_cost_per_token_keeps_token_pricing_when_per_second_rates_are_also_set(m
 
     assert prompt_cost == pytest.approx(10 * 1e-6)
     assert completion_cost_value == pytest.approx(20 * 2e-6)
+
+
+@pytest.mark.parametrize(
+    ("pricing_fields", "expected_rate"),
+    [
+        ({"cost_per_second": 0.02}, 0.02),
+        ({"output_cost_per_second": 0.04}, 0.04),
+        (
+            {"cost_per_second": 0.05, "input_cost_per_second": 0.02, "output_cost_per_second": 0.04},
+            0.05,
+        ),
+        ({"input_cost_per_second": 0.02}, 0.02),
+    ],
+)
+def test_cost_per_token_resolves_per_second_rate_precedence(
+    monkeypatch, pricing_fields: dict[str, float], expected_rate: float
+):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "test-chat-per-second-rate-precedence"
+    entry: Final = {**pricing_fields, "litellm_provider": "together_ai", "mode": "chat"}
+    litellm.register_model(
+        model_cost={model: entry}
+    )
+
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider="together_ai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    ) == pytest.approx((expected_rate * 1.5, 0.0))
 
 
 def _logging_obj_with_call_window(duration_ms: float) -> Logging:
@@ -3228,7 +3288,7 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
         litellm_logging_obj=_logging_obj_with_call_window(logged_duration_ms),
     )
 
-    assert cost == pytest.approx((0.02 + 0.04) * expected_seconds)
+    assert cost == pytest.approx(0.02 * expected_seconds)
 
 
 @pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])
@@ -3845,31 +3905,70 @@ def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_r
         ) == pytest.approx(expected)
 
 
-def test_completion_cost_mantle_native_messages_prices_haiku_from_the_mantle_row(_local_model_cost_map):
-    """Mantle serves Anthropic's un-versioned haiku id, which has no bare Bedrock row (Bedrock's carries
-    the -20251001-v1:0 suffix), and Claude Code sends every small-fast-model call to it. Both the plain
-    and the region-prefixed deployment names must price from bedrock_mantle/anthropic.claude-haiku-4-5
-    instead of billing $0."""
+@pytest.mark.parametrize(
+    "response_model,mantle_row,deployment_models",
+    [
+        (
+            "claude-haiku-4-5",
+            "bedrock_mantle/anthropic.claude-haiku-4-5",
+            (
+                "bedrock_mantle/anthropic.claude-haiku-4-5",
+                "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
+            ),
+        ),
+        (
+            "claude-opus-5-5",
+            "bedrock_mantle/anthropic.claude-opus-5-5",
+            ("bedrock_mantle/anthropic.claude-opus-5-5",),
+        ),
+        (
+            "claude-sonnet-5-5",
+            "bedrock_mantle/anthropic.claude-sonnet-5-5",
+            ("bedrock_mantle/anthropic.claude-sonnet-5-5",),
+        ),
+    ],
+)
+def test_completion_cost_mantle_native_messages_prices_unversioned_claude_from_the_mantle_row(
+    _local_model_cost_map, response_model, mantle_row, deployment_models
+):
+    """Mantle serves Anthropic's un-versioned Claude ids; the plain and region-prefixed deployment
+    names must price from the model's own bedrock_mantle/ row instead of billing $0."""
 
     response = litellm.ModelResponse(
         id="msg_x",
         choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-        model="claude-haiku-4-5",
+        model=response_model,
         usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
     )
-    row = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]
+    row = litellm.model_cost[mantle_row]
     expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
     assert expected > 0
 
-    for model in (
-        "bedrock_mantle/anthropic.claude-haiku-4-5",
-        "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
-    ):
+    for model in deployment_models:
         assert litellm.completion_cost(
             completion_response=response,
             model=model,
             custom_llm_provider="bedrock_mantle",
         ) == pytest.approx(expected), model
+
+
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
+def test_cost_per_token_gov_region_prices_mantle_claude_on_the_gov_row(_local_model_cost_map, model):
+    """A bedrock_mantle/ deployment in us-gov-west-1 must price from the
+    bedrock_mantle/us-gov-west-1/<model> row."""
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=f"bedrock_mantle/{model}",
+        prompt_tokens=38,
+        completion_tokens=20,
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+    gov = litellm.model_cost[f"bedrock_mantle/us-gov-west-1/{model}"]
+
+    assert prompt_cost + completion_cost == pytest.approx(
+        38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+    )
 
 
 def test_completion_cost_legacy_mantle_route_prices_after_router_registration(local_model_cost_map):
@@ -5079,6 +5178,55 @@ def test_every_openai_entry_with_a_long_context_rate_and_a_batch_rate_declares_t
     assert undeclared == []
 
 
+@pytest.mark.parametrize("prefix", _BATCH_RATE_PREFIXES)
+def test_every_xai_entry_with_a_long_context_rate_and_a_batch_rate_declares_the_batch_tier(
+    _local_model_cost_map: None, prefix: str
+) -> None:
+    undeclared: Final = [
+        name
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict)
+        and entry.get("litellm_provider") == "xai"
+        and entry.get(f"{prefix}_above_200k_tokens") is not None
+        and entry.get(f"{prefix}_batches") is not None
+        and entry.get(f"{prefix}_above_200k_tokens_batches") is None
+    ]
+
+    assert undeclared == []
+
+
+_XAI_TIERED_BATCH_MODEL: Final = "xai/grok-4.3"
+
+
+def test_xai_batch_tier_discounts_the_long_context_rate_like_the_flat_batch_rate(_local_model_cost_map: None) -> None:
+    info: Final = litellm.get_model_info(_XAI_TIERED_BATCH_MODEL, custom_llm_provider="xai")
+    flat_discount: Final = info["input_cost_per_token_batches"] / info["input_cost_per_token"]
+
+    for prefix in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        tier_discount = info[f"{prefix}_above_200k_tokens_batches"] / info[f"{prefix}_above_200k_tokens"]
+        assert tier_discount == pytest.approx(flat_discount)
+        assert info[f"{prefix}_above_200k_tokens_batches"] < info[f"{prefix}_above_200k_tokens"]
+
+
+@pytest.mark.parametrize(
+    ("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")]
+)
+def test_xai_batch_cost_calculator_bills_the_200k_batch_tier_inclusively(
+    _local_model_cost_map: None, prompt_tokens: int, tier: str
+) -> None:
+    from litellm.cost_calculator import batch_cost_calculator
+
+    info: Final = litellm.get_model_info(_XAI_TIERED_BATCH_MODEL, custom_llm_provider="xai")
+    usage: Final = Usage(prompt_tokens=prompt_tokens, completion_tokens=64, total_tokens=prompt_tokens + 64)
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage, model=_XAI_TIERED_BATCH_MODEL, custom_llm_provider="xai"
+    )
+
+    assert prompt_cost == pytest.approx(prompt_tokens * info[f"input_cost_per_token{tier}"])
+    assert completion_cost_value == pytest.approx(64 * info[f"output_cost_per_token{tier}"])
+
+
 def test_batch_cost_calculator_ignores_malformed_batch_tier_keys():
     from litellm.cost_calculator import batch_cost_calculator
 
@@ -5817,3 +5965,100 @@ def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytes
     )
 
     assert cost == 0.0
+
+
+@pytest.mark.parametrize(
+    ("requested", "served", "expected"),
+    [
+        (None, "priority", "priority"),
+        ("priority", "flex", "flex"),
+        ("priority", "default", None),
+        ("priority", "standard", None),
+        ("priority", "auto", "priority"),
+        ("priority", "scale", "priority"),
+        ("priority", None, "priority"),
+        ("auto", None, None),
+        (None, "Priority", "priority"),
+        ("flex", "on_demand", "flex"),
+    ],
+)
+def test_resolve_billable_service_tier(requested: object, served: object, expected: str | None) -> None:
+    from litellm.cost_calculator import _resolve_billable_service_tier
+
+    assert _resolve_billable_service_tier(requested=requested, served=served) == expected
+
+
+def _served_tier_cost_model(monkeypatch: pytest.MonkeyPatch) -> str:
+    model: Final = "served-tier-cost-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "input_cost_per_token_priority": 0.01,
+            "output_cost_per_token_priority": 0.02,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    return model
+
+
+def test_completion_cost_bills_base_when_served_default_overrides_requested_priority(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = _served_tier_cost_model(monkeypatch)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    setattr(response, "service_tier", "default")
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+def test_completion_cost_bills_priority_when_served_tier_overrides_missing_request(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = _served_tier_cost_model(monkeypatch)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    setattr(response, "service_tier", "priority")
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(100 * 0.01 + 50 * 0.02)
+
+
+def test_completion_cost_bills_base_when_gemini_serves_on_demand(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = _served_tier_cost_model(monkeypatch)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    response._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND"}
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)

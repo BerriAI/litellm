@@ -35,7 +35,14 @@ def _auth_cache(initial=None):
     async def set(*, key, value, **kwargs):
         values[key] = value
 
-    return SimpleNamespace(async_get_cache=AsyncMock(side_effect=get), async_set_cache=AsyncMock(side_effect=set))
+    # ``redis_cache`` is part of the UserApiKeyCache surface the auth helpers read: ``_cache_team_object``
+    # compares it against the usage cache to decide whether one Redis holds both entries. The fake has no
+    # Redis at all, so it reports ``None``, the same way a standalone in-memory cache does.
+    return SimpleNamespace(
+        async_get_cache=AsyncMock(side_effect=get),
+        async_set_cache=AsyncMock(side_effect=set),
+        redis_cache=None,
+    )
 
 
 def handle(owner="owner", model_id=None):

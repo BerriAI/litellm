@@ -1,23 +1,56 @@
 use litellm_http::request::string_headers as shared_string_headers;
 pub(super) use litellm_http::request::truncate_error_body;
 use litellm_llms::{
-    anthropic::experimental_pass_through::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
-    azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
+    anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
+    azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
+    base_llm::messages::transformation::BaseMessagesConfig,
+    bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
 
 use super::Error;
+use crate::provider::LlmProviders;
 
 const HEADER_CONTEXT: &str = "messages";
 
-pub(super) fn messages_provider_config(
-    provider: &str,
-) -> Option<&'static dyn BaseAnthropicMessagesConfig> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MessagesProvider {
+    Anthropic,
+    AzureAi,
+    Bedrock,
+}
+
+impl MessagesProvider {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Anthropic => LlmProviders::Anthropic,
+            Self::AzureAi => LlmProviders::AzureAi,
+            Self::Bedrock => LlmProviders::Bedrock,
+        }
+        .into()
+    }
+
+    pub(crate) fn config(self) -> &'static dyn BaseMessagesConfig {
+        match self {
+            Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
+            Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
+            Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        }
+    }
+}
+
+pub(crate) fn messages_provider(provider: LlmProviders) -> Option<MessagesProvider> {
     match provider {
-        "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
-        "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
-        _ => None,
+        LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
+        LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
+        LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
+        LlmProviders::AwsTextract
+        | LlmProviders::Cohere
+        | LlmProviders::Mistral
+        | LlmProviders::Openai
+        | LlmProviders::OpenaiLike
+        | LlmProviders::Reducto
+        | LlmProviders::VertexAi => None,
     }
 }
 
@@ -31,14 +64,30 @@ pub(super) fn string_headers(
 mod tests {
     use serde_json::json;
 
-    use super::{messages_provider_config, string_headers, truncate_error_body};
+    use rstest::rstest;
+
+    use super::{MessagesProvider, messages_provider, string_headers, truncate_error_body};
     use crate::messages::Error;
+    use crate::provider::LlmProviders;
+
+    #[rstest]
+    #[case::anthropic("anthropic", MessagesProvider::Anthropic)]
+    #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
+    #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
+    fn provider_round_trips_through_its_python_name(
+        #[case] name: &str,
+        #[case] provider: MessagesProvider,
+    ) {
+        assert_eq!(
+            messages_provider(name.parse::<LlmProviders>().unwrap()),
+            Some(provider)
+        );
+        assert_eq!(provider.as_str(), name);
+    }
 
     #[test]
-    fn provider_config_resolves_anthropic_and_azure_ai() {
-        assert!(messages_provider_config("anthropic").is_some());
-        assert!(messages_provider_config("azure_ai").is_some());
-        assert!(messages_provider_config("openai").is_none());
+    fn provider_without_a_messages_config_is_rejected() {
+        assert_eq!(messages_provider(LlmProviders::Openai), None);
     }
 
     #[test]

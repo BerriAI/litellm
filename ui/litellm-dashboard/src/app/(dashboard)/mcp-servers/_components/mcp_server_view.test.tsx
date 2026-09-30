@@ -7,13 +7,21 @@ import * as networking from "@/components/networking";
 import { setSecureItem } from "@/utils/secureStorage";
 import { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import type { MCPServer } from "@/components/mcp_tools/types";
+import { mcpServersKeys } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 
 vi.mock(".", () => ({
   MCPToolsViewer: () => <div>tools viewer</div>,
 }));
 
 vi.mock("./mcp_server_edit", () => ({
-  default: () => <div>edit form</div>,
+  default: ({ mcpServer, onSuccess }: { mcpServer: MCPServer; onSuccess: (server: MCPServer) => void }) => (
+    <div>
+      edit form
+      <button type="button" onClick={() => onSuccess({ ...mcpServer, alias: "renamed" })}>
+        save edit
+      </button>
+    </div>
+  ),
   EDIT_OAUTH_UI_STATE_KEY: "litellm-mcp-oauth-edit-state",
 }));
 
@@ -33,9 +41,15 @@ const baseServer = {
   auth_type: "api_key",
 } as MCPServer;
 
-const renderView = (overrides: Partial<MCPServer> = {}, props: Record<string, unknown> = {}) =>
+const newQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+
+const renderView = (
+  overrides: Partial<MCPServer> = {},
+  props: Record<string, unknown> = {},
+  queryClient: QueryClient = newQueryClient(),
+) =>
   render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+    <QueryClientProvider client={queryClient}>
       <MCPServerView
         mcpServer={{ ...baseServer, ...overrides } as MCPServer}
         onBack={vi.fn()}
@@ -120,14 +134,21 @@ describe("MCPServerView", () => {
   });
 
   it("shows the read-only settings summary before editing", async () => {
-    renderView({ allow_all_keys: true, available_on_public_internet: false });
+    renderView({
+      allow_all_keys: true,
+      available_on_public_internet: false,
+      mcp_info: { server_name: "demo server", is_public: true, is_public_explicit: true },
+    });
 
     await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
 
     expect(await screen.findByText("MCP Server Settings")).toBeInTheDocument();
     expect(screen.getByText("Allow All Keys")).toBeInTheDocument();
     expect(screen.getByText("Enabled")).toBeInTheDocument();
-    expect(screen.getByText("Internal only")).toBeInTheDocument();
+    expect(screen.getByText("Network access")).toBeInTheDocument();
+    expect(screen.getByText("All Networks")).toBeInTheDocument();
+    expect(screen.queryByText("MCP Hub")).not.toBeInTheDocument();
+    expect(screen.queryByText("Listed")).not.toBeInTheDocument();
     expect(screen.queryByText("edit form")).not.toBeInTheDocument();
   });
 
@@ -138,6 +159,27 @@ describe("MCPServerView", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Edit Settings" }));
 
     expect(await screen.findByText("edit form")).toBeInTheDocument();
+  });
+
+  it("drops the cached server list and tool catalog once the edit form saves", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    const serversKey = mcpServersKeys.list();
+    const toolsKey = ["mcpTools", "srv-1", {}, null];
+    const otherToolsKey = ["mcpTools", "srv-2", {}, null];
+    queryClient.setQueryData(serversKey, [baseServer]);
+    queryClient.setQueryData(toolsKey, { tools: [] });
+    queryClient.setQueryData(otherToolsKey, { tools: [] });
+    const onBack = vi.fn();
+    renderView({}, { onBack }, queryClient);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Settings" }));
+    await userEvent.click(await screen.findByRole("button", { name: "save edit" }));
+
+    expect(queryClient.getQueryState(serversKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(toolsKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherToolsKey)?.isInvalidated).toBe(false);
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it("opens straight into the edit form when isEditing is set", async () => {
