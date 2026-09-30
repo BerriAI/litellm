@@ -1,5 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("invalid ClickHouse insert row")]
+    InvalidRow,
     #[error("invalid ClickHouse HTTP URL")]
     InvalidUrl,
     #[error("database must be a nonempty SQL identifier and retention must be positive")]

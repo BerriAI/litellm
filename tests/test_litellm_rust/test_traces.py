@@ -1,10 +1,11 @@
 import base64
+import json
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from litellm.rust_bridge.traces import query, schema_statements
+from litellm.rust_bridge.traces import encode_rows, query, schema_statements
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -44,3 +45,10 @@ async def test_trace_reader_rejects_success_status_with_embedded_error(recording
 def test_schema_binding_preserves_configuration_validation(database: str, retention: int) -> None:
     with pytest.raises(ValueError, match="database.*retention"):
         schema_statements(database, retention, 14)
+
+
+def test_insert_encoding_preserves_nanoseconds_through_bridge() -> None:
+    assert json.loads(encode_rows([{"Timestamp": 1_234_567_890, "Input": "hello"}])) == {
+        "Input": "hello",
+        "Timestamp": "1970-01-01T00:00:01.23456789Z",
+    }
