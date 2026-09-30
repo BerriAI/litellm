@@ -1562,6 +1562,25 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type in (
+            "response.output_text.annotation.added",
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+        ):
+            # Responses streams url_citation / file_citation via annotation.added;
+            # Chat Completions clients expect them on delta.annotations.
+            raw_annotation = parsed_chunk.get("annotation")
+            annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                [raw_annotation] if raw_annotation is not None else None
+            )
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(annotations=annotations),
+                        finish_reason=None,
+                    )
+                ]
+            )
         elif event_type == "response.reasoning_summary_text.delta":
             content_part = parsed_chunk.get("delta", None)
             if content_part:
