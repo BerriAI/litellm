@@ -22,6 +22,7 @@ from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
@@ -33,14 +34,59 @@ from litellm.proxy.proxy_server import (
     _scrub_guardrail_inner,
     resolve_complexity_router_plugins,
     resolve_routing_plugins,
+    validate_auto_router_capability_limits,
     validate_deployment_access_windows,
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
-    validate_auto_router_capability_limits,
 )
 
 from .conftest import normalize
-from pydantic import JsonValue, TypeAdapter, ValidationError
+
+
+@pytest.mark.asyncio
+async def test_tracing_config_automatically_logs_spend_without_callback_setting():
+    from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+    from litellm.proxy import tracing_endpoints
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.tracing import TraceReceiver
+    from litellm.tracing.store import ClickHouseTraceStore
+
+    storage = MagicMock()
+    storage.ensure_schema = AsyncMock()
+    storage.insert_rows = AsyncMock()
+    receiver = TraceReceiver(ClickHouseTraceStore(storage))
+    prior_receiver = tracing_endpoints.receiver
+
+    try:
+        await ProxyStartupEvent.init_tracing({"tracing": {"store": "clickhouse"}}, receiver=receiver)
+        storage.ensure_schema.assert_awaited_once()
+        logger = next(
+            callback for callback in litellm._async_success_callback if isinstance(callback, ClickHouseSpendLogger)
+        )
+        now = datetime.now()
+        await logger.async_log_success_event(
+            {
+                "standard_logging_object": {
+                    "id": "response-1",
+                    "startTime": now.timestamp(),
+                    "endTime": now.timestamp(),
+                    "response_cost": 0.25,
+                }
+            },
+            None,
+            now,
+            now,
+        )
+        await logger.flush_queue()
+        assert storage.insert_rows.await_args.args[0] == "spend_logs"
+        assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
+
+        await ProxyStartupEvent.init_tracing({})
+        assert all(not isinstance(callback, ClickHouseSpendLogger) for callback in litellm._async_success_callback)
+    finally:
+        await ProxyStartupEvent.init_tracing({})
+        tracing_endpoints.receiver = prior_receiver
+
 
 # ---------------------------------------------------------------------------
 # _is_remote_module_url

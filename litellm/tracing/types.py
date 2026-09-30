@@ -32,6 +32,7 @@ class Span(TypedDict):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     litellm_request_id: ReadOnly[str | None]
+    spend: ReadOnly[float | None]
 
 
 class AgentNode(TypedDict):
@@ -43,6 +44,7 @@ class AgentNode(TypedDict):
     llm_calls: int
     tool_calls: int
     duration_ms: float
+    spend: ReadOnly[float | None]
 
 
 class TraceSummary(TypedDict):
@@ -63,6 +65,7 @@ class TraceSummary(TypedDict):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     models: ReadOnly[tuple[str, ...]]
+    spend: ReadOnly[float | None]
 
 
 class Trace(TypedDict):

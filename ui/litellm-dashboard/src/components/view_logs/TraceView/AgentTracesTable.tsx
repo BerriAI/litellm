@@ -17,9 +17,6 @@ interface AgentTracesTableProps {
   onOpenTrace: (trace: TraceSummary) => void;
 }
 
-/** Spend is only on summaries once the spend-enrichment PR lands; show Cost when it's there. */
-type SummaryWithSpend = TraceSummary & { spend?: number };
-
 const SECOND_MS = 1000;
 const MINUTE_S = 60;
 const HOUR_M = 60;
@@ -57,7 +54,6 @@ export function AgentTracesTable({
   onLoadMore,
   onOpenTrace,
 }: AgentTracesTableProps) {
-  const showCost = traces.some((t) => typeof (t as SummaryWithSpend).spend === "number");
   const isEmpty = !isLoading && !error && traces.length === 0;
   return (
     <div className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
@@ -74,7 +70,7 @@ export function AgentTracesTable({
             <th className={`w-[72px] ${TH_NUM}`}>Agents</th>
             <th className={`w-[74px] ${TH_NUM}`}>Steps</th>
             <th className={`w-[86px] ${TH_NUM}`}>Duration</th>
-            {showCost && <th className={`w-[80px] ${TH_NUM}`}>Cost</th>}
+            <th className={`w-[80px] ${TH_NUM}`}>Cost</th>
             <th className={`w-[72px] ${TH_NUM}`}>Failed</th>
             <th className="w-8" />
           </tr>
@@ -110,11 +106,9 @@ export function AgentTracesTable({
               <td className={TD_NUM}>{run.agent_count.toLocaleString()}</td>
               <td className={TD_NUM}>{run.span_count.toLocaleString()}</td>
               <td className="px-3 text-right font-mono tabular-nums text-foreground">{fmtMs(run.duration_ms)}</td>
-              {showCost && (
-                <td className="px-3 text-right font-mono tabular-nums text-foreground">
-                  {formatCost((run as SummaryWithSpend).spend ?? 0)}
-                </td>
-              )}
+              <td className="px-3 text-right font-mono tabular-nums text-foreground">
+                {run.spend == null ? "—" : formatCost(run.spend)}
+              </td>
               <td className="px-3 text-right">
                 {run.error_count > 0 ? (
                   <StatusMark status="error" count={run.error_count} />
