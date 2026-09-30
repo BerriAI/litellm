@@ -1,10 +1,11 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
+import re
 from collections.abc import Collection, Mapping
 
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Final, Literal
 
 import pytest
 
@@ -187,6 +188,27 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
             )
     except FileNotFoundError as e:
         pytest.skip("whitelisted_bedrock_models.txt not found")
+
+
+@pytest.mark.parametrize("region", ("us-gov-east-1", "us-gov-west-1"))
+@pytest.mark.parametrize("base_provider", ("bedrock_converse", "bedrock"))
+def test_regional_bedrock_alias_requires_canonical_converse_metadata(
+    region: str, base_provider: Literal["bedrock_converse", "bedrock"]
+) -> None:
+    base_model: Final = next(
+        model for model in sorted(litellm.bedrock_converse_models) if BedrockModelInfo.get_base_model(model) == model
+    )
+    model: Final = f"bedrock/{region}/{base_model}"
+    model_cost: Final[Mapping[str, ModelInfoBase]] = {
+        model: {"litellm_provider": "bedrock", "mode": "chat"},
+        base_model: {"litellm_provider": base_provider, "mode": "chat"},
+    }
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"
+    if base_provider == "bedrock":
+        with pytest.raises(AssertionError, match=re.escape(model)):
+            _enforce_bedrock_converse_models(model_cost, ())
+        return
+    _enforce_bedrock_converse_models(model_cost, ())
 
 
 def test_get_model_info_custom_provider():
