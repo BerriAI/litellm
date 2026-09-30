@@ -1803,10 +1803,11 @@ class PromptTokensDetailsWrapper(
             del self.google_maps_grounding_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
-        if self.cache_write_tokens is None:
-            del self.cache_write_tokens
-        if self.cache_creation_tokens is None:
-            del self.cache_creation_tokens
+        # NOTE: cache_write_tokens / cache_creation_tokens are intentionally NOT
+        # deleted when unset (unlike the other optional fields above): the
+        # __setattr__ mirror above keeps the two fields in sync, and downstream
+        # cost code reads them directly, so deleting them turns a None into an
+        # AttributeError on first-turn requests with no cache activity.
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
         if self.cached_tokens_details is None:
