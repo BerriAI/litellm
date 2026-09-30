@@ -162,7 +162,7 @@ async fn retried_trace_insert_does_not_inflate_rollup(
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
-    let row = serde_json::from_value(serde_json::json!({
+    let row: BTreeMap<String, serde_json::Value> = serde_json::from_value(serde_json::json!({
         "Timestamp": time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64,
         "TraceId": "retried-trace", "SpanId": "span-1", "ParentSpanId": "",
         "TeamId": "team-1", "ApiKeyHash": "key-1", "SpanName": "root", "InputTokens": 7

@@ -24,7 +24,7 @@ from litellm.constants import (
 )
 from litellm.integrations.clickhouse.schema import ensure_schema
 from litellm.rust_bridge.traces import TraceStorage
-from litellm.tracing.decode import InvalidOTLPPayloadError, OTLPPayloadTooLargeError, decode_otlp
+from litellm.tracing.decode import OTLPPayloadTooLargeError, decode_otlp
 from litellm.tracing.store import ClickHouseTraceStore
 from litellm.tracing.types import (
     SpanDetail,

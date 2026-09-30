@@ -11,7 +11,6 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 
-from litellm.tracing.types import TraceScope
 from litellm.tracing.store import (
     ClickHouseTraceStore,
     agent_nodes,
@@ -21,6 +20,7 @@ from litellm.tracing.store import (
     trace_from_rows,
     trace_summary_from_row,
 )
+from litellm.tracing.types import TraceScope
 
 T0 = 1_790_742_989_000_000_000  # ns
 MS = 1_000_000

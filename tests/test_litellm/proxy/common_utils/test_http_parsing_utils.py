@@ -1,5 +1,5 @@
-import io
 import gzip
+import io
 import json
 from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -31,7 +31,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 
 
-def _starlette_request(body: bytes, content_type: str, path: str = "/v1/messages", content_encoding: str = "") -> Request:
+def _starlette_request(
+    body: bytes, content_type: str, path: str = "/v1/messages", content_encoding: str = ""
+) -> Request:
     scope = {
         "type": "http",
         "method": "POST",

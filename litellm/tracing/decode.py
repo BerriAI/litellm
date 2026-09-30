@@ -160,7 +160,9 @@ def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
     if row["ObservationType"] == "llm" and isinstance(completion, dict):
         messages = prompt_payload.get("messages") or [[]]
         batch = messages[0] if messages and isinstance(messages[0], list) else messages
-        row["Input"] = json.dumps([_lc_message(m) for m in batch if isinstance(m, dict)]) if isinstance(batch, list) else ""
+        row["Input"] = (
+            json.dumps([_lc_message(m) for m in batch if isinstance(m, dict)]) if isinstance(batch, list) else ""
+        )
         generations: Final = completion.get("generations")
         first: Final = generations[0] if isinstance(generations, list) and generations else None
         item: Final = first[0] if isinstance(first, list) and first else None
