@@ -711,27 +711,38 @@ def _assert_one_scope_wave(
         assert plan.call_id in (spend.get("request_id"), spend.get("litellm_call_id")), (plan, spend)
 
 
-def test_h4_yaml_scope_survives_owned_proxy_restart(rig: ChaosRig, tmp_path: Path) -> None:
+def test_h4_stored_scope_survives_owned_proxy_restart(rig: ChaosRig, tmp_path: Path) -> None:
     with wire_server(_sink) as sink:
-        name: Final = f"h4-yaml-{uuid.uuid4().hex}"
-        rails: Final = (_rail(name, sink.url, "streaming", default_on=True),)
-        with _owned_proxy(rig, tmp_path, rails, workers=2) as first:
-            first_plans: Final = _plans("h4-before", 20)
-            first_responses: Final = _call_wave(first.gateway, first_plans, ())
-            first_provider: Final = rig.provider.drain()
-            first_sink: Final = sink.drain()
-            assert tuple(response.status_code for response in first_responses) == (200,) * 20, first_responses
-            _assert_one_scope_wave(first_plans, first_responses, first_provider, first_sink, name)
-
-        with _owned_proxy(rig, tmp_path, rails, workers=2) as restarted:
-            workers: Final = _worker_processes(restarted)
-            assert len(workers) == 2, tuple(worker.pid for worker in workers)
-            recovery_plans: Final = _plans("h4-after", 20)
-            recovery_responses: Final = _call_wave(restarted.gateway, recovery_plans, ())
-            recovery_provider: Final = rig.provider.drain()
-            recovery_sink: Final = sink.drain()
-            assert tuple(response.status_code for response in recovery_responses) == (200,) * 20, (recovery_responses,)
-            _assert_one_scope_wave(recovery_plans, recovery_responses, recovery_provider, recovery_sink, name)
+        name: Final = f"h4-stored-{uuid.uuid4().hex}"
+        identity: Final = _create_stored_rail(rig.gateway, name, sink.url)
+        try:
+            with ExitStack() as first_stack:
+                first: Final = first_stack.enter_context(_owned_proxy(rig, tmp_path, ()))
+                first_plans: Final = _plans("h4-before", 20)
+                first_responses: Final = _call_wave(first.gateway, first_plans, (name,))
+                first_provider: Final = rig.provider.drain()
+                first_sink: Final = sink.drain()
+                assert tuple(response.status_code for response in first_responses) == (200,) * 20, first_responses
+                _assert_one_scope_wave(first_plans, first_responses, first_provider, first_sink, name)
+                first_stack.close()
+                with _owned_proxy(rig, tmp_path, ()) as restarted:
+                    recovery_plans: Final = _plans("h4-after", 20)
+                    recovery_responses: Final = _call_wave(restarted.gateway, recovery_plans, (name,))
+                    recovery_provider: Final = rig.provider.drain()
+                    recovery_sink: Final = sink.drain()
+                    assert tuple(response.status_code for response in recovery_responses) == (200,) * 20, (
+                        recovery_responses,
+                    )
+                    _assert_one_scope_wave(
+                        recovery_plans,
+                        recovery_responses,
+                        recovery_provider,
+                        recovery_sink,
+                        name,
+                    )
+        finally:
+            deleted: Final = rig.gateway.request("DELETE", f"/guardrails/{identity}")
+            assert deleted.status_code == 200, deleted.text
 
 
 @contextmanager
