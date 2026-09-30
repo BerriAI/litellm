@@ -8,6 +8,7 @@ different objects. `RoutingReadBatch` fetches both key sets in one
 the usage slice to the strategy, so selection does not read again.
 """
 
+import asyncio
 import itertools
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -35,13 +36,54 @@ else:
 _PREFETCH_SLOT: Final = "routing_read"
 
 
+async def _backfill_prefetched_cache(
+    cache: DualCache,
+    due_keys: tuple[str, ...],
+    values: Mapping[str, object],
+) -> None:
+    cache_keys: Final = list(due_keys)  # mutable-ok: _prepare_batch_get takes a list
+    prepare_batch_get: Final = cache._prepare_batch_get  # pyright: ignore[reportPrivateUsage]  # memory backfill
+    pending: Final = await prepare_batch_get(cache_keys, local_only=True)
+    redis_values: Final = {  # mutable-ok: _apply_batch_get accepts a dictionary
+        key: values[key]
+        for key, local in zip(due_keys, pending.result)
+        if local is None and values.get(key) is not None
+    }
+    apply_batch_get: Final = cache._apply_batch_get  # pyright: ignore[reportPrivateUsage]  # cache backfill
+    await apply_batch_get(pending, redis_values)
+
+
 @dataclass(frozen=True, slots=True)
 class RoutingPrefetch:
     """The cooldown and usage keys of a model group, declared on the request's Redis batch before admission
     flushes it, so the routing read rides the same round trip as the rate limiter's Lua calls."""
 
     keys: frozenset[str]
+    fetched: frozenset[str]
     result: BatchResult[Mapping[str, object]]
+    reservations: tuple[tuple[DualCache, tuple[str, ...], dict[str, float | None]], ...]
+
+    def release(self) -> None:
+        for cache, _, previous_access_times in self.reservations:
+            cache._rollback_redis_batch_key_reservations(  # pyright: ignore[reportPrivateUsage]  # rollback
+                previous_access_times
+            )
+
+    async def _settle(self, future: asyncio.Future[Mapping[str, object]]) -> None:
+        if future.cancelled():
+            self.release()
+            return
+        if future.exception() is not None:
+            self.release()
+            return
+
+        values: Final = future.result()
+        try:
+            for cache, due_keys, _ in self.reservations:
+                await _backfill_prefetched_cache(cache, due_keys, values)
+        except Exception:
+            self.release()
+            raise
 
     @staticmethod
     def arm(
@@ -60,9 +102,28 @@ class RoutingPrefetch:
             () if usage_selector is None else tuple(itertools.chain(*usage_selector.usage_counter_keys(deployments)))
         )
         keys: Final = (*cooldown_keys, *usage_keys)
-        request.prefetched[_PREFETCH_SLOT] = RoutingPrefetch(
-            keys=frozenset(keys), result=request.batch(redis_cache).mget(keys)
+        cooldown_store: Final = litellm_router_instance.cooldown_cache.cooldown_store
+        cooldown_due, cooldown_previous = cooldown_store.reserve_redis_batch_reads(cooldown_keys)
+        usage_cache: Final = None if usage_selector is None else usage_selector.router_cache
+        usage_reservation: Final = None if usage_cache is None else usage_cache.reserve_redis_batch_reads(usage_keys)
+        usage_due: Final = () if usage_reservation is None else tuple(usage_reservation[0])
+        due: Final = (*cooldown_due, *usage_due)
+        reservations: Final = (
+            (cooldown_store, tuple(cooldown_due), cooldown_previous),
+            *(
+                ()
+                if usage_cache is None or usage_reservation is None
+                else ((usage_cache, usage_due, usage_reservation[1]),)
+            ),
         )
+        if not due:
+            return
+        result: Final = request.batch(redis_cache).mget(due)
+        prefetch: Final = RoutingPrefetch(
+            keys=frozenset(keys), fetched=frozenset(due), result=result, reservations=reservations
+        )
+        result.on_settled(prefetch._settle)
+        request.prefetched[_PREFETCH_SLOT] = prefetch
 
     @staticmethod
     def armed() -> bool:
@@ -78,6 +139,8 @@ class RoutingPrefetch:
         armed: Final = request.prefetched.pop(_PREFETCH_SLOT, None)
         if isinstance(armed, RoutingPrefetch) and armed.keys.issuperset(needed):
             return armed
+        if isinstance(armed, RoutingPrefetch):
+            armed.release()
         return None
 
 
@@ -149,6 +212,10 @@ class RoutingReadBatch:
         results: Final[list[list[object | None] | None]] = []  # mutable-ok: filled per read below
         for cache, keys in reads:
             pending = await cache._prepare_batch_get(keys, local_only=True)  # pyright: ignore[reportPrivateUsage]  # same two-step read as async_batch_get_cache_shared
+            if any(
+                key not in prefetch.fetched for key, local_value in zip(keys, pending.result) if local_value is None
+            ):
+                return None
             missed = {  # mutable-ok: _apply_batch_get takes a dict
                 key: values.get(key) for key, local in zip(keys, pending.result) if local is None
             }
