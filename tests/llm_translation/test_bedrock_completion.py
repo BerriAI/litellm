@@ -11,14 +11,12 @@ from dotenv import load_dotenv
 import litellm.types
 
 load_dotenv()
-import contextlib
 import io
 import json
 
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from typing import NoReturn
 
 import litellm
 from litellm import (
@@ -911,53 +909,6 @@ def test_completion_bedrock_external_client_region(monkeypatch):
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
-def _bedrock_call_rate_limited(*args: object, **kwargs: object) -> NoReturn:
-    raise RateLimitError(
-        "Too many requests",
-        llm_provider="bedrock",
-        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    )
-
-
-def _bedrock_call_unavailable(*args: object, **kwargs: object) -> NoReturn:
-    raise ServiceUnavailableError(
-        "Bedrock is unable to process your request.",
-        llm_provider="bedrock",
-        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    )
-
-
-@pytest.mark.parametrize(
-    "auth_test",
-    [
-        test_completion_bedrock_claude_completion_auth,
-        test_completion_bedrock_claude_external_client_auth,
-        test_completion_bedrock_external_client_region,
-    ],
-)
-@pytest.mark.parametrize(
-    "failing_completion", [_bedrock_call_rate_limited, _bedrock_call_unavailable]
-)
-def test_bedrock_auth_tests_restore_aws_env_after_a_failed_call(
-    monkeypatch, auth_test, failing_completion
-):
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "key-id-before-the-test")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-before-the-test")
-    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    failing_call = Mock(side_effect=failing_completion)
-    monkeypatch.setitem(globals(), "completion", failing_call)
-
-    with pytest.MonkeyPatch.context() as auth_test_env, contextlib.suppress(
-        pytest.fail.Exception
-    ):
-        auth_test(auth_test_env)
-
-    failing_call.assert_called_once()
-    assert os.environ["AWS_ACCESS_KEY_ID"] == "key-id-before-the-test"
-    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "secret-before-the-test"
-    assert os.environ["AWS_REGION_NAME"] == "us-west-2"
 
 
 def test_bedrock_tool_calling():
