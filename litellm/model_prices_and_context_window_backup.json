@@ -39901,6 +39901,7 @@
     "nebius/deepseek-ai/DeepSeek-V4-Pro-0813": {
         "input_cost_per_token": 1.32e-06,
         "litellm_provider": "nebius",
+        "max_input_tokens": 979000,
         "mode": "chat",
         "output_cost_per_token": 3.96e-06,
         "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Pro-0813",
@@ -39910,7 +39911,7 @@
     "nebius/deepseek-ai/DeepSeek-V4.1-Flash": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "nebius",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 1048000,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
@@ -40162,6 +40163,16 @@
         "supports_reasoning": true,
         "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3.5-397B-A17B"
     },
+    "nebius/Qwen/Qwen3.8-27B": {
+        "input_cost_per_token": 4.5e-07,
+        "litellm_provider": "nebius",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3.8-27B",
+        "supports_function_calling": true,
+        "supports_reasoning": true
+    },
     "nebius/zai-org/GLM-5.1": {
         "max_tokens": 202752,
         "max_input_tokens": 202752,
@@ -40189,8 +40200,8 @@
     "nebius/zai-org/GLM-5.3": {
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "nebius",
-        "max_input_tokens": 1048576,
-        "max_tokens": 1048576,
+        "max_input_tokens": 1024000,
+        "max_tokens": 1024000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.3",
