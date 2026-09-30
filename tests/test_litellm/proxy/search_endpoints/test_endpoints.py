@@ -5,7 +5,6 @@ import pytest
 
 from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 from litellm.proxy.search_endpoints.endpoints import search
 
@@ -39,9 +38,9 @@ async def test_search_with_only_a_query_falls_back_to_the_proxy_default_model(mo
     else:
         monkeypatch.setitem(proxy_server.general_settings, "completion_model", "perplexity-search")
     search_result = {"object": "search", "results": []}
-    monkeypatch.setattr(
-        ProxyBaseLLMRequestProcessing, "base_process_llm_request", AsyncMock(return_value=search_result)
-    )
+    router = MagicMock()
+    router.asearch = AsyncMock(return_value=search_result)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
 
     response = await search(
         request=_json_request({"query": "litellm"}),
@@ -50,3 +49,6 @@ async def test_search_with_only_a_query_falls_back_to_the_proxy_default_model(mo
     )
 
     assert response == search_result, response
+    router.asearch.assert_awaited_once()
+    assert router.asearch.await_args.kwargs["query"] == "litellm"
+    assert router.asearch.await_args.kwargs["model"] == "perplexity-search"
