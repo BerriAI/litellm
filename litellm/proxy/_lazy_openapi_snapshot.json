@@ -47779,6 +47779,10 @@
               "title": "Github Api Url",
               "type": "string"
             },
+            "has_estimator_key": {
+              "title": "Has Estimator Key",
+              "type": "boolean"
+            },
             "has_github_token": {
               "title": "Has Github Token",
               "type": "boolean"
@@ -47800,6 +47804,10 @@
               },
               "title": "Repos",
               "type": "array"
+            },
+            "update_interval_minutes": {
+              "title": "Update Interval Minutes",
+              "type": "number"
             }
           },
           "required": [
@@ -47808,6 +47816,8 @@
             "estimator_model",
             "estimator_prompt",
             "backfill_days",
+            "update_interval_minutes",
+            "has_estimator_key",
             "identity_map",
             "has_github_token",
             "default_prompt",
@@ -47832,6 +47842,17 @@
                 }
               ],
               "title": "Backfill Days"
+            },
+            "estimator_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estimator Key"
             },
             "estimator_model": {
               "anyOf": [
@@ -47890,6 +47911,19 @@
                 }
               ],
               "title": "Repos"
+            },
+            "update_interval_minutes": {
+              "anyOf": [
+                {
+                  "maximum": 43200.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Update Interval Minutes"
             }
           },
           "title": "ROISettingsUpdate",
@@ -48007,6 +48041,11 @@
               "title": "Done",
               "type": "integer"
             },
+            "elapsed_seconds": {
+              "default": 0,
+              "title": "Elapsed Seconds",
+              "type": "integer"
+            },
             "error": {
               "anyOf": [
                 {
@@ -48022,9 +48061,31 @@
               "title": "Estimated",
               "type": "integer"
             },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Finished At"
+            },
             "needs_attention": {
               "title": "Needs Attention",
               "type": "integer"
+            },
+            "next_update": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Update"
             },
             "phase": {
               "enum": [
@@ -48039,6 +48100,17 @@
               "title": "Phase",
               "type": "string"
             },
+            "remaining_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Remaining Seconds"
+            },
             "reused": {
               "title": "Reused",
               "type": "integer"
@@ -48050,6 +48122,17 @@
             "stage": {
               "title": "Stage",
               "type": "string"
+            },
+            "started_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Started At"
             },
             "total": {
               "title": "Total",
@@ -48141,6 +48224,32 @@
       }
     },
     "paths": {
+      "/roi-calculator/connections/test": {
+        "post": {
+          "operationId": "test_roi_calculator_connections_roi_calculator_connections_test_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Test Roi Calculator Connections",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
       "/roi-calculator/identity-map": {
         "put": {
           "operationId": "update_roi_calculator_identity_map_roi_calculator_identity_map_put",
@@ -48190,6 +48299,22 @@
       "/roi-calculator/report": {
         "get": {
           "operationId": "get_roi_calculator_report_roi_calculator_report_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mode",
+              "required": false,
+              "schema": {
+                "default": "live",
+                "enum": [
+                  "live",
+                  "demo"
+                ],
+                "title": "Mode",
+                "type": "string"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -48200,6 +48325,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "security": [
@@ -48339,6 +48474,32 @@
             }
           ],
           "summary": "Update Roi Calculator Settings",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/setup/reset": {
+        "post": {
+          "operationId": "reset_roi_calculator_setup_roi_calculator_setup_reset_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Reset Roi Calculator Setup",
           "tags": [
             "roi_calculator"
           ]

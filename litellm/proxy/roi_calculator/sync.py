@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, runtime_checkable
+from uuid import uuid4
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -39,6 +40,12 @@ class _ReportRepository(Protocol):
     async def get_param(self, param_name: str) -> _ConfigParam | None: ...
 
     async def set_param(self, param_name: str, param_value: object) -> object: ...
+
+
+class SyncCoordinator(Protocol):
+    async def acquire(self, owner: str, status: ROISyncStatus, scheduled_interval: float = 0) -> bool: ...
+    async def heartbeat(self, owner: str, status: ROISyncStatus) -> bool: ...
+    async def finish(self, owner: str, status: ROISyncStatus, report: ROIReport | None = None) -> bool: ...
 
 
 class _DailySpendTable(Protocol):
@@ -222,12 +229,26 @@ class SyncManager:
             error=None,
         )
         self._task: asyncio.Task[None] | None = None
+        self._coordinator: SyncCoordinator | None = None
+        self._owner: str = ""
 
     @property
     def status(self) -> ROISyncStatus:
-        return self._status
+        if self._status.started_at is None:
+            return self._status
+        start: Final = datetime.fromisoformat(self._status.started_at)
+        finish: Final = datetime.fromisoformat(self._status.finished_at) if self._status.finished_at else self._clock()
+        elapsed: Final = max(0, int((finish - start).total_seconds()))
+        remaining: Final = (
+            max(0, round(elapsed / self._status.done * (self._status.total - self._status.done)))
+            if self._status.running and self._status.done >= PR_CONCURRENCY
+            else None
+        )
+        return self._status.model_copy(
+            update=MappingProxyType({"elapsed_seconds": elapsed, "remaining_seconds": remaining})
+        )
 
-    def start(
+    async def start(
         self,
         settings: ROISettings,
         repository: _ReportRepository,
@@ -235,11 +256,14 @@ class SyncManager:
         complete: CompletionCaller,
         github_transport: httpx.AsyncBaseTransport | None = None,
         estimator_models: tuple[EstimatorModel, ...] | None = None,
+        coordinator: SyncCoordinator | None = None,
+        scheduled_interval: float = 0,
     ) -> bool:
         if self._status.running or not settings.repos or not settings.estimator_model:
             return False
-        self._status = ROISyncStatus(
+        initial_status: Final = ROISyncStatus(
             running=True,
+            started_at=self._clock().isoformat(),
             phase="spend",
             stage="Reading gateway spend",
             done=0,
@@ -249,8 +273,16 @@ class SyncManager:
             needs_attention=0,
             error=None,
         )
+        owner: Final = str(uuid4())
+        if coordinator is not None and not await coordinator.acquire(owner, initial_status, scheduled_interval):
+            return False
+        self._status = initial_status
+        self._coordinator = coordinator
+        self._owner = owner
         self._task = asyncio.create_task(
-            self._run(settings, repository, spend_reader, complete, github_transport, estimator_models)
+            self._run(
+                settings, repository, spend_reader, complete, github_transport, estimator_models, coordinator, owner
+            )
         )
         return True
 
@@ -262,6 +294,9 @@ class SyncManager:
         with suppress(asyncio.CancelledError):
             await task
         self._update_status(running=False, phase="cancelled", stage="Sync cancelled")
+        self._status = self.status.model_copy(update=MappingProxyType({"finished_at": self._clock().isoformat()}))
+        if self._coordinator is not None:
+            await self._coordinator.finish(self._owner, self.status)
         return True
 
     async def _run(
@@ -272,7 +307,24 @@ class SyncManager:
         complete: CompletionCaller,
         github_transport: httpx.AsyncBaseTransport | None,
         estimator_models: tuple[EstimatorModel, ...] | None,
+        coordinator: SyncCoordinator | None,
+        owner: str,
     ) -> None:
+        task: Final = asyncio.current_task()
+
+        async def heartbeat() -> None:
+            if coordinator is None or task is None:
+                return
+            try:
+                while True:
+                    await asyncio.sleep(1)
+                    if not await coordinator.heartbeat(owner, self.status):
+                        task.cancel()
+                        return
+            except Exception:
+                task.cancel()
+
+        monitor: Final = asyncio.create_task(heartbeat())
         github: Final = self._github_factory(settings, github_transport)
         try:
             end: Final = self._clock().date()
@@ -298,53 +350,83 @@ class SyncManager:
                 (index, repo, pull, cache_key(settings, context, repo, pull))
                 for index, (repo, pull) in enumerate(queue)
             )
-            cached: Final = tuple(
-                (index, previous_pulls[key])
-                for index, _, _, key in indexed_queue
-                if key is not None
-                and (previous_pull := previous_pulls.get(key)) is not None
-                and previous_pull["estimate"]["status"] == "estimated"
-            )
-            cached_by_index: Final[Mapping[int, ROIPullRecord]] = MappingProxyType(
-                {index: self._cached_record(pull) for index, pull in cached}
-            )
-            pending: Final = tuple(item for item in indexed_queue if item[0] not in cached_by_index)
-            reused_count: Final = len(cached)
             self._update_status(
                 phase="estimates",
                 stage="Estimating new or changed pull requests",
-                done=reused_count,
                 total=len(queue),
-                estimated=reused_count,
-                reused=reused_count,
             )
-            semaphore: Final = asyncio.Semaphore(PR_CONCURRENCY)
             estimator: Final = Estimator(settings, complete, estimator_models)
 
             async def process(
                 item: tuple[int, str, GitHubPullListItem, str | None],
             ) -> tuple[int, ROIPullRecord]:
-                async with semaphore:
-                    index, repo, pull, key = item
-                    evidence: Final = await github.evidence(repo, pull)
-                    estimate: Final = await _estimate_with_fallback(estimator, evidence)
-                    record: Final = self._report_record(evidence, estimate, key)
-                    self._update_estimate_progress(estimate)
-                    return index, record
+                index, repo, pull, key = item
+                saved: Final = await repository.get_param("roi_calculator_pull_" + key) if key is not None else None
+                cached_pull: Final = (
+                    TypeAdapter(ROIPullRecord).validate_python(saved.param_value)
+                    if saved is not None
+                    else previous_pulls.get(key or "")
+                )
+                if (
+                    cached_pull is not None
+                    and cached_pull["estimate"]["status"] == "estimated"
+                    and "commit_emails" in cached_pull
+                ):
+                    profile: Final = await github.profile_email(cached_pull["login"])
+                    cached_record: Final = TypeAdapter(ROIPullRecord).validate_python(
+                        {
+                            **self._cached_record(cached_pull),
+                            "profile_email": profile,
+                            "emails": tuple(
+                                sorted(frozenset(email for email in (*cached_pull["commit_emails"], profile) if email))
+                            ),
+                        }
+                    )
+                    self._update_estimate_progress(cached_record["estimate"])
+                    return index, cached_record
+                evidence: Final = await github.evidence(repo, pull)
+                estimate: Final = await _estimate_with_fallback(estimator, evidence)
+                evidence_item: Final = GitHubPullListItem.model_validate(
+                    MappingProxyType(
+                        {
+                            "number": evidence["number"],
+                            "title": evidence["title"],
+                            "body": evidence["body"],
+                            "head": MappingProxyType({"sha": evidence["head_sha"]}),
+                            "user": MappingProxyType({"login": evidence["login"]}),
+                            "merged_at": evidence["merged_at"],
+                            "updated_at": evidence["merged_at"],
+                        }
+                    )
+                )
+                fetched_key: Final = cache_key(settings, context, repo, evidence_item)
+                record: Final = self._report_record(evidence, estimate, fetched_key)
+                if fetched_key is not None and estimate["status"] == "estimated":
+                    await repository.set_param(
+                        "roi_calculator_pull_" + fetched_key,
+                        _JSON_OBJECT_ADAPTER.validate_python(
+                            TypeAdapter(ROIPullRecord).dump_python(record, mode="json")
+                        ),
+                    )
+                self._update_estimate_progress(estimate)
+                return index, record
 
-            workers: Final = tuple(asyncio.create_task(process(item)) for item in pending)
+            async def worker(offset: int) -> tuple[tuple[int, ROIPullRecord], ...]:
+                return tuple(
+                    [await process(indexed_queue[index]) for index in range(offset, len(indexed_queue), PR_CONCURRENCY)]
+                )
+
+            workers: Final = tuple(asyncio.create_task(worker(offset)) for offset in range(PR_CONCURRENCY))
             try:
-                processed: Final = await asyncio.gather(*workers)
+                groups: Final = await asyncio.gather(*workers)
+                processed: Final = tuple(chain.from_iterable(groups))
             finally:
-                for worker in workers:
-                    if not worker.done():
-                        worker.cancel()
+                for worker_task in workers:
+                    if not worker_task.done():
+                        worker_task.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
             processed_by_index: Final[Mapping[int, ROIPullRecord]] = MappingProxyType(
                 {index: pull for index, pull in processed}
-            )
-            report_pulls: Final[Mapping[int, ROIPullRecord]] = MappingProxyType(
-                {**cached_by_index, **processed_by_index}
             )
             report: Final = ROIReport(
                 mode="live",
@@ -356,7 +438,7 @@ class SyncManager:
                 estimator_prompt=settings.estimator_prompt,
                 effort_basis="without_ai",
                 spend=spend,
-                pulls=tuple(report_pulls[index] for index in range(len(queue))),
+                pulls=tuple(processed_by_index[index] for index in range(len(queue))),
                 settings_fingerprint=settings_fingerprint(settings),
                 warnings=(),
             )
@@ -364,8 +446,27 @@ class SyncManager:
             report_json: Final[dict[str, object]] = _JSON_OBJECT_ADAPTER.validate_python(
                 _REPORT_ADAPTER.dump_python(report, mode="json")
             )
-            await repository.set_param("roi_calculator_report", report_json)
-            self._update_status(phase="complete", stage="Up to date")
+            monitor.cancel()
+            with suppress(asyncio.CancelledError):
+                await monitor
+            completed_status: Final = self.status.model_copy(
+                update=MappingProxyType(
+                    {
+                        "running": False,
+                        "phase": "complete",
+                        "stage": "Analysis complete",
+                        "finished_at": self._clock().isoformat(),
+                    }
+                )
+            )
+            if coordinator is not None:
+                if not await coordinator.finish(owner, completed_status, report):
+                    raise SourceError(
+                        "This sync was cancelled or replaced. Run analysis again to resume saved estimates."
+                    )
+            else:
+                await repository.set_param("roi_calculator_report", report_json)
+            self._status = completed_status
         except asyncio.CancelledError:
             self._update_status(phase="cancelled", stage="Sync cancelled")
             raise
@@ -381,11 +482,18 @@ class SyncManager:
                 ),
             )
         finally:
+            monitor.cancel()
+            with suppress(asyncio.CancelledError):
+                await monitor
             try:
                 if self._status.phase != "complete":
                     await github.close()
             finally:
-                self._update_status(running=False)
+                self._status = self._status.model_copy(
+                    update=MappingProxyType({"running": False, "finished_at": self._clock().isoformat()})
+                )
+                if coordinator is not None and self._status.phase != "complete":
+                    await coordinator.finish(owner, self.status)
 
     def _update_status(self, **update: Unpack[_StatusUpdate]) -> None:
         status: Final = ROISyncStatus.model_validate(MappingProxyType({**self._status.model_dump(), **update}))
@@ -410,6 +518,7 @@ class SyncManager:
             login=pull["login"],
             emails=pull["emails"],
             profile_email=pull["profile_email"],
+            commit_emails=pull.get("commit_emails", ()),
             merged_at=pull["merged_at"],
             head_sha=pull["head_sha"],
             additions=pull["additions"],
@@ -435,6 +544,7 @@ class SyncManager:
             login=evidence["login"],
             emails=evidence["emails"],
             profile_email=evidence["profile_email"],
+            commit_emails=evidence.get("commit_emails", ()),
             merged_at=evidence["merged_at"],
             head_sha=evidence["head_sha"],
             additions=evidence["additions"],

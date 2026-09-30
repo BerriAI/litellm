@@ -23,14 +23,11 @@ const SYNCED_AT_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
   timeZoneName: "short",
 };
 
-export const formatMoney = (value: number | null | undefined): string =>
-  value == null
-    ? "—"
-    : new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: "USD",
-        maximumFractionDigits: 2,
-      }).format(value);
+export const formatMoney = (value: number | null | undefined): string => {
+  if (value == null) return "—";
+  if (value > 0 && value < 0.01) return "<$0.01";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
+};
 
 export const formatNumber = (value: number | null | undefined): string =>
   value == null ? "—" : new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
@@ -62,4 +59,43 @@ export const filterPulls = (pulls: ROIPull[], query: string): ROIPull[] => {
   return pulls.filter((pull) =>
     `${pull.title} ${pull.repo} ${pull.number} ${pull.login}`.toLocaleLowerCase().includes(normalized),
   );
+};
+
+export const peopleCsv = (summary: ROISummary): string => {
+  const escape = (value: unknown): string => {
+    const text = value == null ? "" : String(value);
+    const safe = /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;
+    return `"${safe.replaceAll('"', '""')}"`;
+  };
+  const rows = summary.people.map((person) => [
+    person.email,
+    person.logins.join(";"),
+    person.spend,
+    person.hours,
+    person.prs,
+    person.pending_prs,
+    person.eligible,
+    person.cost_per_hour,
+    summary.start,
+    summary.end,
+    summary.effort_basis ?? "unspecified",
+  ]);
+  return [
+    [
+      "email",
+      "github_logins",
+      "gateway_spend_usd",
+      "estimated_hours",
+      "merged_prs",
+      "pending_estimates",
+      "in_matched_cohort",
+      "cost_per_estimated_hour",
+      "start_utc",
+      "end_utc",
+      "effort_basis",
+    ],
+    ...rows,
+  ]
+    .map((row) => row.map(escape).join(","))
+    .join("\r\n");
 };

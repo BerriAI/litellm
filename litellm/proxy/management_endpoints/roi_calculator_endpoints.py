@@ -1,13 +1,14 @@
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
@@ -15,8 +16,8 @@ from litellm.proxy.roi_calculator.analytics import normalize_email, summarize
 from litellm.proxy.roi_calculator.estimator import CompletionCaller, EstimatorModel
 from litellm.proxy.roi_calculator.github import GitHub, SourceError
 from litellm.proxy.roi_calculator.sync import SpendReader, SyncManager, read_spend, spend_prisma_client
+from litellm.proxy.roi_calculator.sync_store import SyncStore
 from litellm.repositories.config_repository import ConfigRepository
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.roi_calculator import (
     DEFAULT_PROMPT,
     ROICompletionRequest,
@@ -46,10 +47,12 @@ class _StoredSettings(BaseModel):
 
     github_api_url: str = "https://api.github.com"
     github_token: str = ""
+    estimator_key: str = ""
     repos: tuple[str, ...] = ()
     estimator_model: str = ""
     estimator_prompt: str = DEFAULT_PROMPT
     backfill_days: int = Field(default=7, ge=1, le=3650)
+    update_interval_minutes: float = Field(default=1440, ge=0, le=43200)
     identity_map: Mapping[str, str] = Field(default_factory=lambda: MappingProxyType({}))
 
 
@@ -116,7 +119,6 @@ def get_github_transport() -> httpx.AsyncBaseTransport | None:
 
 _ROUTER_ESTIMATOR_DEPLOYMENTS: Final = TypeAdapter(tuple[_RouterEstimatorDeployment, ...])
 _MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
-_ROUTER_MESSAGES: Final = TypeAdapter(list[AllMessageValues])
 
 
 def _estimator_models_from_deployments(deployments: Sequence[object]) -> tuple[EstimatorModel, ...]:
@@ -174,6 +176,10 @@ async def _load_settings(repository: ConfigRepository) -> ROISettings:
         return ROISettings(
             github_api_url=stored.github_api_url,
             github_token=SecretStr(token or ""),
+            estimator_key=SecretStr(decrypt_value_helper(stored.estimator_key, _SETTINGS_KEY) or "")
+            if stored.estimator_key
+            else SecretStr(""),
+            update_interval_minutes=stored.update_interval_minutes,
             repos=stored.repos,
             estimator_model=stored.estimator_model,
             estimator_prompt=stored.estimator_prompt,
@@ -188,10 +194,13 @@ async def _save_settings(
     repository: ConfigRepository,
     settings: ROISettings,
     encrypted_token: str,
+    encrypted_estimator_key: str,
 ) -> None:
     stored: Final = _StoredSettings(
         github_api_url=settings.github_api_url,
         github_token=encrypted_token,
+        estimator_key=encrypted_estimator_key,
+        update_interval_minutes=settings.update_interval_minutes,
         repos=settings.repos,
         estimator_model=settings.estimator_model,
         estimator_prompt=settings.estimator_prompt,
@@ -221,48 +230,71 @@ def _public_settings(settings: ROISettings) -> ROISettingsResponse:
         backfill_days=settings.backfill_days,
         identity_map=settings.identity_map,
         has_github_token=bool(settings.github_token.get_secret_value()),
+        has_estimator_key=bool(settings.estimator_key.get_secret_value()),
+        update_interval_minutes=settings.update_interval_minutes,
         default_prompt=DEFAULT_PROMPT,
         available_models=models,
         ready=bool(settings.repos and settings.estimator_model and settings.estimator_model in models),
     )
 
 
-def _completion_caller() -> CompletionCaller:
-    from litellm.proxy.proxy_server import llm_router
+def _gateway_key(settings: ROISettings) -> str:
+    from litellm.proxy.proxy_server import master_key
 
-    if llm_router is None:
-        raise HTTPException(status_code=503, detail="The proxy model router is not ready.")
+    credential: Final = settings.estimator_key.get_secret_value() or master_key
+    if not credential:
+        raise HTTPException(status_code=409, detail="Add an estimator API key in Advanced settings.")
+    return credential
+
+
+def _completion_caller(settings: ROISettings) -> CompletionCaller:
+    from litellm.proxy.proxy_server import app
+
+    credential: Final = _gateway_key(settings)
+    transport: Final = httpx.ASGITransport(app=app)
 
     async def complete(request: ROICompletionRequest) -> object:
-        messages: Final = _ROUTER_MESSAGES.validate_python(request.messages)
-        tags: Final[list[str]] = list(  # mutable-ok: the router requires list-valued tags
-            request.metadata["tags"]
-        )
-        metadata: Final[dict[str, object]] = {  # mutable-ok: the router requires dict metadata
-            "tags": tags,
-            "litellm_roi_estimator": request.metadata["litellm_roi_estimator"],
-        }
-        if request.reasoning_effort is None:
-            return await llm_router.acompletion(
-                model=request.model,
-                messages=messages,
-                temperature=request.temperature,
-                response_format=request.response_format,
-                max_tokens=request.max_tokens,
-                metadata=metadata,
+        client: Final = AsyncHTTPHandler(transport=transport, timeout=180, follow_redirects=False)
+        try:
+            response: Final = await client.client.post(
+                "http://litellm.internal/v1/chat/completions",
+                headers=MappingProxyType({"authorization": f"Bearer {credential}", "content-type": "application/json"}),
+                content=request.model_dump_json(exclude_none=True),
             )
-        response_with_reasoning: Final[object] = await llm_router.acompletion(
-            model=request.model,
-            messages=messages,
-            temperature=request.temperature,
-            response_format=request.response_format,
-            max_tokens=request.max_tokens,
-            metadata=metadata,
-            reasoning_effort=request.reasoning_effort,
-        )
-        return response_with_reasoning
+            response.raise_for_status()
+            return TypeAdapter(object).validate_python(response.json())
+        finally:
+            await client.close()
 
     return complete
+
+
+class _GatewayModel(BaseModel):
+    id: str
+
+
+class _GatewayModels(BaseModel):
+    data: tuple[_GatewayModel, ...]
+
+
+async def _test_estimator_access(settings: ROISettings) -> None:
+    from litellm.proxy.proxy_server import app
+
+    credential: Final = _gateway_key(settings)
+    client: Final = AsyncHTTPHandler(transport=httpx.ASGITransport(app=app), timeout=30, follow_redirects=False)
+    try:
+        response: Final = await client.client.get(
+            "http://litellm.internal/v1/models",
+            headers=MappingProxyType({"authorization": f"Bearer {credential}"}),
+        )
+        response.raise_for_status()
+        models: Final = _GatewayModels.model_validate(response.json())
+        if not any(model.id == settings.estimator_model for model in models.data):
+            raise HTTPException(status_code=409, detail="The estimator key cannot access the selected model.")
+    except (httpx.HTTPError, ValidationError):
+        raise HTTPException(status_code=409, detail="The estimator key could not connect to the gateway.") from None
+    finally:
+        await client.close()
 
 
 def _spend_reader(repository: ConfigRepository) -> SpendReader:
@@ -314,10 +346,22 @@ async def update_roi_calculator_settings(
         if github_url_changed
         else (current.github_token.get_secret_value(), stored.github_token)
     )
+    estimator_key: Final = (
+        patch.estimator_key or ""
+        if "estimator_key" in patch.model_fields_set
+        else current.estimator_key.get_secret_value()
+    )
+    encrypted_estimator_key: Final = (
+        TypeAdapter(str).validate_python(encrypt_value_helper(estimator_key)) if estimator_key else ""
+    )
     try:
         settings: Final = ROISettings(
             github_api_url=github_api_url,
             github_token=SecretStr(plaintext_token),
+            estimator_key=SecretStr(estimator_key),
+            update_interval_minutes=patch.update_interval_minutes
+            if patch.update_interval_minutes is not None
+            else current.update_interval_minutes,
             repos=patch.repos if patch.repos is not None else current.repos,
             estimator_model=(patch.estimator_model if patch.estimator_model is not None else current.estimator_model),
             estimator_prompt=(
@@ -328,7 +372,7 @@ async def update_roi_calculator_settings(
         )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from None
-    await _save_settings(repository, settings, encrypted_token)
+    await _save_settings(repository, settings, encrypted_token, encrypted_estimator_key)
     return _public_settings(settings)
 
 
@@ -367,9 +411,14 @@ async def get_roi_calculator_repositories(
 )
 async def get_roi_calculator_sync_status(
     _user: Annotated[UserAPIKeyAuth, Depends(_read_admin)],
+    repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
     manager: Annotated[SyncManager, Depends(get_roi_sync_manager)],
 ) -> ROISyncStatus:
-    return manager.status
+    status: Final = await SyncStore(repository.prisma_client).status() or manager.status
+    settings: Final = await _load_settings(repository)
+    report: Final = await _load_report(repository)
+    next_update: Final = _next_update(settings, status, report)
+    return status.model_copy(update={"next_update": next_update.isoformat() if next_update else None})
 
 
 @router.post(
@@ -388,13 +437,14 @@ async def start_roi_calculator_sync(
     public: Final = _public_settings(settings)
     if not public.ready:
         raise HTTPException(status_code=409, detail="Connect GitHub, select repositories, and choose a router model.")
-    if not manager.start(
+    if not await manager.start(
         settings,
         repository,
         _spend_reader(repository),
-        _completion_caller(),
+        _completion_caller(settings),
         transport,
         _router_estimator_models(settings.estimator_model),
+        SyncStore(repository.prisma_client),
     ):
         raise HTTPException(status_code=409, detail="A sync is already running.")
     return manager.status
@@ -407,10 +457,13 @@ async def start_roi_calculator_sync(
 )
 async def cancel_roi_calculator_sync(
     _user: Annotated[UserAPIKeyAuth, Depends(_write_admin)],
+    repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
     manager: Annotated[SyncManager, Depends(get_roi_sync_manager)],
 ) -> ROISyncStatus:
+    store: Final = SyncStore(repository.prisma_client)
+    await store.cancel()
     await manager.cancel()
-    return manager.status
+    return await store.status() or manager.status
 
 
 @router.get(
@@ -421,7 +474,13 @@ async def cancel_roi_calculator_sync(
 async def get_roi_calculator_report(
     _user: Annotated[UserAPIKeyAuth, Depends(_read_admin)],
     repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
+    mode: Literal["live", "demo"] = "live",
 ) -> ROIReportResponse:
+    if mode == "demo":
+        from litellm.proxy.roi_calculator.sample import sample_report
+
+        sample: Final = summarize(sample_report(datetime.now(timezone.utc)), MappingProxyType({}))
+        return ROIReportResponse(report=ROISummaryResponse.model_validate(sample))
     report: Final = await _load_report(repository)
     if report is None:
         return ROIReportResponse(report=None)
@@ -454,16 +513,111 @@ async def update_roi_calculator_identity_map(
     settings: Final = ROISettings(
         github_api_url=current.github_api_url,
         github_token=current.github_token,
+        estimator_key=current.estimator_key,
+        update_interval_minutes=current.update_interval_minutes,
         repos=current.repos,
         estimator_model=current.estimator_model,
         estimator_prompt=current.estimator_prompt,
         backfill_days=current.backfill_days,
         identity_map=identity_map,
     )
-    await _save_settings(repository, settings, current_stored.github_token)
+    await _save_settings(repository, settings, current_stored.github_token, current_stored.estimator_key)
     report: Final = await _load_report(repository)
     summary: Final = summarize(report, settings.identity_map) if report is not None else None
     return ROIIdentityMapResponse(
         report=ROISummaryResponse.model_validate(summary) if summary is not None else None,
         identity_map=settings.identity_map,
     )
+
+
+def _next_update(settings: ROISettings, status: ROISyncStatus, report: ROIReport | None) -> datetime | None:
+    if (
+        not report
+        or not settings.repos
+        or not settings.estimator_model
+        or not settings.update_interval_minutes
+        or status.running
+    ):
+        return None
+    anchor: Final = status.finished_at or status.started_at or report["synced_at"]
+    return datetime.fromisoformat(anchor.replace("Z", "+00:00")) + timedelta(minutes=settings.update_interval_minutes)
+
+
+async def run_scheduled_sync() -> None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return
+    repository: Final = ConfigRepository(prisma_client)
+    settings: Final = await _load_settings(repository)
+    if not settings.update_interval_minutes or not _public_settings(settings).ready:
+        return
+    store: Final = SyncStore(prisma_client)
+    status: Final = await store.status() or _SYNC_MANAGER.status
+    report: Final = await _load_report(repository)
+    next_update: Final = _next_update(settings, status, report)
+    if next_update is None or next_update > datetime.now(timezone.utc):
+        return
+    await _SYNC_MANAGER.start(
+        settings,
+        repository,
+        _spend_reader(repository),
+        _completion_caller(settings),
+        estimator_models=_router_estimator_models(settings.estimator_model),
+        coordinator=store,
+        scheduled_interval=settings.update_interval_minutes,
+    )
+
+
+@router.post("/roi-calculator/connections/test", tags=_ROI_TAGS)
+async def test_roi_calculator_connections(
+    _user: Annotated[UserAPIKeyAuth, Depends(_write_admin)],
+    repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
+    transport: Annotated[httpx.AsyncBaseTransport | None, Depends(get_github_transport)],
+) -> ROISettingsResponse:
+    settings: Final = await _load_settings(repository)
+    public: Final = _public_settings(settings)
+    if not public.ready:
+        raise HTTPException(status_code=409, detail="Choose repositories and an available estimator model first.")
+    await _test_estimator_access(settings)
+    github: Final = GitHub(settings, transport)
+    try:
+        await github.test_repositories(settings.repos)
+    except SourceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    finally:
+        await github.close()
+    return public
+
+
+@router.post("/roi-calculator/setup/reset", tags=_ROI_TAGS)
+async def reset_roi_calculator_setup(
+    _user: Annotated[UserAPIKeyAuth, Depends(_write_admin)],
+    repository: Annotated[ConfigRepository, Depends(get_roi_config_repository)],
+) -> ROISettingsResponse:
+    from uuid import uuid4
+
+    store: Final = SyncStore(repository.prisma_client)
+    owner: Final = str(uuid4())
+    status: Final = ROISyncStatus(
+        running=True,
+        phase="spend",
+        stage="Restarting setup",
+        done=0,
+        total=0,
+        estimated=0,
+        reused=0,
+        needs_attention=0,
+        error=None,
+    )
+    if not await store.acquire(owner, status):
+        raise HTTPException(status_code=409, detail="Cancel the running analysis before restarting setup.")
+    try:
+        current: Final = await _load_settings(repository)
+        stored: Final = await _load_stored_settings(repository)
+        settings: Final = current.model_copy(update={"repos": ()})
+        await _save_settings(repository, settings, stored.github_token, stored.estimator_key)
+        await repository.prisma_client.db.execute_raw('DELETE FROM "LiteLLM_Config" WHERE param_name = $1', _REPORT_KEY)
+        return _public_settings(settings)
+    finally:
+        await store.finish(owner, status.model_copy(update={"running": False, "phase": "idle", "stage": "Idle"}))

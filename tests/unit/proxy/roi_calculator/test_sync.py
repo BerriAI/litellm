@@ -151,6 +151,7 @@ def _settings(estimator_prompt: str = "Estimate effort.") -> ROISettings:
 def _transport(
     pull_detail_status: int = 200,
     unexpected_details: bool = False,
+    profile_email: str = "alice@example.com",
 ) -> httpx.MockTransport:
     def respond(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -166,7 +167,7 @@ def _transport(
                 content=_PULL_FILES_JSON,
             )
         if path == "/users/alice":
-            return httpx.Response(200, content=_USER_JSON)
+            return httpx.Response(200, json={"email": profile_email})
         if path == "/repos/org/repo/pulls/42/commits":
             return httpx.Response(200, content=_COMMITS_JSON)
         raise AssertionError(f"Unexpected GitHub request: {request.method} {path}")
@@ -211,23 +212,23 @@ async def _wait_until_finished(manager: SyncManager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unchanged_estimated_pull_skips_github_details_and_model_call() -> None:
+async def test_unchanged_estimated_pull_refreshes_identity_without_model_call() -> None:
     repository: Final = _ReportRepository()
     manager: Final = SyncManager(clock=_fixed_now)
     complete: Final = _completion()
 
-    assert manager.start(_settings(), repository, _spend_reader(), complete, _transport())
+    assert await manager.start(_settings(), repository, _spend_reader(), complete, _transport())
     await _wait_until_finished(manager)
 
     async def unexpected_completion(request: ROICompletionRequest) -> object:
         raise AssertionError("A reused estimate must not call the estimator.")
 
-    assert manager.start(
+    assert await manager.start(
         _settings(),
         repository,
         _spend_reader(),
         unexpected_completion,
-        _transport(unexpected_details=True),
+        _transport(unexpected_details=True, profile_email="new@example.com"),
     )
     await _wait_until_finished(manager)
 
@@ -235,6 +236,8 @@ async def test_unchanged_estimated_pull_skips_github_details_and_model_call() ->
     assert manager.status.reused == 1
     report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
     assert report["pulls"][0]["estimate"].get("cached") is True
+    assert report["pulls"][0]["profile_email"] == "new@example.com"
+    assert report["pulls"][0]["emails"] == ("alice@example.com", "new@example.com")
 
 
 @pytest.mark.asyncio
@@ -274,7 +277,7 @@ async def test_sync_does_not_persist_a_report_when_github_fails() -> None:
     repository: Final = _ReportRepository()
     manager: Final = SyncManager(clock=_fixed_now)
 
-    assert manager.start(
+    assert await manager.start(
         _settings(),
         repository,
         _spend_reader(),
@@ -293,7 +296,7 @@ async def test_cancelling_estimation_leaves_the_previous_report_unchanged() -> N
     repository: Final = _ReportRepository()
     manager: Final = SyncManager(clock=_fixed_now)
 
-    assert manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
     await _wait_until_finished(manager)
     previous_report: Final = repository.values["roi_calculator_report"]
 
@@ -302,7 +305,7 @@ async def test_cancelling_estimation_leaves_the_previous_report_unchanged() -> N
         entered_estimator.set()
         await asyncio.Event().wait()
 
-    assert manager.start(
+    assert await manager.start(
         _settings(estimator_prompt="Different estimator instructions."),
         repository,
         _spend_reader(),
@@ -314,3 +317,38 @@ async def test_cancelling_estimation_leaves_the_previous_report_unchanged() -> N
     assert await manager.cancel()
     assert manager.status.phase == "cancelled"
     assert repository.values["roi_calculator_report"] is previous_report
+
+
+@pytest.mark.asyncio
+async def test_immediate_cancel_allows_another_run() -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    assert await manager.cancel()
+    assert manager.status.phase == "cancelled"
+    assert manager.status.finished_at is not None
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "complete"
+
+
+@pytest.mark.asyncio
+async def test_saved_estimates_survive_report_reset() -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    await _wait_until_finished(manager)
+    repository.values = MappingProxyType(
+        {key: value for key, value in repository.values.items() if key != "roi_calculator_report"}
+    )
+
+    async def unexpected_completion(request: ROICompletionRequest) -> object:
+        raise AssertionError("Saved estimates should survive report reset")
+
+    restarted: Final = SyncManager(clock=_fixed_now)
+    assert await restarted.start(
+        _settings(), repository, _spend_reader(), unexpected_completion, _transport(unexpected_details=True)
+    )
+    await _wait_until_finished(restarted)
+    assert restarted.status.phase == "complete"
+    assert restarted.status.reused == 1

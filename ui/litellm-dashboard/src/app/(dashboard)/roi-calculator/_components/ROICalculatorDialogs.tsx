@@ -73,9 +73,11 @@ export function PullReasoningDialog({
               </details>
             )}
             <DialogFooter>
-              <Button variant="outline" render={<a href={pull.url} target="_blank" rel="noopener noreferrer" />}>
-                View on GitHub
-              </Button>
+              {pull.url && (
+                <Button variant="outline" render={<a href={pull.url} target="_blank" rel="noopener noreferrer" />}>
+                  View on GitHub
+                </Button>
+              )}
             </DialogFooter>
           </>
         )}
@@ -87,11 +89,13 @@ export function PullReasoningDialog({
 export function IdentityMatchDialog({
   selection,
   identityMap,
+  gatewayEmails,
   onClose,
   onSave,
 }: {
   selection: PersonMatchSelection | null;
   identityMap: Record<string, string>;
+  gatewayEmails: string[];
   onClose: () => void;
   onSave: (payload: ROIIdentityMapUpdate) => Promise<void>;
 }) {
@@ -137,12 +141,18 @@ export function IdentityMatchDialog({
             <Input
               id="roi-match-email"
               autoComplete="off"
+              list="roi-gateway-emails"
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
             />
           </div>
+          <datalist id="roi-gateway-emails">
+            {Array.from(new Set(gatewayEmails)).map((address) => (
+              <option key={address} value={address} />
+            ))}
+          </datalist>
           {error && (
             <p role="alert" className="text-sm text-destructive">
               {error}

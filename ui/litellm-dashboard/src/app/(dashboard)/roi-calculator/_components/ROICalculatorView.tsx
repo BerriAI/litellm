@@ -49,14 +49,19 @@ export default function ROICalculatorView({
   userRole?: string | null;
   isViewOnly?: boolean;
 }) {
-  const readOnly = isViewOnly && isProxyAdminTierRole(userRole ?? "");
+  const [sampleSummary, setSampleSummary] = React.useState<ROISummary | null>(null);
+  const adminReadOnly = isViewOnly && isProxyAdminTierRole(userRole ?? "");
+  const readOnly = adminReadOnly || sampleSummary !== null;
   const [view, setView] = React.useState<View>("overview");
   const [settings, setSettings] = React.useState<ROISettings | null>(null);
-  const [summary, setSummary] = React.useState<ROISummary | null>(null);
+  const [liveSummary, setSummary] = React.useState<ROISummary | null>(null);
+  const summary = sampleSummary ?? liveSummary;
   const [status, setStatus] = React.useState<ROISyncStatus>(IDLE_STATUS);
   const [selectedPull, setSelectedPull] = React.useState<ROIPull | null>(null);
   const [matchingPerson, setMatchingPerson] = React.useState<PersonMatchSelection | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const statusRef = React.useRef<ROISyncStatus>(IDLE_STATUS);
+  const settingsLoaded = settings !== null;
   const [query, setQuery] = React.useState("");
 
   const loadReport = React.useCallback(async () => {
@@ -78,6 +83,7 @@ export default function ROICalculatorView({
         setSettings(nextSettings);
         setSummary(reportResponse.report);
         setStatus(syncStatus);
+        statusRef.current = syncStatus;
         setError(null);
       })
       .catch((reason: unknown) => {
@@ -89,9 +95,10 @@ export default function ROICalculatorView({
   }, [accessToken]);
 
   React.useEffect(() => {
-    if (!accessToken || !status.running) return;
+    if (!accessToken || !settingsLoaded) return;
     let cancelled = false;
     let requestInFlight = false;
+    let reportNeedsRefresh = false;
     const interval = window.setInterval(() => {
       if (requestInFlight) return;
       requestInFlight = true;
@@ -99,19 +106,20 @@ export default function ROICalculatorView({
         .get<ROISyncStatus>("/roi-calculator/sync", { accessToken })
         .then(async (nextStatus) => {
           if (cancelled) return;
-          setError(null);
-          if (!nextStatus.running && nextStatus.phase === "complete") {
-            try {
-              const report = await loadReport();
-              if (cancelled) return;
-              setSummary(report);
-              setError(null);
-              if (view === "settings") setView("overview");
-            } catch (reason) {
-              if (!cancelled) setError(extractErrorMessage(reason));
-            }
+          const previousStatus = statusRef.current;
+          statusRef.current = nextStatus;
+          setStatus(nextStatus);
+          const finished = !nextStatus.running && nextStatus.phase === "complete";
+          const reportChanged = previousStatus.running || nextStatus.finished_at !== previousStatus.finished_at;
+          if (finished && (reportChanged || reportNeedsRefresh)) {
+            reportNeedsRefresh = true;
+            const report = await loadReport();
+            if (cancelled) return;
+            setSummary(report);
+            reportNeedsRefresh = false;
+            setView((current) => (current === "settings" ? "overview" : current));
           }
-          if (!cancelled) setStatus(nextStatus);
+          if (!cancelled) setError(null);
         })
         .catch((reason: unknown) => {
           if (!cancelled) setError(extractErrorMessage(reason));
@@ -124,13 +132,15 @@ export default function ROICalculatorView({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [accessToken, loadReport, status.running, view]);
+  }, [accessToken, loadReport, settingsLoaded]);
 
   const startSync = React.useCallback(async () => {
     if (!accessToken || readOnly) return;
     try {
       setError(null);
-      setStatus(await apiClient.post<ROISyncStatus>("/roi-calculator/sync", { accessToken }));
+      const nextStatus = await apiClient.post<ROISyncStatus>("/roi-calculator/sync", { accessToken });
+      statusRef.current = nextStatus;
+      setStatus(nextStatus);
     } catch (reason) {
       setError(extractErrorMessage(reason));
     }
@@ -180,6 +190,27 @@ export default function ROICalculatorView({
     );
   }
 
+  const previewSample = async () => {
+    try {
+      const response = await apiClient.get<ROIReportResponse>("/roi-calculator/report", {
+        accessToken,
+        query: { mode: "demo" },
+      });
+      setSampleSummary(response.report);
+      setView("overview");
+    } catch (reason) {
+      setError(extractErrorMessage(reason));
+    }
+  };
+  const resetView = (updated: ROISettings) => {
+    setSettings(updated);
+    setSummary(null);
+    setView("overview");
+    setStatus(IDLE_STATUS);
+    statusRef.current = IDLE_STATUS;
+  };
+  const showLiveStatus = !sampleSummary && !status.running;
+  const scheduleLabel = settings.update_interval_minutes ? "Automatic updates enabled" : "Manual updates";
   const progress = status.total > 0 ? Math.min(100, (status.done / status.total) * 100) : 0;
   const statusIsIdleOrComplete = status.phase === "idle" || status.phase === "complete";
   const syncIsUpToDate = !status.running && statusIsIdleOrComplete;
@@ -197,7 +228,7 @@ export default function ROICalculatorView({
               : "Compare gateway spend with estimated engineering effort for merged pull requests"}
             {syncedAt && (
               <span className="mt-1 block text-xs text-muted-foreground" role="status">
-                Up to date · Last synced {formatSyncedAt(syncedAt)}
+                Last synced {formatSyncedAt(syncedAt)}
                 {!status.running && status.phase === "complete" && status.reused > 0
                   ? ` · ${status.reused} of ${status.total} estimates reused`
                   : ""}
@@ -206,27 +237,50 @@ export default function ROICalculatorView({
           </>
         }
       />
-      {readOnly && (
+      {!liveSummary && showLiveStatus && (
+        <Button variant="outline" onClick={() => void previewSample()}>
+          Preview sample report
+        </Button>
+      )}
+      {sampleSummary && (
+        <Alert>
+          <AlertTitle>Sample report</AlertTitle>
+          <AlertDescription>
+            Example data only. No GitHub or model requests were made.
+            <Button variant="link" onClick={() => setSampleSummary(null)}>
+              Use my data
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {liveSummary && showLiveStatus && (
+        <p className="text-xs text-muted-foreground">
+          {status.next_update ? `Next update ${formatSyncedAt(status.next_update)}` : scheduleLabel}
+        </p>
+      )}
+      {adminReadOnly && (
         <p className="text-sm text-muted-foreground" role="note">
           Read-only access. Settings, analysis runs, and email matches are unavailable.
         </p>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={view} onValueChange={(value) => setView(value as View)}>
-          <TabsList aria-label="ROI Calculator views">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="people">People</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
-          </TabsList>
-        </Tabs>
-        {view !== "settings" && !readOnly && (
-          <Button onClick={() => void startSync()} disabled={status.running || !settings.ready}>
-            <RefreshCw className={status.running ? "animate-spin" : ""} />
-            {status.running ? "Syncing…" : "Run analysis"}
-          </Button>
-        )}
-      </div>
+      {summary && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Tabs value={view} onValueChange={(value) => setView(value as View)}>
+            <TabsList aria-label="ROI Calculator views">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="people">People</TabsTrigger>
+              {!sampleSummary && <TabsTrigger value="settings">Settings</TabsTrigger>}
+            </TabsList>
+          </Tabs>
+          {view !== "settings" && !readOnly && (
+            <Button onClick={() => void startSync()} disabled={status.running || !settings.ready}>
+              <RefreshCw className={status.running ? "animate-spin" : ""} />
+              {status.running ? "Syncing…" : "Run analysis"}
+            </Button>
+          )}
+        </div>
+      )}
 
       {error && (
         <Alert variant="destructive">
@@ -263,6 +317,8 @@ export default function ROICalculatorView({
               </div>
               <p className="text-sm text-muted-foreground">
                 {status.done} of {status.total} pull requests processed · {status.reused} reused
+                {` · ${status.elapsed_seconds ?? 0}s elapsed`}
+                {status.remaining_seconds != null ? ` · about ${status.remaining_seconds}s remaining` : ""}
               </p>
             </div>
             {!readOnly && (
@@ -276,11 +332,11 @@ export default function ROICalculatorView({
 
       {view === "settings" || (!summary && !status.running) ? (
         <ROISettingsPanel
-          key={JSON.stringify(settings)}
           accessToken={accessToken}
           initialSettings={settings}
           onboarding={!summary}
           onSaved={setSettings}
+          onReset={resetView}
           onStartSync={startSync}
           readOnly={readOnly}
           syncDisabled={status.running}
@@ -310,6 +366,7 @@ export default function ROICalculatorView({
           key={matchingPerson?.login.toLowerCase() ?? "closed"}
           selection={matchingPerson}
           identityMap={settings.identity_map}
+          gatewayEmails={liveSummary?.people.flatMap((person) => (person.email ? [person.email] : [])) ?? []}
           onClose={() => setMatchingPerson(null)}
           onSave={updateIdentity}
         />

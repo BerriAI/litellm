@@ -137,3 +137,53 @@ def test_github_api_url_must_use_https() -> None:
 
     assert response.status_code == 422
     assert not repository.values
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("POST", "/roi-calculator/sync", {}),
+        ("DELETE", "/roi-calculator/sync", {}),
+        ("POST", "/roi-calculator/setup/reset", {}),
+        ("POST", "/roi-calculator/connections/test", {}),
+        ("PUT", "/roi-calculator/identity-map", {"github_login": "alice", "email": "alice@example.com"}),
+    ],
+)
+def test_all_writes_require_full_admin(role: LitellmUserRoles, method: str, path: str, body: Mapping[str, str]) -> None:
+    client: Final = _client(role, _ConfigRepository())
+    assert client.request(method, path, json=body).status_code == 403
+
+
+def test_schedule_and_estimator_key_persist_without_exposing_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "roi-calculator-test-salt-key-0123456789")
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    saved: Final = client.put(
+        "/roi-calculator/settings", json={"estimator_key": "sk-test-secret", "update_interval_minutes": 60}
+    )
+    assert saved.status_code == 200
+    assert saved.json()["has_estimator_key"] is True
+    assert saved.json()["update_interval_minutes"] == 60
+    assert "sk-test-secret" not in saved.text
+    assert "sk-test-secret" not in str(repository.values)
+    updated: Final = client.put("/roi-calculator/settings", json={"estimator_key": None, "update_interval_minutes": 0})
+    assert updated.json()["has_estimator_key"] is False
+    assert updated.json()["update_interval_minutes"] == 0
+
+
+def test_sample_preview_does_not_change_live_settings_or_report() -> None:
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, repository)
+    response: Final = client.get("/roi-calculator/report", params={"mode": "demo"})
+    assert response.status_code == 200
+    assert response.json()["report"]["mode"] == "demo"
+    assert response.json()["report"]["metrics"]["cost_per_hour"] > 0
+    assert not repository.values
+    assert client.get("/roi-calculator/report").json()["report"] is None
+
+
+@pytest.mark.parametrize("interval", [0.1, 1, 4.99])
+def test_schedule_rejects_intervals_under_five_minutes(interval: float) -> None:
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, _ConfigRepository())
+    assert client.put("/roi-calculator/settings", json={"update_interval_minutes": interval}).status_code == 422

@@ -15,7 +15,7 @@ import {
 import type { ChartConfig } from "@/components/ui/chart";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { coverageLabel, effortNote, estimateLabel, formatMoney, formatNumber } from "./roiCalculatorData";
+import { coverageLabel, peopleCsv, effortNote, estimateLabel, formatMoney, formatNumber } from "./roiCalculatorData";
 import type { ROIPerson, ROIPull, ROISummary } from "./roiCalculatorData";
 
 const CHART_CONFIG = {
@@ -207,8 +207,21 @@ export function ROIPeopleView({
   onMatch: (person: ROIPerson, login: string) => void;
   readOnly?: boolean;
 }) {
+  const exportCsv = () => {
+    const url = URL.createObjectURL(new Blob([peopleCsv(summary)], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "litellm-roi.csv";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button variant="outline" onClick={exportCsv}>
+          Export CSV
+        </Button>
+      </div>
       <p className="text-sm leading-relaxed text-muted-foreground">
         {effortNote(summary.effort_basis)} Spend includes each person’s full gateway usage for this period. This does
         not measure hours saved by AI or financial returns.
@@ -247,8 +260,9 @@ export function ROIPeopleView({
                       ) : (
                         <span>Unassigned gateway spend</span>
                       )}
-                      {person.match_methods.some((method) =>
-                        ["manual", "commit email", "profile email"].includes(method),
+                      {person.match_methods.some(
+                        (method) =>
+                          ["manual", "commit email", "profile email"].includes(method) && person.spend != null,
                       ) ? (
                         <span className="text-xs text-emerald-700">Matched</span>
                       ) : (

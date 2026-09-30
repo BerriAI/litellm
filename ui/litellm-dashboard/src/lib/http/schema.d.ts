@@ -13540,6 +13540,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/roi-calculator/connections/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Roi Calculator Connections */
+        post: operations["test_roi_calculator_connections_roi_calculator_connections_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/roi-calculator/identity-map": {
         parameters: {
             query?: never;
@@ -13603,6 +13620,23 @@ export interface paths {
         /** Update Roi Calculator Settings */
         put: operations["update_roi_calculator_settings_roi_calculator_settings_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/setup/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Roi Calculator Setup */
+        post: operations["reset_roi_calculator_setup_roi_calculator_setup_reset_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -39393,6 +39427,8 @@ export interface components {
             estimator_prompt: string;
             /** Github Api Url */
             github_api_url: string;
+            /** Has Estimator Key */
+            has_estimator_key: boolean;
             /** Has Github Token */
             has_github_token: boolean;
             /** Identity Map */
@@ -39403,11 +39439,15 @@ export interface components {
             ready: boolean;
             /** Repos */
             repos: string[];
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
         };
         /** ROISettingsUpdate */
         ROISettingsUpdate: {
             /** Backfill Days */
             backfill_days?: number | null;
+            /** Estimator Key */
+            estimator_key?: string | null;
             /** Estimator Model */
             estimator_model?: string | null;
             /** Estimator Prompt */
@@ -39418,6 +39458,8 @@ export interface components {
             github_token?: string | null;
             /** Repos */
             repos?: string[] | null;
+            /** Update Interval Minutes */
+            update_interval_minutes?: number | null;
         };
         /** ROISummaryResponse */
         ROISummaryResponse: {
@@ -39453,23 +39495,36 @@ export interface components {
         ROISyncStatus: {
             /** Done */
             done: number;
+            /**
+             * Elapsed Seconds
+             * @default 0
+             */
+            elapsed_seconds: number;
             /** Error */
             error: string | null;
             /** Estimated */
             estimated: number;
+            /** Finished At */
+            finished_at?: string | null;
             /** Needs Attention */
             needs_attention: number;
+            /** Next Update */
+            next_update?: string | null;
             /**
              * Phase
              * @enum {string}
              */
             phase: "idle" | "spend" | "repositories" | "estimates" | "complete" | "cancelled" | "error";
+            /** Remaining Seconds */
+            remaining_seconds?: number | null;
             /** Reused */
             reused: number;
             /** Running */
             running: boolean;
             /** Stage */
             stage: string;
+            /** Started At */
+            started_at?: string | null;
             /** Total */
             total: number;
         };
@@ -64955,6 +65010,26 @@ export interface operations {
             };
         };
     };
+    test_roi_calculator_connections_roi_calculator_connections_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+        };
+    };
     update_roi_calculator_identity_map_roi_calculator_identity_map_put: {
         parameters: {
             query?: never;
@@ -64990,7 +65065,9 @@ export interface operations {
     };
     get_roi_calculator_report_roi_calculator_report_get: {
         parameters: {
-            query?: never;
+            query?: {
+                mode?: "live" | "demo";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -65004,6 +65081,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ROIReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -65089,6 +65175,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_roi_calculator_setup_roi_calculator_setup_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
                 };
             };
         };

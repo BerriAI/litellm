@@ -16,11 +16,20 @@ class ROISettings(BaseModel):
 
     github_api_url: str = "https://api.github.com"
     github_token: SecretStr = SecretStr("")
+    estimator_key: SecretStr = SecretStr("")
     repos: tuple[str, ...] = ()
     estimator_model: str = ""
     estimator_prompt: str = DEFAULT_PROMPT
     backfill_days: int = Field(default=7, ge=1, le=3650)
+    update_interval_minutes: float = Field(default=1440, ge=0, le=43200, allow_inf_nan=False)
     identity_map: Mapping[str, str] = Field(default_factory=lambda: MappingProxyType({}))
+
+    @field_validator("update_interval_minutes")
+    @classmethod
+    def validate_update_interval(cls, value: float) -> float:
+        if 0 < value < 5:
+            raise ValueError("Choose manual updates (0), or an interval of at least 5 minutes.")
+        return value
 
     @field_validator("github_api_url")
     @classmethod
@@ -93,10 +102,12 @@ class ROISettingsUpdate(BaseModel):
 
     github_api_url: str | None = None
     github_token: str | None = None
+    estimator_key: str | None = None
     repos: tuple[str, ...] | None = None
     estimator_model: str | None = None
     estimator_prompt: str | None = None
     backfill_days: int | None = Field(default=None, ge=1, le=3650)
+    update_interval_minutes: float | None = Field(default=None, ge=0, le=43200, allow_inf_nan=False)
 
 
 class ROISettingsResponse(BaseModel):
@@ -105,6 +116,8 @@ class ROISettingsResponse(BaseModel):
     estimator_model: str
     estimator_prompt: str
     backfill_days: int
+    update_interval_minutes: float
+    has_estimator_key: bool
     identity_map: Mapping[str, str]
     has_github_token: bool
     default_prompt: str
@@ -134,6 +147,11 @@ class ROISyncStatus(BaseModel):
     reused: int
     needs_attention: int
     error: str | None
+    started_at: str | None = None
+    finished_at: str | None = None
+    next_update: str | None = None
+    elapsed_seconds: int = 0
+    remaining_seconds: int | None = None
 
 
 class ROISpendRecord(TypedDict):
@@ -162,6 +180,7 @@ class ROIPullRecord(TypedDict):
     login: ReadOnly[str]
     emails: ReadOnly[tuple[str, ...]]
     profile_email: ReadOnly[str]
+    commit_emails: NotRequired[ReadOnly[tuple[str, ...]]]
     merged_at: ReadOnly[str]
     head_sha: ReadOnly[str]
     additions: ReadOnly[int]
@@ -213,6 +232,7 @@ class ROIPullEvidence(TypedDict):
     login: ReadOnly[str]
     emails: ReadOnly[tuple[str, ...]]
     profile_email: ReadOnly[str]
+    commit_emails: NotRequired[ReadOnly[tuple[str, ...]]]
     merged_at: ReadOnly[str]
     head_sha: ReadOnly[str]
     additions: ReadOnly[int]

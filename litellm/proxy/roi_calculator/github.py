@@ -312,6 +312,7 @@ class GitHub:
     ) -> None:
         if client is not None and transport is not None:
             raise ValueError("Pass either an injected GitHub client or a transport.")
+        self._profiles: Mapping[str, str] = MappingProxyType({})
         token: Final = settings.github_token.get_secret_value()
         self._headers: Final[Mapping[str, str]] = (
             MappingProxyType(
@@ -397,6 +398,17 @@ class GitHub:
         matches, has_more = await search_pages(first_github_page, _REPOSITORY_SEARCH_PAGES)
         return _repository_values(matches), has_more
 
+    async def test_repositories(self, repos: tuple[str, ...]) -> None:
+        for repo in repos:
+            await _request(self.client, "GET", self._url(f"repos/{repo}"), headers=self._headers)
+            await _request(
+                self.client,
+                "GET",
+                self._url(f"repos/{repo}/pulls"),
+                params=MappingProxyType({"per_page": 1, "state": "closed"}),
+                headers=self._headers,
+            )
+
     async def pulls(self, repo: str, start: date, end: date) -> tuple[GitHubPullListItem, ...]:
         async def pull_pages() -> AsyncIterator[GitHubPullListItem]:
             async for page in _pages(
@@ -443,13 +455,18 @@ class GitHub:
                     yield item
 
         files: Final = tuple(item.evidence() for item in await _collect(file_pages()))
-        profile_email: Final = await self._profile_email(login)
+        profile_email: Final = await self.profile_email(login)
         commits, authors, commit_count = await self._commit_metadata(repo, pull.number, detail)
+        commit_emails: Final = tuple(
+            sorted(
+                frozenset(normalize_email(author[1]) for author in authors if author[0].casefold() == login.casefold())
+            )
+        )
         email_candidates: Final = frozenset(
             address
             for address in (
                 profile_email,
-                *(normalize_email(author[1]) for author in authors if author[0].casefold() == login.casefold()),
+                *commit_emails,
             )
             if address
         )
@@ -463,6 +480,7 @@ class GitHub:
             "login": login,
             "emails": tuple(sorted(email_candidates)),
             "profile_email": profile_email,
+            "commit_emails": commit_emails,
             "merged_at": detail.merged_at,
             "head_sha": detail.head.sha,
             "additions": detail.additions,
@@ -475,7 +493,14 @@ class GitHub:
         }
         return evidence
 
-    async def _profile_email(self, login: str) -> str:
+    async def profile_email(self, login: str) -> str:
+        if login.casefold() in self._profiles:
+            return self._profiles[login.casefold()]
+        address: Final = await self._load_profile_email(login)
+        self._profiles = MappingProxyType({**self._profiles, login.casefold(): address})
+        return address
+
+    async def _load_profile_email(self, login: str) -> str:
         try:
             response: Final = await self.client.get(
                 self._url(f"users/{quote(login, safe='')}"),

@@ -133,6 +133,7 @@ describe("ROICalculatorView", () => {
   beforeEach(() => {
     vi.mocked(apiClient.get).mockReset();
     vi.mocked(apiClient.put).mockReset();
+    vi.mocked(apiClient.post).mockReset();
     vi.mocked(apiClient.get).mockImplementation((path: string) => {
       if (path === "/roi-calculator/settings") return Promise.resolve(settings);
       if (path === "/roi-calculator/report") return Promise.resolve({ report: summary });
@@ -192,7 +193,7 @@ describe("ROICalculatorView", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: "People" }));
     fireEvent.click(await screen.findByRole("button", { name: "alice-work" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Gateway email" }), {
+    fireEvent.change(screen.getByLabelText("Gateway email"), {
       target: { value: "alice+work@example.com" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save match" }));
@@ -206,8 +207,9 @@ describe("ROICalculatorView", () => {
   });
 
   it("presents onboarding settings once when no report exists", async () => {
+    const emptySettings = { ...settings, has_github_token: false, ready: false, repos: [], estimator_model: "" };
     vi.mocked(apiClient.get).mockImplementation((path: string) => {
-      if (path === "/roi-calculator/settings") return Promise.resolve(settings);
+      if (path === "/roi-calculator/settings") return Promise.resolve(emptySettings);
       if (path === "/roi-calculator/report") return Promise.resolve({ report: null });
       return Promise.resolve(idleStatus);
     });
@@ -243,10 +245,9 @@ describe("ROICalculatorView", () => {
     render(<ROICalculatorView accessToken="token" />);
 
     expect(await screen.findByRole("progressbar", { name: "Sync progress" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connect GitHub to get started" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Up to date · Last synced Sep 30, 2026, 12:00 PM UTC");
+    expect(screen.getByRole("status")).toHaveTextContent("Last synced Sep 30, 2026, 12:00 PM UTC");
     expect(screen.getByRole("status")).toHaveTextContent("57 of 57 estimates reused");
   });
 
@@ -327,5 +328,23 @@ describe("ROICalculatorView", () => {
     );
     expect(await screen.findByText("Spend per estimated engineering hour", {}, { timeout: 7000 })).toBeInTheDocument();
     expect(screen.queryByText("The sync status could not be loaded.")).not.toBeInTheDocument();
+  });
+  it("saves the edited schedule before running from Settings", async () => {
+    vi.mocked(apiClient.put).mockResolvedValue(settings);
+    vi.mocked(apiClient.post).mockResolvedValue({ ...idleStatus, running: true });
+    render(<ROICalculatorView accessToken="token" />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Settings" }));
+    fireEvent.change(screen.getByLabelText("Update interval (hours)"), { target: { value: "6" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save and run analysis" }));
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith("/roi-calculator/sync", { accessToken: "token" }));
+    expect(apiClient.put).toHaveBeenCalledWith(
+      "/roi-calculator/settings",
+      expect.objectContaining({
+        body: expect.objectContaining({ update_interval_minutes: 360, estimator_model: "estimator" }),
+      }),
+    );
+    expect(vi.mocked(apiClient.put).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(apiClient.post).mock.invocationCallOrder[0],
+    );
   });
 });

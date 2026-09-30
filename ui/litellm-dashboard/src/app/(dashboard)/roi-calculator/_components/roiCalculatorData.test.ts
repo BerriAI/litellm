@@ -40,6 +40,8 @@ const summary = {
 describe("ROI calculator display helpers", () => {
   it("formats spend and estimated hours without losing null values", () => {
     expect(formatMoney(1234.5)).toBe("$1,234.50");
+    expect(formatMoney(0.0001)).toBe("<$0.01");
+    expect(formatMoney(0)).toBe("$0.00");
     expect(formatMoney(null)).toBe("—");
     expect(formatNumber(4.25)).toBe("4.3");
     expect(formatNumber(null)).toBe("—");
