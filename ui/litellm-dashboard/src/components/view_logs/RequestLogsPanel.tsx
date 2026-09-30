@@ -25,7 +25,6 @@ import { useLogDetailRouting } from "./logDetailRouting";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
-import { AgentTracesSection, LogsViewSwitch, type LogsView } from "./TraceView/AgentTracesSection";
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
@@ -54,7 +53,6 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
-  const [logsView, setLogsView] = useState<LogsView>("all");
 
   const {
     logId: urlLogId,
@@ -98,7 +96,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     userRole,
     userID,
     columnFilters: queryColumnFilters,
-    activeTab: isActive && logsView !== "traces" ? "request logs" : "inactive",
+    activeTab: isActive ? "request logs" : "inactive",
     isLiveTail,
     excludeInternalHealthChecks,
     startTime,
@@ -289,69 +287,52 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     );
   }
 
-  const logsToolbar = (
-    <LogsTableToolbar
-      startTime={startTime}
-      onStartTimeChange={setStartTime}
-      endTime={endTime}
-      onEndTimeChange={setEndTime}
-      isCustomDate={isCustomDate}
-      onIsCustomDateChange={setIsCustomDate}
-      selectedTimeInterval={selectedTimeInterval}
-      onSelectedTimeIntervalChange={setSelectedTimeInterval}
-      isLiveTail={isLiveTail}
-      onIsLiveTailChange={setIsLiveTail}
-      excludeInternalHealthChecks={excludeInternalHealthChecks}
-      onExcludeInternalHealthChecksChange={handleExcludeInternalHealthChecksChange}
-      onResetToFirstPage={resetToFirstPage}
-      onResetFilters={handleResetFilters}
-    />
-  );
-
   return (
     <AutoRouterModelGroupsProvider>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-semibold">Request Logs</h1>
-        <LogsViewSwitch value={logsView} onChange={setLogsView} />
       </div>
 
       {isLiveTail && pagination.pageIndex === 0 && <LiveTailBanner onStop={() => setIsLiveTail(false)} />}
 
-      {logsView === "traces" && <div className="mb-3">{logsToolbar}</div>}
-
-      <AgentTracesSection
-        view={logsView}
-        accessToken={accessToken}
-        isActive={isActive}
-        startTime={startTime}
-        endTime={endTime}
-        isCustomDate={isCustomDate}
-        isLiveTail={isLiveTail}
+      <RequestLogsTable
+        data={rows}
+        rowCount={rowCount}
+        isLoading={logsQuery.isLoading}
+        isRefreshing={logsQuery.isFetching}
+        pagination={pagination}
+        onPaginationChange={handlePaginationChange}
+        sorting={sorting}
+        onSortingChange={handleSortingChange}
+        columnFilters={columnFilters}
+        onColumnFiltersChange={handleColumnFiltersChange}
+        searchValue={searchTerm}
+        onSearchChange={handleSearchChange}
+        onRefresh={() => void logsQuery.refetch()}
+        onRowClick={handleRowClick}
+        onKeyHashClick={handleKeyHashClick}
+        onSessionClick={handleSessionClick}
+        teams={allTeams ?? []}
+        logsWindow={logsWindow}
+        toolbarChildren={
+          <LogsTableToolbar
+            startTime={startTime}
+            onStartTimeChange={setStartTime}
+            endTime={endTime}
+            onEndTimeChange={setEndTime}
+            isCustomDate={isCustomDate}
+            onIsCustomDateChange={setIsCustomDate}
+            selectedTimeInterval={selectedTimeInterval}
+            onSelectedTimeIntervalChange={setSelectedTimeInterval}
+            isLiveTail={isLiveTail}
+            onIsLiveTailChange={setIsLiveTail}
+            excludeInternalHealthChecks={excludeInternalHealthChecks}
+            onExcludeInternalHealthChecksChange={handleExcludeInternalHealthChecksChange}
+            onResetToFirstPage={resetToFirstPage}
+            onResetFilters={handleResetFilters}
+          />
+        }
       />
-
-      {logsView !== "traces" && (
-        <RequestLogsTable
-          data={rows}
-          rowCount={rowCount}
-          isLoading={logsQuery.isLoading}
-          isRefreshing={logsQuery.isFetching}
-          pagination={pagination}
-          onPaginationChange={handlePaginationChange}
-          sorting={sorting}
-          onSortingChange={handleSortingChange}
-          columnFilters={columnFilters}
-          onColumnFiltersChange={handleColumnFiltersChange}
-          searchValue={searchTerm}
-          onSearchChange={handleSearchChange}
-          onRefresh={() => void logsQuery.refetch()}
-          onRowClick={handleRowClick}
-          onKeyHashClick={handleKeyHashClick}
-          onSessionClick={handleSessionClick}
-          teams={allTeams ?? []}
-          logsWindow={logsWindow}
-          toolbarChildren={logsToolbar}
-        />
-      )}
 
       <LogDetailsDrawer
         open={isDrawerOpen}
