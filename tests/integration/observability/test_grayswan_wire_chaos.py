@@ -13,7 +13,7 @@ from integration._support.client import Gateway
 from integration._support.process import group_members, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
-from test_grayswan_wire import _PROVIDER_KEY, _REQUEST_MESSAGES, _VENDOR_KEY, _monitor_bodies
+from test_grayswan_wire import _PROVIDER_KEY, _REQUEST_MESSAGES, _VENDOR_KEY, _monitor_bodies, _serving_model_probe
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -47,8 +47,6 @@ def _chaos_config(tmp_path: Path, identity: str, vendor_url: str, *, fail_open: 
 
 
 def _provider(request: Request) -> Reply:
-    if request.method != "POST" or not request.body:
-        return Reply(body=b"{}")
     body: Final = json.loads(request.body)
     marker: Final = next(
         (
@@ -130,7 +128,7 @@ def test_vendor_outage_mid_burst_no_duplicate_monitor_calls(gateway: Gateway, tm
             return Reply(status=503, body=b'{"error":"sink down"}')
         return Reply(body=b'{"violation":0.0}')
 
-    with wire_server(vendor) as vendor_wire, wire_server(_provider) as upstream:
+    with wire_server(vendor) as vendor_wire, wire_server(_serving_model_probe(_provider)) as upstream:
         config_path: Final = _chaos_config(tmp_path, identity, vendor_wire.url)
         with owned_proxy_process(gateway, tmp_path, {}, config=config_path, workers=2) as owned:
             candidate: Final = owned.gateway
@@ -176,7 +174,7 @@ def test_slow_vendor_burst_completes_without_deadlock(gateway: Gateway, tmp_path
         time.sleep(2)
         return Reply(body=b'{"violation":0.0}')
 
-    with wire_server(slow_vendor) as vendor, wire_server(_provider) as upstream:
+    with wire_server(slow_vendor) as vendor, wire_server(_serving_model_probe(_provider)) as upstream:
         config_path: Final = _chaos_config(tmp_path, identity, vendor.url)
         with owned_proxy_process(gateway, tmp_path, {}, config=config_path, workers=2) as owned:
             candidate: Final = owned.gateway
@@ -199,7 +197,7 @@ def test_worker_kill_mid_burst_survivor_keeps_serving(gateway: Gateway, tmp_path
     def vendor(request: Request) -> Reply:
         return Reply(body=b'{"violation":0.0}')
 
-    with wire_server(vendor) as vendor_wire, wire_server(_provider) as upstream:
+    with wire_server(vendor) as vendor_wire, wire_server(_serving_model_probe(_provider)) as upstream:
         config_path: Final = _chaos_config(tmp_path, identity, vendor_wire.url)
         with owned_proxy_process(gateway, tmp_path, {}, config=config_path, workers=2) as owned:
             candidate: Final = owned.gateway

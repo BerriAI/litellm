@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -114,10 +115,17 @@ def _vendor(violation: float = 0.0):
     return respond
 
 
-def _chat_provider(message: dict[str, JsonValue]):
-    def respond(request: Request) -> Reply:
+def _serving_model_probe(respond: Callable[[Request], Reply]) -> Callable[[Request], Reply]:
+    def wrapped(request: Request) -> Reply:
         if request.target == "/v1/models":
             return Reply(body=b'{"data":[]}')
+        return respond(request)
+
+    return wrapped
+
+
+def _chat_provider(message: dict[str, JsonValue]):
+    def respond(request: Request) -> Reply:
         assert request.target == "/chat/completions", request.target
         return Reply(
             body=json.dumps(
@@ -132,7 +140,7 @@ def _chat_provider(message: dict[str, JsonValue]):
             ).encode()
         )
 
-    return respond
+    return _serving_model_probe(respond)
 
 
 def _monitor_bodies(vendor: Wire, expected: int = 1, seconds: float = 30) -> tuple[dict[str, JsonValue], ...]:
@@ -229,8 +237,6 @@ def test_post_call_sends_anthropic_messages_conversation(gateway: Gateway, tmp_p
     response_text: Final = "inbox checked"
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/v1/messages", request.target
         return Reply(
             body=json.dumps(
@@ -246,7 +252,7 @@ def test_post_call_sends_anthropic_messages_conversation(gateway: Gateway, tmp_p
             ).encode()
         )
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
@@ -312,8 +318,6 @@ def test_post_call_sends_responses_api_input(gateway: Gateway, tmp_path: Path) -
     response_text: Final = "thread summarized"
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/responses", request.target
         return Reply(
             body=json.dumps(
@@ -337,7 +341,7 @@ def test_post_call_sends_responses_api_input(gateway: Gateway, tmp_path: Path) -
             ).encode()
         )
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
@@ -373,8 +377,6 @@ def test_post_call_streams_end_of_stream_with_conversation(gateway: Gateway, tmp
     response_text: Final = "streamed summary"
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/chat/completions", request.target
         assert json.loads(request.body)["stream"] is True
         frames: Final = (
@@ -388,7 +390,7 @@ def test_post_call_streams_end_of_stream_with_conversation(gateway: Gateway, tmp
         )
         return Reply(content_type="text/event-stream", chunks=frames)
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(
             tmp_path, identity, vendor.url, "post_call", streaming_end_of_stream_only=True
         )
@@ -498,8 +500,6 @@ def test_post_call_multi_choice_texts_and_tool_calls_stay_split(gateway: Gateway
     }
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/chat/completions", request.target
         return Reply(
             body=json.dumps(
@@ -525,7 +525,7 @@ def test_post_call_multi_choice_texts_and_tool_calls_stay_split(gateway: Gateway
             ).encode()
         )
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=upstream.url, api_key=_PROVIDER_KEY)
@@ -552,8 +552,6 @@ def test_post_call_multi_choice_texts_and_tool_calls_stay_split(gateway: Gateway
 
 def _chat_stream_provider(chunks: int):
     def respond(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/chat/completions", request.target
         frames: Final = tuple(
             f'data: {{"id":"chatcmpl-s","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-mini","choices":[{{"index":0,"delta":{{"content":"part{i} "}}}}]}}\n\n'.encode()
@@ -569,7 +567,7 @@ def _chat_stream_provider(chunks: int):
             ),
         )
 
-    return respond
+    return _serving_model_probe(respond)
 
 
 def test_post_call_sampled_stream_calls_each_carry_context(gateway: Gateway, tmp_path: Path) -> None:
@@ -608,8 +606,6 @@ def test_post_call_anthropic_stream_sends_conversation(gateway: Gateway, tmp_pat
     response_text: Final = "streamed inbox checked"
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/v1/messages", request.target
         frames: Final = (
             b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_s","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}\n\n',
@@ -622,7 +618,7 @@ def test_post_call_anthropic_stream_sends_conversation(gateway: Gateway, tmp_pat
         )
         return Reply(content_type="text/event-stream", chunks=frames)
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
@@ -676,8 +672,6 @@ def test_post_call_responses_stream_sends_conversation(gateway: Gateway, tmp_pat
     response_text: Final = "streamed thread"
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/responses", request.target
         output_item: Final = {
             "type": "message",
@@ -702,7 +696,7 @@ def test_post_call_responses_stream_sends_conversation(gateway: Gateway, tmp_pat
         "description": "Send an email",
         "parameters": {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]},
     }
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
@@ -788,8 +782,6 @@ def test_post_call_anthropic_sdk_sends_conversation(gateway: Gateway, tmp_path: 
     response_text: Final = "sdk inbox checked"
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/v1/messages", request.target
         return Reply(
             body=json.dumps(
@@ -805,7 +797,7 @@ def test_post_call_anthropic_sdk_sends_conversation(gateway: Gateway, tmp_path: 
             ).encode()
         )
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
@@ -1074,7 +1066,7 @@ def test_post_call_text_completion_surface_sends_response_only(gateway: Gateway,
             ).encode()
         )
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
@@ -1399,8 +1391,6 @@ def test_post_call_responses_string_input_becomes_user_message(gateway: Gateway,
     response_text: Final = "string input done"
 
     def provider(request: Request) -> Reply:
-        if request.target == "/v1/models":
-            return Reply(body=b'{"data":[]}')
         assert request.target == "/responses", request.target
         return Reply(
             body=json.dumps(
@@ -1424,7 +1414,7 @@ def test_post_call_responses_string_input_becomes_user_message(gateway: Gateway,
             ).encode()
         )
 
-    with wire_server(_vendor()) as vendor, wire_server(provider) as upstream:
+    with wire_server(_vendor()) as vendor, wire_server(_serving_model_probe(provider)) as upstream:
         config_path: Final = _grayswan_config(tmp_path, identity, vendor.url, "post_call")
         with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model(
