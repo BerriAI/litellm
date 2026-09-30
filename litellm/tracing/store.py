@@ -77,6 +77,7 @@ SELECT SpanId AS span_id, Input AS input, Output AS output
 FROM {OTEL_TRACES_TABLE}
 WHERE TraceId = {{trace_id:String}} AND {_SCOPE_OTEL}
   AND ({{trace_ref:String}} = '' OR {_TRACE_REF_SQL} = {{trace_ref:String}})
+ORDER BY Timestamp
 LIMIT 1 BY SpanId
 """
 
