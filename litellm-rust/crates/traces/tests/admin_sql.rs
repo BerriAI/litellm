@@ -1,7 +1,8 @@
 use litellm_http::Client;
-use litellm_traces::{Connection, Error, execute_admin_sql};
+use litellm_traces::{Connection, Error, Parameter, execute_read};
 use rstest::{fixture, rstest};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use testcontainers_modules::{
     clickhouse::ClickHouse,
     testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
@@ -67,7 +68,7 @@ async fn admin_sql_reads_rows_with_enforced_settings(
         database.url,
     ))?;
 
-    let result = execute_admin_sql(
+    let result = read(
         &database.client,
         &connection,
         "SELECT n AS answer FROM otel_traces",
@@ -99,11 +100,10 @@ async fn reader_rejects_writes_and_privilege_escalation(
     let database = database?;
     let connection = Connection::parse(&format!("{}?readonly=0", database.url))?;
 
-    let result = execute_admin_sql(&database.client, &connection, sql).await;
+    let result = read(&database.client, &connection, sql).await;
 
     assert!(matches!(result, Err(Error::QueryFailed(_))), "{result:?}");
-    let rows =
-        execute_admin_sql(&database.client, &connection, "SELECT n FROM otel_traces").await?;
+    let rows = read(&database.client, &connection, "SELECT n FROM otel_traces").await?;
     let json: Value = serde_json::from_str(&rows)?;
     assert_eq!(json["data"], serde_json::json!([{ "n": 1 }]));
     Ok(())
@@ -121,7 +121,7 @@ async fn admin_sql_rejects_errors_after_output_starts(
         database.admin_url,
     ))?;
 
-    let result = execute_admin_sql(
+    let result = read(
         &database.client,
         &connection,
         "SELECT sleepEachRow(0.2), throwIf(number = 2) FROM numbers(5)",
@@ -146,7 +146,7 @@ async fn admin_sql_enforces_result_row_limit(
         database.url,
     ))?;
 
-    let result = execute_admin_sql(
+    let result = read(
         &database.client,
         &connection,
         "SELECT number FROM numbers(1001)",
@@ -165,7 +165,7 @@ async fn admin_sql_enforces_response_byte_limit(
     let database = database?;
     let connection = Connection::parse(&database.admin_url)?;
 
-    let result = execute_admin_sql(
+    let result = read(
         &database.client,
         &connection,
         "SELECT repeat('x', 5 * 1024 * 1024)",
@@ -201,7 +201,7 @@ async fn admin_sql_authenticates_url_credentials(
         1,
     ))?;
 
-    let result = execute_admin_sql(
+    let result = read(
         &database.client,
         &connection,
         "SELECT currentUser() AS username",
@@ -211,5 +211,45 @@ async fn admin_sql_authenticates_url_credentials(
 
     assert_eq!(json["data"][0]["username"], "sql_reader");
 
+    Ok(())
+}
+
+async fn read(client: &Client, connection: &Connection, sql: &str) -> Result<String, Error> {
+    execute_read(client, connection, sql, &BTreeMap::new()).await
+}
+
+#[rstest]
+#[case::sql("'; DROP TABLE otel_traces; --")]
+#[case::escapes("back\\slash\ttab\nline\0null")]
+#[tokio::test]
+async fn query_parameters_preserve_values_and_replace_url_parameters(
+    #[case] value: &str,
+    #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database = database?;
+    let connection = Connection::parse(&format!("{}?param_value=wrong", database.url))?;
+    let values = vec![
+        "a'b".to_owned(),
+        "back\\slash".to_owned(),
+        "line\nbreak".to_owned(),
+        "雪".to_owned(),
+    ];
+    let parameters = BTreeMap::from([
+        ("value".to_owned(), Parameter::Text(value.into())),
+        ("teams".to_owned(), Parameter::Strings(values.clone())),
+        ("number".to_owned(), Parameter::Integer(-42)),
+    ]);
+    let body = execute_read(&database.client, &connection,
+        "SELECT {value:String} AS value, {teams:Array(String)} AS teams, toInt32({number:Int64}) AS number",
+        &parameters).await?;
+    let json: Value = serde_json::from_str(&body)?;
+    assert_eq!(json["data"][0]["value"], value);
+    assert_eq!(json["data"][0]["teams"], serde_json::json!(values));
+    assert_eq!(json["data"][0]["number"], -42);
+    assert!(
+        read(&database.client, &connection, "SELECT n FROM otel_traces")
+            .await
+            .is_ok()
+    );
     Ok(())
 }

@@ -4358,6 +4358,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-http",
  "rstest",
+ "serde",
  "serde_json",
  "testcontainers-modules",
  "thiserror 2.0.19",

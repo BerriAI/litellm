@@ -1,4 +1,6 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
+
+use serde::Deserialize;
 
 use litellm_http::Client;
 
@@ -6,10 +8,38 @@ use crate::{Connection, Error};
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
-pub async fn execute_admin_sql(
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Parameter {
+    Text(String),
+    Integer(i64),
+    Strings(Vec<String>),
+}
+
+impl Parameter {
+    fn encoded(&self) -> String {
+        match self {
+            Self::Text(value) => value.clone(),
+            Self::Integer(value) => value.to_string(),
+            Self::Strings(values) => format!(
+                "[{}]",
+                values
+                    .iter()
+                    .map(|value| {
+                        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        }
+    }
+}
+
+pub async fn execute_read(
     client: &Client,
     connection: &Connection,
     sql: &str,
+    parameters: &BTreeMap<String, Parameter>,
 ) -> Result<String, Error> {
     if sql.trim().is_empty() {
         return Err(Error::EmptySql);
@@ -20,16 +50,17 @@ pub async fn execute_admin_sql(
     let existing_pairs: Vec<(String, String)> = url
         .query_pairs()
         .filter(|(key, _)| {
-            !matches!(
-                key.as_ref(),
-                "query"
-                    | "readonly"
-                    | "default_format"
-                    | "max_result_rows"
-                    | "result_overflow_mode"
-                    | "max_execution_time"
-                    | "wait_end_of_query"
-            )
+            !key.starts_with("param_")
+                && !matches!(
+                    key.as_ref(),
+                    "query"
+                        | "readonly"
+                        | "default_format"
+                        | "max_result_rows"
+                        | "result_overflow_mode"
+                        | "max_execution_time"
+                        | "wait_end_of_query"
+                )
         })
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
         .collect();
@@ -42,6 +73,12 @@ pub async fn execute_admin_sql(
         .append_pair("max_execution_time", "10")
         .append_pair("wait_end_of_query", "1")
         .append_pair("default_format", "JSON");
+
+    url.query_pairs_mut().extend_pairs(
+        parameters
+            .iter()
+            .map(|(name, value)| (format!("param_{name}"), value.encoded())),
+    );
 
     let request = client
         .post(url)

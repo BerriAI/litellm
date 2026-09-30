@@ -1,8 +1,10 @@
 mod error;
+mod schema;
 mod sql;
 
 pub use error::Error;
-pub use sql::execute_admin_sql;
+pub use schema::schema_statements;
+pub use sql::{Parameter, execute_read};
 use url::Url;
 
 #[derive(Clone)]
@@ -19,49 +21,37 @@ impl Connection {
         Ok(Self { url })
     }
 
+    pub fn configured(
+        url: &str,
+        database: &str,
+        user: &str,
+        password: &str,
+    ) -> Result<Self, Error> {
+        let mut connection = Self::parse(url)?;
+        connection
+            .url
+            .set_username(user)
+            .map_err(|_| Error::InvalidUrl)?;
+        connection
+            .url
+            .set_password(Some(password))
+            .map_err(|_| Error::InvalidUrl)?;
+        let pairs: Vec<_> = connection
+            .url
+            .query_pairs()
+            .filter(|(key, _)| !matches!(key.as_ref(), "database" | "user" | "password"))
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        connection
+            .url
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(pairs)
+            .append_pair("database", database);
+        Ok(connection)
+    }
+
     pub fn url(&self) -> &Url {
         &self.url
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ListQuery {
-    pub start_ms: i64,
-    pub end_ms: i64,
-    pub service: Option<String>,
-    pub status: Option<String>,
-    pub search: Option<String>,
-    pub cursor: Option<String>,
-    pub limit: u8,
-}
-
-#[derive(Debug, Clone)]
-pub enum Query {
-    List(ListQuery),
-    Trace { trace_id: String },
-    Span { trace_id: String, span_id: String },
-}
-
-impl Query {
-    pub fn validate(&self) -> Result<(), Error> {
-        match self {
-            Self::List(query)
-                if query.start_ms >= query.end_ms || !(1..=100).contains(&query.limit) =>
-            {
-                Err(Error::InvalidListQuery)
-            }
-            Self::Trace { trace_id }
-            | Self::Span {
-                trace_id,
-                span_id: _,
-            } if trace_id.is_empty() => Err(Error::InvalidIdentifier),
-            Self::Span { span_id, .. } if span_id.is_empty() => Err(Error::InvalidIdentifier),
-            _ => Ok(()),
-        }
-    }
-}
-
-pub async fn query(_connection: Connection, request: Query) -> Result<(), Error> {
-    request.validate()?;
-    Err(Error::SchemaPending)
 }
