@@ -20,7 +20,7 @@ async def generate_key(
     models: list,
     calling_key="sk-1234",
 ):
-    url = f"{PROXY_BASE_URL}/key/generate"
+    url: Final = f"{PROXY_BASE_URL}/key/generate"
     headers = {
         "Authorization": f"Bearer {calling_key}",
         "Content-Type": "application/json",
@@ -54,7 +54,7 @@ async def chat_completion(
     extra_headers: Optional[dict] = None,
     **kwargs,
 ):
-    url = f"{PROXY_BASE_URL}/chat/completions"
+    url: Final = f"{PROXY_BASE_URL}/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -236,13 +236,23 @@ async def test_chat_completion_with_timeout_from_request():
 @pytest.mark.parametrize("has_access", [True, False])
 @pytest.mark.asyncio
 async def test_chat_completion_client_fallbacks_with_custom_message(has_access: bool) -> None:
+    original_messages: Final = [{"role": "user", "content": "Who was Alexander?"}]
+    custom_messages: Final = [
+        {
+            "role": "user",
+            "content": (
+                "Describe the weather in a coastal city during winter, including the usual temperature, rain, wind, "
+                "and the clothing a visitor should bring."
+            ),
+        }
+    ]
     models: Final = ["gpt-3.5-turbo", "gpt-6-luna"] if has_access else ["gpt-3.5-turbo"]
     async with aiohttp.ClientSession() as session:
         generated_key: Final = await generate_key(session=session, i=0, models=models)
     async with AsyncOpenAI(api_key=generated_key["key"], base_url=PROXY_BASE_URL, max_retries=0) as client:
         request: Final = {
             "model": "gpt-3.5-turbo",
-            "messages": [{"role": "user", "content": "Who was Alexander?"}],
+            "messages": original_messages,
             "max_tokens": 32,
             "temperature": 0,
             "extra_body": {
@@ -250,9 +260,7 @@ async def test_chat_completion_client_fallbacks_with_custom_message(has_access: 
                 "fallbacks": [
                     {
                         "model": "gpt-6-luna",
-                        "messages": [
-                            {"role": "user", "content": "Output only this exact token: FALLBACK_MESSAGE_REACHED"}
-                        ],
+                        "messages": custom_messages,
                     }
                 ],
             },
@@ -266,7 +274,25 @@ async def test_chat_completion_client_fallbacks_with_custom_message(has_access: 
         response: Final = await client.chat.completions.create(**request)
         assert response.model == "gpt-6-luna"
         assert response.choices[0].message.content
-        assert response.choices[0].message.content.strip() == "FALLBACK_MESSAGE_REACHED"
+        custom_control: Final = await client.chat.completions.create(
+            model="gpt-6-luna",
+            messages=custom_messages,
+            max_tokens=32,
+            temperature=0,
+        )
+        original_control: Final = await client.chat.completions.create(
+            model="gpt-6-luna",
+            messages=original_messages,
+            max_tokens=32,
+            temperature=0,
+        )
+        assert response.usage is not None
+        assert custom_control.usage is not None
+        assert original_control.usage is not None
+        assert custom_control.usage.completion_tokens > 0
+        assert original_control.usage.completion_tokens > 0
+        assert custom_control.usage.prompt_tokens != original_control.usage.prompt_tokens
+        assert response.usage.prompt_tokens == custom_control.usage.prompt_tokens
 
 
 from typing import List

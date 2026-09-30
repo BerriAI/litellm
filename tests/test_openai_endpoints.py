@@ -1,4 +1,5 @@
 import os
+from typing import Final
 # What this tests ?
 ## Tests /chat/completions by generating a key and then making a chat completions-request
 import pytest
@@ -399,7 +400,9 @@ async def test_completion_streaming_usage_metrics():
     """
     [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url=os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000"))
+    client: Final = AsyncOpenAI(
+        api_key="sk-1234", base_url=os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000")
+    )
 
     response = await client.completions.create(
         model="gpt-6-luna",
