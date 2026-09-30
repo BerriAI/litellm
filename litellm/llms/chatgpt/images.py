@@ -136,9 +136,9 @@ class ChatGPTImageEditConfig(OpenAIImageEditConfig):
             if not 1 <= len(validated) <= 5:
                 raise ValueError("images must contain between 1 and 5 reference images")
             return {  # mutable-ok: JSON request serialization
-                "model": model,
                 "prompt": prompt,
                 **image_edit_optional_request_params,
+                "model": model,  # the authenticated alias wins over passthrough fields
                 "images": tuple(item.model_dump() for item in validated),
             }, ()
 
@@ -147,8 +147,8 @@ class ChatGPTImageEditConfig(OpenAIImageEditConfig):
         if not 1 <= len(encoded) <= 5:
             raise ValueError("images must contain between 1 and 5 reference images")
         return {  # mutable-ok: JSON request serialization
-            "model": model,
             "prompt": prompt,
             **image_edit_optional_request_params,
+            "model": model,  # the authenticated alias wins over passthrough fields
             "images": encoded,
         }, ()

@@ -214,13 +214,26 @@ async def _body(request: Request) -> Mapping[str, JsonValue]:
         raise HTTPException(400, "Expected a JSON object") from exc
 
 
-def _request(source: Request | WebSocket, body: Mapping[str, JsonValue]) -> Request:
+def _request(source: Request | WebSocket, body: Mapping[str, JsonValue], pinned_model: str | None = None) -> Request:
+    """Build the synthetic POST request that authenticates one Live operation.
+
+    A copied scope can carry the body a previous authentication parsed, so the
+    cached ``parsed_body`` is dropped and the request parses ``body`` again.
+    ``litellm_pinned_realtime_model`` marks the requests whose model this endpoint
+    dispatches itself, so a key-level budget fallback cannot authorize a different
+    model than the one that is about to run.
+    """
+
     async def receive() -> Message:
         return _mutable(
             MappingProxyType({"type": "http.request", "body": _encode_json(body).encode(), "more_body": False})
         )
 
-    return Request(_mutable(MappingProxyType({**source.scope, "type": "http", "method": "POST"})), receive=receive)
+    scope: Final = _mutable(MappingProxyType({**source.scope, "type": "http", "method": "POST"}))
+    scope.pop("parsed_body", None)
+    if pinned_model is not None:
+        scope["litellm_pinned_realtime_model"] = pinned_model
+    return Request(scope, receive=receive)
 
 
 def _session_model(body: Mapping[str, JsonValue], fallback: str | None = None) -> str:
@@ -449,7 +462,7 @@ async def _budget_scope(auth: UserAPIKeyAuth) -> AsyncGenerator[_BudgetOwnership
 
 async def _reauth(ownership: _BudgetOwnership, request: Request, body: Mapping[str, JsonValue], model: str) -> None:
     await release_or_invalidate_budget_reservation(budget_reservation=ownership.auth.budget_reservation)
-    ownership.replace_auth(await _auth(_request(request, MappingProxyType({**body, "model": model}))))
+    ownership.replace_auth(await _auth(_request(request, MappingProxyType({**body, "model": model}), model)))
 
 
 def _policy_object(value: object) -> Mapping[str, JsonValue]:
@@ -1288,9 +1301,9 @@ def _response(response: httpx.Response, handle: LiveHandle | None = None) -> Res
 
 async def _create(request: Request, token: str | None = None) -> Response:
     body: Final = await _body(request)
-    auth: Final = await _auth(
-        _request(request, _EMPTY if token else MappingProxyType({**body, "model": _session_model(body)}))
-    )
+    requested: Final = None if token else _session_model(body)
+    auth_body: Final = _EMPTY if token or requested is None else MappingProxyType({**body, "model": requested})
+    auth: Final = await _auth(_request(request, auth_body, requested))
     async with _budget_scope(auth) as ownership:
         source: Final = decode_session(token, _owner(auth)) if token else None
         model: Final = _session_model(body, source.alias if source else None)

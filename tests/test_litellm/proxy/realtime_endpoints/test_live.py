@@ -165,9 +165,11 @@ def route_client(monkeypatch):
     selected = AsyncMock(return_value=deployment)
     supervised = AsyncMock()
     authenticated_bodies = []
+    authenticated_scopes = []
 
     async def authenticate(request):
         authenticated_bodies.append(await request.json())
+        authenticated_scopes.append(request.scope)
         return auth
 
     @asynccontextmanager
@@ -205,6 +207,7 @@ def route_client(monkeypatch):
         auth=auth,
         factory=factory,
         bodies=authenticated_bodies,
+        scopes=authenticated_scopes,
     )
 
 
@@ -235,6 +238,47 @@ def test_create_preserves_configuration_and_returns_owned_json_session(route_cli
     assert route_client.bodies[0] == {**body, "model": "voice"}
     route_client.supervised.assert_awaited_once()
     assert route_client.factory.call_args.args[0].api_base is None
+
+
+def test_synthetic_live_request_drops_the_cached_body_and_pins_the_model_on_request():
+    source = Request({"type": "http", "method": "POST", "headers": [], "path": "/v1/live/sessions"})
+    source.scope["parsed_body"] = (("model",), {"model": "stale-alias"})
+
+    pinned = live._request(source, MappingProxyType({"model": "voice"}), "voice")
+    assert "parsed_body" not in pinned.scope
+    assert pinned.scope["litellm_pinned_realtime_model"] == "voice"
+
+    plain = live._request(source, MappingProxyType({"model": "voice"}))
+    assert "litellm_pinned_realtime_model" not in plain.scope
+    assert "parsed_body" not in plain.scope
+    assert source.scope["parsed_body"] == (("model",), {"model": "stale-alias"})
+
+
+@pytest.mark.asyncio
+async def test_synthetic_live_request_sends_the_replaced_body():
+    source = Request({"type": "http", "method": "POST", "headers": [], "path": "/v1/live/sessions"})
+    source.scope["parsed_body"] = (("model",), {"model": "stale-alias"})
+
+    request = live._request(source, MappingProxyType({"model": "voice"}))
+
+    assert await request.json() == {"model": "voice"}
+
+
+def test_live_create_and_fork_pin_the_model_they_dispatch(route_client):
+    created = route_client.client.post(
+        "/v1/live/sessions",
+        json={"session": {"model": "voice"}, "transport": {"type": "webrtc", "sdp": "offer"}},
+    )
+    assert created.status_code == 201
+    assert [scope.get("litellm_pinned_realtime_model") for scope in route_client.scopes] == ["voice"]
+
+    token = live.encode_session(handle(model_id="deployment-a"))
+    forked = route_client.client.post(
+        f"/v1/live/sessions/{token}/fork",
+        json={"session": {}, "transport": {"type": "webrtc", "sdp": "offer"}},
+    )
+    assert forked.status_code == 201
+    assert [scope.get("litellm_pinned_realtime_model") for scope in route_client.scopes[1:]] == [None, "voice"]
 
 
 def test_fork_preserves_empty_overrides_and_pins_source_deployment(route_client):

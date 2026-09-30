@@ -201,6 +201,28 @@ async def test_async_codex_edit_without_multipart_image(chatgpt_tokens):
     assert requests[0].headers["x-gateway-route"] == "images"
 
 
+@pytest.mark.parametrize(
+    "references",
+    [None, [{"image_url": "data:image/png;base64,aGVsbG8="}]],
+    ids=["uploaded-image", "reference-images"],
+)
+def test_edit_keeps_the_authenticated_model_over_passthrough_fields(tmp_path, references):
+    image = None
+    if references is None:
+        image = tmp_path / "reference.png"
+        image.write_bytes(b"reference image bytes")
+    data, _ = ChatGPTImageEditConfig().transform_image_edit_request(
+        "gpt-image-2",
+        "edit",
+        image,
+        {"model": "gpt-image-2.5-flare", "size": "1024x1024"},
+        GenericLiteLLMParams(images=references),
+        {},
+    )
+    assert data["model"] == "gpt-image-2"
+    assert data["size"] == "1024x1024"
+
+
 @pytest.mark.parametrize("as_tuple", [False, True])
 def test_edit_accepts_filesystem_path(tmp_path, as_tuple):
     image = tmp_path / "reference.png"
