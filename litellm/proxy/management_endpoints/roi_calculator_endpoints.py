@@ -6,7 +6,9 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 import httpx
-from apscheduler.schedulers.asyncio import AsyncIOScheduler  # pyright: ignore[reportMissingTypeStubs]  # no upstream stubs
+from apscheduler.schedulers.asyncio import (  # pyright: ignore[reportMissingTypeStubs]  # no upstream stubs
+    AsyncIOScheduler,
+)
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
