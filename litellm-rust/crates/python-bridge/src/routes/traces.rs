@@ -33,7 +33,7 @@ pub fn trace_ensure_schema<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let connection = Connection::writer(url, user, password).map_err(map_error)?;
     let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
-    litellm_host_python::run_async(
+    crate::logger::run_async(
         py,
         async move {
             litellm_traces::ensure_schema(
@@ -64,7 +64,7 @@ pub fn trace_query<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     let connection = Connection::configured(url, database, user, password).map_err(map_error)?;
     let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
-    litellm_host_python::run_async(
+    crate::logger::run_async(
         py,
         async move { litellm_traces::execute_read(&client, &connection, &sql, &parameters).await },
         map_error,
