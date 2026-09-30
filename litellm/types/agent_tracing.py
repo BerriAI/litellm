@@ -6,7 +6,7 @@ Two contracts live here:
 - `TraceResponse` / `TraceListResponse`: what `GET /v1/traces*` returns to the UI and API users.
 """
 
-from typing import Dict, List, Literal, Optional
+from typing import Literal
 
 from typing_extensions import TypedDict
 
@@ -25,10 +25,10 @@ class SpanRecord(TypedDict):
     SpanName: str
     SpanKind: str
     ServiceName: str
-    ResourceAttributes: Dict[str, str]
+    ResourceAttributes: dict[str, str]
     ScopeName: str
     ScopeVersion: str
-    SpanAttributes: Dict[str, str]
+    SpanAttributes: dict[str, str]
     Duration: int  # nanoseconds
     StatusCode: str
     StatusMessage: str
@@ -71,14 +71,14 @@ class SpendLogRecord(TypedDict):
     cache_write_tokens: int
     start_time: int  # unix ms
     end_time: int  # unix ms
-    completion_start_time: Optional[int]
+    completion_start_time: int | None
     status: str
     error_str: str
     cache_hit: bool
     session_id: str
     trace_id: str  # from an incoming W3C traceparent, if any
     span_id: str
-    request_tags: List[str]
+    request_tags: list[str]
     metadata: str
     messages: str
     response: str
@@ -100,13 +100,13 @@ class LiteLLMRequestView(TypedDict):
     cache_read_tokens: int
     cache_write_tokens: int
     latency_ms: int
-    ttft_ms: Optional[int]
+    ttft_ms: int | None
     status: str
 
 
 class SpanView(TypedDict):
     span_id: str
-    parent_span_id: Optional[str]
+    parent_span_id: str | None
     name: str
     type: ObservationType
     agent: str
@@ -114,17 +114,17 @@ class SpanView(TypedDict):
     duration_ms: float
     status: str
     input_preview: str
-    model: Optional[str]
+    model: str | None
     input_tokens: int
     output_tokens: int
-    litellm: Optional[LiteLLMRequestView]
+    litellm: LiteLLMRequestView | None
 
 
 class AgentView(TypedDict):
     """One agent (root or subagent) inside a trace, for the multi-agent graph."""
 
     name: str
-    parent_agent: Optional[str]
+    parent_agent: str | None
     invocations: int
     llm_calls: int
     tool_calls: int
@@ -147,22 +147,22 @@ class TraceSummary(TypedDict):
     input_tokens: int
     output_tokens: int
     spend: float
-    models: List[str]
+    models: list[str]
 
 
 class TraceResponse(TypedDict):
     trace: TraceSummary
-    agents: List[AgentView]
-    spans: List[SpanView]
+    agents: list[AgentView]
+    spans: list[SpanView]
 
 
 class TraceListResponse(TypedDict):
-    data: List[TraceSummary]
-    next_cursor: Optional[str]
+    data: list[TraceSummary]
+    next_cursor: str | None
 
 
 class SpanDetailResponse(TypedDict):
     span_id: str
     input: str
     output: str
-    attributes: Dict[str, str]
+    attributes: dict[str, str]
