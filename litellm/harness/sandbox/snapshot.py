@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm.constants import HARNESS_MAX_DIFF_BYTES, HARNESS_SNAPSHOT_SKIP_DIRS
+from litellm.harness.errors import HarnessError
 from litellm.harness.types import FileChange, FileChangeKind
 
 if TYPE_CHECKING:
@@ -117,7 +118,7 @@ def unified_diff(path: str, old: str | None, new: str | None) -> str:
 async def _read_or_none(sandbox: Sandbox, path: str) -> bytes | None:
     try:
         return await sandbox.read(path)
-    except Exception:
+    except (HarnessError, OSError):
         return None
 
 
