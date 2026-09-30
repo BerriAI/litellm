@@ -12,7 +12,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
@@ -160,14 +159,6 @@ async def batch_upsert_tools(
         verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
 
 
-class _KeyInFilter(TypedDict):
-    token: ReadOnly[Mapping[str, Sequence[str]]]
-
-
-class _UserInFilter(TypedDict):
-    user_id: ReadOnly[Mapping[str, Sequence[str]]]
-
-
 _NO_OWNERS: Final[Mapping[str, ToolDiscoveryUser]] = MappingProxyType({})
 
 
@@ -175,13 +166,11 @@ async def _key_owners(prisma_client: "PrismaClient", key_hashes: frozenset[str])
     """Map each key hash to the user that owns the key, skipping keys without an owner or an unknown owner."""
     if not key_hashes:
         return _NO_OWNERS
-    key_filter: Final[_KeyInFilter] = {"token": {"in": sorted(key_hashes)}}
-    keys: Final = await VerificationTokenRepository(prisma_client).find_many(where=key_filter)
+    keys: Final = await VerificationTokenRepository(prisma_client).find_many_in("token", sorted(key_hashes))
     owner_ids: Final = frozenset(key.user_id for key in keys if key.user_id)
     if not owner_ids:
         return _NO_OWNERS
-    user_filter: Final[_UserInFilter] = {"user_id": {"in": sorted(owner_ids)}}
-    users: Final = await UserRepository(prisma_client).find_many(where=user_filter)
+    users: Final = await UserRepository(prisma_client).find_many_in("user_id", sorted(owner_ids))
     users_by_id: Final = MappingProxyType(
         {
             user.user_id: ToolDiscoveryUser(
