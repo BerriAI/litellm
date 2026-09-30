@@ -38,6 +38,7 @@ def _config(directory: Path, claim_field: str) -> Path:
         "enable_jwt_auth": True,
         "litellm_jwtauth": {
             "user_id_jwt_field": "sub",
+            "user_email_jwt_field": "email",
             "virtual_key_claim_field": claim_field,
             "unregistered_jwt_client_behavior": "auto_register",
             "auto_register_map_existing_key": True,
@@ -137,6 +138,25 @@ def test_first_jwt_call_reuses_the_newest_durable_llm_key_and_skips_every_inelig
         }
         assert _user_key_hashes(user) == keys_before, "a key was minted although a reusable one existed"
         assert _billed_key(response) == _hash(durable)
+
+
+def test_user_matched_by_email_instead_of_sub_still_reuses_their_existing_key(gateway: Gateway, tmp_path: Path) -> None:
+    with _issuer() as (private_key, jwks_url), gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        email: Final = f"integration-{uuid.uuid4().hex}@example.com"
+        user: Final = scenario.user(user_role="internal_user", user_email=email)
+        existing: Final = scenario.key(user_id=user)
+        subject: Final = f"integration-idp-subject-{uuid.uuid4().hex}"
+
+        with owned_proxy(
+            gateway, tmp_path, {"JWT_PUBLIC_KEY_URL": jwks_url}, config=_config(tmp_path, "sub")
+        ) as candidate:
+            response: Final = _chat(candidate, model, _token(private_key, subject, email=email.upper()))
+
+        assert response.status_code == 200, response.text
+        assert _mapped_token("sub", subject) == _hash(existing)
+        assert _user_key_hashes(user) == frozenset({_hash(existing)}), "a key was minted for an email-matched user"
+        assert _billed_key(response) == _hash(existing)
 
 
 def test_shared_client_claim_never_maps_a_second_user_onto_the_first_users_personal_key(

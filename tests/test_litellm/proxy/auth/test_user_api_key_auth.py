@@ -2090,6 +2090,7 @@ async def test_auto_register_map_existing_key_reuses_users_key_but_never_an_auto
 
     jwt_handler = MagicMock()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
         auto_register_map_existing_key=True,
         virtual_key_mapping_cache_ttl=300,
     )
@@ -2128,6 +2129,7 @@ async def test_auto_register_map_existing_key_mints_when_user_has_no_key():
 
     jwt_handler = MagicMock()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
         auto_register_map_existing_key=True,
         virtual_key_mapping_cache_ttl=300,
     )
@@ -2189,6 +2191,7 @@ async def test_auto_register_map_existing_key_race_loser_keeps_reused_key():
 
     jwt_handler = MagicMock()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
         auto_register_map_existing_key=True,
         virtual_key_mapping_cache_ttl=300,
     )
@@ -2230,6 +2233,7 @@ async def test_auto_register_map_existing_key_user_id_none_mints():
 
     jwt_handler = MagicMock()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
         auto_register_map_existing_key=True,
         virtual_key_mapping_cache_ttl=300,
     )
@@ -2245,7 +2249,44 @@ async def test_auto_register_map_existing_key_user_id_none_mints():
 
 
 @pytest.mark.asyncio
-async def test_auto_register_map_existing_key_mints_when_claim_is_not_the_user_id():
+async def test_auto_register_map_existing_key_reuses_when_the_user_was_matched_by_a_fallback_lookup():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        user_email_jwt_field="email",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(
+                prisma_client,
+                user_api_key_cache,
+                jwt_handler,
+                claim_value="idp-subject-not-the-db-user-id",
+                cache_key="jwt_key_mapping:sub:idp-subject-not-the-db-user-id",
+            )
+        )
+
+    generate_key.assert_not_awaited()
+    assert prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]["token"] == "existing-hash"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_mints_when_the_claim_is_not_a_user_identity_field():
     from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
     from litellm.proxy.proxy_server import hash_token
 
@@ -2260,6 +2301,7 @@ async def test_auto_register_map_existing_key_mints_when_claim_is_not_the_user_i
 
     jwt_handler = MagicMock()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
         auto_register_map_existing_key=True,
         virtual_key_mapping_cache_ttl=300,
     )
