@@ -47,9 +47,10 @@ export interface VisibleTree {
  * Framework plumbing: middleware wrappers plus LangGraph's generic "model" / "tools"
  * graph nodes. The root span is never hidden.
  */
-export const isFrameworkSpan = (span: Span): boolean =>
-  span.parent_span_id !== null &&
-  (span.type === "framework" || (span.type === "chain" && (span.name === "model" || span.name === "tools")));
+export const isFrameworkSpan = (span: Span): boolean => {
+  const isGraphNode = span.type === "chain" && (span.name === "model" || span.name === "tools");
+  return span.parent_span_id !== null && (span.type === "framework" || isGraphNode);
+};
 
 const byStart = (a: Span, b: Span): number => a.start_offset_ms - b.start_offset_ms;
 
@@ -208,16 +209,21 @@ interface FlattenContext {
 function pushSpanRow(ctx: FlattenContext, span: Span, depth: number): void {
   const hasChildren = (ctx.children.get(span.span_id)?.length ?? 0) > 0;
   const isCollapsed = ctx.ui.collapsed.has(span.span_id);
-  ctx.rows.push({ kind: "span", span, depth, hasChildren, isCollapsed });
+  const row: TreeRow = { kind: "span", span, depth, hasChildren, isCollapsed };
+  ctx.rows.push(row);
   if (hasChildren && !isCollapsed) walkChildren(ctx, span.span_id, depth + 1);
 }
 
 function pushGroupRows(ctx: FlattenContext, group: SpanGroup, depth: number): void {
   const shown = Math.min(ctx.ui.groupShown[group.key] ?? 0, group.spans.length);
-  ctx.rows.push({ kind: "group", group, depth, shown });
+  const groupRow: TreeRow = { kind: "group", group, depth, shown };
+  ctx.rows.push(groupRow);
   if (shown === 0) return;
   group.spans.slice(0, shown).forEach((span) => pushSpanRow(ctx, span, depth + 1));
-  if (shown < group.spans.length) ctx.rows.push({ kind: "more", group, depth: depth + 1, shown });
+  if (shown < group.spans.length) {
+    const moreRow: TreeRow = { kind: "more", group, depth: depth + 1, shown };
+    ctx.rows.push(moreRow);
+  }
 }
 
 function walkChildren(ctx: FlattenContext, parentKey: string, depth: number): void {
@@ -286,8 +292,10 @@ export interface TraceStep {
   toolNames: string[];
 }
 
-const isStepSpan = (span: Span): boolean =>
-  span.type === "llm" || span.type === "tool" || (span.type === "agent" && span.parent_span_id !== null);
+const isStepSpan = (span: Span): boolean => {
+  const isNestedAgent = span.type === "agent" && span.parent_span_id !== null;
+  return span.type === "llm" || span.type === "tool" || isNestedAgent;
+};
 
 interface AgentContext {
   subagent: string | null;
@@ -450,8 +458,10 @@ export const parseJson = (value: string): unknown => {
   }
 };
 
-const isMessage = (value: unknown): value is TraceMessage =>
-  typeof value === "object" && value !== null && "role" in value && typeof (value as TraceMessage).role === "string";
+const isMessage = (value: unknown): value is TraceMessage => {
+  if (typeof value !== "object" || value === null || !("role" in value)) return false;
+  return typeof value.role === "string";
+};
 
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */
 export function parseMessages(value: string): TraceMessage[] | null {

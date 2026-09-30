@@ -260,19 +260,14 @@ function TraceHeader({ trace, onClose }: { trace: Trace; onClose: () => void }) 
 }
 
 /** Right-side drawer for one agent trace: header, stats strip, Steps / Tree / Graph views and span details. */
-export function TraceDrawer({
-  open,
-  traceId,
-  initialSpanId,
-  accessToken,
-  onClose,
-}: TraceDrawerProps) {
-  const traceQuery = useQuery({
+export function TraceDrawer({ open, traceId, initialSpanId, accessToken, onClose }: TraceDrawerProps) {
+  const traceQueryOptions = {
     queryKey: ["agentTrace", traceId, accessToken],
     queryFn: () => agentTraceCall(accessToken, traceId as string),
     enabled: open && traceId !== null,
     staleTime: 30_000,
-  });
+  };
+  const traceQuery = useQuery(traceQueryOptions);
   const trace = traceQuery.data;
 
   return (

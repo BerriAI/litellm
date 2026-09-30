@@ -93,6 +93,9 @@ export function SpanDetail({ accessToken, traceId, span }: SpanDetailProps) {
     staleTime: Infinity,
   });
   const detail = detailQuery.data;
+  const attributes = detail
+    ? { trace_id: traceId, span_id: span.span_id, parent_span_id: span.parent_span_id, ...detail.attributes }
+    : null;
 
   return (
     <div className="min-h-0 overflow-auto px-5 pt-4 pb-10" data-testid="span-detail">
@@ -134,11 +137,7 @@ export function SpanDetail({ accessToken, traceId, span }: SpanDetailProps) {
           <section className="mt-3.5">
             <h4 className="mb-1.5 text-xs font-semibold">OTEL attributes</h4>
             <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted px-3 py-2.5 font-mono text-xs">
-              {JSON.stringify(
-                { trace_id: traceId, span_id: span.span_id, parent_span_id: span.parent_span_id, ...detail.attributes },
-                null,
-                2,
-              )}
+              {JSON.stringify(attributes, null, 2)}
             </pre>
           </section>
         </>
