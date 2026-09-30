@@ -224,6 +224,20 @@ def enable_eager_mcp_oauth_discovery(monkeypatch):
     monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "1")
 
 
+@pytest.fixture(autouse=True)
+def restore_mcp_manager_singleton():
+    """``_reload_mcp_manager_module`` rebinds ``global_mcp_server_manager`` in every MCP module, so
+    without this the next test file inherits a manager that has none of its servers registered."""
+    bound: Final = tuple(
+        (module, module.global_mcp_server_manager)
+        for name, module in tuple(sys.modules.items())
+        if name.startswith("litellm.proxy._experimental.mcp_server.") and hasattr(module, "global_mcp_server_manager")
+    )
+    yield
+    for module, manager in bound:
+        module.global_mcp_server_manager = manager
+
+
 class TestMCPServerManager:
     """Test MCP Server Manager stdio functionality"""
 
