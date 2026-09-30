@@ -15,8 +15,8 @@
       "error_count": 0,
       "input_tokens": 69506,
       "output_tokens": 2960,
-      "spend": 0.12833024999999998,
-      "models": ["claude-sonnet-4-5"]
+      "models": ["claude-sonnet-4-5"],
+      "agent_invocations": 6
     },
     {
       "trace_id": "f78f6df35480060fafadac887e234241",
@@ -33,8 +33,8 @@
       "error_count": 2,
       "input_tokens": 659,
       "output_tokens": 60,
-      "spend": 0.0028770000000000002,
-      "models": ["claude-sonnet-4-5"]
+      "models": ["claude-sonnet-4-5"],
+      "agent_invocations": 1
     },
     {
       "trace_id": "71498cec128bbea430f01de04b972f36",
@@ -51,8 +51,8 @@
       "error_count": 0,
       "input_tokens": 1552,
       "output_tokens": 202,
-      "spend": 0.007686,
-      "models": ["claude-sonnet-4-5"]
+      "models": ["claude-sonnet-4-5"],
+      "agent_invocations": 1
     }
   ],
   "next_cursor": null
