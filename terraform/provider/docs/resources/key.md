@@ -78,7 +78,7 @@ The following arguments are supported:
 
 * `auto_rotate` - (Optional) Whether the proxy rotates this key on its own schedule. Omit it to leave the current setting unchanged, including on keys imported or scheduled outside Terraform. Set it to `false` to stop rotation. That does not clear `rotation_interval` or `key_rotation_at`. The proxy only rotates keys whose `auto_rotate` is true, and the rotation itself is the proxy's enterprise key-rotation job. This provider does not check the license and does not call regenerate.
 
-* `rotation_interval` - (Optional) How often the proxy rotates this key when `auto_rotate` is true, for example `30d` or `12h`. Required in that case. Omit it to leave the stored interval unchanged. An empty value is never sent. Removing `auto_rotate` and `rotation_interval` from configuration does not clear a schedule that is already stored.
+* `rotation_interval` - (Optional) How often the proxy rotates this key when `auto_rotate` is true. Required in that case. The value is 1 to 3 digits followed by `s`, `m`, `h`, or `d`, matching the Admin UI presets (`7d`, `30d`, `90d`, `180d`, `365d`) and custom examples (`1s`, `5m`, `2h`, `14d`). Omit it to leave the stored interval unchanged. An empty value is never sent. Removing `auto_rotate` and `rotation_interval` from configuration does not clear a schedule that is already stored.
 
 * `duration` - (Optional) How long the key stays valid, e.g. "30d" or "12h". The proxy stores this as an absolute `expires` timestamp. Changing the value resets the expiry to the time of the update plus the new duration; removing it from the configuration leaves the current expiry in place.
 

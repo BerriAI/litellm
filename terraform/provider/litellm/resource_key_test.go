@@ -1086,6 +1086,38 @@ func TestCreateKeyRejectsAutoRotateWithoutSchedule(t *testing.T) {
 	}
 }
 
+func TestRotationIntervalMatchesUIConvention(t *testing.T) {
+	validate := resourceKey().Schema["rotation_interval"].ValidateFunc
+	for _, interval := range []string{"1s", "5m", "2h", "7d", "14d", "30d", "90d", "180d", "365d"} {
+		if _, errs := validate(interval, "rotation_interval"); len(errs) != 0 {
+			t.Errorf("%s: %v", interval, errs)
+		}
+	}
+	for _, interval := range []string{"0d", "07d", "1000d", "30w", "1mo", "monthly", "30"} {
+		if _, errs := validate(interval, "rotation_interval"); len(errs) == 0 {
+			t.Errorf("%s was accepted", interval)
+		}
+	}
+}
+
+func TestCreateKeyRejectsRotationIntervalFormat(t *testing.T) {
+	srv, _, calls := captureKeyGenerate(t)
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":         "alias-1",
+		"auto_rotate":       true,
+		"rotation_interval": "30w",
+	})
+	diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() || !strings.Contains(diags[0].Summary, "rotation_interval") {
+		t.Fatalf("diag = %v", diags)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("generate calls = %d, want 0", got)
+	}
+}
+
 func TestKeyUpdateOmitsRotationWhenConfigOmitsIt(t *testing.T) {
 	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}, infoExtra: map[string]interface{}{
 		"auto_rotate":       true,

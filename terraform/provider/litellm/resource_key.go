@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"slices"
 
 	"github.com/hashicorp/go-cty/cty"
@@ -103,10 +104,11 @@ func resourceKey() *schema.Resource {
 				Description: "Whether the proxy rotates this key on a schedule. Omit to leave the current setting unchanged. Set to false to stop rotation; that does not clear rotation_interval or key_rotation_at. Requires key_alias and rotation_interval",
 			},
 			"rotation_interval": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				Computed:    true,
-				Description: "How often the proxy rotates this key, for example \"30d\" or \"12h\". Required when auto_rotate is true. Omit to leave the stored interval unchanged",
+				Type:         schema.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validateRotationInterval,
+				Description:  "How often the proxy rotates this key, for example \"30d\" or \"12h\". 1 to 3 digits followed by s, m, h, or d. Required when auto_rotate is true. Omit to leave the stored interval unchanged",
 			},
 			"key_rotation_at": {
 				Type:        schema.TypeString,
@@ -479,12 +481,25 @@ func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{
 	return nil
 }
 
+var rotationIntervalPattern = regexp.MustCompile(`^[1-9][0-9]{0,2}[smhd]$`)
+
+func validateRotationInterval(v interface{}, k string) ([]string, []error) {
+	value, ok := v.(string)
+	if !ok || !rotationIntervalPattern.MatchString(value) {
+		return nil, []error{fmt.Errorf("%q must be 1 to 3 digits followed by s, m, h, or d, for example \"30d\"", k)}
+	}
+	return nil, nil
+}
+
 func validateKeyRotationConfig(d *schema.ResourceData) error {
+	interval, intervalSet := configuredString(d, "rotation_interval")
+	if intervalSet && interval != "" && !rotationIntervalPattern.MatchString(interval) {
+		return fmt.Errorf("rotation_interval must be 1 to 3 digits followed by s, m, h, or d, for example \"30d\"")
+	}
 	autoRotate, autoSet := configuredBool(d, "auto_rotate")
 	if !autoSet || !autoRotate {
 		return nil
 	}
-	interval, intervalSet := configuredString(d, "rotation_interval")
 	if !intervalSet || interval == "" {
 		return fmt.Errorf("rotation_interval is required when auto_rotate is true")
 	}
