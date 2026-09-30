@@ -259,6 +259,7 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
             tmp_path,
             upstream,
             destination_wire=stopped_destination,
+            workers=1,
         ) as rig:
             with httpx.Client(trust_env=False) as client, pytest.raises(httpx.ConnectError):
                 client.get(stopped_destination.url + "/health", timeout=2)
@@ -275,7 +276,17 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
                     wire_server(_owned_sink_handler(sink), port=sink_port)
                 )
                 run_burst(recovery_calls, rig.proxy, rig.model, messages_model)
-                spans: Final = _llm_spans_through_markers(recovered_destination, recovery_markers)
+                sentinel: Final = f"f1-sentinel-{uuid.uuid4().hex}"
+                sentinel_response: Final = _call(
+                    rig.proxy,
+                    rig.model,
+                    sentinel,
+                    surface="chat",
+                    stream=False,
+                    prompt=sentinel,
+                )
+                _assert_response(sentinel_response, sentinel, "chat", False, rig.model)
+                spans: Final = _llm_spans_through_markers(recovered_destination, (*recovery_markers, sentinel))
                 assert all(
                     sum(span.get("litellm.metadata.trace_marker") == marker for span in spans) == 1
                     for marker in recovery_markers
@@ -284,6 +295,7 @@ def test_arize_otel_v2_f1_sink_outage_and_recovery(gateway: Gateway, tmp_path: P
                     sum(span.get("litellm.metadata.trace_marker") == marker for span in spans) <= 1
                     for marker in outage_markers
                 ), spans
+                assert sum(span.get("litellm.metadata.trace_marker") == sentinel for span in spans) == 1, spans
 
 
 def test_arize_otel_v2_f2_slow_sink_does_not_deadlock(gateway: Gateway, tmp_path: Path) -> None:
