@@ -81,35 +81,29 @@ class TestCallbackManagementEndpoints:
         # Setup test client
         client = TestClient(app)
 
-        # Initialize Langfuse logger and add to callbacks
-        with patch("litellm.integrations.langfuse.langfuse.Langfuse") as mock_langfuse:
-            # Mock the Langfuse client initialization
-            mock_langfuse_client = MagicMock()
-            mock_langfuse.return_value = mock_langfuse_client
+        # Add string representation to callback lists (this is how the system typically works)
+        litellm.success_callback.append("langfuse")
+        litellm._async_success_callback.append("langfuse")
 
-            # Add string representation to callback lists (this is how the system typically works)
-            litellm.success_callback.append("langfuse")
-            litellm._async_success_callback.append("langfuse")
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
+        )
 
-            # Make request to list callbacks endpoint
-            response = client.get(
-                "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-            )
+        # Verify response
+        assert response.status_code == 200
 
-            # Verify response
-            assert response.status_code == 200
+        response_data = response.json()
 
-            response_data = response.json()
+        # Verify langfuse appears in success callbacks
+        assert "langfuse" in response_data["success"]
+        assert response_data["failure"] == []
+        assert response_data["success_and_failure"] == []
 
-            # Verify langfuse appears in success callbacks
-            assert "langfuse" in response_data["success"]
-            assert response_data["failure"] == []
-            assert response_data["success_and_failure"] == []
-
-            # Verify the response structure is correct
-            assert isinstance(response_data["success"], list)
-            assert isinstance(response_data["failure"], list)
-            assert isinstance(response_data["success_and_failure"], list)
+        # Verify the response structure is correct
+        assert isinstance(response_data["success"], list)
+        assert isinstance(response_data["failure"], list)
+        assert isinstance(response_data["success_and_failure"], list)
 
     def test_alist_callbacks_with_datadog_logger(self):
         """Test /callbacks/list endpoint with DataDog logger configuration"""

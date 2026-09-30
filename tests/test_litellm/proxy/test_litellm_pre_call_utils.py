@@ -870,6 +870,31 @@ def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> No
     assert proxy_request == {"body": {"messages": [{"role": "user", "content": "new request"}]}}
 
 
+def test_body_snapshot_excludes_team_callback_credentials() -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.types.litellm_params import TRUSTED_CALLBACK_VARS_FIELD
+
+    callback_vars: Final = {
+        "langfuse_public_key": "pk-lf-team",
+        "langfuse_secret_key": "sk-lf-team-secret",
+        "langfuse_host": "https://cloud.langfuse.com",
+    }
+    proxy_request: Final = {"body": None}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "proxy_server_request": proxy_request,
+        "success_callback": ["langfuse"],
+        **callback_vars,
+        TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {
+        "body": {"messages": [{"role": "user", "content": "hi"}], "success_callback": ["langfuse"]}
+    }, proxy_request
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pre_call_ran", [False, True])
 async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(
@@ -8470,3 +8495,31 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     for name, value in secrets.items():
         assert updated["secret_fields"]["raw_headers"][name.lower()] == value
         assert request.headers[name] == value
+
+
+def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    under_signoz = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="signoz",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_signoz.callback_vars == {
+        "signoz_ingestion_key": "team-key",
+        "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443",
+    }
+
+    under_other = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "langfuse_host": "https://cloud.langfuse.com"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}

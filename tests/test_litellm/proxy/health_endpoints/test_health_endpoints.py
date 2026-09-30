@@ -4307,3 +4307,22 @@ async def test_health_services_endpoint_pointfive_blocks_non_admin(monkeypatch, 
 
     assert str(raised.value.code) == "403"
     logger_class.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_langfuse_missing_keys_errors(monkeypatch):
+    """v2 raised out of ``auth_check`` and the endpoint printed the server's answer; the v4 check
+    returns the failure as a value, and the endpoint has to error with that reason rather than a
+    generic credentials message that reads the same for an outage and a bad key."""
+    import litellm.integrations.langfuse.langfuse as langfuse_module
+    from litellm.integrations.langfuse.langfuse_sdk import AuthCheckFailure
+
+    logger_class = MagicMock()
+    logger_class.return_value.api_client.auth_check.return_value = AuthCheckFailure(
+        "connection refused by lf.internal.example"
+    )
+    monkeypatch.setattr(langfuse_module, "LangFuseLogger", logger_class)
+
+    with pytest.raises(ProxyException, match="auth_check failed") as raised:
+        await health_services_endpoint(service="langfuse")
+    assert "connection refused by lf.internal.example" in str(raised.value.message)

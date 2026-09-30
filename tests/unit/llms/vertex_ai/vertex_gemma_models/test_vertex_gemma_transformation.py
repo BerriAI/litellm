@@ -5,11 +5,18 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 """
 
 import json
+from collections.abc import AsyncIterator
+from typing import cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 import litellm
+from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
+    ResponseCompletedEvent,
+    ResponsesAPIStreamingResponse,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -439,8 +446,9 @@ class TestVertexGemmaCompletion:
 
         Verifies:
         1. Request body does NOT include 'stream' parameter (model doesn't support it)
-        2. Response returns a MockResponseIterator that yields chunks
+        2. Response wraps a MockResponseIterator and yields chunks
         """
+        from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 
         # Mock Vertex response
@@ -502,8 +510,8 @@ class TestVertexGemmaCompletion:
                 vertex_location="us-central1",
             )
 
-            # Verify the response is a MockResponseIterator
-            assert isinstance(response, MockResponseIterator), f"Expected MockResponseIterator, got {type(response)}"
+            assert isinstance(response, CustomStreamWrapper)
+            assert isinstance(response.completion_stream, MockResponseIterator)
 
             # Verify the request sent to Vertex does NOT include 'stream'
             call_args = mock_client.post.call_args
@@ -520,14 +528,113 @@ class TestVertexGemmaCompletion:
             async for chunk in response:
                 chunks.append(chunk)
 
-            # Should get exactly one chunk (fake streaming)
-            assert len(chunks) == 1, f"Expected 1 chunk from fake stream, got {len(chunks)}"
+            assert len(chunks) == 2
+            assert chunks[1].choices[0].finish_reason == "stop"
+            assert all(getattr(chunk, "usage", None) is None for chunk in chunks)
 
             # Verify the chunk has the expected content
             chunk = chunks[0]
             assert hasattr(chunk, "choices")
             assert len(chunk.choices) > 0
             assert chunk.choices[0].delta.content == "Streaming test response"
+
+    @pytest.mark.asyncio
+    async def test_aresponses_streams_vertex_gemma_with_llm_tracing(self):
+        pytest.importorskip("ddtrace")
+        from ddtrace.contrib.internal.litellm.patch import patch as patch_litellm
+        from ddtrace.contrib.internal.litellm.patch import unpatch as unpatch_litellm
+        from ddtrace.llmobs._integrations.base_stream_handler import TracedAsyncStream
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        reply = Mock(status_code=200)
+        reply.json.return_value = _make_gemma_vertex_response(content="READY")
+        client = Mock()
+        client.post = AsyncMock(return_value=reply)
+
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client),
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "test-project"),
+            ),
+        ):
+            patch_litellm()
+            try:
+                response = await litellm.aresponses(
+                    model="vertex_ai/gemma/test-model",
+                    input="Reply exactly READY",
+                    stream=True,
+                    api_base="https://example.invalid/v1/projects/test-project/locations/us-central1/endpoints/test:predict",
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                )
+                bridge = cast(LiteLLMCompletionStreamingIterator, response)
+                traced_stream = bridge.litellm_custom_stream_wrapper
+                assert isinstance(traced_stream, TracedAsyncStream)
+                events = [event async for event in cast(AsyncIterator[ResponsesAPIStreamingResponse], response)]
+                span = traced_stream.handler.primary_span
+                assert span.finished
+                assert span.get_tag("_dd.llmobs.span_kind") == "llm"
+                assert span.get_metric("_dd.llmobs.total_tokens") == 114
+            finally:
+                unpatch_litellm()
+
+        assert "stream" not in client.post.call_args.kwargs["json"]["instances"][0]
+        assert "READY" in "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
+        assert isinstance(events[-1], ResponseCompletedEvent)
+        assert events[-1].response.usage.total_tokens == 114
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream_options", [None, {"include_usage": False}, {"include_usage": True}])
+    async def test_acompletion_stream_respects_usage_option_with_llm_tracing(self, stream_options):
+        pytest.importorskip("ddtrace")
+        from ddtrace.contrib.internal.litellm.patch import patch as patch_litellm
+        from ddtrace.contrib.internal.litellm.patch import unpatch as unpatch_litellm
+
+        reply = Mock(status_code=200)
+        reply.json.return_value = _make_gemma_vertex_response(content="READY")
+        client = Mock(post=AsyncMock(return_value=reply))
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client),
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "test-project"),
+            ),
+        ):
+            patch_litellm()
+            try:
+                stream = await litellm.acompletion(
+                    model="vertex_ai/gemma/test-model",
+                    messages=[{"role": "user", "content": "Reply exactly READY"}],
+                    stream=True,
+                    **({"stream_options": stream_options} if stream_options is not None else {}),
+                    api_base="https://example.invalid/v1/projects/test-project/locations/us-central1/endpoints/test:predict",
+                    vertex_project="test-project",
+                    vertex_location="us-central1",
+                )
+                chunks = [chunk async for chunk in stream]
+                span = stream.handler.primary_span
+                assert span.finished
+                assert span.get_tag("_dd.llmobs.span_kind") == "llm"
+            finally:
+                unpatch_litellm()
+
+        assert len(chunks) == (3 if stream_options and stream_options["include_usage"] else 2)
+        assert chunks[0].choices[0].delta.content == "READY"
+        assert chunks[1].choices[0].finish_reason == "stop"
+        if stream_options and stream_options["include_usage"]:
+            assert chunks[-1].choices[0].delta.content is None
+            assert chunks[-1].usage.total_tokens == 114
+            assert span.get_metric("_dd.llmobs.total_tokens") == 114
+        else:
+            from litellm.litellm_core_utils.streaming_handler import calculate_total_usage
+
+            assert all(getattr(chunk, "usage", None) is None for chunk in chunks)
+            assert calculate_total_usage(chunks=stream.chunks).total_tokens == 114
+            assert span.get_metric("_dd.llmobs.total_tokens") is None
 
     @pytest.mark.asyncio
     async def test_acompletion_filters_stream_and_stream_options(self):
@@ -693,6 +800,89 @@ class TestVertexGemmaCompletion:
             assert "context_management" not in instance, "context_management should not be forwarded to Vertex Gemma"
             assert instance["@requestFormat"] == "chatCompletions"
             assert "messages" in instance
+
+    @pytest.mark.parametrize(
+        "param",
+        [
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "safety_identifier",
+            "service_tier",
+            "store",
+            "web_search_options",
+            "modalities",
+            "prediction",
+            "audio",
+            "max_retries",
+        ],
+    )
+    def test_get_supported_openai_params_omits_params_the_predict_endpoint_rejects(self, param: str):
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+
+        assert param not in VertexGemmaConfig().get_supported_openai_params(model="gemma-2-2b-it")
+
+    @pytest.mark.asyncio
+    async def test_acompletion_drops_prompt_cache_key_when_drop_params_is_set(self):
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = _make_gemma_vertex_response()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
+
+            await litellm.acompletion(
+                model="vertex_ai/gemma/gemma-2-2b-it",
+                messages=[{"role": "user", "content": "Test"}],
+                prompt_cache_key="session-lit8592",
+                service_tier="default",
+                max_completion_tokens=16,
+                drop_params=True,
+                api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                vertex_project="PROJECT_ID",
+                vertex_location="us-central1",
+            )
+
+            instance = mock_client.post.call_args.kwargs["json"]["instances"][0]
+            assert "prompt_cache_key" not in instance
+            assert "service_tier" not in instance
+            assert instance["max_tokens"] == 16
+            assert instance["messages"] == [{"role": "user", "content": "Test"}]
+
+    @pytest.mark.asyncio
+    async def test_acompletion_rejects_prompt_cache_key_before_calling_vertex(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+        with (
+            patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_get_client,
+            patch(
+                "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
+                return_value=("fake-access-token", "PROJECT_ID"),
+            ),
+        ):
+            mock_client = Mock()
+            mock_client.post = AsyncMock()
+            mock_get_client.return_value = mock_client
+
+            with pytest.raises(litellm.UnsupportedParamsError, match="prompt_cache_key"):
+                await litellm.acompletion(
+                    model="vertex_ai/gemma/gemma-2-2b-it",
+                    messages=[{"role": "user", "content": "Test"}],
+                    prompt_cache_key="session-lit8592",
+                    drop_params=False,
+                    api_base="https://test.us-central1-project.prediction.vertexai.goog/v1/projects/PROJECT_ID/locations/us-central1/endpoints/ENDPOINT_ID:predict",
+                    vertex_project="PROJECT_ID",
+                    vertex_location="us-central1",
+                )
+
+            mock_client.post.assert_not_called()
 
     def test_transform_request_strips_context_management(self):
         """
@@ -1113,3 +1303,81 @@ class TestVertexGemmaCompletion:
         mock_async_post.assert_awaited_once()
         assert mock_async_post.call_args.kwargs["client"] is None
         assert response.choices[0].message.content == "default async handler fallback"
+
+
+_GEMMA_VERTEX_URL = "https://example.invalid/v1/projects/test/locations/us-central1/endpoints/test:predict"
+_FAKE_GEMMA_CREDENTIALS = "gemma-test-credentials"
+
+
+@pytest.fixture
+def _gemma_cached_access_token():
+    """Serve a fake token from the handler's credential cache so no auth round-trip runs."""
+    from types import SimpleNamespace
+
+    from litellm.main import vertex_gemma_chat_completion
+
+    cache = vertex_gemma_chat_completion._credentials_project_mapping
+    key = (_FAKE_GEMMA_CREDENTIALS, "test")
+    cache[key] = (SimpleNamespace(token="fake-token", expired=False), "test")
+    yield
+    cache.pop(key, None)
+
+
+def test_sync_gemma_stream(_gemma_cached_access_token):
+    import httpx
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY"))
+
+    stream = litellm.completion(
+        model="vertex_ai/gemma/test-model",
+        messages=[{"role": "user", "content": "Reply exactly READY"}],
+        stream=True,
+        api_base=_GEMMA_VERTEX_URL,
+        vertex_project="test",
+        vertex_location="us-central1",
+        vertex_credentials=_FAKE_GEMMA_CREDENTIALS,
+        client=httpx.Client(transport=httpx.MockTransport(handle)),
+    )
+
+    assert isinstance(stream, CustomStreamWrapper)
+    chunks = list(stream)
+
+    assert "stream" not in captured["body"]["instances"][0]
+    assert len(chunks) == 2
+    assert chunks[0].choices[0].delta.content == "READY"
+    assert chunks[1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_async_gemma_responses_stream(_gemma_cached_access_token):
+    import httpx
+
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY"))
+
+    response = await litellm.aresponses(
+        model="vertex_ai/gemma/test-model",
+        input="Reply exactly READY",
+        stream=True,
+        api_base=_GEMMA_VERTEX_URL,
+        vertex_project="test",
+        vertex_location="us-central1",
+        vertex_credentials=_FAKE_GEMMA_CREDENTIALS,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    )
+    events = [event async for event in cast(AsyncIterator[ResponsesAPIStreamingResponse], response)]
+
+    assert "stream" not in captured["body"]["instances"][0]
+    assert "READY" in "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
+    assert isinstance(events[-1], ResponseCompletedEvent)
+    assert events[-1].response.usage is not None
+    assert events[-1].response.usage.total_tokens == 114

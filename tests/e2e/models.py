@@ -568,6 +568,17 @@ class AnthropicMessagesBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+class ResponsesStreamBody(BaseModel):
+    """POST /v1/responses body in the subset the spend tests stream with.
+    `input` stays a plain string: the tests only drive single-turn prompts."""
+
+    model: str
+    input: str
+    stream: bool = True
+    max_output_tokens: int | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
 class CountTokensBody(BaseModel):
     """POST /v1/messages/count_tokens body: the /v1/messages shape minus
     max_tokens (the endpoint only counts the prompt)."""
@@ -596,6 +607,16 @@ class CountTokensResponse(BaseModel):
     whose body lacks it fails validation instead of passing vacuously."""
 
     input_tokens: int
+
+
+class AnthropicErrorBody(BaseModel):
+    type: str
+    message: str
+
+
+class AnthropicErrorEvent(BaseModel):
+    type: Literal["error"]
+    error: AnthropicErrorBody
 
 
 # ---------- mcp servers ----------
@@ -928,9 +949,14 @@ class GuardrailEntityMatch(BaseModel):
     end: int
 
 
+class GuardrailModeRecord(BaseModel):
+    tags: dict[str, str | list[str]] | None = None
+    default: str | list[str] | None = None
+
+
 class GuardrailRunRecord(BaseModel):
     guardrail_name: str | None = None
-    guardrail_mode: str | None = None
+    guardrail_mode: str | list[str] | GuardrailModeRecord | None = None
     guardrail_status: str | None = None
     guardrail_provider: str | None = None
     masked_entity_count: dict[str, int] | None = None
@@ -1197,7 +1223,7 @@ class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
     The `*_cost_per_token` / `*_token_cost` fields register a per-deployment custom
-    pricing override (the cache and `_priority` rates only apply when both base
+    pricing override (the cache and service-tier rates only apply when both base
     rates are set, which is what makes the proxy register the deployment's full
     pricing entry); left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
@@ -1233,6 +1259,12 @@ class LiteLLMParamsBody(BaseModel):
     cache_creation_input_token_cost: float | None = None
     input_cost_per_token_priority: float | None = None
     output_cost_per_token_priority: float | None = None
+    input_cost_per_token_balanced: float | None = None
+    output_cost_per_token_balanced: float | None = None
+    cache_read_input_token_cost_balanced: float | None = None
+    input_cost_per_token_flex: float | None = None
+    output_cost_per_token_flex: float | None = None
+    cache_read_input_token_cost_flex: float | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
@@ -1458,7 +1490,7 @@ class TeamInfoResponse(BaseModel):
 
 class TeamMemberAddBody(BaseModel):
     team_id: str
-    member: TeamMemberEntry
+    member: TeamMemberEntry | list[TeamMemberEntry]
 
 
 class TeamMemberDeleteBody(BaseModel):

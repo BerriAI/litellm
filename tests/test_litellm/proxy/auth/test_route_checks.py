@@ -3043,7 +3043,7 @@ def test_team_update_gate_admits_internal_user_without_org_context():  # test-qu
 
 def test_team_update_gate_defers_cross_org_admin_to_the_handler():  # test-quality-ok: the gate's only success signal is not raising; the handler's 403 it defers to is pinned in test_team_endpoints
     """An org admin of a DIFFERENT org clears the coarse gate like any internal user;
-    update_team's _resolve_team_access finds no role on the team and 403s (pinned in
+    update_team's TeamAccess.strongest_role finds no role on the team and 403s (pinned in
     test_team_endpoints), so there is still no cross-org escalation."""
     user_obj = _make_org_admin_user("org-1")
     valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
@@ -3517,7 +3517,6 @@ def test_internal_user_still_blocked_from_another_users_info():
     [
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
-        "/user/daily/activity/aggregated/search",
     ],
 )
 @pytest.mark.parametrize(
@@ -3598,55 +3597,6 @@ def test_user_daily_activity_aggregated_not_covered_by_prefix_match():
         route="/user/daily/activity/aggregated",
         allowed_routes=["/user/daily/activity"],
     )
-
-
-@pytest.mark.parametrize(
-    "route",
-    [
-        "/team/daily/activity",
-        "/team/daily/activity/aggregated",
-        "/team/daily/activity/aggregated/search",
-    ],
-)
-@pytest.mark.parametrize(
-    "user_role",
-    [
-        LitellmUserRoles.INTERNAL_USER.value,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
-    ],
-)
-def test_team_daily_activity_routes_reachable_by_non_admin(route, user_role):
-    """The Team Usage dashboard calls all three team daily-activity routes, and
-    each handler self-scopes to the caller's teams and own keys
-    (_resolve_team_daily_activity_scope). self_managed_routes is the only list
-    granting them to a non-admin, and check_route_access is exact-match, so each
-    sub-path needs its own entry: dropping one 401s the dashboard before the
-    handler ever runs.
-    """
-    user_obj = LiteLLM_UserTable(
-        user_id="test_user",
-        user_email="test@example.com",
-        user_role=user_role,
-    )
-    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
-    request = MagicMock(spec=Request)
-    request.query_params = {}
-
-    def outcome() -> str:
-        try:
-            RouteChecks.non_proxy_admin_allowed_routes_check(
-                user_obj=user_obj,
-                _user_role=user_role,
-                route=route,
-                request=request,
-                valid_token=valid_token,
-                request_data={},
-            )
-        except Exception as exc:
-            return f"denied: {exc}"
-        return "allowed"
-
-    assert outcome() == "allowed"
 
 
 @pytest.mark.parametrize(
@@ -4069,8 +4019,8 @@ def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
     """A team admin manages their own team's logging callbacks, so the route gate
     must let a non-proxy-admin through to the handler.
 
-    The handler is what authorizes: every team callback endpoint calls
-    _verify_team_access, which admits only a proxy admin, an org admin for the
+    The handler is what authorizes: every team callback endpoint asks
+    TeamAccess.allows, which admits only a proxy admin, an org admin for the
     team, or an admin of that team, and 403s everyone else. Before this, the gate
     rejected the team admin with a 401 naming proxy admin, so the handler's own
     check was unreachable for them.

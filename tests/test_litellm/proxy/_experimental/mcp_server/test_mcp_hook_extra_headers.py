@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import CallToolResult
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy._types import UserAPIKeyAuth
@@ -409,7 +410,7 @@ class TestCallToolFlowsHookHeaders:
                         manager,
                         "_call_openapi_tool_handler",
                         new_callable=AsyncMock,
-                        return_value=MagicMock(),
+                        return_value=CallToolResult(content=[], isError=False),
                     ):
                         import litellm.proxy._experimental.mcp_server.mcp_server_manager as mgr_mod
 
@@ -456,7 +457,7 @@ class TestCallToolFlowsHookHeaders:
                         manager,
                         "_call_openapi_tool_handler",
                         new_callable=AsyncMock,
-                        return_value=MagicMock(),
+                        return_value=CallToolResult(content=[], isError=False),
                     ):
                         proxy_logging = MagicMock(spec=ProxyLogging)
 
@@ -1076,9 +1077,9 @@ class TestOpenApiByokCallTool:
         user_auth = UserAPIKeyAuth(user_id="default_user_id", api_key="sk-dashboard")
         captured_auth: dict[str, Optional[str]] = {}
 
-        async def fake_openapi_handler(_server, _name, _arguments):
+        async def fake_openapi_handler(_server, _name, _arguments, _wire_compat):
             captured_auth["value"] = _request_auth_header.get()
-            return MagicMock()
+            return CallToolResult(content=[], isError=False)
 
         with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
             with patch(
@@ -1316,9 +1317,9 @@ class TestOpenApiResolvedUpstreamAuth:
         user_auth = UserAPIKeyAuth(user_id="alice", api_key="sk-user")
         captured: Dict[str, Any] = {}
 
-        async def fake_openapi_handler(_server, _name, _arguments):
+        async def fake_openapi_handler(_server, _name, _arguments, _wire_compat):
             captured["resolved"] = _request_resolved_auth_headers.get()
-            return MagicMock()
+            return CallToolResult(content=[], isError=False)
 
         with patch.object(manager, "_resolve_mcp_server_for_tool_call", return_value=server):
             with patch.object(
