@@ -4,7 +4,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Any, Final
 
-from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from litellm._logging import verbose_logger
@@ -283,7 +283,6 @@ class OpenTelemetryV2Config(BaseSettings):
         "baggage_metadata_keys",
         "baggage_team_metadata_keys",
         "mapper_names",
-        "excluded_services",
         mode="before",
     )
     @classmethod
@@ -299,6 +298,11 @@ class OpenTelemetryV2Config(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("excluded_services", mode="before")
+    @classmethod
+    def _read_excluded_services(cls, value: object) -> frozenset[str]:
+        return excluded_service_names(value)
 
     @model_validator(mode="after")
     def _normalize(self) -> "OpenTelemetryV2Config":
@@ -353,14 +357,33 @@ class OpenTelemetryV2Config(BaseSettings):
         return cls()
 
 
-_EXCLUDED_SERVICES_INPUT: Final = TypeAdapter(str | list[str])
+_EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])
 
 
 def excluded_db_systems_from(value: object) -> frozenset[str]:
     """Normalize a raw ``excluded_services`` value without building a settings model that rereads the env"""
-    parsed: Final = _EXCLUDED_SERVICES_INPUT.validate_python(value)
-    names: Final = [item.strip() for item in parsed.split(",") if item.strip()] if isinstance(parsed, str) else parsed
-    return _normalize_excluded_services(frozenset(names))
+    return _normalize_excluded_services(excluded_service_names(value))
+
+
+def excluded_service_names(value: object) -> frozenset[str]:
+    """Read a YAML list or comma-separated string of service names, logging and dropping unusable input
+    so a malformed value cannot stop the OTel logger from being built"""
+    if value is None:
+        return frozenset()
+    try:
+        parsed: Final = _EXCLUDED_SERVICES_INPUT.validate_python(value)
+    except ValidationError:
+        verbose_logger.error("excluded_services must be a list or comma-separated string; %r ignored", value)
+        return frozenset()
+    items: Final = tuple(parsed.split(",")) if isinstance(parsed, str) else parsed
+    return frozenset(name for item in items if (name := _service_name(item)))
+
+
+def _service_name(item: object) -> str:
+    if not isinstance(item, str):
+        verbose_logger.error("excluded_services must be a list of service names; %r ignored", item)
+        return ""
+    return item.strip().lower()
 
 
 def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:

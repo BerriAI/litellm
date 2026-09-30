@@ -28,6 +28,7 @@ from litellm.integrations.otel.model.baggage import (  # noqa: E402
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
 )
+from litellm.integrations.otel.model.config import excluded_db_systems_from  # noqa: E402
 from litellm.integrations.otel.model.payloads import GuardrailSpanData  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -127,6 +128,28 @@ def test_excluded_services_env_drops_a_bad_value_and_logs(monkeypatch, caplog):
         config = OpenTelemetryV2Config()
     assert config.excluded_services == frozenset({"postgresql"})
     assert any("'auth' is not a datastore service; ignored" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "given,expected,logged",
+    [
+        (None, frozenset(), None),
+        ("", frozenset(), None),
+        ([], frozenset(), None),
+        (["REDIS", " Postgres "], frozenset({"redis", "postgresql"}), None),
+        (7, frozenset(), "excluded_services must be a list or comma-separated string; 7 ignored"),
+        ({"redis": True}, frozenset(), "excluded_services must be a list or comma-separated string"),
+        ([7, "redis"], frozenset({"redis"}), "excluded_services must be a list of service names; 7 ignored"),
+    ],
+)
+def test_malformed_excluded_services_logs_and_still_builds_the_config(given, expected, logged, caplog):
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        config = OpenTelemetryV2Config(excluded_services=given)
+        resolved = excluded_db_systems_from(given)
+    assert config.excluded_services == expected
+    assert resolved == expected
+    messages = [record.message for record in caplog.records]
+    assert (logged is None and messages == []) or any(logged in message for message in messages), messages
 
 
 # --------------------------------------------------------------------------- #
