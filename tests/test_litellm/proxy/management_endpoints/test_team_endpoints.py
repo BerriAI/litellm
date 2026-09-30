@@ -9011,6 +9011,17 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
     assert cache_state_when_rows_deleted["doomed_still_cached"] is True
 
 
+def test_delete_team_request_collapses_repeated_ids_in_order():
+    """`[T, T, U]` deletes T once and U once: one tombstone, one audit row and one eviction per team."""
+    from litellm.proxy._types import DeleteTeamRequest
+
+    assert DeleteTeamRequest(team_ids=["team-a", "team-b", "team-a", "team-b", "team-c"]).team_ids == [
+        "team-a",
+        "team-b",
+        "team-c",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_delete_team_evicts_member_caches_with_one_transaction(
     monkeypatch,

@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
@@ -2239,6 +2239,12 @@ class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
 
 class DeleteTeamRequest(LiteLLMPydanticObjectBase):
     team_ids: list[str]  # required
+
+    @field_validator("team_ids")
+    @classmethod
+    def distinct_team_ids(cls, team_ids: Sequence[str]) -> list[str]:
+        """One delete per team: a repeated id would otherwise write its tombstone and audit row twice."""
+        return list(dict.fromkeys(team_ids))
 
 
 class BlockTeamRequest(LiteLLMPydanticObjectBase):
