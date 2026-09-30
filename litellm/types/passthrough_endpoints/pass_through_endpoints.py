@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 # Request.state key for programmatic pass-through callers (e.g. Bedrock proxy) that attach
@@ -30,6 +31,23 @@ class EndpointType(str, Enum):
     OPENAI = "openai"
     TINYFISH = "tinyfish"
     GENERIC = "generic"
+
+
+class PassThroughAuthMode(str, Enum):
+    PUBLIC = "public"
+    ANY_KEY = "any_key"
+    GRANTED_KEYS = "granted_keys"
+
+
+_AUTH_FLAG: Final = TypeAdapter(bool)
+
+
+def pass_through_auth_mode(auth: object) -> PassThroughAuthMode:
+    try:
+        enforced: Final = _AUTH_FLAG.validate_python(auth.strip() if isinstance(auth, str) else auth)
+    except ValidationError:
+        return PassThroughAuthMode.ANY_KEY
+    return PassThroughAuthMode.GRANTED_KEYS if enforced else PassThroughAuthMode.PUBLIC
 
 
 class PassthroughStandardLoggingPayload(TypedDict, total=False):
