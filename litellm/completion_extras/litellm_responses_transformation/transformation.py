@@ -1568,7 +1568,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         ):
             raw_annotation = parsed_chunk.get("annotation")
             annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                [raw_annotation] if raw_annotation is not None else None  # mutable-ok: one-shot wrapper for shared converter
+                [raw_annotation]  # mutable-ok: one-shot wrapper for shared converter
+                if raw_annotation is not None
+                else None
             )
             return ModelResponseStream(
                 choices=[  # mutable-ok: ModelResponseStream coerces only list choices
