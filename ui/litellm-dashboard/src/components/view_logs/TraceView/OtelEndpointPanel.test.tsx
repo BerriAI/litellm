@@ -2,7 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { endpointEnvSnippet, OtelEndpointPanel, proxyHost } from "./OtelEndpointPanel";
+import { OtelEndpointPanel, proxyHost } from "./OtelEndpointPanel";
+import { tracingEnvSnippet } from "./TracingSetupCard";
 
 vi.mock("../../networking", () => ({ getProxyBaseUrl: () => "http://127.0.0.1:4012/" }));
 vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) }));
@@ -50,9 +51,10 @@ describe("OtelEndpointPanel", () => {
   });
 });
 
-describe("endpointEnvSnippet", () => {
-  it("points the SDK at the proxy base URL, never at /v1/traces, and never embeds a real key", () => {
-    const env = endpointEnvSnippet("http://127.0.0.1:4012");
+describe("pill env snippet", () => {
+  it("is the setup guide's snippet: base URL endpoint, protocol, key placeholder, no /v1/traces suffix", () => {
+    const env = tracingEnvSnippet("http://127.0.0.1:4012");
+    expect(env).toContain("OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf");
     expect(env).toContain("OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4012\n");
     expect(env).not.toContain("/v1/traces");
     expect(env).toContain("Authorization=Bearer $LITELLM_API_KEY");
