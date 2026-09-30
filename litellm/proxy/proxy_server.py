@@ -714,6 +714,7 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -845,6 +846,7 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
+from litellm.tracing import TraceReceiver
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1520,6 +1522,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 await _tagged.strategy.load_state_from_db(prisma_client)
                 _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
+
+    ## [Optional] Initialize agent tracing
+    asyncio.create_task(ProxyStartupEvent._init_tracing(general_settings))
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -11311,6 +11316,28 @@ class ProxyStartupEvent:
             return connected_client
 
     @classmethod
+    async def _init_tracing(cls, general_settings: dict) -> None:
+        """
+        Enable agent tracing (`POST/GET /v1/traces`) when configured:
+
+            general_settings:
+              tracing:
+                store: clickhouse       # CLICKHOUSE_URL / _USER / _PASSWORD / _DATABASE
+        """
+        settings = general_settings.get("tracing") or {}
+        if settings.get("store") != "clickhouse":
+            return
+        try:
+            tracing: Final = TraceReceiver.from_env()
+            await tracing.start()
+        except (KeyError, OSError, RuntimeError, ValueError) as error:
+            tracing_endpoints.receiver = None
+            verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
+            return
+        tracing_endpoints.receiver = tracing
+        verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
+
+    @classmethod
     def _init_dd_tracer(cls):
         """
         Initialize dd tracer - if `USE_DDTRACE=true` in .env
@@ -19849,6 +19876,7 @@ app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
+app.include_router(tracing_endpoints.router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)

@@ -26,8 +26,8 @@ import {
 } from "./traceUtils";
 
 /** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
-export const agentHandoffText = (traceId: string, spanId?: string | null): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}`;
+export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
+  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
   const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
   return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
 };
@@ -60,7 +60,7 @@ const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
   return next;
 };
 
-function CopyForAgent({ traceId }: { traceId: string }) {
+function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -72,7 +72,7 @@ function CopyForAgent({ traceId }: { traceId: string }) {
       variant="outline"
       size="xs"
       className="shrink-0 gap-1.5 rounded-[4px] font-mono text-[10px] shadow-none"
-      onClick={async () => setCopied(await copyToClipboard(agentHandoffText(traceId), "Command copied"))}
+      onClick={async () => setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))}
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
       {copied ? "Command copied" : "Copy for agent"}
@@ -121,7 +121,7 @@ function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
         {failed && <Stat label="failed" value={summary.error_count.toLocaleString()} error />}
       </div>
       <div className="ml-auto">
-        <CopyForAgent traceId={summary.trace_id} />
+        <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
       </div>
     </header>
   );
@@ -222,15 +222,16 @@ function RunBody({ trace, accessToken }: { trace: Trace; accessToken: string }) 
 
 interface RunViewProps {
   traceId: string;
+  traceRef?: string;
   accessToken: string;
   onBack: () => void;
 }
 
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
-export function RunView({ traceId, accessToken, onBack }: RunViewProps) {
+export function RunView({ traceId, traceRef, accessToken, onBack }: RunViewProps) {
   const traceQuery = useQuery({
-    queryKey: ["agentTrace", traceId, accessToken],
-    queryFn: () => agentTraceCall(accessToken, traceId),
+    queryKey: ["agentTrace", traceId, traceRef, accessToken],
+    queryFn: () => agentTraceCall(accessToken, traceId, traceRef),
     staleTime: 30_000,
   });
   const trace = traceQuery.data;

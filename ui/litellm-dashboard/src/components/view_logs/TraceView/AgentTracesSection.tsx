@@ -67,7 +67,7 @@ export function AgentTracesSection({
   timeControls,
   onRunOpenChange,
 }: AgentTracesSectionProps) {
-  const [openTraceId, setOpenTraceId] = useState<string | null>(null);
+  const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
   const [service, setService] = useState(ALL_SERVICES);
   const [status, setStatus] = useState<RunStatusFilter>("all");
@@ -96,9 +96,9 @@ export function AgentTracesSection({
     apply(hours);
   };
 
-  const openRun = (traceId: string | null) => {
-    setOpenTraceId(traceId);
-    onRunOpenChange?.(traceId !== null);
+  const openRun = (trace: TraceSummary | null) => {
+    setOpenTrace(trace);
+    onRunOpenChange?.(trace !== null);
   };
 
   if (traces.notEnabledDetail !== null) return <TracingSetupCard detail={traces.notEnabledDetail} />;
@@ -120,8 +120,8 @@ export function AgentTracesSection({
     );
   }
 
-  if (openTraceId !== null) {
-    return <RunView traceId={openTraceId} accessToken={accessToken} onBack={() => openRun(null)} />;
+  if (openTrace !== null) {
+    return <RunView traceId={openTrace.trace_id} traceRef={openTrace.trace_ref} accessToken={accessToken} onBack={() => openRun(null)} />;
   }
 
   return (

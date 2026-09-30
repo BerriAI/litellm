@@ -24,7 +24,7 @@
             <profile>litellm_traces_reader</profile>
             <grants>
                 <query>GRANT SELECT ON litellm.otel_traces</query>
-                <query>GRANT SELECT ON litellm.agent_traces</query>
+                <query>GRANT SELECT ON litellm.agent_traces_by_key</query>
                 <query>GRANT SELECT ON litellm.spend_logs</query>
             </grants>
         </litellm_traces_reader>

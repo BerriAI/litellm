@@ -19,10 +19,10 @@ export const errorHeadline = (error: string): string =>
 const errorReason = (headline: string): string => /^([A-Za-z_][\w.]*)\(/.exec(headline)?.[1] ?? "error";
 
 /** Shared lazy fetch of one span's full input / output / attributes. */
-export function useSpanDetail(accessToken: string, traceId: string, spanId: string | null) {
+export function useSpanDetail(accessToken: string, traceId: string, spanId: string | null, traceRef?: string) {
   const queryOptions: UseQueryOptions<SpanDetail, Error> = {
-    queryKey: ["agentTraceSpan", traceId, spanId, accessToken],
-    queryFn: () => agentTraceSpanCall(accessToken, traceId, spanId as string),
+    queryKey: ["agentTraceSpan", traceId, traceRef, spanId, accessToken],
+    queryFn: () => agentTraceSpanCall(accessToken, traceId, spanId as string, traceRef),
     enabled: spanId !== null,
     staleTime: Infinity,
   };
@@ -121,12 +121,13 @@ function Payload({ label, value, mono }: { label: string; value: string; mono: b
 interface DetailContentProps {
   accessToken: string;
   traceId: string;
+  traceRef?: string;
   span: Span;
 }
 
 /** Content tab: the error first (if any), then what went in and what came out. */
-export function DetailContent({ accessToken, traceId, span }: DetailContentProps) {
-  const detailQuery = useSpanDetail(accessToken, traceId, span.span_id);
+export function DetailContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
+  const detailQuery = useSpanDetail(accessToken, traceId, span.span_id, traceRef);
   const detail = detailQuery.data;
   const isTool = span.type === "tool";
   const empty = detail && !detail.input && !detail.output;
