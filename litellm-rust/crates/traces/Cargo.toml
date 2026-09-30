@@ -1,0 +1,19 @@
+[package]
+name = "litellm-traces"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+rstest.workspace = true
+testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
+tokio.workspace = true
