@@ -11,11 +11,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import iter_request_fallback_targets
-from litellm.proxy.auth.user_api_key_auth import (
-    _enforce_key_and_fallback_model_access,
-    _fallback_target_model_name,
-)
+from litellm.proxy.auth.auth_utils import fallback_target_model_name, iter_request_fallback_targets
+from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
 
 
 def _fallback_model_names(fallbacks):
@@ -23,7 +20,7 @@ def _fallback_model_names(fallbacks):
     return [
         name
         for target in iter_request_fallback_targets({"fallbacks": fallbacks})
-        if (name := _fallback_target_model_name(target)) is not None
+        if (name := fallback_target_model_name(target)) is not None
     ]
 
 
@@ -41,9 +38,11 @@ def _key_with_models(models: List[str]) -> UserAPIKeyAuth:
 
 def test_fallback_model_names_router_config_shape():
     """Router-config shape: ``[{primary: [fallback_list]}]``."""
-    assert _fallback_model_names(
-        [{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]
-    ) == ["gpt-4", "claude-3", "o1"]
+    assert _fallback_model_names([{"gpt-3.5-turbo": ["gpt-4", "claude-3"]}, {"gpt-4o": ["o1"]}]) == [
+        "gpt-4",
+        "claude-3",
+        "o1",
+    ]
 
 
 def test_fallback_model_names_simple_string_shape():
@@ -61,9 +60,10 @@ def test_fallback_model_names_client_side_shape():
 
 def test_fallback_model_names_nested_deployment_fallbacks():
     """A deployment target's own nested fallback field is unrolled too."""
-    assert _fallback_model_names(
-        [{"primary": [{"model": "gpt-4", "fallbacks": [{"gpt-4": ["deepseek-chat"]}]}]}]
-    ) == ["gpt-4", "deepseek-chat"]
+    assert _fallback_model_names([{"primary": [{"model": "gpt-4", "fallbacks": [{"gpt-4": ["deepseek-chat"]}]}]}]) == [
+        "gpt-4",
+        "deepseek-chat",
+    ]
 
 
 def test_fallback_model_names_empty_or_none():
