@@ -267,7 +267,7 @@ def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
 
 
-async def _close_guarded_stream(stream: object) -> None:
+async def close_guarded_stream(stream: object) -> None:
     if not isinstance(stream, AsyncGenerator):
         return
     with anyio.CancelScope(shield=True):
@@ -3973,7 +3973,7 @@ class ProxyBaseLLMRequestProcessing:
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
-            await _close_guarded_stream(guarded_stream)
+            await close_guarded_stream(guarded_stream)
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,

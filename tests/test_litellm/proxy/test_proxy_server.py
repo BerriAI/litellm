@@ -7318,6 +7318,69 @@ async def test_async_data_generator_cleanup_on_early_exit():
     mock_response.aclose.assert_awaited_once()
 
 
+def _guarded_chain_logging(chain):
+    from litellm.proxy.utils import ProxyLogging
+
+    proxy_logging = MagicMock(spec=ProxyLogging)
+    proxy_logging.async_post_call_streaming_iterator_hook = chain
+    proxy_logging.async_post_call_streaming_hook = AsyncMock(side_effect=lambda **kwargs: kwargs.get("response"))
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    return proxy_logging
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_closes_the_guardrail_chain_before_returning_on_client_disconnect():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+
+    cleanup_ran = []
+
+    async def guarded_chain(**_kwargs):
+        try:
+            yield {"choices": [{"delta": {"content": "Hello"}}]}
+            yield {"choices": [{"delta": {"content": " world"}}]}
+        finally:
+            cleanup_ran.append(True)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", _guarded_chain_logging(guarded_chain)):
+        gen = async_data_generator(MagicMock(), MagicMock(spec=UserAPIKeyAuth), {"model": "gpt-4o-mini"})
+        first_chunk = await gen.__anext__()
+        await gen.aclose()
+
+    assert first_chunk.startswith("data: ")
+    assert cleanup_ran == [True]
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_closes_the_guardrail_chain_while_a_keepalive_read_is_pending():
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+
+    cleanup_ran = []
+    never_arrives = asyncio.Event()
+
+    async def guarded_chain(**_kwargs):
+        try:
+            yield {"choices": [{"delta": {"content": "Hello"}}]}
+            await never_arrives.wait()
+            yield {"choices": [{"delta": {"content": " world"}}]}
+        finally:
+            cleanup_ran.append(True)
+
+    with (
+        patch.object(litellm, "sse_keepalive_ping_interval_seconds", 1.0),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", _guarded_chain_logging(guarded_chain)),
+    ):
+        gen = async_data_generator(MagicMock(), MagicMock(spec=UserAPIKeyAuth), {"model": "gpt-4o-mini"})
+        first_chunk = await gen.__anext__()
+        heartbeat = await gen.__anext__()
+        await gen.aclose()
+
+    assert first_chunk.startswith("data: ")
+    assert heartbeat == ": ping\n\n"
+    assert cleanup_ran == [True]
+
+
 @pytest.mark.asyncio
 async def test_async_data_generator_uses_direct_stream_fast_path_without_callbacks():
     """

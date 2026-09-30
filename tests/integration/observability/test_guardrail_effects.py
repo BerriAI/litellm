@@ -1439,3 +1439,43 @@ def test_client_disconnect_while_end_of_stream_scan_is_in_flight_still_records_t
             assert [entry["guardrail_status"] for entry in entries] == ["success"], entries
             scans: Final = _response_scans(policy)
             assert len(scans) == 1 and secret in "".join(scans[0]["texts"]), scans
+
+
+def test_client_disconnect_mid_stream_records_a_failed_scan_when_the_guardrail_errors(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    secret: Final = "synthetic-leaked-secret-" + identity
+    upstream_gate: Final = threading.Event()
+    frames: Final = (
+        _openai_stream_frame(identity, {"role": "assistant", "content": secret}),
+        _openai_stream_frame(identity, {}, finish="stop"),
+        b"data: [DONE]\n\n",
+    )
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        if json.loads(request.body)["input_type"] == "response":
+            return Reply(status=500, body=b'{"error": "synthetic guardrail outage"}')
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+    with (
+        wire_server(guardrail) as policy,
+        wire_server(
+            lambda request: Reply(content_type="text/event-stream", chunks=frames, gate_after_first=upstream_gate)
+        ) as upstream,
+    ):
+        config: Final = _detect_only_post_call_config(tmp_path, identity, policy.url)
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1", api_key="synthetic-openai-key")
+            client_has_content: Final = threading.Event()
+            client_has_content.set()
+            try:
+                received: Final = _read_content_then_disconnect(candidate, model, secret, client_has_content)
+            finally:
+                upstream_gate.set()
+            assert secret in received, received
+            scans: Final = eventually(lambda: _response_scans(policy), lambda values: len(values) == 1, seconds=20)
+            assert secret in "".join(scans[0]["texts"]), scans
+            entries: Final = _post_call_guardrail_entries(model, identity)
+            assert [entry["guardrail_status"] for entry in entries] == ["guardrail_failed_to_respond"], entries
