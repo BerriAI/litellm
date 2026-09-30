@@ -881,7 +881,7 @@ BEDROCK_STREAMING_ACTIONS: Final = {"invoke-with-response-stream", "converse-str
 
 
 def _is_bedrock_streaming_endpoint(endpoint: str) -> bool:
-    return any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
+    return endpoint.partition("?")[0].rstrip("/").rsplit("/", 1)[-1] in BEDROCK_STREAMING_ACTIONS
 
 
 def is_bedrock_count_tokens_endpoint(endpoint: str) -> bool:

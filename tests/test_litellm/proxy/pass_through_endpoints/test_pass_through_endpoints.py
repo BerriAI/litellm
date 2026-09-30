@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 import zlib
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from io import BytesIO
@@ -24,6 +24,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -48,6 +49,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -1658,6 +1660,96 @@ async def test_pass_through_request_preserves_caller_streaming_request_field(bod
                 assert upstream_json["is_streaming_request"] == "caller-value"
                 assert "litellm_server_streaming_classification" not in upstream_json
                 assert upstream_json["contents"] == request_body["contents"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route_stream", "body_stream", "expected_streaming"),
+    [
+        (True, False, False),
+        (False, True, True),
+        (True, None, True),
+        (None, None, False),
+    ],
+    ids=["body-disables-route-stream", "body-enables-streaming", "route-enables-absent-body", "both-absent"],
+)
+async def test_passthrough_guardrails_follow_effective_relay_stream_decision(
+    route_stream: bool | None,
+    body_stream: bool | None,
+    expected_streaming: bool,
+):
+    async def return_pre_call_data(
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict[str, object],
+        call_type: str,
+    ) -> dict[str, object]:
+        return dict(data)
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
+            ) as mock_chunk_processor:
+                mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=return_pre_call_data)
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+                upstream_response = MagicMock()
+                upstream_response.status_code = 200
+                upstream_response.headers = {}
+                upstream_response.aread = AsyncMock(return_value=b"{}")
+                upstream_response.text = "{}"
+                upstream_response.raise_for_status = MagicMock()
+
+                async_client = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                async_client.request = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                async def empty_chunks() -> AsyncIterator[bytes]:
+                    yield b""
+
+                mock_chunk_processor.return_value = empty_chunks()
+
+                request_body: Final = {
+                    "message": "hello",
+                    **({"stream": body_stream} if body_stream is not None else {}),
+                }
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "POST"
+                mock_request.url = "http://test-proxy.com/guardrail-stream-scope"
+                mock_request.body = AsyncMock(return_value=json.dumps(request_body).encode())
+                mock_request.headers = Headers({"content-type": "application/json"})
+                mock_request.query_params = QueryParams({})
+
+                await pass_through_request(
+                    request=mock_request,
+                    target="http://upstream.test/guardrail-stream-scope",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=route_stream,
+                )
+                hook_data: Final[dict[str, object]] = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+
+    streaming_guardrail: Final = CustomGuardrail(
+        guardrail_name="streaming-only",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+        stream_scope="streaming",
+    )
+    non_streaming_guardrail: Final = CustomGuardrail(
+        guardrail_name="non-streaming-only",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+        stream_scope="non_streaming",
+    )
+    assert streaming_guardrail.should_run_guardrail(hook_data, GuardrailEventHooks.pre_call) is expected_streaming
+    assert (
+        non_streaming_guardrail.should_run_guardrail(hook_data, GuardrailEventHooks.pre_call) is not expected_streaming
+    )
 
 
 @pytest.mark.asyncio

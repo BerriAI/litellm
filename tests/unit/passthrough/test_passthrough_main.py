@@ -150,7 +150,7 @@ def test_bedrock_non_application_inference_profile_no_encoding():
 
 def test_update_stream_param_based_on_request_body():
     """
-    Test _update_stream_param_based_on_request_body handles stream parameter correctly.
+    Test update_stream_param_based_on_request_body handles stream parameter correctly.
     """
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         HttpPassThroughEndpointHelpers,
@@ -158,28 +158,28 @@ def test_update_stream_param_based_on_request_body():
 
     # Test 1: stream in request body should take precedence
     parsed_body = {"stream": True, "model": "test-model"}
-    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+    result = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
         parsed_body=parsed_body, stream=False
     )
     assert result is True
 
     # Test 2: no stream in request body should return original stream param
     parsed_body = {"model": "test-model"}
-    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+    result = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
         parsed_body=parsed_body, stream=False
     )
     assert result is False
 
     # Test 3: stream=False in request body should return False
     parsed_body = {"stream": False, "model": "test-model"}
-    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+    result = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
         parsed_body=parsed_body, stream=True
     )
     assert result is False
 
     # Test 4: no stream param provided, no stream in body
     parsed_body = {"model": "test-model"}
-    result = HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
+    result = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
         parsed_body=parsed_body, stream=None
     )
     assert result is None

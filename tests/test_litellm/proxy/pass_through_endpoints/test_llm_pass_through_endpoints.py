@@ -1564,6 +1564,84 @@ class TestBedrockLLMProxyRoute:
         _assert_bedrock_processing_data_classification(processing_data, is_streaming)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_id", "action"),
+        [
+            ("my-converse-stream-model", "converse"),
+            ("my-invoke-with-response-stream-model", "invoke"),
+        ],
+    )
+    async def test_bedrock_direct_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
+        mock_request: Final = Mock()
+        mock_request.method = "POST"
+        mock_processor: Final = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+        request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._read_request_body",
+                return_value=request_body,
+            ),
+            patch(
+                "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+                return_value=mock_processor,
+            ) as processor_constructor,
+        ):
+            result: Final = await bedrock_llm_proxy_route(
+                endpoint=f"/model/{model_id}/{action}",
+                request=mock_request,
+                fastapi_response=Mock(),
+                user_api_key_dict=Mock(),
+            )
+
+        assert result == "success"
+        processing_data: Final = processor_constructor.call_args.kwargs["data"]
+        _assert_bedrock_processing_data_classification(processing_data, is_streaming=False)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_id", "action"),
+        [
+            ("my-converse-stream-model", "converse"),
+            ("my-invoke-with-response-stream-model", "invoke"),
+        ],
+    )
+    async def test_bedrock_router_model_id_does_not_imply_streaming(self, model_id: str, action: str) -> None:
+        mock_request: Final = Mock()
+        mock_request.method = "POST"
+        mock_processor: Final = Mock()
+        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+        request_body: Final = {"messages": [{"role": "user", "content": "test"}]}
+
+        with patch(
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+            return_value=mock_processor,
+        ) as processor_constructor:
+            result: Final = await handle_bedrock_passthrough_router_model(
+                model=model_id,
+                endpoint=f"/model/{model_id}/{action}",
+                request=mock_request,
+                request_body=request_body,
+                llm_router=Mock(),
+                user_api_key_dict=Mock(),
+                proxy_logging_obj=Mock(),
+                general_settings={},
+                proxy_config=None,
+                select_data_generator=None,
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                version=None,
+            )
+
+        assert result == "success"
+        processing_data: Final = processor_constructor.call_args.kwargs["data"]
+        _assert_bedrock_processing_data_classification(processing_data, is_streaming=False)
+
+    @pytest.mark.asyncio
     async def test_bedrock_error_handling_returns_actual_error(self):
         """
         Test that when Bedrock API returns an error, it is properly propagated to the user
