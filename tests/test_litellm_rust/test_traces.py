@@ -43,7 +43,7 @@ async def test_trace_reader_rejects_success_status_with_embedded_error(recording
 
 @pytest.mark.parametrize("database,retention", [("db; DROP DATABASE default", 7), ("traces", 0)])
 def test_schema_binding_preserves_configuration_validation(database: str, retention: int) -> None:
-    with pytest.raises(ValueError, match="database.*retention"):
+    with pytest.raises(ValueError, match=r"database.*retention"):
         schema_statements(database, retention, 14)
 
 
