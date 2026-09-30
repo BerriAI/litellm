@@ -1230,6 +1230,85 @@ async def test_vertex_ai_token_counter_routes_partner_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_ai_token_counter_forwards_system_and_tools_to_partner_request():
+    from typing import Final
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens import handler
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, int]:
+            return {"input_tokens": 37}
+
+    class FakeHttpClient:
+        posted_bodies: tuple[dict[str, object], ...] = ()
+
+        async def post(
+            self,
+            url: str,
+            headers: dict[str, str],
+            json: dict[str, object],
+            timeout: float,
+        ) -> FakeResponse:
+            self.posted_bodies = (*self.posted_bodies, json)
+            return FakeResponse()
+
+    fake_http_client: Final = FakeHttpClient()
+    counter: Final = VertexAITokenCounter()
+    model: Final = "claude-opus-5-5"
+    messages: Final = [{"role": "user", "content": "Hello"}]
+    system: Final = "Follow the system instructions"
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Look up a value",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+    deployment: Final = {
+        "litellm_params": {
+            "vertex_project": "test-project",
+            "vertex_location": "us-east5",
+        }
+    }
+
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=fake_http_client),
+        patch.object(
+            handler.VertexAIPartnerModelsTokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        with_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+            system=system,
+            tools=tools,
+        )
+        without_optional_fields: Final = await counter.count_tokens(
+            model_to_use=model,
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+        )
+
+    assert fake_http_client.posted_bodies == (
+        {"model": model, "messages": messages, "system": system, "tools": tools},
+        {"model": model, "messages": messages},
+    )
+    assert with_optional_fields is not None
+    assert with_optional_fields.total_tokens == 37
+    assert without_optional_fields is not None
+    assert without_optional_fields.total_tokens == 37
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_token_counter_uses_count_tokens_location():
     """
     Test that VertexAITokenCounter uses vertex_count_tokens_location to override
