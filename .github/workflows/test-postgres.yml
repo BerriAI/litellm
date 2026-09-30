@@ -24,6 +24,7 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout-minutes }}
     permissions:
       contents: read
+      id-token: write
 
     services:
       postgres:
@@ -134,9 +135,19 @@ jobs:
         env:
           TEST_PATH: ${{ matrix.test-path }}
           WORKERS: ${{ matrix.workers }}
+          PYTEST_ADDOPTS: ${{ matrix.shard == 'proxy-behavior' && '--cov=litellm/proxy/engine --cov-report=xml:coverage-lens-postgres.xml' || '' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} -vv --tb=short --durations=10
           else
             uv run --no-sync pytest ${TEST_PATH:?} -vv --tb=short --durations=10 -n "${WORKERS}"
           fi
+
+      - name: Upload Lens database coverage
+        if: steps.changes.outputs.decision != 'skip' && matrix.shard == 'proxy-behavior' && !cancelled()
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          use_oidc: true
+          files: coverage-lens-postgres.xml
+          flags: lens-postgres
+          fail_ci_if_error: true

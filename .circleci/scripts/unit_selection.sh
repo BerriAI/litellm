@@ -107,6 +107,7 @@ legacy_paths() {
       echo tests/unit/proxy/test_update_spend.py
       echo tests/unit/skills/test_skills_db.py ;;
     proxy-db-endpoints-and-responses)
+      echo tests/unit/proxy/engine
       echo tests/unit/proxy/auth/test_models_fallback_endpoint.py
       echo tests/unit/proxy/common_utils/test_check_batch_cost.py
       echo tests/unit/proxy/common_utils/test_check_responses_cost.py
