@@ -138,6 +138,9 @@ def test_generic_chunk_has_all_required_fields_rejects_incomplete_chunks():
         incomplete_chunk = {key: value for key, value in valid_chunk.items() if key != required_field}
         assert generic_chunk_has_all_required_fields(incomplete_chunk) is False
 
+    for degenerate_chunk in ({}, {"is_finished": False}, {"usage": {"prompt_tokens": 1}}):
+        assert generic_chunk_has_all_required_fields(degenerate_chunk) is False
+
 
 # ---------------------------------------------------------------------------
 # 2. Cached model name and provider at init time
