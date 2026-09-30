@@ -475,6 +475,15 @@ _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 
 
+def _untried_fallback_target_exists(chain: Sequence[object] | None, kwargs: Mapping[str, Any]) -> bool:
+    """
+    Whether a resolved fallback chain still names a target this request can try.
+    `has_unattempted_fallback_target` reports an unattempted target for an empty chain
+    whenever the request carries no attempt record yet, so guard the empty case here.
+    """
+    return bool(chain) and has_unattempted_fallback_target(chain, kwargs)
+
+
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
@@ -8514,7 +8523,7 @@ class Router:
             fallbacks=fallbacks,
             lookup_groups=fallback_lookup_groups(kwargs, model_group),
         )
-        return has_unattempted_fallback_target(resolved, kwargs)
+        return _untried_fallback_target_exists(resolved, kwargs)
 
     def _anthropic_messages_order_levels(self, model_group: str, kwargs: Mapping[str, Any]) -> tuple[int, ...]:
         """
@@ -8583,7 +8592,7 @@ class Router:
         if model_group is None or fallbacks_disabled_for_request(kwargs):
             return False
         if _check_non_standard_fallback_format(fallbacks=fallbacks):
-            return has_unattempted_fallback_target(fallbacks, kwargs)
+            return _untried_fallback_target_exists(fallbacks, kwargs)
         dedicated_fallbacks: Final = (
             context_window_fallbacks
             if isinstance(error, litellm.ContextWindowExceededError)
@@ -8592,7 +8601,7 @@ class Router:
             else None
         )
         if dedicated_fallbacks is not None:
-            return has_unattempted_fallback_target(
+            return _untried_fallback_target_exists(
                 self._get_fallback_model_group_for_lookup_groups(
                     fallbacks=dedicated_fallbacks,
                     lookup_groups=fallback_lookup_groups(kwargs, model_group),

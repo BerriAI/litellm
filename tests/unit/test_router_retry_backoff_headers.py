@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.constants import MAX_RETRY_DELAY
+from litellm.router import _untried_fallback_target_exists
 from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets, record_disable_fallbacks
 from litellm.types.router import RetryPolicy
 
@@ -76,6 +77,25 @@ async def test_fallback_configured_for_another_group_keeps_retry_backoff():
             router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}]),
             timeout=_BACKOFF_DETECTION_TIMEOUT,
         )
+
+
+@pytest.mark.asyncio
+async def test_empty_fallback_chain_keeps_retry_backoff():
+    """A chain configured as an empty list names no target, so the request has nothing to
+    fall back to and the retries must still space themselves out."""
+    router: Final = _router_with_single_failing_deployment(fallbacks=[{"primary": []}])
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}]),
+            timeout=_BACKOFF_DETECTION_TIMEOUT,
+        )
+
+
+def test_untried_fallback_target_exists_is_false_for_a_chain_with_no_entries():
+    assert _untried_fallback_target_exists(["backup"], {}) is True
+    assert _untried_fallback_target_exists([], {}) is False
+    assert _untried_fallback_target_exists(None, {}) is False
 
 
 @pytest.mark.asyncio
