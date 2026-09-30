@@ -42,7 +42,7 @@ describe("TraceDrawer", () => {
     vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, spanId) => spanDetail(spanId));
   });
 
-  it("opens a healthy trace on the Steps view with the stats strip", async () => {
+  it("opens a healthy trace on the Steps view with the stats strip and per-agent cost split", async () => {
     renderDrawer(research);
 
     expect(await screen.findByRole("heading", { name: "research_lead" })).toBeInTheDocument();
@@ -50,7 +50,8 @@ describe("TraceDrawer", () => {
     expect(stats).toHaveTextContent("40.20s");
     expect(stats).toHaveTextContent("LLM calls21");
     expect(stats).toHaveTextContent("Tool calls25");
-    expect(stats).not.toHaveTextContent("Cost");
+    expect(stats).toHaveTextContent("$0.1283");
+    expect(screen.getByLabelText("Cost by agent")).toHaveTextContent("researcher $0.0892");
     expect(screen.getByRole("button", { name: "Steps" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("list", { name: "Trace steps" })).toBeInTheDocument();
   });
@@ -63,7 +64,22 @@ describe("TraceDrawer", () => {
     const selected = within(tree).getByRole("treeitem", { selected: true });
     expect(selected).toHaveTextContent("lookup_benchmark");
     // the 12 researcher invocations collapse into one group row
-    expect(within(tree).getByText(/researcher ×12 · p50/)).toBeInTheDocument();
+    expect(within(tree).getByText(/researcher ×12 · \$0\.0635 · p50/)).toBeInTheDocument();
+  });
+
+  it("shows the LiteLLM request card with model group and deployment for an LLM span", async () => {
+    const user = userEvent.setup();
+    const onOpenRequestLog = vi.fn();
+    const llm = research.spans.find((s) => s.type === "llm" && s.litellm) as Trace["spans"][number];
+    renderDrawer(research, { initialSpanId: llm.span_id, onOpenRequestLog });
+
+    const card = await screen.findByRole("region", { name: "LiteLLM request" });
+    expect(card).toHaveTextContent(llm.litellm?.request_id ?? "");
+    expect(card).toHaveTextContent("claude-sonnet-4-5");
+    expect(card).toHaveTextContent("openai/claude-sonnet-4-5 (openai)");
+    await user.click(within(card).getByRole("button", { name: "Open request log →" }));
+    expect(onOpenRequestLog).toHaveBeenCalledWith(llm.litellm?.request_id);
+    expect(await screen.findByText(/lookup_benchmark/, { selector: "b" })).toBeInTheDocument();
   });
 
   it("hides framework spans until the toggle is checked", async () => {

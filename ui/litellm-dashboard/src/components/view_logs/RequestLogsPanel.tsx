@@ -327,6 +327,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         endTime={endTime}
         isCustomDate={isCustomDate}
         isLiveTail={isLiveTail}
+        onOpenRequestLog={openLog}
       />
 
       {logsView !== "traces" && (

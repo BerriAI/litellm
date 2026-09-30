@@ -36,6 +36,7 @@ def _row(
     status: str = "STATUS_CODE_OK",
     **extra: Any,
 ) -> dict[str, Any]:
+    """A TRACE_SPANS_SQL result row; `s_*` columns empty unless the span joined a spend log."""
     return {
         "span_id": span_id,
         "parent_span_id": parent,
@@ -51,11 +52,12 @@ def _row(
         "input_tokens": 0,
         "output_tokens": 0,
         "litellm_request_id": "",
+        "s_request_id": "",
         **extra,
     }
 
 
-def _llm_row(span_id: str, parent: str, agent: str, request_id: str, start_ms: float = 1) -> dict:
+def _llm_row(span_id: str, parent: str, agent: str, request_id: str, spend: float, start_ms: float = 1) -> dict:
     return _row(
         span_id,
         parent,
@@ -68,6 +70,22 @@ def _llm_row(span_id: str, parent: str, agent: str, request_id: str, start_ms: f
         input_tokens=100,
         output_tokens=20,
         litellm_request_id=request_id,
+        s_request_id=request_id,
+        s_model="claude-sonnet-4-5",
+        s_model_group="claude-sonnet-4-5",
+        s_provider="anthropic",
+        s_api_base="https://api.anthropic.com",
+        s_key_alias="research-bot",
+        s_team_alias="research-agents",
+        s_spend=spend,
+        s_prompt_tokens=100,
+        s_completion_tokens=20,
+        s_cache_read_tokens=5,
+        s_cache_write_tokens=0,
+        s_start_ms=T0 // MS,
+        s_end_ms=T0 // MS + 100,
+        s_ttft_start_ms=T0 // MS + 30,
+        s_status="success",
     )
 
 
@@ -75,13 +93,13 @@ def _deep_agent_rows(researcher_invocations: int = 1) -> list[dict[str, Any]]:
     """root agent -> llm, task tool -> researcher subagent (N times) -> llm + search_docs tool."""
     rows = [
         _row("root", "", "deep_research_agent", "agent", "deep_research_agent", duration_ms=1000),
-        _llm_row("llm-root", "root", "deep_research_agent", "chatcmpl-root"),
+        _llm_row("llm-root", "root", "deep_research_agent", "chatcmpl-root", 0.01),
         _row("task", "root", "task", "tool", "deep_research_agent", start_ms=200, duration_ms=700),
     ]
     for i in range(researcher_invocations):
         rows += [
             _row(f"res-{i}", "task", "researcher", "agent", "researcher", start_ms=201, duration_ms=5),
-            _llm_row(f"res-llm-{i}", f"res-{i}", "researcher", f"chatcmpl-res-{i}", start_ms=202),
+            _llm_row(f"res-llm-{i}", f"res-{i}", "researcher", f"chatcmpl-res-{i}", 0.001, start_ms=202),
             _row(f"res-tool-{i}", f"res-{i}", "search_docs", "tool", "researcher", start_ms=203, duration_ms=1),
             _row(f"res-mw-{i}", f"res-{i}", "FilesystemMiddleware.wrap_model_call", "framework", "researcher"),
         ]
@@ -95,13 +113,44 @@ def test_empty_rows_is_none():
     assert trace_from_rows("abc", []) is None
 
 
-def test_llm_response_id_is_preserved_without_spend_enrichment():
+def test_litellm_request_joined_onto_llm_spans_only():
     trace = trace_from_rows("t1", _deep_agent_rows())
     assert trace is not None
-    spans = {span["span_id"]: span for span in trace["spans"]}
-    assert spans["llm-root"]["litellm_request_id"] == "chatcmpl-root"
-    assert spans["task"]["litellm_request_id"] is None
-    assert "spend" not in trace["summary"]
+    spans = {s["span_id"]: s for s in trace["spans"]}
+    llm = spans["llm-root"]["litellm"]
+    assert llm == {
+        "request_id": "chatcmpl-root",
+        "model": "claude-sonnet-4-5",
+        "model_group": "claude-sonnet-4-5",
+        "provider": "anthropic",
+        "key_alias": "research-bot",
+        "team_alias": "research-agents",
+        "spend": 0.01,
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "cache_read_tokens": 5,
+        "cache_write_tokens": 0,
+        "latency_ms": 100,
+        "ttft_ms": 30,
+        "status": "success",
+    }
+    assert spans["task"]["litellm"] is None
+    assert spans["root"]["litellm"] is None
+
+
+def test_llm_span_without_spend_log_has_no_litellm():
+    rows = [_row("root", "", "a", "agent", "a"), _row("llm", "root", "ChatOpenAI", "llm", "a", litellm_request_id="x")]
+    trace = trace_from_rows("t1", rows)
+    assert trace is not None
+    assert trace["spans"][1]["litellm"] is None
+    assert trace["summary"]["spend"] is None
+
+
+def test_zero_cost_spend_log_is_distinct_from_missing_spend_log():
+    trace = trace_from_rows("t1", [_row("root", "", "a", "agent", "a"), _llm_row("llm", "root", "a", "req", 0.0)])
+    assert trace is not None
+    assert trace["summary"]["spend"] == 0.0
+    assert trace["agents"][0]["spend"] == 0.0
 
 
 def test_summary_totals():
@@ -119,6 +168,7 @@ def test_summary_totals():
     assert summary["tool_calls"] == 2
     assert summary["error_count"] == 0
     assert (summary["input_tokens"], summary["output_tokens"]) == (200, 40)
+    assert summary["spend"] == pytest.approx(0.011)
     assert summary["models"] == ["claude-sonnet-4-5"]
     assert summary["duration_ms"] == 1000
     assert summary["start_time"].startswith("2026-09-30T")
@@ -147,12 +197,16 @@ def test_offsets_are_relative_to_trace_start_in_ms():
 
 def test_span_from_row_optional_fields():
     span = span_from_row(_row("s", "", "x", "chain", "a", status="STATUS_CODE_UNSET"), T0)
-    assert (span["model"], span["parent_span_id"], span["status"], span["litellm_request_id"]) == (
-        None,
-        None,
-        "unset",
-        None,
-    )
+    assert (span["model"], span["parent_span_id"], span["status"], span["litellm"]) == (None, None, "unset", None)
+
+
+def test_ttft_is_none_without_completion_start_time():
+    row = _llm_row("l", "", "a", "req", 0.1)
+    row["s_ttft_start_ms"] = 0
+    assert span_from_row(row, T0)["litellm"]["ttft_ms"] is None  # type: ignore[index]
+
+
+# ---------------------------------------------------------------- agent_nodes
 
 
 def test_agent_nodes_parent_and_per_agent_counts():
@@ -165,6 +219,7 @@ def test_agent_nodes_parent_and_per_agent_counts():
             "invocations": 1,
             "llm_calls": 1,
             "tool_calls": 1,
+            "spend": 0.01,
             "duration_ms": 1000,
         },
         {
@@ -173,6 +228,7 @@ def test_agent_nodes_parent_and_per_agent_counts():
             "invocations": 1,
             "llm_calls": 1,
             "tool_calls": 1,
+            "spend": 0.001,
             "duration_ms": 5,
         },
     ]
@@ -187,6 +243,7 @@ def test_200_subagent_invocations_aggregate_into_one_node():
     assert researcher["invocations"] == 200
     assert researcher["llm_calls"] == 200
     assert researcher["tool_calls"] == 200
+    assert researcher["spend"] == pytest.approx(0.2)
     assert researcher["duration_ms"] == pytest.approx(1000)
     assert trace["summary"]["agent_count"] == 2
     assert trace["summary"]["span_count"] == 3 + 4 * 200
@@ -238,10 +295,11 @@ def test_trace_summary_from_row():
             "input_tokens": "30175",
             "output_tokens": "2620",
             "models": ["claude-sonnet-4-5"],
+            "spend": None,
         }
     )
     assert summary["status"] == "ok"
-    assert (summary["span_count"], summary["error_count"]) == (126, 1)
+    assert (summary["span_count"], summary["error_count"], summary["spend"]) == (126, 1, None)
     assert summary["start_time"] == "2026-09-30T04:36:29.377000+00:00"
 
 
@@ -264,8 +322,9 @@ async def test_list_traces_sets_next_cursor_on_full_page():
         "input_tokens": 0,
         "output_tokens": 0,
         "models": [],
+        "spend": 0,
     }
-    client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "start_ms": 900}])
+    client.list_traces = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "start_ms": 900}])
     store = ClickHouseTraceStore(client)
     scope = {"team_ids": ["team-a"], "api_key_hash": ""}
 
@@ -273,22 +332,22 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
     assert page["next_cursor"] is not None
     assert decode_cursor(page["next_cursor"]) == (900, "t1")
-    params = client.query.call_args.args[1]
+    params = client.list_traces.call_args.args[0]
     assert params["team_ids"] == ["team-a"] and params["limit"] == 2 and params["cursor_ms"] == 0
 
     page = await store.list_traces(scope, 0, 2000, cursor=page["next_cursor"], limit=3)  # type: ignore[arg-type]
     assert page["next_cursor"] is None
-    assert client.query.call_args.args[1]["cursor_trace_id"] == "t1"
+    assert client.list_traces.call_args.args[0]["cursor_trace_id"] == "t1"
 
 
 @pytest.mark.asyncio
 async def test_get_span_not_found_and_found():
     client = MagicMock()
-    client.query = AsyncMock(return_value=[])
+    client.span_detail = AsyncMock(return_value=[])
     store = ClickHouseTraceStore(client)
     scope = {"team_ids": [], "api_key_hash": ""}
     assert await store.get_span("t", "s", scope) is None  # type: ignore[arg-type]
-    client.query = AsyncMock(return_value=[{"span_id": "s", "input": "i", "output": "o", "attributes": {"k": "v"}}])
+    client.span_detail = AsyncMock(return_value=[{"span_id": "s", "input": "i", "output": "o", "attributes": {"k": "v"}}])
     assert await store.get_span("t", "s", scope) == {  # type: ignore[arg-type]
         "span_id": "s",
         "input": "i",

@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import deepAgentTrace from "./__fixtures__/deep_agent_trace.json";
 import researchTrace from "./__fixtures__/research_trace.json";
 import swarmTrace from "./__fixtures__/swarm_trace.json";
+import { groupSummary } from "./SpanTree";
 import type { Span, Trace } from "./traceTypes";
 import {
   agentBadgeLabel,
   buildVisibleTree,
   firstErrorSpan,
   flattenTree,
+  fmtCost,
   fmtMs,
   GROUP_PAGE_SIZE,
   groupSiblingAgents,
@@ -20,6 +22,7 @@ import {
   previewText,
   revealSpan,
   ROOT_KEY,
+  sortStepsByCost,
   spanLabel,
   spanRowIds,
   stepsFromSpans,
@@ -45,15 +48,18 @@ const span = (overrides: Partial<Span> & Pick<Span, "span_id">): Span => ({
   model: null,
   input_tokens: 0,
   output_tokens: 0,
-  litellm_request_id: null,
+  litellm: null,
   ...overrides,
 });
 
 describe("formatting", () => {
-  it("formats durations the way the table shows them", () => {
+  it("formats durations and costs the way the table shows them", () => {
     expect(fmtMs(4.25)).toBe("4.3ms");
     expect(fmtMs(950)).toBe("950ms");
     expect(fmtMs(51386)).toBe("51.39s");
+    expect(fmtCost(0.0832806)).toBe("$0.0833");
+    expect(fmtCost(0.0004)).toBe("$0.00040");
+    expect(fmtCost(null)).toBe("—");
   });
 
   it("labels agent rows with agent, LLM and tool counts", () => {
@@ -61,9 +67,10 @@ describe("formatting", () => {
     expect(agentBadgeLabel({ agent_count: 1, llm_calls: 2, tool_calls: 1 })).toBe("◆ Agent · 2 LLM · 1 tool");
   });
 
-  it("headlines LLM spans with the OTLP model", () => {
-    const llm = { span_id: "llm", type: "llm", name: "generation", model: "model-a" } as const;
-    expect(spanLabel(span(llm))).toBe("model-a");
+  it("headlines LLM spans with the model group, not the deployment", () => {
+    const llm = swarm.spans.find((s) => s.litellm?.model.startsWith("openai/"));
+    expect(llm).toBeDefined();
+    expect(spanLabel(llm as Span)).toBe((llm as Span).litellm?.model_group);
   });
 
   it("pulls the user message out of a truncated JSON preview", () => {
@@ -85,17 +92,13 @@ describe("formatting", () => {
 
 describe("buildVisibleTree", () => {
   it("hides framework spans and re-parents their children to the nearest visible ancestor", () => {
-    const middleware = { span_id: "mw", parent_span_id: "root", type: "framework", name: "X.wrap_model_call" } as const;
-    const model = { span_id: "model", parent_span_id: "mw", type: "chain", name: "model" } as const;
-    const llm = { span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 } as const;
-    const step = {
-      span_id: "step",
-      parent_span_id: "root",
-      type: "chain",
-      name: "planner",
-      start_offset_ms: 1,
-    } as const;
-    const spans = [span({ span_id: "root", type: "agent" }), span(middleware), span(model), span(llm), span(step)];
+    const spans = [
+      span({ span_id: "root", type: "agent" }),
+      span({ span_id: "mw", parent_span_id: "root", type: "framework", name: "X.wrap_model_call" }),
+      span({ span_id: "model", parent_span_id: "mw", type: "chain", name: "model" }),
+      span({ span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 }),
+      span({ span_id: "step", parent_span_id: "root", type: "chain", name: "planner", start_offset_ms: 1 }),
+    ];
     const compact = buildVisibleTree(spans, false);
     expect(compact.visibleCount).toBe(3);
     expect(compact.children.get(ROOT_KEY)?.map((s) => s.span_id)).toEqual(["root"]);
@@ -136,22 +139,36 @@ describe("groupSiblingAgents", () => {
     expect(items.some((i) => i.kind === "span" && i.span.name === "critic")).toBe(true);
   });
 
-  it("counts grouped invocations that contain errors", () => {
+  it("rolls up subtree spend and counts invocations that contain errors", () => {
     const items = groupSiblingAgents(root.span_id, children.get(root.span_id) ?? [], stats);
     const group = items.find((i) => i.kind === "group");
     if (group?.kind !== "group") throw new Error("expected a group");
+    const researcherAgent = swarm.agents.find((a) => a.name === "researcher");
+    const factChecker = swarm.agents.find((a) => a.name === "fact_checker");
+    // researcher subtrees include the nested fact_checker invocations
+    expect(group.group.spend).toBeCloseTo((researcherAgent?.spend ?? 0) + (factChecker?.spend ?? 0), 6);
     expect(group.group.errors).toBeGreaterThan(0);
     expect(group.group.p50Ms).toBeGreaterThan(0);
   });
 
   it("leaves groups of 10 or fewer alone", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = Array.from({ length: 10 }, (_, i) => {
-      const props = { span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker" } as const;
-      return span(props);
-    });
+    const kids = Array.from({ length: 10 }, (_, i) =>
+      span({ span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker" }),
+    );
     const items = groupSiblingAgents("p", kids, subtreeStats([parent, ...kids]));
     expect(items.every((i) => i.kind === "span")).toBe(true);
+  });
+
+  it("does not show a zero cost when grouped spans have no spend rows", () => {
+    const parent = span({ span_id: "p", type: "agent" });
+    const children = Array.from({ length: 11 }, (_, index) =>
+      span({ span_id: `child-${index}`, parent_span_id: "p", type: "agent", name: "worker" }),
+    );
+    const items = groupSiblingAgents("p", children, subtreeStats([parent, ...children]));
+    const group = items.find((item) => item.kind === "group");
+    if (group?.kind !== "group") throw new Error("expected a group");
+    expect(groupSummary(group.group)).toBe("worker ×11 · p50 1.0ms");
   });
 });
 
@@ -167,16 +184,9 @@ describe("flattenTree + revealSpan", () => {
 
   it("pages group invocations 20 at a time with a 'more' row until all are shown", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = Array.from({ length: 45 }, (_, i) => {
-      const props = {
-        span_id: `k${i}`,
-        parent_span_id: "p",
-        type: "agent",
-        name: "worker",
-        start_offset_ms: i,
-      } as const;
-      return span(props);
-    });
+    const kids = Array.from({ length: 45 }, (_, i) =>
+      span({ span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker", start_offset_ms: i }),
+    );
     const all = [parent, ...kids];
     const tree = buildVisibleTree(all, false).children;
     const key = "p::worker";
@@ -224,6 +234,13 @@ describe("stepsFromSpans", () => {
     // the lead's first decision runs write_file and task
     expect(first.toolNames).toEqual(["write_file", "task"]);
   });
+
+  it("sorts by cost without renumbering", () => {
+    const sorted = sortStepsByCost(stepsFromSpans(deepAgent.spans));
+    const spend = sorted.map((s) => s.span.litellm?.spend ?? 0);
+    expect(spend).toEqual([...spend].sort((a, b) => b - a));
+    expect(sorted[0].span.type).toBe("llm");
+  });
 });
 
 describe("trace-level helpers", () => {
@@ -248,7 +265,7 @@ describe("trace-level helpers", () => {
     );
     const researcherNode = layout.nodes.find((n) => n.agent.name === "researcher");
     const criticNode = layout.nodes.find((n) => n.agent.name === "critic");
-    expect(researcherNode?.width).toBe(criticNode?.width);
+    expect(researcherNode?.width).toBeGreaterThan(criticNode?.width ?? Infinity);
     expect(researcherNode?.x).toBeGreaterThan(layout.nodes[0].x);
   });
 

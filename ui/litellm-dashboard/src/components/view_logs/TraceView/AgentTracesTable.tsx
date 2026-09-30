@@ -14,6 +14,7 @@ import { AgentTracePill, SpanStatusBadge, SpanTypePill } from "./TracePills";
 import type { Span, TraceSummary } from "./traceTypes";
 import {
   agentBadgeLabel,
+  fmtCost,
   fmtMs,
   fmtTok,
   llmSpans,
@@ -37,7 +38,7 @@ interface AgentTracesTableProps {
   compact?: boolean;
 }
 
-const COLUMNS = ["", "Time", "Type", "Status", "Trace", "Input", "Duration", "Model", "Tokens"] as const;
+const COLUMNS = ["", "Time", "Type", "Status", "Trace", "Input", "Cost", "Duration", "Model", "Tokens"] as const;
 
 const TRUNC = "block max-w-[280px] truncate";
 
@@ -90,8 +91,8 @@ function ChildRow({ span, onClick }: { span: Span; onClick: () => void }) {
         <SpanStatusBadge status={span.status} />
       </TableCell>
       <TableCell className="font-mono text-[11px]">
-        {span.litellm_request_id ? (
-          shortId(span.litellm_request_id, 22)
+        {span.litellm ? (
+          shortId(span.litellm.request_id, 22)
         ) : (
           <span className="text-muted-foreground">{span.agent}</span>
         )}
@@ -99,6 +100,7 @@ function ChildRow({ span, onClick }: { span: Span; onClick: () => void }) {
       <TableCell className="text-muted-foreground">
         <span className={TRUNC}>{previewText(span.input_preview)}</span>
       </TableCell>
+      <TableCell>{fmtCost(span.litellm?.spend)}</TableCell>
       <TableCell>{fmtMs(span.duration_ms)}</TableCell>
       <TableCell>{spanLabel(span)}</TableCell>
       <TableCell>{fmtTok(tokens)}</TableCell>
@@ -158,6 +160,7 @@ function TraceRow({
           {previewText(trace.input_preview)}
         </span>
       </TableCell>
+      <TableCell>{fmtCost(trace.spend)}</TableCell>
       <TableCell>{fmtMs(trace.duration_ms)}</TableCell>
       <TableCell>
         <span className={TRUNC}>{trace.models.join(", ")}</span>

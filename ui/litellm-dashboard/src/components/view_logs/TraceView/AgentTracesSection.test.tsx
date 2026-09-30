@@ -26,6 +26,7 @@ const renderSection = (view: "all" | "traces" | "llm") =>
       endTime="2026-09-30T00:00"
       isCustomDate={false}
       isLiveTail={false}
+      onOpenRequestLog={vi.fn()}
     />,
   );
 
@@ -57,7 +58,7 @@ describe("AgentTracesSection", () => {
     expect(screen.queryByRole("table", { name: "Agent traces" })).not.toBeInTheDocument();
   });
 
-  it("lists traces with the agent badge, red status for runs with errors", async () => {
+  it("lists traces with the agent badge, red status for runs with errors and cost", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderSection("traces");
 
@@ -66,7 +67,7 @@ describe("AgentTracesSection", () => {
     const lead = rows.find((row) => row.textContent?.includes("research_lead"));
     expect(lead).toHaveTextContent("◆ 6 agents · 21 LLM · 25 tool");
     expect(lead).toHaveTextContent("Success");
-    expect(screen.queryByRole("columnheader", { name: "Cost" })).not.toBeInTheDocument();
+    expect(lead).toHaveTextContent("$0.1283");
     expect(lead).toHaveTextContent("Should we store OTEL agent spans in ClickHouse or Postgres at 50k spans/sec?");
     const failed = rows.find((row) => row.textContent?.includes("acme-404"));
     expect(failed).toHaveTextContent("Failure");

@@ -8,6 +8,31 @@ use crate::{Connection, Error};
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+pub enum ReadQuery {
+    ListTraces,
+    TraceSpans,
+    SpanDetail,
+}
+
+impl ReadQuery {
+    pub fn parse(value: &str) -> Result<Self, Error> {
+        match value {
+            "list_traces" => Ok(Self::ListTraces),
+            "trace_spans" => Ok(Self::TraceSpans),
+            "span_detail" => Ok(Self::SpanDetail),
+            _ => Err(Error::InvalidQuery),
+        }
+    }
+
+    fn sql(&self) -> &'static str {
+        match self {
+            Self::ListTraces => include_str!("list_traces.sql"),
+            Self::TraceSpans => include_str!("trace_spans.sql"),
+            Self::SpanDetail => include_str!("span_detail.sql"),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Parameter {
@@ -51,7 +76,6 @@ pub async fn execute_read(
     if sql.trim().is_empty() {
         return Err(Error::EmptySql);
     }
-
     let mut url = connection.url().clone();
 
     let existing_pairs: Vec<(String, String)> = url
@@ -111,4 +135,24 @@ pub async fn execute_read(
         return Err(Error::InvalidResponse);
     }
     String::from_utf8(body).map_err(|_| Error::InvalidResponse)
+}
+
+pub async fn execute_named_read(
+    client: &Client,
+    connection: &Connection,
+    query: ReadQuery,
+    parameters: &BTreeMap<String, Parameter>,
+) -> Result<String, Error> {
+    execute_read(client, connection, query.sql(), parameters).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReadQuery;
+
+    #[test]
+    fn named_reads_reject_caller_sql() {
+        assert!(ReadQuery::parse("list_traces").is_ok());
+        assert!(ReadQuery::parse("SELECT * FROM otel_traces").is_err());
+    }
 }

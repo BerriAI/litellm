@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { cn } from "@/lib/cva.config";
 
 import { SPAN_PILL_CLASS, SpanTypePill } from "./TracePills";
-import { fmtMs, previewText, spanLabel, type TraceStep } from "./traceUtils";
+import { fmtCost, fmtMs, previewText, spanLabel, type TraceStep } from "./traceUtils";
 
 interface TraceStepsProps {
   steps: TraceStep[];
@@ -27,11 +27,15 @@ function StepTitle({ step }: { step: TraceStep }) {
       </>
     );
   }
+  const cost = span.type === "llm" ? ` · ${fmtCost(span.litellm?.spend)}` : "";
   return (
     <>
       <SpanTypePill type={span.type} />
       <span className={cn(span.status === "error" && "text-destructive")}>{spanLabel(span)}</span>
-      <span className="text-muted-foreground">{fmtMs(span.duration_ms)}</span>
+      <span className="text-muted-foreground">
+        {fmtMs(span.duration_ms)}
+        {cost}
+      </span>
     </>
   );
 }

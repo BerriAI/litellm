@@ -6,7 +6,7 @@ import { cn } from "@/lib/cva.config";
 
 import { SPAN_BAR_CLASS, SpanTypePill } from "./TracePills";
 import type { Span } from "./traceTypes";
-import { fmtMs, GROUP_PAGE_SIZE, spanLabel, type SpanGroup, type TreeRow } from "./traceUtils";
+import { fmtCost, fmtMs, fmtTok, GROUP_PAGE_SIZE, spanLabel, type SpanGroup, type TreeRow } from "./traceUtils";
 
 interface SpanTreeProps {
   rows: TreeRow[];
@@ -20,11 +20,17 @@ interface SpanTreeProps {
 
 const MIN_BAR_PERCENT = 0.3;
 
-const spanMeta = (span: Span): string => fmtMs(span.duration_ms);
+const spanMeta = (span: Span): string => {
+  if (span.litellm) {
+    return `${fmtTok(span.litellm.prompt_tokens)}→${fmtTok(span.litellm.completion_tokens)} · ${fmtCost(span.litellm.spend)}`;
+  }
+  return fmtMs(span.duration_ms);
+};
 
 export const groupSummary = (group: SpanGroup): string => {
   const errors = group.errors ? ` · ${group.errors} error${group.errors === 1 ? "" : "s"}` : "";
-  return `${group.name} ×${group.spans.length} · p50 ${fmtMs(group.p50Ms)}${errors}`;
+  const cost = group.hasSpend ? ` · ${fmtCost(group.spend)}` : "";
+  return `${group.name} ×${group.spans.length}${cost} · p50 ${fmtMs(group.p50Ms)}${errors}`;
 };
 
 function Guides({ depth }: { depth: number }) {

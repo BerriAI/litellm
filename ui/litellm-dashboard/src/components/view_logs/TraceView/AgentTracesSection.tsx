@@ -44,6 +44,8 @@ interface AgentTracesSectionProps {
   endTime: string;
   isCustomDate: boolean;
   isLiveTail: boolean;
+  /** Open the request-log drawer for a LiteLLM request id (from a span's LiteLLM request card). */
+  onOpenRequestLog: (requestId: string) => void;
 }
 
 /**
@@ -58,6 +60,7 @@ export function AgentTracesSection({
   endTime,
   isCustomDate,
   isLiveTail,
+  onOpenRequestLog,
 }: AgentTracesSectionProps) {
   const [openTrace, setOpenTrace] = useState<{ traceId: string; spanId: string | null } | null>(null);
   const traceOptions: Parameters<typeof useAgentTraces>[0] = {
@@ -71,6 +74,11 @@ export function AgentTracesSection({
   const traces = useAgentTraces(traceOptions);
 
   if (view === "llm") return null;
+
+  const handleOpenRequestLog = (requestId: string) => {
+    setOpenTrace(null);
+    onOpenRequestLog(requestId);
+  };
 
   return (
     <>
@@ -93,6 +101,7 @@ export function AgentTracesSection({
         initialSpanId={openTrace?.spanId}
         accessToken={accessToken}
         onClose={() => setOpenTrace(null)}
+        onOpenRequestLog={handleOpenRequestLog}
       />
     </>
   );

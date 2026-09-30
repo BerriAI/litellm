@@ -37,7 +37,7 @@ class NativeStore(Protocol):
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, JsonValue]]) -> Awaitable[None]: ...
 
-    def query(self, sql: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
+    def query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
 
 class NativeTraces(Protocol):
@@ -84,6 +84,15 @@ class TraceStorage:
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, INSERT_ROWS.validate_python(rows))
 
-    async def query(self, sql: str, parameters: Mapping[str, object] | None = None) -> list[dict[str, JsonValue]]:
-        result: Final = await self._native.query(sql, QUERY_PARAMETERS.validate_python(parameters or {}))
+    async def _query(self, name: str, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        result: Final = await self._native.query(name, QUERY_PARAMETERS.validate_python(parameters))
         return QueryResponse.model_validate_json(result).data
+
+    async def list_traces(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._query("list_traces", parameters)
+
+    async def trace_spans(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._query("trace_spans", parameters)
+
+    async def span_detail(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._query("span_detail", parameters)

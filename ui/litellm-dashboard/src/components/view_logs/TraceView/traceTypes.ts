@@ -2,10 +2,29 @@
  * Agent tracing types. Mirrors `litellm/tracing/types.py` exactly.
  *
  * A trace is one agent run made of spans (agent / llm / tool / chain / framework).
+ * LLM spans that went through LiteLLM carry a `LiteLLMRequest`: the spend-log row
+ * for that call, joined on the provider response id.
  */
 
 export type SpanType = "agent" | "llm" | "tool" | "chain" | "framework";
 export type SpanStatus = "ok" | "error" | "unset";
+
+export interface LiteLLMRequest {
+  request_id: string;
+  model: string;
+  model_group: string;
+  provider: string;
+  key_alias: string;
+  team_alias: string;
+  spend: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  latency_ms: number;
+  ttft_ms: number | null;
+  status: string;
+}
 
 export interface Span {
   span_id: string;
@@ -24,7 +43,7 @@ export interface Span {
   model: string | null;
   input_tokens: number;
   output_tokens: number;
-  litellm_request_id: string | null;
+  litellm: LiteLLMRequest | null;
 }
 
 /** One distinct agent in a trace. 200 invocations of `researcher` = one node. */
@@ -34,6 +53,7 @@ export interface AgentNode {
   invocations: number;
   llm_calls: number;
   tool_calls: number;
+  spend: number | null;
   duration_ms: number;
 }
 
@@ -54,6 +74,7 @@ export interface TraceSummary {
   error_count: number;
   input_tokens: number;
   output_tokens: number;
+  spend: number | null;
   models: string[];
 }
 

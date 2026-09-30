@@ -22,12 +22,15 @@ import {
   buildVisibleTree,
   firstErrorSpan,
   flattenTree,
+  fmtCost,
   fmtMs,
   fmtTok,
   revealSpan,
+  sortStepsByCost,
   spanRowIds,
   stepsFromSpans,
   subtreeStats,
+  totalCacheRead,
   traceHasErrors,
   type TreeUiState,
 } from "./traceUtils";
@@ -42,6 +45,7 @@ interface TraceDrawerProps {
   initialSpanId?: string | null;
   accessToken: string;
   onClose: () => void;
+  onOpenRequestLog?: (requestId: string) => void;
 }
 
 const DRAWER_WIDTH = "min(1180px, 80vw)";
@@ -91,7 +95,7 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 export function TraceStats({ trace }: { trace: Trace }) {
   const { summary } = trace;
   return (
-    <div aria-label="Trace stats" className="grid grid-cols-3 gap-px border-b bg-border sm:grid-cols-4 lg:grid-cols-5">
+    <div aria-label="Trace stats" className="grid grid-cols-3 gap-px border-b bg-border sm:grid-cols-4 lg:grid-cols-7">
       <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
       <Stat label="Agents" value={String(summary.agent_count)} />
       <Stat label="LLM calls" value={String(summary.llm_calls)} sub={summary.models.join(", ")} />
@@ -101,6 +105,23 @@ export function TraceStats({ trace }: { trace: Trace }) {
         value={fmtTok(summary.input_tokens + summary.output_tokens)}
         sub={`${fmtTok(summary.input_tokens)} in · ${fmtTok(summary.output_tokens)} out`}
       />
+      <Stat label="Cache read" value={fmtTok(totalCacheRead(trace.spans))} sub="tokens" />
+      <Stat label="Cost" value={fmtCost(summary.spend)} sub="via spend logs" />
+    </div>
+  );
+}
+
+function AgentCostSplit({ trace }: { trace: Trace }) {
+  if (trace.agents.length < 2) return null;
+  const sorted = [...trace.agents].sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0));
+  return (
+    <div aria-label="Cost by agent" className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span>Cost by agent:</span>
+      {sorted.map((agent) => (
+        <span key={agent.name}>
+          <b className="font-medium text-foreground">{agent.name}</b> {fmtCost(agent.spend)}
+        </span>
+      ))}
     </div>
   );
 }
@@ -109,13 +130,15 @@ interface TraceBodyProps {
   trace: Trace;
   accessToken: string;
   initialSpanId?: string | null;
+  onOpenRequestLog?: (requestId: string) => void;
 }
 
-function TraceBody({ trace, accessToken, initialSpanId }: TraceBodyProps) {
+function TraceBody({ trace, accessToken, initialSpanId, onOpenRequestLog }: TraceBodyProps) {
   const [initial] = useState(() => initialTraceView(trace, initialSpanId));
   const [mode, setMode] = useState<TraceViewMode>(initial.mode);
   const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId);
   const [showFramework, setShowFramework] = useState(false);
+  const [sortByCost, setSortByCost] = useState(false);
   const [ui, setUi] = useState<TreeUiState>(() => initialTreeUi(trace, initial.selectedId));
 
   const { children, visibleCount } = useMemo(
@@ -124,7 +147,8 @@ function TraceBody({ trace, accessToken, initialSpanId }: TraceBodyProps) {
   );
   const stats = useMemo(() => subtreeStats(trace.spans), [trace.spans]);
   const rows = useMemo(() => flattenTree(children, stats, ui), [children, stats, ui]);
-  const steps = useMemo(() => stepsFromSpans(trace.spans), [trace.spans]);
+  const timeSteps = useMemo(() => stepsFromSpans(trace.spans), [trace.spans]);
+  const steps = useMemo(() => (sortByCost ? sortStepsByCost(timeSteps) : timeSteps), [timeSteps, sortByCost]);
   const selectedSpan = useMemo(
     () => trace.spans.find((s) => s.span_id === selectedId) ?? null,
     [trace.spans, selectedId],
@@ -190,6 +214,12 @@ function TraceBody({ trace, accessToken, initialSpanId }: TraceBodyProps) {
               Show framework spans
             </label>
           )}
+          {mode === "steps" && (
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+              <Checkbox checked={sortByCost} onCheckedChange={(checked) => setSortByCost(checked === true)} />
+              Sort by cost
+            </label>
+          )}
           <span className="ml-auto text-xs text-muted-foreground">
             {mode === "tree" ? `${visibleCount} of ${trace.spans.length} spans` : `${steps.length} steps`}
           </span>
@@ -213,6 +243,7 @@ function TraceBody({ trace, accessToken, initialSpanId }: TraceBodyProps) {
           accessToken={accessToken}
           traceId={trace.summary.trace_id}
           span={selectedSpan}
+          onOpenRequestLog={onOpenRequestLog}
         />
       ) : (
         <div className="p-5 text-sm text-muted-foreground">Select a span to see its details.</div>
@@ -255,19 +286,28 @@ function TraceHeader({ trace, onClose }: { trace: Trace; onClose: () => void }) 
         <span>·</span>
         <span>{new Date(summary.start_time).toLocaleString()}</span>
       </div>
+      <div className="mt-1.5">
+        <AgentCostSplit trace={trace} />
+      </div>
     </div>
   );
 }
 
 /** Right-side drawer for one agent trace: header, stats strip, Steps / Tree / Graph views and span details. */
-export function TraceDrawer({ open, traceId, initialSpanId, accessToken, onClose }: TraceDrawerProps) {
-  const traceQueryOptions = {
+export function TraceDrawer({
+  open,
+  traceId,
+  initialSpanId,
+  accessToken,
+  onClose,
+  onOpenRequestLog,
+}: TraceDrawerProps) {
+  const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, accessToken],
     queryFn: () => agentTraceCall(accessToken, traceId as string),
     enabled: open && traceId !== null,
     staleTime: 30_000,
-  };
-  const traceQuery = useQuery(traceQueryOptions);
+  });
   const trace = traceQuery.data;
 
   return (
@@ -299,6 +339,7 @@ export function TraceDrawer({ open, traceId, initialSpanId, accessToken, onClose
               trace={trace}
               accessToken={accessToken}
               initialSpanId={initialSpanId}
+              onOpenRequestLog={onOpenRequestLog}
             />
           </div>
         )}
