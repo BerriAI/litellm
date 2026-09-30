@@ -29,11 +29,15 @@ class PassThrough:
 
 
 @contextmanager
-def pass_through(gateway: Gateway, *, show_in_model_hub: bool, display_name: str | None) -> Generator[PassThrough]:
+def pass_through(
+    gateway: Gateway, *, show_in_model_hub: bool, display_name: str | None, methods: tuple[str, ...] | None = None
+) -> Generator[PassThrough]:
     path: Final = f"/integration-nlp-{uuid.uuid4().hex[:8]}"
     body: dict[str, JsonValue] = {"path": path, "target": gateway.upstream_url, "show_in_model_hub": show_in_model_hub}
     if display_name is not None:
         body["display_name"] = display_name
+    if methods is not None:
+        body["methods"] = list(methods)
     created: Final = gateway.request("POST", "/config/pass_through_endpoint", body)
     assert created.status_code == 200, created.text
     endpoints: Final = object_value(created.json())["endpoints"]
@@ -122,7 +126,8 @@ def test_opted_in_pass_through_is_listed_under_its_display_name(gateway: Gateway
 
 
 def test_opted_in_pass_through_without_a_display_name_is_listed_by_path(gateway: Gateway) -> None:
-    with pass_through(gateway, show_in_model_hub=True, display_name=None) as shown:
+    with pass_through(gateway, show_in_model_hub=True, display_name=None, methods=("GET",)) as shown:
         row: Final = hub_row(hub_rows(gateway), shown.path)
         assert row["mode"] == PASS_THROUGH_MODE, row
         assert row["pass_through_path"] == shown.path, row
+        assert row["pass_through_methods"] == ["GET"], row

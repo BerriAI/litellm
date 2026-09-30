@@ -68,6 +68,11 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
+const BODY_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH"]);
+
+const passThroughExampleMethod = (methods: string[] | null | undefined): string =>
+  !methods?.length || methods.includes("POST") ? "POST" : methods[0];
+
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
@@ -267,12 +272,16 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
   const usageSnippet = (model: ModelGroupInfo): string => {
     if (model.pass_through_path) {
-      return [
-        `curl -X POST "${getProxyBaseUrl()}${model.pass_through_path}" \\`,
-        `  -H "Authorization: Bearer your_api_key" \\`,
-        `  -H "Content-Type: application/json" \\`,
-        `  -d '{"input": "Hello, how are you?"}'`,
-      ].join("\n");
+      const method = passThroughExampleMethod(model.pass_through_methods);
+      const url = `${getProxyBaseUrl()}${model.pass_through_path}`;
+      return BODY_METHODS.has(method)
+        ? [
+            `curl -X ${method} "${url}" \\`,
+            `  -H "Authorization: Bearer your_api_key" \\`,
+            `  -H "Content-Type: application/json" \\`,
+            `  -d '{"input": "Hello, how are you?"}'`,
+          ].join("\n")
+        : [`curl -X ${method} "${url}" \\`, `  -H "Authorization: Bearer your_api_key"`].join("\n");
     }
     const snippetRequest: Parameters<typeof generateCodeSnippet>[0] = {
       apiKeySource: "custom",
@@ -515,7 +524,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   <DataTable
                     data={models.rows}
                     columns={modelColumns}
-                    getRowId={(model, index) => model.model_group || String(index)}
+                    getRowId={(model, index) =>
+                      model.pass_through_path
+                        ? `passthrough:${model.pass_through_path}:${index}`
+                        : model.model_group || String(index)
+                    }
                     sortingMode="server"
                     sorting={models.sorting}
                     onSortingChange={models.onSortingChange}

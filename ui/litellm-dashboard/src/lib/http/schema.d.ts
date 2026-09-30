@@ -36040,6 +36040,8 @@ export interface components {
             otpm?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Pass Through Methods */
+            pass_through_methods?: string[] | null;
             /** Pass Through Path */
             pass_through_path?: string | null;
             /** Providers */

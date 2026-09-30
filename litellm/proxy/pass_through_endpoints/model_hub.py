@@ -16,6 +16,7 @@ def pass_through_model_hub_row(endpoint: PassThroughGenericEndpoint) -> ModelGro
         mode=PASS_THROUGH_MODE,
         is_public_model_group=True,
         pass_through_path=endpoint.path,
+        pass_through_methods=endpoint.methods,
     )
 
 

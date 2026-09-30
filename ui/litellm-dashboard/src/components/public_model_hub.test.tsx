@@ -378,6 +378,25 @@ describe("PublicModelHub", () => {
     expect(within(dialog).queryByText("Token & Cost Information")).not.toBeInTheDocument();
   });
 
+  it("writes the usage example with a method the pass-through route accepts", async () => {
+    respondWith([
+      model({
+        model_group: "Catalog",
+        providers: [],
+        mode: "passthrough",
+        pass_through_path: "/catalog",
+        pass_through_methods: ["GET"],
+      }),
+    ]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Catalog" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/curl -X GET "http:\/\/localhost:3000\/catalog"/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/-d '\{"input"/)).not.toBeInTheDocument();
+  });
+
   it("shows no models when the search has no matches (LIT-5230 regression)", async () => {
     renderHub();
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();

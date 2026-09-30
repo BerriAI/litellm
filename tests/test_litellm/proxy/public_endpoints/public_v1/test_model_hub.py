@@ -496,7 +496,7 @@ def _configure_pass_throughs(monkeypatch, *endpoints: Mapping[str, object]) -> N
     )
 
 
-def _pass_through_row(model_group: str, path: str) -> dict[str, object]:
+def _pass_through_row(model_group: str, path: str, methods: list[str] | None = None) -> dict[str, object]:
     return {
         **ModelGroupInfo(model_group=model_group, providers=[], mode="passthrough").model_dump(mode="json"),
         "is_public_model_group": True,
@@ -504,6 +504,7 @@ def _pass_through_row(model_group: str, path: str) -> dict[str, object]:
         "health_response_time": None,
         "health_checked_at": None,
         "pass_through_path": path,
+        "pass_through_methods": methods,
     }
 
 
@@ -525,6 +526,18 @@ def test_a_pass_through_endpoint_opted_into_the_hub_is_listed_under_its_display_
         _pass_through_row("/unnamed-tagger", "/unnamed-tagger"),
         _pass_through_row("Clinical NER", "/clinical-ner"),
     ]
+
+
+def test_a_pass_through_row_carries_the_methods_its_route_accepts(monkeypatch):
+    _publish(monkeypatch, (_info("gpt-4o"),))
+    _configure_pass_throughs(
+        monkeypatch, {"path": "/catalog", "display_name": "Catalog", "show_in_model_hub": True, "methods": ["GET"]}
+    )
+
+    response = _get()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"][0] == _pass_through_row("Catalog", "/catalog", methods=["GET"])
 
 
 def test_a_pass_through_row_is_filterable_by_its_mode_and_offered_by_the_modes_facet(monkeypatch):

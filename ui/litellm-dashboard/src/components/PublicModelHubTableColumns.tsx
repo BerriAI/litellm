@@ -26,6 +26,7 @@ export interface ModelGroupInfo {
   health_response_time?: number;
   health_checked_at?: string;
   pass_through_path?: string | null;
+  pass_through_methods?: string[] | null;
   [key: string]: any;
 }
 
