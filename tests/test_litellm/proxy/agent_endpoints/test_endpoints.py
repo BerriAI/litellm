@@ -1648,3 +1648,31 @@ def test_invalid_identity_and_untrusted_tenant_cannot_be_registered(
     with pytest.raises(HTTPException, match=message) as failure:
         agent_endpoints._validate_managed_identity_request(request)
     assert failure.value.status_code == 400
+
+
+@pytest.mark.parametrize("cached,path", [(False, "/v1/agents/agent-123"), (True, "/v1/agents/agent-123"), (True, "/v1/agents")])
+def test_agent_budget_readback_refreshes_consumption_and_limit(monkeypatch: pytest.MonkeyPatch, cached: bool, path: str) -> None:
+    from prisma.models import LiteLLM_BudgetTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    row: Final = LiteLLM_AgentsTable.model_construct(
+        agent_id="agent-123", agent_name="Agent", agent_card_params={}, spend=12.5,
+        lifetime_budget_spend=0.75, budget_id="budget", litellm_params=None,
+        litellm_budget_table=LiteLLM_BudgetTable.model_construct(budget_id="budget", max_budget=2.0),
+    )
+    registry: Final = AgentRegistry()
+    if cached:
+        registry.register_agent(_sample_agent_response())
+    table: Final = SimpleNamespace(find_unique=AsyncMock(return_value=row), find_many=AsyncMock(return_value=[row]))
+    database: Final = SimpleNamespace(litellm_agentstable=table, litellm_verificationtoken=SimpleNamespace(find_many=AsyncMock(return_value=[])))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=database, writer_db=database))
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    response: Final = client.get(path)
+    assert response.status_code == 200, response.text
+    payload: Final = response.json()[0] if path == "/v1/agents" else response.json()
+    assert payload["spend"] == 12.5
+    assert payload["lifetime_budget_spend"] == 0.75
+    assert payload["litellm_budget_table"]["max_budget"] == 2.0

@@ -4885,3 +4885,32 @@ async def test_agent_settlement_charges_only_the_matching_current_window(capture
         "agent_id": "window-agent",
         "spend_window": captured_window,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("captured_budget", ("current", "retired"))
+async def test_lifetime_settlement_preserves_history_without_charging_another_budget(captured_budget: str) -> None:
+    from types import SimpleNamespace
+
+    row: Final = SimpleNamespace(
+        agent_id="agent", budget_id="current", spend_window=None, spend=12.5, lifetime_budget_spend=0.25
+    )
+
+    def apply_update(*, where: dict[str, object], data: dict[str, dict[str, float]]) -> None:
+        if all(getattr(row, key) == value for key, value in where.items()):
+            for field, operation in data.items():
+                setattr(row, field, getattr(row, field) + operation["increment"])
+
+    batcher: Final = MagicMock()
+    batcher.litellm_agentstable.update_many.side_effect = apply_update
+    transaction: Final = AsyncMock()
+    transaction.batch_ = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=batcher)))
+    client: Final = MagicMock()
+    client.db.tx.return_value = AsyncMock(__aenter__=AsyncMock(return_value=transaction))
+    await DBSpendUpdateWriter._update_entity_spend_in_db(
+        entity_name="Agent", transactions={f"spend:agent_lifetime:{captured_budget}:agent": 0.25},
+        table_accessor="litellm_agentstable", where_field="agent_id", n_retry_times=0,
+        prisma_client=client, proxy_logging_obj=MagicMock(),
+    )
+    assert row.spend == 12.75
+    assert row.lifetime_budget_spend == (0.5 if captured_budget == "current" else 0.25)

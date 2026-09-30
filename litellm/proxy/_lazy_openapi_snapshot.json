@@ -3246,6 +3246,11 @@
                 }
               ]
             },
+            "lifetime_budget_spend": {
+              "default": 0.0,
+              "title": "Lifetime Budget Spend",
+              "type": "number"
+            },
             "litellm_budget_table": {
               "anyOf": [
                 {

@@ -108,7 +108,7 @@ async def test_agent_budget_accumulates_across_credentials_and_denies_the_next_a
     from litellm.proxy.agent_endpoints.auth.managed_authorization import check_agent_budget
 
     counters: Final = DualCache()
-    counters.set_cache("spend:agent:agent", 0.0)
+    counters.set_cache("spend:agent_lifetime:budget:agent", 0.0)
     counters.set_cache("spend:key:first", 0.0)
     counters.set_cache("spend:key:second", 0.0)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
@@ -117,15 +117,15 @@ async def test_agent_budget_accumulates_across_credentials_and_denies_the_next_a
     auth.billing_agent_policy = policy
     await check_agent_budget(auth)
     await proxy_server.increment_spend_counters(
-        token="first", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent"
+        token="first", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent", billing_agent_counter_key=policy.budget_counter_key
     )
     await check_agent_budget(auth)
     await proxy_server.increment_spend_counters(
-        token="second", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent"
+        token="second", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent", billing_agent_counter_key=policy.budget_counter_key
     )
     with pytest.raises(litellm.BudgetExceededError):
         await check_agent_budget(auth)
-    assert await counters.async_get_cache("spend:agent:agent") == pytest.approx(0.6)
+    assert await counters.async_get_cache("spend:agent_lifetime:budget:agent") == pytest.approx(0.6)
     assert await counters.async_get_cache("spend:key:first") == pytest.approx(0.3)
     assert await counters.async_get_cache("spend:key:second") == pytest.approx(0.3)
 

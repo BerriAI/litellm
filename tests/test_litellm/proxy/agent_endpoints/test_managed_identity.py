@@ -311,3 +311,46 @@ def test_budget_write_stamps_the_same_window_on_the_agent_row() -> None:
     assert not isinstance(result, AgentIdentityFailure)
     assert result["spend_window"] == result["litellm_budget_table"]["create"]["budget_reset_at"]
     assert result["spend"] == 0.0
+
+
+def test_new_lifetime_budget_starts_unused_without_erasing_historical_spend() -> None:
+    existing: Final = managed_agent().model_copy(update={"spend": 12.5})
+    result: Final = managed_write_fields({"budget": {"max_budget": 1.0}}, existing, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert "spend" not in result
+    assert result["lifetime_budget_spend"] == 0.0
+    assert result["litellm_budget_table"]["create"]["max_budget"] == 1.0
+    assert existing.spend == 12.5
+
+
+def test_editing_lifetime_budget_preserves_consumption() -> None:
+    from litellm.types.proxy.agent_identity import AgentBudgetState
+
+    existing: Final = managed_agent().model_copy(update={
+        "spend": 12.5, "lifetime_budget_spend": 0.75, "budget_id": "budget",
+        "litellm_budget_table": AgentBudgetState(budget_id="budget", max_budget=1.0),
+    })
+    result: Final = managed_write_fields({"budget": {"max_budget": 2.0}}, existing, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert "spend" not in result
+    assert "lifetime_budget_spend" not in result
+    assert result["litellm_budget_table"]["update"]["max_budget"] == 2.0
+
+
+@pytest.mark.parametrize("previous_duration", (None, "1d"))
+def test_recreated_or_converted_lifetime_budget_gets_a_fresh_allowance(previous_duration: str | None) -> None:
+    from litellm.types.proxy.agent_identity import AgentBudgetState
+
+    existing: Final = managed_agent().model_copy(update={
+        "spend": 12.5, "lifetime_budget_spend": 0.75,
+        "budget_id": "previous" if previous_duration else None,
+        "litellm_budget_table": AgentBudgetState(
+            budget_id="previous", max_budget=1.0, budget_duration=previous_duration,
+        ) if previous_duration else None,
+    })
+    result: Final = managed_write_fields({"budget": {"max_budget": 2.0}}, existing, "admin")
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["lifetime_budget_spend"] == 0.0
+    assert "spend" not in result
+    assert "create" in result["litellm_budget_table"]
+    assert "update" not in result["litellm_budget_table"]

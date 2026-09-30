@@ -86,6 +86,7 @@ model LiteLLM_AgentsTable {
   retired_identities LiteLLM_RetiredAgentIdentity[]
   budget_id String? @unique
   spend_window        DateTime?
+  lifetime_budget_spend Float @default(0.0)
   litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
   tpm_limit  Int?
   rpm_limit  Int?

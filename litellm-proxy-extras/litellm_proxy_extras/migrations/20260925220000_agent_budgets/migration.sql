@@ -13,3 +13,5 @@ END $$;
 
 
 ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN IF NOT EXISTS "spend_window" TIMESTAMP(3);
+
+ALTER TABLE "LiteLLM_AgentsTable" ADD COLUMN IF NOT EXISTS "lifetime_budget_spend" DOUBLE PRECISION NOT NULL DEFAULT 0.0;

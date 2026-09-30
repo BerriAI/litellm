@@ -511,7 +511,7 @@ async def _get_budget_counters(
                 counter_key=agent.budget_counter_key,
                 source_cache_key=None,
                 max_budget=agent.litellm_budget_table.max_budget,
-                fallback_spend=agent.spend or 0.0,
+                fallback_spend=agent.budget_spend,
                 entity_type="Agent",
                 entity_id=agent.agent_id,
             )

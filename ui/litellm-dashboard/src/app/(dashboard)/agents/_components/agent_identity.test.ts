@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentBudgetSpend,
   buildIdentityParams,
   entraTenantFromIssuer,
   parseIdentityForForm,
@@ -82,5 +83,27 @@ describe("agent identity configuration", () => {
     );
     expect(entraTenantFromIssuer("https://attacker.example/tenant/v2.0")).toBeNull();
     expect(entraTenantFromIssuer("https://login.microsoftonline.com/common/v2.0")).toBeNull();
+  });
+});
+
+describe("agent budget consumption", () => {
+  it("keeps historical spend separate from lifetime budget consumption", () => {
+    expect(
+      agentBudgetSpend({
+        spend: 12.5,
+        lifetime_budget_spend: 0.75,
+        litellm_budget_table: { budget_id: "budget", max_budget: 1 },
+      }),
+    ).toBe(0.75);
+  });
+  it("preserves recurring window spend and defaults missing lifetime consumption to zero", () => {
+    expect(
+      agentBudgetSpend({
+        spend: 0.5,
+        lifetime_budget_spend: 9,
+        litellm_budget_table: { budget_id: "budget", max_budget: 1, budget_duration: "1d" },
+      }),
+    ).toBe(0.5);
+    expect(agentBudgetSpend({ spend: 12.5, litellm_budget_table: { budget_id: "budget", max_budget: 1 } })).toBe(0);
   });
 });
