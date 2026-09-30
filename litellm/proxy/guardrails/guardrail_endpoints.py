@@ -1286,18 +1286,7 @@ async def patch_guardrail(
             # the caller instead of a misleading 200.
             await GUARDRAIL_REGISTRY.update_guardrail_in_db(
                 guardrail_id=guardrail_id,
-                guardrail=Guardrail(
-                    guardrail_id=guardrail_id,
-                    guardrail_name=existing_guardrail.get("guardrail_name") or "",
-                    litellm_params=parse_tolerant_litellm_params(
-                        existing_litellm_params,
-                        existing_guardrail.get("guardrail_name") or "Unknown",
-                    ),
-                    guardrail_info=existing_guardrail.get(
-                        "guardrail_info",
-                        {},  # mutable-ok: Guardrail's own constructor takes a plain dict
-                    ),
-                ),
+                guardrail=existing_guardrail,
                 prisma_client=prisma_client,
             )
             raise HTTPException(

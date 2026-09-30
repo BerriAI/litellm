@@ -1505,7 +1505,7 @@ async def test_patch_guardrail_rejects_explicit_unsupported_scope_and_rolls_back
         assert exc_info.value.status_code == 422
         assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
         restored_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args_list[-1].kwargs["guardrail"]
-        assert restored_guardrail["litellm_params"].logging_only_scope == "output"
+        assert restored_guardrail["litellm_params"] == stored_guardrail["litellm_params"]
         callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
         assert callback.logging_only_scope is None
     finally:
@@ -1513,7 +1513,9 @@ async def test_patch_guardrail_rejects_explicit_unsupported_scope_and_rolls_back
 
 
 @pytest.mark.asyncio
-async def test_patch_guardrail_rolls_back_invalid_stored_scope_tolerantly(mocker, monkeypatch, mock_guardrail_registry):
+async def test_patch_guardrail_rejected_update_restores_invalid_stored_scope_verbatim(
+    mocker, monkeypatch, mock_guardrail_registry
+):
     handler, stored_guardrail = _setup_patch_scope_guardrail(
         mocker,
         monkeypatch,
@@ -1535,7 +1537,7 @@ async def test_patch_guardrail_rolls_back_invalid_stored_scope_tolerantly(mocker
         assert exc_info.value.status_code == 422
         assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
         restored_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args_list[-1].kwargs["guardrail"]
-        assert restored_guardrail["litellm_params"].logging_only_scope is None
+        assert restored_guardrail["litellm_params"] == stored_guardrail["litellm_params"]
         callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
         assert callback.logging_only_scope is None
     finally:
