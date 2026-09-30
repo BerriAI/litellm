@@ -10,6 +10,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
 router: Final = APIRouter()
 
@@ -133,6 +134,9 @@ async def search(
     # If search_tool_name is provided in URL path, use it (takes precedence over body)
     if search_tool_name is not None:
         data["search_tool_name"] = search_tool_name
+
+    if not data.get("search_tool_name") and not data.get("model"):
+        raise ProxyMissingRequiredParamError(route="/search", param="search_tool_name")
 
     if "search_tool_name" in data and data["search_tool_name"]:
         data["model"] = data["search_tool_name"]

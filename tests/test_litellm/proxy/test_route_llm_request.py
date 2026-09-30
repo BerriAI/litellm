@@ -1,6 +1,4 @@
-
 import pytest
-
 
 
 from typing import Final
@@ -17,10 +15,10 @@ from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_reque
         ("atext_completion", {}),
         ("acompletion", {"messages": [{"role": "user", "content": "Hello"}]}),
         ("aembedding", {"input": "Hello"}),
-        ("aimage_generation", {}),
-        ("aspeech", {}),
+        ("aimage_generation", {"prompt": "a cat"}),
+        ("aspeech", {"input": "Hello"}),
         ("atranscription", {}),
-        ("amoderation", {}),
+        ("amoderation", {"input": "Hello"}),
         ("arerank", {}),
     ],
 )
@@ -1045,9 +1043,15 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
         ("aembedding", "input", "/embeddings"),
         ("aresponses", "input", "/responses"),
         ("acreate_batch", "input_file_id", "/batches"),
+        ("aspeech", "input", "/audio/speech"),
+        ("amoderation", "input", "/moderations"),
+        ("aimage_generation", "prompt", "/image/generations"),
+        ("asearch", "query", "/search"),
     ],
 )
-@pytest.mark.parametrize("data_extra", [{}, {"messages": None, "input": None, "input_file_id": None}])
+@pytest.mark.parametrize(
+    "data_extra", [{}, {"messages": None, "input": None, "input_file_id": None, "prompt": None, "query": None}]
+)
 def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, param, route, data_extra):
     from litellm.proxy.route_llm_request import (
         ProxyMissingRequiredParamError,
@@ -1094,7 +1098,10 @@ def test_raise_if_required_body_param_missing_names_first_missing_batch_param(da
         ("aresponses", {"model": "gpt-4o", "input": "hi"}),
         ("aresponses", {"model": "gpt-4o", "input": []}),
         ("arerank", {"model": "rerank-model"}),
-        ("aimage_generation", {"model": "dall-e-3"}),
+        ("aimage_generation", {"model": "gpt-image-1", "prompt": "a cat"}),
+        ("aspeech", {"model": "gpt-4o-mini-tts", "input": "hi", "voice": "alloy"}),
+        ("amoderation", {"model": "omni-moderation-latest", "input": ""}),
+        ("asearch", {"model": "perplexity-search", "query": "litellm"}),
         (
             "acreate_batch",
             {"input_file_id": "file-abc", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
@@ -1256,6 +1263,7 @@ async def test_route_request_read_through_disabled_without_store_model_in_db(mon
         )
 
     assert table.find_many_wheres == []
+
 
 @pytest.mark.asyncio
 async def test_route_request_routing_group_name_passes_model_gate():
