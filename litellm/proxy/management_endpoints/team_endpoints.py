@@ -175,6 +175,7 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
 from litellm.proxy.management_helpers.utils import (
     MemberWriteTx,
     add_new_member,
+    find_users_by_email,
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
@@ -4519,6 +4520,11 @@ async def delete_team(
 
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
 
+    member_ids_per_team: Final = await _resolve_deleted_team_member_user_ids(
+        teams=team_rows,
+        prisma_client=prisma_client,
+    )
+
     ## DELETE TEAMS
     # Both the delete and the reconcile sweep run under every team's advisory lock
     # (TEAM_ADVISORY_LOCK_SQL, the same one /team/member_add takes before its own writes),
@@ -4547,8 +4553,7 @@ async def delete_team(
         proxy_logging_obj=proxy_logging_obj,
     )
     await _invalidate_deleted_team_member_cache(
-        teams=team_rows,
-        prisma_client=prisma_client,
+        member_ids_per_team=member_ids_per_team,
         user_api_key_cache=user_api_key_cache,
     )
 
@@ -4631,30 +4636,28 @@ async def _invalidate_deleted_team_cache(
 
 
 async def _invalidate_deleted_team_member_cache(
-    teams: Sequence[LiteLLM_TeamTable],
-    prisma_client: PrismaClient,
+    member_ids_per_team: Sequence[tuple[str, Sequence[str]]],
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
-    for team in teams:
+    for team_id, member_user_ids in member_ids_per_team:
         await _evict_deleted_team_member_cache(
-            team=team,
-            prisma_client=prisma_client,
+            team_id=team_id,
+            member_user_ids=member_user_ids,
             user_api_key_cache=user_api_key_cache,
         )
 
 
 async def _evict_deleted_team_member_cache(
-    team: LiteLLM_TeamTable,
-    prisma_client: PrismaClient,
+    team_id: str,
+    member_user_ids: Sequence[str],
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
-    member_user_ids: Final = await _deleted_team_member_user_ids(team=team, prisma_client=prisma_client)
-    await evict_and_broadcast(cache_keys=member_user_ids, user_api_key_cache=user_api_key_cache)
+    await evict_and_broadcast(cache_keys=tuple(member_user_ids), user_api_key_cache=user_api_key_cache)
     await asyncio.gather(
         *(
             invalidate_team_member_spend_state(
                 user_id=user_id,
-                team_id=team.team_id,
+                team_id=team_id,
                 user_api_key_cache=user_api_key_cache,
             )
             for user_id in member_user_ids
@@ -4662,28 +4665,35 @@ async def _evict_deleted_team_member_cache(
     )
 
 
+async def _resolve_deleted_team_member_user_ids(
+    teams: Sequence[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    resolved: Final = await asyncio.gather(
+        *(_deleted_team_member_user_ids(team=team, prisma_client=prisma_client) for team in teams)
+    )
+    return tuple(zip((team.team_id for team in teams), resolved))
+
+
 async def _deleted_team_member_user_ids(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> tuple[str, ...]:
     roster_user_ids: Final = frozenset(
         member.user_id for member in team.members_with_roles if member.user_id is not None
     )
-    email_only_member_emails: Final = sorted(
-        frozenset(
-            member.user_email
-            for member in team.members_with_roles
-            if member.user_id is None and member.user_email is not None
-        )
+    email_only_member_emails: Final = frozenset(
+        member.user_email
+        for member in team.members_with_roles
+        if member.user_id is None and member.user_email is not None
     )
     if not email_only_member_emails:
         return tuple(sorted(roster_user_ids))
-    email_only_users: Final = await _user_db(prisma_client).find_many(
-        where={  # mutable-ok: Prisma query filters are dict-shaped
-            "user_email": {  # mutable-ok: Prisma query filters are dict-shaped
-                "in": email_only_member_emails,
-                "mode": "insensitive",
-            }
-        }
+    email_user_rows: Final = await asyncio.gather(
+        *(
+            find_users_by_email(prisma_client=prisma_client, tx=None, user_email=user_email)
+            for user_email in email_only_member_emails
+        )
     )
-    return tuple(sorted(roster_user_ids.union(user.user_id for user in email_only_users)))
+    email_user_ids: Final = frozenset(row.user_id for rows in email_user_rows for row in rows)
+    return tuple(sorted(roster_user_ids | email_user_ids))
 
 
 def _transform_teams_to_deleted_records(
