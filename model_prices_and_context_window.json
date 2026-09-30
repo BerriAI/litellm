@@ -30721,6 +30721,7 @@
         "output_cost_per_image": 0.08
     },
     "gemini/veo-3.1-fast-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -30737,6 +30738,7 @@
         ]
     },
     "gemini/veo-3.1-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -30752,6 +30754,7 @@
         ]
     },
     "gemini/veo-3.1-lite-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -38611,6 +38614,7 @@
     },
     "mistral/zai-glm-5-2": {
         "cache_read_input_token_cost": 1.4e-07,
+        "deprecation_date": "2026-10-31",
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 1048576,
@@ -38741,6 +38745,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4-0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.004,
         "ocr_cost_per_page_batches": 0.002,
@@ -60616,6 +60621,7 @@
         "supports_vision": true
     },
     "mistral/labs-leanstral-1-5": {
+        "deprecation_date": "2026-09-30",
         "input_cost_per_token": 0.0,
         "litellm_provider": "mistral",
         "max_input_tokens": 262144,
