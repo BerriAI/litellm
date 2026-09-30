@@ -72,6 +72,12 @@ def _next_sync_or_exhausted(it: Any) -> object:
         return _SYNC_ITER_EXHAUSTED
 
 
+def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
+    served_tier: Final = complete_streaming_response.model_dump().get("service_tier")
+    if isinstance(served_tier, str) and served_tier:
+        setattr(response, "service_tier", served_tier)  # noqa: B010  # pydantic extra, not a declared field
+
+
 def is_async_iterable(obj: object) -> bool:
     """
     Check if an object is an async iterable (can be used with 'async for').
@@ -816,7 +822,7 @@ class CustomStreamWrapper:
         self,
         completion_obj: dict[str, Any],
         model_response: ModelResponseStream,
-        response_obj: dict[str, Any],
+        response_obj: Mapping[str, object],
     ) -> bool:
         if (
             "content" in completion_obj
@@ -1500,8 +1506,11 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+            chunk_usage: Final = getattr(chunk, "usage", None)
+            if isinstance(chunk_usage, Usage):
+                model_response.usage = chunk_usage
+            elif isinstance(chunk_usage, BaseModel):
+                model_response.usage = Usage(**chunk_usage.model_dump())
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
@@ -1869,6 +1878,7 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    _stamp_served_service_tier(response, complete_streaming_response)
                     try:
                         _cache_copy = complete_streaming_response.model_copy(deep=True)
                         _log_copy = complete_streaming_response.model_copy(deep=True)
@@ -2120,6 +2130,7 @@ class CustomStreamWrapper:
                     "usage",
                     getattr(complete_streaming_response, "usage"),
                 )
+                _stamp_served_service_tier(response, complete_streaming_response)
                 try:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:

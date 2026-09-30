@@ -196,6 +196,9 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 
+_CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
+    {TRUSTED_CALLBACK_VARS_FIELD}
+)
 service_logger_obj: Final = ServiceLogging()  # used for tracking latency on OTEL
 # Bounded dedup for stale-alias warnings (FIFO eviction when over cap).
 _MAX_STALE_ALIAS_WARNING_KEYS: Final = 10_000
@@ -923,6 +926,8 @@ def convert_key_logging_metadata_to_callback(
         # put newrelic_* under a different callback never asked for New Relic and
         # must not export to it.
         if var.startswith("newrelic_") and data.callback_name != "newrelic":
+            continue
+        if var.startswith("signoz_") and data.callback_name != "signoz":
             continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
@@ -1956,7 +1961,9 @@ def refresh_proxy_server_request_body_snapshot(
     if not isinstance(proxy_server_request, dict):
         return
     _body_snapshot_exclude: Final = (
-        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+        frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"})
+        | _TRANSPORT_ONLY_CREDENTIAL_KEYS
+        | _CALLBACK_CREDENTIAL_KEYS
     )
     body: Final = {  # mutable-ok: audit JSON serialization requires a dict with shared nested messages
         k: v for k, v in data.items() if k not in _body_snapshot_exclude

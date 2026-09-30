@@ -187,6 +187,7 @@ def owned_gateway(idp: Keycloak, directory: Path, cleanup: ExitStack) -> OAuthGa
             base_url=base_url,
             control_plane_base_url=base_url,
             replica_urls=(base_url,),
+            control_replica_urls=(base_url,),
             master_key=os.environ["LITELLM_MASTER_KEY"],
         ),
         _environment=environment,

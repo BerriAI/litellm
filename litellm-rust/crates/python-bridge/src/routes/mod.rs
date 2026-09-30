@@ -1,10 +1,70 @@
 pub(crate) mod audio_transcription;
 pub(crate) mod chat_completions;
 pub(crate) mod embeddings;
+mod inference;
 pub(crate) mod messages;
 pub(crate) mod ocr;
 pub(crate) mod responses;
 pub(crate) mod token_counter;
+
+use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
+use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
+use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
+
+fn call_hooks(
+    py: Python<'_>,
+    operation: LoggingOperation,
+    request: &Bound<'_, PyAny>,
+    args: &Bound<'_, PyTuple>,
+    kwargs: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
+    let call = PublicCall::capture(request, args, kwargs)?;
+    let arguments = call.arguments(py);
+    Ok((
+        arguments,
+        LegacyLogging::new(py, operation, call, asynchronous),
+    ))
+}
+
+fn run_public_call<H, M>(
+    py: Python<'_>,
+    arguments: Py<PyDict>,
+    start: impl FnOnce(
+        Python<'_>,
+        &Bound<'_, PyDict>,
+        <H::Protocol as Protocol>::Request,
+    ) -> PyResult<M>
+    + Send
+    + Sync
+    + 'static,
+    host: H,
+    hooks: impl PythonCallHooks + 'static,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>>
+where
+    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
+{
+    litellm_host_python::run_call(
+        py,
+        move |py, arguments, request| {
+            start(py, arguments, request).map(crate::logger::LoggedMachine::new)
+        },
+        host,
+        HookChain::new()
+            .with(hooks)
+            .with(crate::preflight::SdkPolicy),
+        arguments,
+        crate::lifecycle::call_options(asynchronous),
+    )
+}
 
 #[cfg(test)]
 mod tests {
