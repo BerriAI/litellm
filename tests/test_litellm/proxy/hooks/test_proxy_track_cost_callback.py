@@ -726,6 +726,7 @@ async def test_update_database_and_spend_counters_reconciles_reservation_before_
         budget_reservation=budget_reservation,
         actual_cost=0.2,
         finalize=False,
+        apply_consistent=False,
     )
     increment_spend_counters.assert_awaited_once()
     assert increment_spend_counters.await_args.kwargs["budget_reservation"] is budget_reservation
@@ -771,6 +772,7 @@ async def test_update_database_and_spend_counters_releases_reservation_when_db_u
             budget_reservation=budget_reservation,
             actual_cost=0.2,
             finalize=False,
+            apply_consistent=False,
         )
         mock_release_budget_reservation.assert_awaited_once_with(
             budget_reservation=budget_reservation,
@@ -2730,3 +2732,34 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
         assert "headers" in failure_debug_lines[0]
     else:
         assert failure_debug_lines == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
+async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "model": "test-model",
+        "response_cost": 0.01,
+        "litellm_params": {"metadata": {identity_field: "autonomous-agent"}},
+    }
+    with patch(
+        "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as persist:
+        await _ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=ModelResponse(), start_time=datetime.now(), end_time=datetime.now()
+        )
+    persist.assert_awaited_once()
+    assert persist.call_args.kwargs["response_cost"] == 0.01
+    assert persist.call_args.kwargs["user_id"] is None
+    assert persist.call_args.kwargs["user_api_key"] is None
+    assert persist.call_args.kwargs["kwargs"]["litellm_params"]["metadata"][identity_field] == "autonomous-agent"
+
+
+@pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
+def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
+    assert _should_track_cost_callback(
+        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+    ) is expected

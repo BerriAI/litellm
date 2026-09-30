@@ -206,6 +206,7 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
 def test_get_microsoft_callback_response():
     # Arrange
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_response = {
         "mail": "microsoft_user@example.com",
         "displayName": "Microsoft User",
@@ -2995,6 +2996,7 @@ class TestCLIKeyRegenerationFlow:
         from litellm.proxy.management_endpoints.ui_sso import cli_sso_callback
 
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_request.base_url = "https://proxy.example.com/"
 
         mock_user_info = LiteLLM_UserTable(
@@ -3158,6 +3160,7 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock request
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_request.base_url = "http://internal-proxy.local/"
 
         # Test data
@@ -7106,6 +7109,7 @@ class TestCliSsoAttributionMetadata:
         from litellm.proxy.management_endpoints.types import CustomOpenID
 
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_request.base_url = "http://internal-proxy.local/"
         session_key = "cli-session-new-user"
         mock_user_info = LiteLLM_UserTable(
@@ -7220,6 +7224,7 @@ class TestCliSsoAttributionMetadata:
         )
 
         mock_request = MagicMock(spec=Request)
+        mock_request.scope = {}
         mock_request.base_url = "http://internal-proxy.local/"
         session_key = "cli-session-4567890"
         mock_user_info = LiteLLM_UserTable(
@@ -8751,6 +8756,7 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
     assertion = assertion_from_sso_login(_ema_id_token(), "rt_1")
     assert assertion is not None
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_request.base_url = "http://localhost:4000/"
     mock_request.cookies = {}
 
@@ -8822,6 +8828,7 @@ async def test_cli_completion_persists_assertion_under_db_user_id():
     assertion = assertion_from_sso_login(_ema_id_token(), None)
     assert assertion is not None
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_request.base_url = "http://localhost:4000/"
 
     user_info = MagicMock()
@@ -8989,6 +8996,7 @@ async def test_browser_funnel_reports_an_uncaptured_assertion(monkeypatch, caplo
     """Wiring: the browser login path must reach the diagnostic, not just define it."""
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_request.base_url = "http://localhost:4000/"
     mock_request.cookies = {}
 
@@ -9059,6 +9067,7 @@ async def test_cli_funnel_reports_an_uncaptured_assertion(monkeypatch, caplog):
 
     monkeypatch.setenv("MICROSOFT_CLIENT_ID", "cid")
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_request.base_url = "http://localhost:4000/"
 
     user_info = MagicMock()
@@ -9134,6 +9143,7 @@ def _cli_callback_kwargs(flow):
 
 def _cli_callback_request():
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_request.base_url = "http://localhost:4000/"
     return mock_request
 
@@ -9438,3 +9448,45 @@ class TestSessionTokenCookie:
         resp = Response()
         set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
         assert "Secure" in self._cookie(resp)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trusted", [False, True])
+@pytest.mark.parametrize("storage_available", [False, True])
+async def test_cli_sign_in_enrolls_only_verified_subjects_before_completing(
+    monkeypatch: pytest.MonkeyPatch, trusted: bool, storage_available: bool
+) -> None:
+    from typing import Final
+
+    from litellm.proxy.management_endpoints import ui_sso
+    from litellm.types.proxy.agent_identity import MicrosoftInteractiveSubject
+
+    flow: Final[dict[str, object]] = {}
+    kwargs: Final = _cli_callback_kwargs(flow)
+    subject: Final = MicrosoftInteractiveSubject(issuer="issuer", tenant_id="tenant", oid="subject")
+    kwargs["request"].scope = {"litellm_microsoft_interactive_subject": subject if trusted else subject.model_dump()}
+    table: Final = kwargs["prisma_client"].writer_db.litellm_verifiedsubject
+    table.upsert = AsyncMock(
+        return_value=SimpleNamespace(kind="human", user_id="cli-user-id", verified_via="sso_interactive"),
+        side_effect=None if storage_available else RuntimeError("storage unavailable"),
+    )
+    monkeypatch.setattr(ui_sso, "get_user_info_from_db", AsyncMock(return_value=_cli_callback_user_info([])))
+    monkeypatch.setattr(ui_sso, "fetch_cli_sso_team_details", AsyncMock(return_value=()))
+    monkeypatch.setattr(ui_sso, "retain_sso_identity_assertion_for_ema", AsyncMock())
+    if trusted and not storage_available:
+        with pytest.raises(HTTPException) as error:
+            await ui_sso._complete_cli_sso_callback_session(**kwargs)
+        assert error.value.status_code == 503
+        assert "sso_complete" not in flow
+        return
+    response: Final = await ui_sso._complete_cli_sso_callback_session(**kwargs)
+    assert response.status_code == 200
+    assert flow["session_data"]["user_id"] == "cli-user-id"
+    if trusted:
+        table.upsert.assert_awaited_once_with(
+            where={"issuer_tenant_id_oid": {"issuer": "issuer", "tenant_id": "tenant", "oid": "subject"}},
+            data={"create": {"issuer": "issuer", "tenant_id": "tenant", "oid": "subject",
+                             "user_id": "cli-user-id", "verified_via": "sso_interactive"}, "update": {}},
+        )
+    else:
+        table.upsert.assert_not_awaited()
