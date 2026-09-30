@@ -24,9 +24,12 @@ describe("partial breakdown metrics", () => {
   it("still sums populated days after a partial day", () => {
     const goodDay = {
       ...partialDay,
-      breakdown: { ...partialDay.breakdown, api_keys: {
-        key: { metadata: { key_alias: "test key" }, metrics: { spend: 5 } },
-      } },
+      breakdown: {
+        ...partialDay.breakdown,
+        api_keys: {
+          key: { metadata: { key_alias: "test key" }, metrics: { spend: 5 } },
+        },
+      },
     } as unknown as DailyData;
     expect(getGlobalTopKeys([partialDay, goodDay], 10)[0].spend).toBe(5);
   });

@@ -35,14 +35,14 @@ export const getTopModels = (
         };
       }
       try {
-        modelSpend[model].spend += (metrics.metrics?.spend ?? 0);
+        modelSpend[model].spend += metrics.metrics?.spend ?? 0;
       } catch (e) {
         console.error(`Error adding spend for ${model}: ${e}, got metrics: ${JSON.stringify(metrics)}`);
       }
-      modelSpend[model].requests += (metrics.metrics?.api_requests ?? 0);
-      modelSpend[model].successful_requests += (metrics.metrics?.successful_requests ?? 0);
-      modelSpend[model].failed_requests += (metrics.metrics?.failed_requests ?? 0);
-      modelSpend[model].tokens += (metrics.metrics?.total_tokens ?? 0);
+      modelSpend[model].requests += metrics.metrics?.api_requests ?? 0;
+      modelSpend[model].successful_requests += metrics.metrics?.successful_requests ?? 0;
+      modelSpend[model].failed_requests += metrics.metrics?.failed_requests ?? 0;
+      modelSpend[model].tokens += metrics.metrics?.total_tokens ?? 0;
     });
   });
 
@@ -69,11 +69,11 @@ export const getTopAgents = (results: ExtendedDailyData[], topAgentsLimit: numbe
           agent_name: (data.metadata as any)?.agent_name || agentId,
         };
       }
-      agentSpend[agentId].spend += (data.metrics?.spend ?? 0);
-      agentSpend[agentId].requests += (data.metrics?.api_requests ?? 0);
-      agentSpend[agentId].successful_requests += (data.metrics?.successful_requests ?? 0);
-      agentSpend[agentId].failed_requests += (data.metrics?.failed_requests ?? 0);
-      agentSpend[agentId].tokens += (data.metrics?.total_tokens ?? 0);
+      agentSpend[agentId].spend += data.metrics?.spend ?? 0;
+      agentSpend[agentId].requests += data.metrics?.api_requests ?? 0;
+      agentSpend[agentId].successful_requests += data.metrics?.successful_requests ?? 0;
+      agentSpend[agentId].failed_requests += data.metrics?.failed_requests ?? 0;
+      agentSpend[agentId].tokens += data.metrics?.total_tokens ?? 0;
     });
   });
 
@@ -113,13 +113,13 @@ export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): To
           },
         };
       }
-      keySpend[key].metrics.spend += (metrics.metrics?.spend ?? 0);
-      keySpend[key].metrics.prompt_tokens += (metrics.metrics?.prompt_tokens ?? 0);
-      keySpend[key].metrics.completion_tokens += (metrics.metrics?.completion_tokens ?? 0);
-      keySpend[key].metrics.total_tokens += (metrics.metrics?.total_tokens ?? 0);
-      keySpend[key].metrics.api_requests += (metrics.metrics?.api_requests ?? 0);
-      keySpend[key].metrics.successful_requests += (metrics.metrics?.successful_requests ?? 0);
-      keySpend[key].metrics.failed_requests += (metrics.metrics?.failed_requests ?? 0);
+      keySpend[key].metrics.spend += metrics.metrics?.spend ?? 0;
+      keySpend[key].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+      keySpend[key].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+      keySpend[key].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+      keySpend[key].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+      keySpend[key].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+      keySpend[key].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
       keySpend[key].metrics.cache_read_input_tokens += (metrics.metrics?.cache_read_input_tokens ?? 0) || 0;
       keySpend[key].metrics.cache_creation_input_tokens += (metrics.metrics?.cache_creation_input_tokens ?? 0) || 0;
     });
@@ -132,7 +132,7 @@ export const getGlobalTopKeys = (results: DailyData[], topKeysLimit: number): To
       user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
       tags: metrics.metadata.tags || [],
-      spend: (metrics.metrics?.spend ?? 0),
+      spend: metrics.metrics?.spend ?? 0,
     }))
     .sort((a, b) => b.spend - a.spend)
     .slice(0, topKeysLimit);
@@ -146,7 +146,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
     const tagDictionary = Object.keys(entities).reduce((acc: { [key: string]: TagUsage[] }, entity) => {
       const { api_key_breakdown } = entities[entity];
       Object.keys(api_key_breakdown).forEach((key) => {
-        const tagUsage = { tag: entity, usage: (api_key_breakdown[key].metrics?.spend ?? 0) };
+        const tagUsage = { tag: entity, usage: api_key_breakdown[key].metrics?.spend ?? 0 };
         if (acc[key]) {
           acc[key].push(tagUsage);
         } else {
@@ -179,13 +179,13 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
           },
         };
       }
-      keySpend[key].metrics.spend += (metrics.metrics?.spend ?? 0);
-      keySpend[key].metrics.prompt_tokens += (metrics.metrics?.prompt_tokens ?? 0);
-      keySpend[key].metrics.completion_tokens += (metrics.metrics?.completion_tokens ?? 0);
-      keySpend[key].metrics.total_tokens += (metrics.metrics?.total_tokens ?? 0);
-      keySpend[key].metrics.api_requests += (metrics.metrics?.api_requests ?? 0);
-      keySpend[key].metrics.successful_requests += (metrics.metrics?.successful_requests ?? 0);
-      keySpend[key].metrics.failed_requests += (metrics.metrics?.failed_requests ?? 0);
+      keySpend[key].metrics.spend += metrics.metrics?.spend ?? 0;
+      keySpend[key].metrics.prompt_tokens += metrics.metrics?.prompt_tokens ?? 0;
+      keySpend[key].metrics.completion_tokens += metrics.metrics?.completion_tokens ?? 0;
+      keySpend[key].metrics.total_tokens += metrics.metrics?.total_tokens ?? 0;
+      keySpend[key].metrics.api_requests += metrics.metrics?.api_requests ?? 0;
+      keySpend[key].metrics.successful_requests += metrics.metrics?.successful_requests ?? 0;
+      keySpend[key].metrics.failed_requests += metrics.metrics?.failed_requests ?? 0;
       keySpend[key].metrics.cache_read_input_tokens += (metrics.metrics?.cache_read_input_tokens ?? 0) || 0;
       keySpend[key].metrics.cache_creation_input_tokens += (metrics.metrics?.cache_creation_input_tokens ?? 0) || 0;
     });
@@ -198,7 +198,7 @@ export const getTopAPIKeys = (results: ExtendedDailyData[], topKeysLimit: number
       user: metrics.metadata.user_email ?? metrics.metadata.user_id ?? null,
       key_exists: metrics.metadata.key_exists,
       tags: metrics.metadata.tags || [],
-      spend: (metrics.metrics?.spend ?? 0),
+      spend: metrics.metrics?.spend ?? 0,
     }))
     .sort((a, b) => b.spend - a.spend)
     .slice(0, topKeysLimit);
@@ -219,11 +219,11 @@ export const getProviderSpend = (results: ExtendedDailyData[]): ProviderSpendRow
         };
       }
       try {
-        providerSpend[provider].spend += (metrics.metrics?.spend ?? 0);
-        providerSpend[provider].requests += (metrics.metrics?.api_requests ?? 0);
-        providerSpend[provider].successful_requests += (metrics.metrics?.successful_requests ?? 0);
-        providerSpend[provider].failed_requests += (metrics.metrics?.failed_requests ?? 0);
-        providerSpend[provider].tokens += (metrics.metrics?.total_tokens ?? 0);
+        providerSpend[provider].spend += metrics.metrics?.spend ?? 0;
+        providerSpend[provider].requests += metrics.metrics?.api_requests ?? 0;
+        providerSpend[provider].successful_requests += metrics.metrics?.successful_requests ?? 0;
+        providerSpend[provider].failed_requests += metrics.metrics?.failed_requests ?? 0;
+        providerSpend[provider].tokens += metrics.metrics?.total_tokens ?? 0;
       } catch (e) {
         console.error(`Error processing provider ${provider}: ${e}`);
       }
