@@ -1566,14 +1566,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             "response.output_text.annotation.added",
             ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
         ):
-            # Responses streams url_citation / file_citation via annotation.added;
-            # Chat Completions clients expect them on delta.annotations.
             raw_annotation = parsed_chunk.get("annotation")
             annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                [raw_annotation] if raw_annotation is not None else None
+                [raw_annotation] if raw_annotation is not None else None  # mutable-ok: one-shot wrapper for shared converter
             )
             return ModelResponseStream(
-                choices=[
+                choices=[  # mutable-ok: ModelResponseStream coerces only list choices
                     StreamingChoices(
                         index=0,
                         delta=Delta(annotations=annotations),
