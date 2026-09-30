@@ -126,6 +126,17 @@ const filterModels = (
   return filterFn(filterArgs);
 };
 
+const unavailableGroups = (
+  selectedOptions: ModelOption[],
+  offeredByValue: Map<string, ModelOption>,
+  hasLiveModels: boolean,
+): ModelOptionGroup[] => {
+  if (!hasLiveModels) return [];
+  const items = selectedOptions.filter((option) => !offeredByValue.has(option.value));
+  if (items.length === 0) return [];
+  return [{ label: "Unavailable", items }];
+};
+
 export const ModelSelect = (props: ModelSelectProps) => {
   const anchor = useComboboxAnchor();
   const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
@@ -230,8 +241,10 @@ export const ModelSelect = (props: ModelSelectProps) => {
 
   const offeredByValue = new Map(offeredGroups.flatMap((group) => group.items).map((option) => [option.value, option]));
   const selectedOptions = value.map((v) => offeredByValue.get(v) ?? { label: v, value: v });
-  const unavailableOptions = selectedOptions.filter((option) => !offeredByValue.has(option.value));
-  const groups: ModelOptionGroup[] = [{ label: "Unavailable", items: unavailableOptions }, ...offeredGroups];
+  const groups: ModelOptionGroup[] = [
+    ...unavailableGroups(selectedOptions, offeredByValue, filteredModels.length > 0),
+    ...offeredGroups,
+  ];
   const overflowOptions = selectedOptions.slice(MAX_VISIBLE_MODEL_CHIPS);
 
   return (

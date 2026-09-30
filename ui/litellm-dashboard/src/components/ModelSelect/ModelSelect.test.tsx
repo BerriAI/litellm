@@ -692,7 +692,7 @@ describe("ModelSelect", () => {
     renderWithProviders(
       <ModelSelect
         onChange={mockOnChange}
-        value={["gpt-4", "retired-model"]}
+        value={["retired-b", "gpt-4", "retired-a", "retired-c", "retired-d", "retired-e", "retired-f"]}
         context="user"
         options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
       />,
@@ -708,7 +708,7 @@ describe("ModelSelect", () => {
           .map((option) => option.textContent),
       ),
     ).toEqual([
-      ["retired-model"],
+      ["retired-b", "retired-a", "retired-c", "retired-d", "retired-e", "retired-f"],
       ["All Proxy Models", "No Default Models"],
       ["All Openai models", "All Anthropic models"],
       ["gpt-4", "claude-3"],
@@ -734,6 +734,28 @@ describe("ModelSelect", () => {
     await user.click(retired);
 
     expect(mockOnChange).toHaveBeenCalledWith(["all-proxy-models"]);
+  });
+
+  it("should not mark selections Unavailable when the model list could not be loaded", async () => {
+    const user = userEvent.setup();
+    mockUseAllProxyModels.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    } as unknown as ReturnType<typeof useAllProxyModels>);
+
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["gpt-4", "claude-3"]}
+        context="global"
+        options={{ includeSpecialOptions: true }}
+      />,
+    );
+
+    await openModelList(user);
+
+    expectOffered("All Proxy Models");
+    expectNotOffered("Unavailable");
   });
 
   it("should not show an Unavailable group when every selection is offered", async () => {
