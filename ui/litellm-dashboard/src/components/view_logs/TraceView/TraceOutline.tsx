@@ -166,7 +166,7 @@ export function TraceOutline({
               {row.error && (
                 <span aria-label="failed" role="img" className="size-1.5 shrink-0 rounded-full bg-destructive" />
               )}
-              <span className={cn("max-w-[75%] shrink-0 truncate", row.kind === "span" && row.span?.type === "tool" && "font-mono text-xs")}>
+              <span className={cn("max-w-[80%] shrink-0 truncate", row.kind === "span" && row.span?.type === "tool" && "font-mono text-xs")}>
                 {row.label}
               </span>
               {row.detail && (

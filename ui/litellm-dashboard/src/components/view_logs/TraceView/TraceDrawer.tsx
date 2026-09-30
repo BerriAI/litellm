@@ -142,7 +142,7 @@ function TraceBody({ trace, accessToken, initialSpanId, onOpenRequestLog }: Trac
   }, []);
 
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto md:grid-cols-[minmax(380px,42%)_1fr] md:overflow-hidden">
+    <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto md:grid-cols-[minmax(400px,46%)_1fr] md:overflow-hidden">
       <div className="flex max-h-[55vh] min-h-0 flex-col border-b border-border/60 md:max-h-none md:border-r md:border-b-0">
         <TraceOutline
           rows={rows}

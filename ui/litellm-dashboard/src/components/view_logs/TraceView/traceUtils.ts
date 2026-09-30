@@ -444,6 +444,8 @@ const countSteps = (nodes: readonly OutlineNode[]): number =>
 interface FlattenContext {
   rows: OutlineRow[];
   stats: Map<string, SubtreeStats>;
+  /** Show the model on LLM rows only when the run used more than one. */
+  showModel: boolean;
 }
 
 function spanRow(
@@ -472,7 +474,7 @@ function spanRow(
   if (span.type === "llm") {
     const model = span.litellm?.model_group || span.model || span.litellm?.model;
     const tokens = span.input_tokens + span.output_tokens;
-    row.meta = [model ? shortModel(model) : null, tokens ? `${fmtTok(tokens)} tok` : null].filter(Boolean).join(" · ");
+    row.meta = [model && ctx.showModel ? shortModel(model) : null, tokens ? `${fmtTok(tokens)} tok` : null].filter(Boolean).join(" · ");
   } else if (span.type === "tool") {
     row.detail = argsPreview(span.input_preview);
   } else if (span.type === "agent") {
@@ -559,7 +561,8 @@ function walk(nodes: readonly OutlineNode[], depth: number, ancestors: string[],
 export function buildOutline(trace: Trace): OutlineRow[] {
   const spans = dedupeSpans(trace.spans);
   const { root, nodes } = buildOutlineTree(spans);
-  const ctx: FlattenContext = { rows: [], stats: subtreeStats(spans) };
+  const models = new Set(spans.flatMap((s) => (s.type === "llm" ? [s.litellm?.model_group || s.model || ""] : [])));
+  const ctx: FlattenContext = { rows: [], stats: subtreeStats(spans), showModel: models.size > 1 };
   const input = firstLine(previewText(trace.summary.input_preview || root?.input_preview || ""));
   ctx.rows.push({
     id: INPUT_ROW_ID,
