@@ -8109,3 +8109,279 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
     )
     assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
     assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
+
+
+def test_guarded_text_rewrite_preserves_element_level_cache_control():
+    """When a text element is rewritten to ``guarded_text``, any
+    ``cache_control`` marker on the original element must survive the rewrite.
+
+    Regression test for BerriAI/litellm#33281."""
+    config = AmazonConverseConfig()
+
+    messages = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "earlier context"},
+                {
+                    "type": "text",
+                    "text": "second question",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+    ]
+
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-x", "guardrailVersion": "1"}}
+
+    converted = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+
+    trailing = converted[-1]
+    assert trailing["role"] == "user"
+    new_content = trailing["content"]
+
+    # Both elements were text -> both should now be guarded_text.
+    assert all(item["type"] == "guarded_text" for item in new_content)
+    assert new_content[0]["text"] == "earlier context"
+    assert new_content[1]["text"] == "second question"
+
+    # The element that originally had cache_control must still carry it,
+    # otherwise the per-element cache-point loop in the prompt factory
+    # silently drops the cachePoint block for the trailing user message.
+    # The first element never had a marker, so it stays clean.
+    assert "cache_control" not in new_content[0]
+    assert "cache_control" in new_content[1]
+    assert new_content[1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_guarded_text_rewrite_preserves_message_level_cache_control_for_string_content():
+    """When string content is rewritten to ``[{"type": "guarded_text", ...}]``,
+    a message-level ``cache_control`` must be promoted to the new element so
+    the per-element cache-point loop can still see it.
+
+    The user-message branch of the prompt factory only honors message-level
+    ``cache_control`` when content is a string — once content becomes a list,
+    only element-level markers are read — so dropping the marker here would
+    silently remove the cachePoint on every trailing string-content user
+    message.
+
+    Regression test for BerriAI/litellm#33281."""
+    config = AmazonConverseConfig()
+
+    messages = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {
+            "role": "user",
+            "content": "second question",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-x", "guardrailVersion": "1"}}
+
+    converted = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+
+    trailing = converted[-1]
+    assert trailing["role"] == "user"
+    # After rewrite, content is a list of guarded_text elements.
+    new_content = trailing["content"]
+    assert isinstance(new_content, list)
+    assert len(new_content) == 1
+    assert new_content[0]["type"] == "guarded_text"
+    assert new_content[0]["text"] == "second question"
+    # The marker must have been promoted to the new element so the
+    # cache-point loop can still see it on the list-content path.
+    assert new_content[0].get("cache_control") == {"type": "ephemeral"}
+
+
+def test_guarded_text_rewrite_without_cache_control_is_unchanged():
+    """Sanity check: when neither the message nor any text element carries a
+    cache_control marker, the rewrite produces a plain ``guarded_text`` dict
+    with no spurious key.
+
+    Regression test for BerriAI/litellm#33281."""
+    config = AmazonConverseConfig()
+
+    messages = [
+        {"role": "user", "content": "second question"},
+    ]
+
+    optional_params = {"guardrailConfig": {"guardrailIdentifier": "gr-x", "guardrailVersion": "1"}}
+
+    converted = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+
+    trailing = converted[-1]
+    new_content = trailing["content"]
+    assert new_content == [{"type": "guarded_text", "text": "second question"}]
+
+
+def test_transform_request_emits_cachePoint_after_guardContent_when_guardrail_enabled():
+    """End-to-end check: when ``cache_control_injection_points`` requests a
+    marker on the trailing user message (``index: -1``) AND
+    ``guardrailConfig`` is set, the transformed Converse request must still
+    contain a ``cachePoint`` block immediately after the rewritten
+    ``guardContent`` block.
+
+    Without the fix the cachePoint is silently dropped — the ``guarded_text``
+    rewrite strips the cache_control marker that the
+    ``AnthropicCacheControlHook`` placed on the trailing message's content,
+    so the per-element cache-point loop in the prompt factory never sees it
+    and no ``cachePoint`` block is emitted for the last user message.
+
+    Regression test for BerriAI/litellm#33281."""
+    config = AmazonConverseConfig()
+
+    # Simulate the state after the AnthropicCacheControlHook has applied the
+    # ``index: -1`` injection point to the trailing string-content user
+    # message — see ``_safe_insert_cache_control_in_message`` in
+    # ``litellm/integrations/anthropic_cache_control_hook.py``. For string
+    # content, that hook attaches the marker at message level; for list
+    # content, on the last element.
+    messages = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "second question",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+    ]
+
+    optional_params = {
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-x",
+            "guardrailVersion": "1",
+            "trace": "disabled",
+        }
+    }
+
+    result = config._transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+
+    # The trailing user message should be rewritten to guarded_text AND still
+    # emit a cachePoint block immediately after its guardContent wrapper.
+    bedrock_messages = result["messages"]
+    trailing_bedrock = bedrock_messages[-1]
+    assert trailing_bedrock["role"] == "user"
+
+    content_blocks = trailing_bedrock["content"]
+    # guardContent block followed by cachePoint block.
+    assert any("guardContent" in block for block in content_blocks)
+    assert any("cachePoint" in block for block in content_blocks)
+
+    # And the cachePoint must come AFTER the guardContent, not before —
+    # a cachePoint is the breakpoint for everything preceding it, so it
+    # has to follow the guardContent block it covers.
+    guard_idx = next(i for i, block in enumerate(content_blocks) if "guardContent" in block)
+    cache_idx = next(i for i, block in enumerate(content_blocks) if "cachePoint" in block)
+    assert cache_idx > guard_idx, (
+        f"cachePoint must follow the guardContent block it covers; got content={content_blocks!r}"
+    )
+    # Default ttl-less cachePoint.
+    assert content_blocks[cache_idx]["cachePoint"] == {"type": "default"}
+
+
+def test_transform_request_emits_cachePoint_when_guardrail_enabled_for_string_content():
+    """End-to-end variant for the string-content rewrite path: a message-level
+    ``cache_control`` set by the AnthropicCacheControlHook on a string-content
+    trailing user message must still produce a cachePoint block after the
+    guardContent block when guardrailConfig is enabled.
+
+    Regression test for BerriAI/litellm#33281."""
+    config = AmazonConverseConfig()
+
+    messages = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {
+            "role": "user",
+            "content": "second question",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    optional_params = {
+        "guardrailConfig": {
+            "guardrailIdentifier": "gr-x",
+            "guardrailVersion": "1",
+            "trace": "disabled",
+        }
+    }
+
+    result = config._transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+
+    trailing_bedrock = result["messages"][-1]
+    content_blocks = trailing_bedrock["content"]
+
+    assert any("guardContent" in block for block in content_blocks)
+    assert any("cachePoint" in block for block in content_blocks)
+
+    guard_idx = next(i for i, block in enumerate(content_blocks) if "guardContent" in block)
+    cache_idx = next(i for i, block in enumerate(content_blocks) if "cachePoint" in block)
+    assert cache_idx > guard_idx, (
+        f"cachePoint must follow the guardContent block it covers; got content={content_blocks!r}"
+    )
+    assert content_blocks[cache_idx]["cachePoint"] == {"type": "default"}
+
+
+def test_transform_request_emits_no_cachePoint_without_guardrail_baseline():
+    """Sanity baseline: without a guardrail, a cacheControl marker on the
+    trailing user message still produces a cachePoint — confirming the
+    comparison case used in the issue reproducer.
+
+    This is the *control* arm of the regression test for
+    BerriAI/litellm#33281: it shows that cachePoint emission was already
+    working in the no-guardrail path, which is exactly what makes the
+    guardrail-path regression a regression."""
+    config = AmazonConverseConfig()
+
+    messages = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "second question",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        },
+    ]
+
+    # No guardrailConfig here.
+    optional_params: dict = {}
+
+    result = config._transform_request(
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+
+    trailing_bedrock = result["messages"][-1]
+    content_blocks = trailing_bedrock["content"]
+
+    # Plain text + cachePoint — no guardContent wrapper.
+    assert any("text" in block for block in content_blocks)
+    assert any("cachePoint" in block for block in content_blocks)
+    assert not any("guardContent" in block for block in content_blocks)
+    assert content_blocks[-1] == {"cachePoint": {"type": "default"}}
