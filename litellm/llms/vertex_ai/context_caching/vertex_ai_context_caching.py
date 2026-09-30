@@ -1,4 +1,7 @@
+import re
+import time
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Final, Literal
 
 import httpx
@@ -29,6 +32,95 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+
+# Maps a generated cache key -> (google cache name, expiry as a unix timestamp).
+#
+# Google does not let us choose the cache name, so finding an existing cache
+# means listing `cachedContents` and matching on `displayName`. That list call
+# runs before every generation, which adds a full round trip (and pagination)
+# to every cache *hit*. Remembering the name we already resolved removes it.
+#
+# Entries are only trusted until the cache's own `expireTime`, so an expired
+# cache is re-resolved rather than passed to the model. `_RESOLVED_CACHE_MAX_ENTRIES`
+# bounds the dict for long-lived proxies with many distinct prefixes.
+_memo: Final[dict[str, tuple[str, float]]] = {}  # mutable-ok: runtime memo
+_RESOLVED_CACHE_MAX_ENTRIES: Final = 1000
+
+# Re-resolve slightly before the stated expiry, so a cache that lapses between
+# our check and Google serving the request is not handed to generateContent.
+_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 30.0
+
+# RFC 3339 with an optional fractional part and an optional UTC offset.
+_EXPIRE_TIME_PATTERN: Final = re.compile(
+    r"^(?P<head>\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2})"
+    r"(?:\.(?P<fraction>\d+))?"
+    r"(?P<offset>[+-]\d{2}:\d{2})?$"
+)
+
+
+def _parse_expire_time(expire_time: str | None) -> float | None:
+    """Convert Google's RFC 3339 `expireTime` to a unix timestamp.
+
+    Returns None when absent or unparseable, which makes the caller skip
+    memoization rather than guess at a lifetime.
+    """
+    if not expire_time:
+        return None
+    # `fromisoformat` rejects more than 6 fractional-second digits and Google
+    # emits up to 9, so truncate the fraction before parsing.
+    match: Final = _EXPIRE_TIME_PATTERN.match(expire_time.replace("Z", "+00:00"))
+    if match is None:
+        verbose_logger.debug("Vertex context caching: could not parse expireTime=%s", expire_time)
+        return None
+    head, fraction, offset = match.group("head"), match.group("fraction"), match.group("offset")
+    normalized: Final = f"{head}.{fraction[:6]}{offset}" if fraction else f"{head}{offset}"
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except (ValueError, OverflowError, OSError):
+        verbose_logger.debug("Vertex context caching: could not parse expireTime=%s", expire_time)
+        return None
+
+
+def _memo_scope(
+    custom_llm_provider: str,
+    vertex_project: str | None,
+    vertex_location: str | None,
+    api_base: str | None,
+    cache_key: str,
+) -> str:
+    """Scope a memo entry to the Google resource it belongs to.
+
+    A cachedContents name is a per-project, per-location resource, so the same
+    prompt in a different project or region is a *different* cache. Keying on
+    the prompt alone would hand one deployment another's resource name.
+    """
+    return "|".join((custom_llm_provider, vertex_project or "", vertex_location or "", api_base or "", cache_key))
+
+
+def _remember_cache_name(cache_key: str, cache_name: str | None, expire_time: str | None) -> None:
+    """Memoize a resolved cache name until its own expiry."""
+    if not cache_name:
+        return
+    expires_at: Final = _parse_expire_time(expire_time)
+    if expires_at is None:
+        # No usable expiry: prefer today's behaviour (re-resolve) over serving
+        # a name we cannot age out.
+        return
+    if len(_memo) >= _RESOLVED_CACHE_MAX_ENTRIES:
+        _memo.clear()
+    _memo[cache_key] = (cache_name, expires_at)
+
+
+def _get_remembered_cache_name(cache_key: str) -> str | None:
+    """Return a previously resolved cache name if it has not expired."""
+    entry: Final = _memo.get(cache_key)
+    if entry is None:
+        return None
+    cache_name, expires_at = entry
+    if time.time() + _EXPIRY_SAFETY_MARGIN_SECONDS >= expires_at:
+        _memo.pop(cache_key, None)
+        return None
+    return cache_name
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -150,6 +242,11 @@ class ContextCachingEndpoints(VertexBase):
         - None
         """
 
+        memo_key: Final = _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, cache_key)
+        remembered: Final = _get_remembered_cache_name(memo_key)
+        if remembered is not None:
+            return remembered
+
         _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
             custom_llm_provider=custom_llm_provider,
@@ -202,7 +299,9 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in raw_response["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    return cached_item.get("name")
+                    cache_name = cached_item.get("name")  # rebind-ok: per page
+                    _remember_cache_name(memo_key, cache_name, cached_item.get("expireTime"))
+                    return cache_name
 
             # Check if there are more pages
             page_token = raw_response.get("nextPageToken")
@@ -236,6 +335,11 @@ class ContextCachingEndpoints(VertexBase):
         OR
         - None
         """
+
+        memo_key: Final = _memo_scope(custom_llm_provider, vertex_project, vertex_location, api_base, cache_key)
+        remembered: Final = _get_remembered_cache_name(memo_key)
+        if remembered is not None:
+            return remembered
 
         _, base_url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
@@ -289,7 +393,9 @@ class ContextCachingEndpoints(VertexBase):
             for cached_item in raw_response["cachedContents"]:
                 display_name = cached_item.get("displayName")
                 if display_name is not None and display_name == cache_key:
-                    return cached_item.get("name")
+                    cache_name = cached_item.get("name")  # rebind-ok: per page
+                    _remember_cache_name(memo_key, cache_name, cached_item.get("expireTime"))
+                    return cache_name
 
             # Check if there are more pages
             page_token = raw_response.get("nextPageToken")
@@ -451,6 +557,13 @@ class ContextCachingEndpoints(VertexBase):
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
+        _remember_cache_name(
+            _memo_scope(
+                custom_llm_provider, vertex_project, vertex_location, api_base, generated_cache_key
+            ),
+            raw_response_cached.get("name"),
+            raw_response_cached.get("expireTime"),
+        )
         return (
             non_cached_messages,
             optional_params,
@@ -605,6 +718,13 @@ class ContextCachingEndpoints(VertexBase):
 
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
+        _remember_cache_name(
+            _memo_scope(
+                custom_llm_provider, vertex_project, vertex_location, api_base, generated_cache_key
+            ),
+            raw_response_cached.get("name"),
+            raw_response_cached.get("expireTime"),
+        )
         return (
             non_cached_messages,
             optional_params,
