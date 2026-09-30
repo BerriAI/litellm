@@ -201,12 +201,15 @@ def _check_disable_global_guardrails_caller_permission(
     )
 
 
-def _is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
+def is_user_team_admin(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:
     for member in team_obj.members_with_roles:
         if (member.user_id is not None and member.user_id == user_api_key_dict.user_id) and member.role == "admin":
             return True
 
     return False
+
+
+_is_user_team_admin = is_user_team_admin
 
 
 async def _is_user_org_admin_for_team(user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable) -> bool:

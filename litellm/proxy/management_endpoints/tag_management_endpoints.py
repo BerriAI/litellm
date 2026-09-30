@@ -32,7 +32,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
 )
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
+from litellm.proxy.management_endpoints.common_utils import is_user_team_admin
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
@@ -178,7 +178,7 @@ async def _authorize_tag_owner_change(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-        if caller_is_proxy_admin or _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        if caller_is_proxy_admin or is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             continue
         raise _tag_owner_change_forbidden(team_id)
 
