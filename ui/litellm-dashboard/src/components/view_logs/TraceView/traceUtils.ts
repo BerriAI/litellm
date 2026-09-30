@@ -37,9 +37,13 @@ export interface VisibleTree {
  * Framework plumbing: middleware wrappers plus LangGraph's generic "model" / "tools"
  * graph nodes. The root span is never hidden.
  */
-export const isFrameworkSpan = (span: Span): boolean =>
-  span.parent_span_id !== null &&
-  (span.type === "framework" || (span.type === "chain" && (span.name === "model" || span.name === "tools")));
+const GRAPH_NODE_NAMES = new Set(["model", "tools"]);
+
+export const isFrameworkSpan = (span: Span): boolean => {
+  const isGraphNode = span.type === "chain" && GRAPH_NODE_NAMES.has(span.name);
+  const isPlumbing = span.type === "framework" || isGraphNode;
+  return span.parent_span_id !== null && isPlumbing;
+};
 
 const byStart = (a: Span, b: Span): number => a.start_offset_ms - b.start_offset_ms;
 
@@ -147,7 +151,8 @@ interface RowContext {
 function pushSpan(ctx: RowContext, span: Span, depth: number): void {
   const hasChildren = (ctx.children.get(span.span_id)?.length ?? 0) > 0;
   const collapsed = ctx.state.collapsedSpanIds.has(span.span_id);
-  ctx.rows.push({ kind: "span", id: span.span_id, span, depth, hasChildren, collapsed });
+  const row: TreeRow = { kind: "span", id: span.span_id, span, depth, hasChildren, collapsed };
+  ctx.rows.push(row);
   if (hasChildren && !collapsed) pushLevel(ctx, span.span_id, depth + 1);
 }
 
@@ -156,7 +161,7 @@ function pushGroup(ctx: RowContext, parentKey: string, members: Span[], depth: n
   const id = groupRowId(parentKey, first);
   const failedCount = members.filter((s) => s.status === "error").length;
   const expanded = ctx.state.expandedGroupIds.has(id);
-  ctx.rows.push({
+  const groupRow: TreeRow = {
     kind: "group",
     id,
     depth,
@@ -168,18 +173,20 @@ function pushGroup(ctx: RowContext, parentKey: string, members: Span[], depth: n
     p50Duration: median(members.map((s) => s.duration_ms)),
     isFailureGroup: failedCount === members.length,
     expanded,
-  });
+  };
+  ctx.rows.push(groupRow);
   if (!expanded) return;
   const reveal = Math.min(ctx.state.groupRevealCounts[id] ?? GROUP_PAGE_SIZE, members.length);
   members.slice(0, reveal).forEach((member) => pushSpan(ctx, member, depth + 1));
   if (reveal < members.length) {
-    ctx.rows.push({
+    const moreRow: TreeRow = {
       kind: "load-more",
       id: `${id}::more`,
       depth: depth + 1,
       groupId: id,
       remaining: members.length - reveal,
-    });
+    };
+    ctx.rows.push(moreRow);
   }
 }
 
@@ -260,8 +267,10 @@ export const parseJson = (value: string): unknown => {
   }
 };
 
-const isMessage = (value: unknown): value is TraceMessage =>
-  typeof value === "object" && value !== null && "role" in value && typeof (value as TraceMessage).role === "string";
+const isMessage = (value: unknown): value is TraceMessage => {
+  const isObject = typeof value === "object" && value !== null;
+  return isObject && "role" in value && typeof (value as TraceMessage).role === "string";
+};
 
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */
 export function parseMessages(value: string): TraceMessage[] | null {
