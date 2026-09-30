@@ -177,11 +177,10 @@ class AgentRequestHandler:
 
         registered: Final = global_agent_registry.get_agent_by_id(agent_id)
         registry_managed: Final = isinstance(registered, AgentResponse) and registered.identity_managed
-        if registry_managed or (registered is None and prisma_client is not None):
+        if registry_managed or prisma_client is not None:
             target: Final = await AgentIdentityStore.from_client(prisma_client).agent(agent_id)
             if isinstance(target, AgentIdentityFailure):
-                if registry_managed:
-                    raise_identity_failure(target)
+                raise_identity_failure(target)
             elif target is None and registry_managed:
                 return False
             elif isinstance(target, AgentResponse) and target.identity_managed:

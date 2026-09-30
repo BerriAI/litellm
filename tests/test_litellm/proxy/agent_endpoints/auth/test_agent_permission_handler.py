@@ -1109,3 +1109,53 @@ async def test_delegated_target_grants_do_not_borrow_another_teams_authority(
         object_permission={"object_permission_id": "own", "agents": ["direct", "a-only", "b-only"]},
     )
     assert await AgentRequestHandler.resolve_agent_access(auth) == RestrictedAgentAccess(frozenset(expected))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "managed,enabled,grant,outage,allowed",
+    [
+        (True, True, False, False, False),
+        (True, True, True, False, True),
+        (True, False, True, False, False),
+        (False, True, False, False, True),
+        (True, True, False, True, False),
+    ],
+)
+async def test_target_authorization_uses_live_policy_despite_stale_unmanaged_registry(
+    monkeypatch: pytest.MonkeyPatch, managed: bool, enabled: bool, grant: bool, outage: bool, allowed: bool
+) -> None:
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    stale: Final = AgentResponse(agent_id="target", agent_name="Target", agent_card_params={})
+    registry: Final = AgentRegistry()
+    registry.register_agent(stale)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    binding: Final = AgentIdentityBinding(
+        agent_id="target", provider="microsoft_entra", tenant_id="tenant", client_id="client",
+        issuer="issuer", revision="current",
+    )
+    current: Final = stale.model_copy(update={
+        "identity_managed": managed, "identity": binding if managed else None, "enabled": enabled,
+    })
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=current, side_effect=ConnectionError("writer unavailable") if outage else None,
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["target"])
+    auth: Final = UserAPIKeyAuth(object_permission=permission if grant else None)
+
+    if outage:
+        with pytest.raises(HTTPException) as denied:
+            await AgentRequestHandler.is_agent_allowed("target", auth)
+        assert denied.value.status_code == 503
+        return
+    assert await AgentRequestHandler.is_agent_allowed("target", auth) is allowed
