@@ -719,6 +719,30 @@ def test_img_url_token_counter(img_url, monkeypatch):
     assert height is not None
 
 
+def test_get_image_dimensions_raw_base64():
+    from litellm.litellm_core_utils.token_counter import get_image_dimensions
+
+    raw_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    w, h = get_image_dimensions(data=raw_b64)
+    assert w == 1
+    assert h == 1
+
+
+def test_get_image_dimensions_failed_url_raises_valueerror(monkeypatch):
+    from litellm.litellm_core_utils.token_counter import get_image_dimensions
+
+    def _failing_get(client, url, **kw):
+        raise Exception("Connection timeout")
+
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.token_counter.safe_get",
+        _failing_get,
+    )
+
+    with pytest.raises(ValueError, match="Unable to parse or decode image data"):
+        get_image_dimensions(data="https://unreachable-endpoint.com/test.png")
+
+
 def test_token_encode_disallowed_special():
     encode(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")
     token_counter(model="gpt-3.5-turbo", text="Hello, world! <|endoftext|>")

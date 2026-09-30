@@ -245,8 +245,16 @@ def get_image_dimensions(
             pass
     if img_data is None:
         # Not a URL or fetch failed — assume base64
-        _header, encoded = data.split(",", 1)
-        img_data = base64.b64decode(encoded)
+        if "," in data:
+            _header, encoded = data.split(",", 1)
+        else:
+            encoded = data
+        try:
+            img_data = base64.b64decode(encoded)
+        except Exception as e:
+            raise ValueError(
+                f"Unable to parse or decode image data: {e}"
+            ) from e
 
     img_type: Final = get_image_type(img_data)
 
