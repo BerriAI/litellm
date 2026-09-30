@@ -20,6 +20,19 @@ class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 
+def trace_encode_rows(rows: Sequence[Mapping[str, JsonValue]]) -> str: ...
+def trace_ensure_schema(
+    url: str, database: str, user: str, password: str, trace_retention_days: int, spend_log_retention_days: int
+) -> Future[None]: ...
+def trace_query(
+    url: str,
+    database: str,
+    user: str,
+    password: str,
+    sql: str,
+    parameters: Mapping[str, str | int | Sequence[str]],
+) -> Future[str]: ...
+
 @final
 class NativeDiagnosticProcessor:
     def __new__(cls, minimum_custom_key_length: int) -> NativeDiagnosticProcessor: ...
@@ -338,6 +351,9 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "trace_encode_rows",
+    "trace_ensure_schema",
+    "trace_query",
     "transcription",
 ]
 
