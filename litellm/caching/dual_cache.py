@@ -326,6 +326,20 @@ class DualCache(BaseCache):
 
         return sublist_keys, previous_access_times
 
+    def reserve_redis_batch_reads(self, keys: Sequence[str]) -> tuple[list[str], dict[str, float | None]]:
+        """Reserve the memory-missed keys whose throttled Redis reads are due, as a batch read would."""
+        if self.redis_cache is None:
+            return [], {}  # mutable-ok: API contract returns an empty list and dictionary
+        key_list: Final = list(keys)  # mutable-ok: batch_get_cache takes a list
+        memory: Final = self.in_memory_cache
+        in_memory_result: Final = (
+            None
+            if memory is None  # pyright: ignore[reportUnnecessaryComparison]  # handle an absent in-memory tier
+            else memory.batch_get_cache(key_list)
+        )
+        result: Final = in_memory_result if in_memory_result is not None else tuple(None for _ in key_list)
+        return self._reserve_redis_batch_keys(time.time(), key_list, result)
+
     def _rollback_redis_batch_key_reservations(self, previous_access_times: dict[str, float | None]) -> None:
         with self._last_redis_batch_access_time_lock:
             for key, previous_time in previous_access_times.items():
