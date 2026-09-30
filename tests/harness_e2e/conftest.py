@@ -1,11 +1,12 @@
-"""Fixtures for litellm.harness end-to-end tests.
+"""Fixtures for the litellm.agent() end-to-end tests.
 
-These run the real harness runtimes (claude, codex, opencode, deepagents) against a
-real LiteLLM AI Gateway. They skip unless LITELLM_PROXY_API_BASE and
-LITELLM_PROXY_API_KEY are set. Model names are gateway model groups and can be
-overridden per harness with HARNESS_E2E_MODEL_<HARNESS>.
+These run the real harness runtimes (claude, codex, opencode, deepagents) against a real
+LiteLLM AI Gateway, routed with the `litellm_proxy/` model prefix. They skip unless
+LITELLM_PROXY_API_BASE and LITELLM_PROXY_API_KEY are set. Model groups can be overridden
+per harness with HARNESS_E2E_MODEL_<HARNESS>.
 """
 
+import importlib.util
 import os
 import shutil
 from collections.abc import Iterator
@@ -13,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from litellm.harness import Gateway, Harness
+from litellm import Harness
 
 GATEWAY_BASE = os.environ.get("LITELLM_PROXY_API_BASE", "").strip()
 GATEWAY_KEY = os.environ.get("LITELLM_PROXY_API_KEY", "").strip()
 
-DEFAULT_MODELS = {
+DEFAULT_MODEL_GROUPS = {
     Harness.CLAUDE_CODE: "claude-haiku-4-5-20251001",
     Harness.CODEX: "bedrock_mantle/openai.gpt-5.4",
     Harness.OPENCODE: "claude-haiku-4-5-20251001",
@@ -38,18 +39,14 @@ requires_gateway = pytest.mark.skipif(
 
 
 def model_for(harness: Harness) -> str:
+    """`litellm_proxy/<group>`: every model call goes through the gateway."""
     override = os.environ.get(f"HARNESS_E2E_MODEL_{harness.name}", "").strip()
-    return override or DEFAULT_MODELS[harness]
+    return f"litellm_proxy/{override or DEFAULT_MODEL_GROUPS[harness]}"
 
 
 def harness_available(harness: Harness) -> bool:
     if harness is Harness.DEEPAGENTS:
-        try:
-            import deepagents  # noqa: F401
-            import langchain_litellm  # noqa: F401
-        except ImportError:
-            return False
-        return True
+        return all(importlib.util.find_spec(m) is not None for m in ("deepagents", "langchain_litellm"))
     return shutil.which(BINARIES[harness]) is not None
 
 
@@ -58,17 +55,10 @@ def harness_params() -> list:
         pytest.param(
             h,
             id=h.value,
-            marks=pytest.mark.skipif(
-                not harness_available(h), reason=f"{h.value} runtime not installed"
-            ),
+            marks=pytest.mark.skipif(not harness_available(h), reason=f"{h.value} runtime not installed"),
         )
         for h in Harness
     ]
-
-
-@pytest.fixture
-def gateway() -> Gateway:
-    return Gateway(api_base=GATEWAY_BASE, api_key=GATEWAY_KEY)
 
 
 @pytest.fixture
