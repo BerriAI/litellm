@@ -32,8 +32,10 @@ class _RecordingLogger(CustomLogger):
 
 
 async def _settle_shared_logging_worker() -> None:
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
-    await GLOBAL_LOGGING_WORKER.stop()
+    try:
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await GLOBAL_LOGGING_WORKER.stop()
 
 
 @pytest.fixture
