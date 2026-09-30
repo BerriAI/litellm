@@ -9,6 +9,7 @@ import type { Settings } from "./engineData";
 vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn() } }));
 
 const settings: Settings = {
+  lookback_hours: 24,
   name: "Research quality",
   model: "analysis",
   source: "traces",
@@ -123,9 +124,8 @@ it("searches providers and saves custom history and schedule values", async () =
   await user.click(screen.getByRole("radio", { name: "Run now and keep monitoring" }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "2" } });
   await user.click(screen.getByRole("button", { name: "Save changes" }));
-  expect(save).toHaveBeenCalledWith(
-    expect.objectContaining({ model: "review", lookback_hours: 3, interval_minutes: 2, enabled: true }),
-  );
+  const expectedSettings = { model: "review", lookback_hours: 3, interval_minutes: 2, enabled: true };
+  expect(save).toHaveBeenCalledWith(expect.objectContaining(expectedSettings));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "0" } });
   expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });

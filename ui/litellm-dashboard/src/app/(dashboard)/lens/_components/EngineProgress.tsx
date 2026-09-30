@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { analysisElapsed, analysisProgress, type Job } from "./engineData";
+import { analysisElapsed, analysisProgress, nextCheckStatus, type Engine, type Job } from "./engineData";
 
 const steps = ["Review runs", "Find patterns", "Check evidence"];
 
@@ -67,4 +67,15 @@ export function EngineProgress({ job, onCancel }: { job: Job; onCancel?: () => v
       </div>
     </section>
   );
+}
+
+export function NextCheck({ engine }: { engine: Engine }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const label = nextCheckStatus(engine, now);
+  if (!label) return null;
+  return <p className="mt-1 text-xs text-muted-foreground">{label}</p>;
 }

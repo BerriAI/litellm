@@ -49,10 +49,8 @@ export function ActivityScope({
     const timer = setTimeout(() => setScope(JSON.parse(serialized) as ActivitySelection), 350);
     return () => clearTimeout(timer);
   }, [serialized]);
-  const validWindow =
-    Number.isInteger(value.lookback_hours ?? 24) &&
-    (value.lookback_hours ?? 24) >= 1 &&
-    (value.lookback_hours ?? 24) <= 720;
+  const historyHours = value.lookback_hours ?? 24;
+  const validWindow = Number.isInteger(historyHours) && historyHours >= 1 && historyHours <= 720;
   const valid = validWindow && (scope.filters ?? []).every((f) => f.key.trim() && f.value.trim());
   const load = (selection: ActivitySelection) => {
     const { lookback_hours, ...selectionSettings } = selection;
@@ -232,51 +230,14 @@ export function ActivityScope({
           History for the first scan, from 1 hour to 30 days. Later scans review new activity.
         </p>
       </div>
-      <section aria-label="Matching activity" className="self-start rounded-lg border">
-        <div className="border-b px-4 py-3">
-          <p className="text-sm font-medium" role="status">
-            {previewTitle()}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">{windowLabel} · Preview only, no analysis cost</p>
-        </div>
-        <div className="max-h-80 overflow-y-auto px-4">
-          {ready && preview.error && (
-            <p role="alert" className="py-3 text-sm text-destructive">
-              {preview.error.message}
-            </p>
-          )}
-          {ready && preview.data?.eligible === 0 && (
-            <p className="py-4 text-sm text-muted-foreground">
-              No matches. Try removing a condition or check that your agent records this metadata. Very recent runs need
-              two minutes to settle.
-            </p>
-          )}
-          {ready &&
-            preview.data?.executions.slice(0, 10).map((run) => (
-              <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
-                <div className="min-w-0">
-                  <RunList executions={[run]} />
-                </div>
-                {run.source === "traces" && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label={`Open ${run.name}`}
-                    onClick={() => setTrace({ id: run.trace_id, ref: run.trace_ref })}
-                  >
-                    Open run
-                    <ArrowUpRight className="size-3" />
-                  </Button>
-                )}
-              </div>
-            ))}
-        </div>
-        {ready && (preview.data?.eligible ?? 0) > 10 && (
-          <p className="border-t px-4 py-2 text-xs text-muted-foreground">
-            Showing 10 examples. Your scan limit determines how many matching runs are reviewed.
-          </p>
-        )}
-      </section>
+      <MatchingActivity
+        title={previewTitle()}
+        windowLabel={windowLabel}
+        ready={ready}
+        error={preview.error}
+        data={preview.data}
+        onOpen={(run) => setTrace({ id: run.trace_id, ref: run.trace_ref })}
+      />
       {trace && (
         <TracePanel
           open
@@ -287,5 +248,64 @@ export function ActivityScope({
         />
       )}
     </div>
+  );
+}
+
+function MatchingActivity({
+  title,
+  windowLabel,
+  ready,
+  error,
+  data,
+  onOpen,
+}: {
+  title: string;
+  windowLabel: string;
+  ready: boolean;
+  error: Error | null;
+  data: Sample | undefined;
+  onOpen: (run: Sample["executions"][number]) => void;
+}) {
+  return (
+    <section aria-label="Matching activity" className="self-start rounded-lg border">
+      <div className="border-b px-4 py-3">
+        <p className="text-sm font-medium" role="status">
+          {title}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">{windowLabel} · Preview only, no analysis cost</p>
+      </div>
+      <div className="max-h-80 overflow-y-auto px-4">
+        {ready && error && (
+          <p role="alert" className="py-3 text-sm text-destructive">
+            {error.message}
+          </p>
+        )}
+        {ready && data?.eligible === 0 && (
+          <p className="py-4 text-sm text-muted-foreground">
+            No matches. Try removing a condition or check that your agent records this metadata. Very recent runs need
+            two minutes to settle.
+          </p>
+        )}
+        {ready &&
+          data?.executions.slice(0, 10).map((run) => (
+            <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
+              <div className="min-w-0">
+                <RunList executions={[run]} />
+              </div>
+              {run.source === "traces" && (
+                <Button variant="ghost" size="sm" aria-label={`Open ${run.name}`} onClick={() => onOpen(run)}>
+                  Open run
+                  <ArrowUpRight className="size-3" />
+                </Button>
+              )}
+            </div>
+          ))}
+      </div>
+      {ready && (data?.eligible ?? 0) > 10 && (
+        <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+          Showing 10 examples. Your scan limit determines how many matching runs are reviewed.
+        </p>
+      )}
+    </section>
   );
 }

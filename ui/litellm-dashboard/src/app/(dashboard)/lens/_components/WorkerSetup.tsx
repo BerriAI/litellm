@@ -3,8 +3,30 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { apiClient } from "@/components/networking";
+import { Input } from "@/components/ui/input";
+import { serverRootPath } from "@/lib/serverRootPath";
+import { apiClient, proxyBaseUrl } from "@/components/networking";
 import type { EngineList, WorkerCreated } from "./engineData";
+
+export const LENS_WORKER_IMAGE =
+  "ghcr.io/berriai/litellm-lens-worker@sha256:654bdb62df533402cc778d318db0e9c56ed1bce7d866a6c684c3436bedc6a7eb";
+
+function initialProxyAddress(): string {
+  const url = new URL(proxyBaseUrl || serverRootPath, window.location.origin);
+  if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) url.hostname = "host.docker.internal";
+  return url.toString().replace(/\/$/, "");
+}
+
+export function workerSetupCommand(address: string, token: string): string {
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  return [
+    "docker run -d --restart unless-stopped --read-only --cap-drop ALL",
+    "  --security-opt no-new-privileges --platform linux/amd64",
+    `  -e ${quote("LITELLM_URL=" + address)}`,
+    `  -e ${quote("LENS_WORKER_TOKEN=" + token)}`,
+    `  ${LENS_WORKER_IMAGE}`,
+  ].join(" \\\n");
+}
 
 export function WorkerSetup({
   accessToken,
@@ -17,6 +39,8 @@ export function WorkerSetup({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const [address, setAddress] = useState(initialProxyAddress);
+  const [copied, setCopied] = useState(false);
   const [created, setCreated] = useState<WorkerCreated | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -52,45 +76,57 @@ export function WorkerSetup({
             your lenses.
           </DialogDescription>
         </DialogHeader>
-        <ol className="list-decimal pl-5 space-y-3 text-sm">
-          <li>Create a credential scoped to the activity you can access.</li>
-          <li>
-            On your server, set <code>LITELLM_URL</code> to this proxy&apos;s address and <code>LENS_WORKER_TOKEN</code>{" "}
-            to the credential below.
-          </li>
-          <li>
-            Set <code>LENS_WORKER_IMAGE</code> to the versioned worker image for your LiteLLM release, then run{" "}
-            <code>
-              docker run -d --restart unless-stopped --read-only --cap-drop ALL --security-opt no-new-privileges
-              --env-file lens.env &quot;$LENS_WORKER_IMAGE&quot;
-            </code>
-            .
-          </li>
-        </ol>
+        <p className="text-sm">
+          LiteLLM already handles your lenses and results. This Docker container runs their analysis in the background.
+          Generate a command below, then run it on a server with Docker. It connects automatically.
+        </p>
+        <label className="grid gap-2 text-sm">
+          LiteLLM address
+          <Input value={address} onChange={(event) => setAddress(event.target.value)} />
+        </label>
         <p className="text-xs text-muted-foreground">
-          No source checkout or second LiteLLM proxy is needed. Upgrade your existing proxy to a Lens-enabled release
-          first. The worker polls LiteLLM for scans started here or due on a schedule. It connects outward to LiteLLM.
-          No incoming port or GPU is required. Store the credential in your server&apos;s secret manager or environment
-          file.
+          Use an address the container can reach. If you run Docker on another server, enter this proxy’s network
+          address.
         </p>
         {created ? (
-          <div className="space-y-2">
-            <p className="text-sm font-medium">Copy this credential now. It is shown only once.</p>
+          <div className="space-y-3">
+            <p className="text-sm font-medium">Run this command on your server</p>
             <textarea
               readOnly
-              aria-label="Worker credential"
+              aria-label="Docker setup command"
+              rows={7}
               className="w-full rounded-md border p-3 font-mono text-xs"
-              value={created.token}
+              value={workerSetupCommand(address, created.token)}
             />
-            <Button variant="outline" onClick={() => navigator.clipboard.writeText(created.token)}>
-              Copy credential
+            <Button
+              onClick={async () => {
+                await navigator.clipboard.writeText(workerSetupCommand(address, created.token));
+                setCopied(true);
+              }}
+            >
+              {copied ? "Copied" : "Copy Docker command"}
             </Button>
+            <p className="text-xs text-muted-foreground">
+              The command includes a private worker token, shown only here. It lets this worker run your lenses; no
+              other API key is needed. Keep the command private.
+            </p>
+            <p className="text-sm" role="status">
+              {workers.some(
+                (worker) => worker.id === created.worker.id && Date.now() - Date.parse(worker.last_seen) < 120000,
+              )
+                ? "Worker connected. You can start a scan."
+                : "Waiting for your worker to connect…"}
+            </p>
           </div>
         ) : (
-          <Button disabled={busy} onClick={createWorker}>
-            {busy ? "Creating…" : "Create worker credential"}
+          <Button disabled={busy || !address.trim()} onClick={createWorker}>
+            {busy ? "Generating…" : "Generate setup command"}
           </Button>
         )}
+        <p className="text-xs text-muted-foreground">
+          A compatible worker image is already selected. One worker can serve all your lenses and keeps running when you
+          close this page. You can stop its access below.
+        </p>
         {workers
           ?.filter((w) => !w.revoked)
           .map((worker) => (

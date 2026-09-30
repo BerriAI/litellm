@@ -1,26 +1,24 @@
 # Lens worker
 
-Lens reviews recorded activity and saves evidence-linked findings in the LiteLLM dashboard under Observability, Lens
+Lens reviews recorded activity and saves evidence-linked findings in the LiteLLM dashboard under Observability, Lens (`/ui/lens/`)
 
 ## Start a worker
 
 Upgrade your existing LiteLLM proxy to a release that includes Lens with PostgreSQL, agent tracing (`general_settings.tracing: {store: clickhouse}`), and ClickHouse configured through `CLICKHOUSE_URL` and a separate SELECT-only `CLICKHOUSE_READER_URL`. Enable the ClickHouse callback and request/response logging to analyze LLM requests. Lens can only inspect content you actually retain
 
-In Lens, click **Connect worker**, then **Create worker credential**. Save the credential in a secret manager or a local environment file readable only by the operator. It is shown once
+In Lens, click **Connect worker**, then **Generate setup command**. The LiteLLM address is filled in for you; change it only if the server running Docker needs a different network address. Copy the command and run it on your server. The dialog changes to **Worker connected** when the container checks in
 
-```dotenv
-LENS_WORKER_IMAGE=ghcr.io/berriai/litellm-lens-worker:sha-<your-release-commit>
-LITELLM_URL=https://your-litellm-proxy.example
-LENS_WORKER_TOKEN=your-worker-credential
-```
+The command already contains the compatible worker image and one worker token. No separate API key, source checkout, environment file, or second LiteLLM deployment is needed. Keep the command private because it includes the token. The LiteLLM release provides the dashboard and APIs; the container only runs background analysis
 
-Download `compose.yaml` from the same LiteLLM release as your proxy, then run it on the same host or another server; a source checkout is unnecessary:
+The dashboard and Compose file pin a verified worker image by digest. The image uses Linux amd64, and the generated command selects that platform. Worker image releases are independent of proxy releases: update the pinned image when changing their API contract. CI also publishes immutable commit tags for reproducible builds
+
+For deployments managed with Compose, download `compose.yaml` and provide `LITELLM_URL` and `LENS_WORKER_TOKEN` in an environment file. Its default image is already selected:
 
 ```bash
 docker compose --env-file /path/to/lens.env -f compose.yaml up -d
 ```
 
-The published image runs only the Lens worker, not another LiteLLM proxy. CI publishes immutable commit tags for main and this preview branch; use the image listed in the successful Lens Worker Image workflow. Images currently target Linux amd64. Developers can build locally with `LENS_WORKER_IMAGE=litellm-lens-worker:local docker compose -f deploy/lens/compose.yaml -f deploy/lens/compose.build.yaml up -d --build`.
+Developers can build locally with `LENS_WORKER_IMAGE=litellm-lens-worker:local docker compose -f deploy/lens/compose.yaml -f deploy/lens/compose.build.yaml up -d --build`
 
 The worker needs outbound HTTPS access to LiteLLM. It needs no inbound ports, provider keys, direct database access, or GPU. The proxy calls your selected model through its configured router; trace content reaches that model provider. Use a model with JSON output support and known token prices. One worker handles one scan at a time and can serve multiple lenses. For more throughput, start another worker with a separate credential
 

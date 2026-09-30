@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { apiClient } from "@/components/networking";
 import { EngineView } from "./EngineView";
-import type { Engine, Finding } from "./engineData";
+import { nextCheckStatus, type Engine, type Finding } from "./engineData";
 
 vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn() } }));
 
@@ -149,4 +149,22 @@ describe("Lens findings and runs", () => {
     expect(screen.getByText("trace-42")).toBeInTheDocument();
     expect(screen.getByText(/1 selected from 1 matches/)).toBeInTheDocument();
   });
+});
+
+it("shows the actual next schedule and avoids a stale countdown during active scans", () => {
+  const now = Date.parse("2026-09-30T10:00:00Z");
+  const monitoring = {
+    ...engine,
+    settings: { ...engine.settings, enabled: true },
+    next_run_at: "2026-09-30T10:12:00Z",
+  };
+  expect(nextCheckStatus(monitoring, now)).toContain("in 12 minutes");
+  expect(nextCheckStatus(monitoring, now + 12 * 60000)).toBe("Due now · waiting for a worker");
+  expect(nextCheckStatus({ ...monitoring, jobs: [{ ...engine.jobs[0], status: "running" }] }, now)).toBe(
+    "Next check scheduled after this scan finishes",
+  );
+  expect(nextCheckStatus({ ...monitoring, jobs: [{ ...engine.jobs[0], status: "queued" }] }, now)).toBe(
+    "Waiting for a worker",
+  );
+  expect(nextCheckStatus(engine, now)).toBeNull();
 });

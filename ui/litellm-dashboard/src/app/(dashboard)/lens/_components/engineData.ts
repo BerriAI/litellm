@@ -141,3 +141,17 @@ export function durationLabel(value: number, base: "minutes" | "hours" = "minute
   if (minutes % 60 === 0) return `${minutes / 60} ${minutes === 60 ? "hour" : "hours"}`;
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
+
+export function nextCheckStatus(engine: Engine, now: number): string | null {
+  if (!engine.settings.enabled) return null;
+  const active = engine.jobs.find((job) => job.status === "queued" || job.status === "running");
+  if (active?.status === "running") return "Next check scheduled after this scan finishes";
+  if (active?.status === "queued") return "Waiting for a worker";
+  const next = new Date(engine.next_run_at);
+  const remaining = next.getTime() - now;
+  if (remaining <= 0) return "Due now · waiting for a worker";
+  const minutes = Math.ceil(remaining / 60000);
+  const relative = minutes === 1 ? "in less than a minute" : `in ${minutes} minutes`;
+  const time = next.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return `Next check ${time} · ${relative}`;
+}

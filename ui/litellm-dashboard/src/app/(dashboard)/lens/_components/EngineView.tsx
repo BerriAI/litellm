@@ -12,7 +12,7 @@ import { apiClient } from "@/components/networking";
 import { TracePanel } from "./TracePanel";
 import { EngineSetup } from "./EngineSetup";
 import { RunList } from "./ActivityScope";
-import { EngineProgress } from "./EngineProgress";
+import { EngineProgress, NextCheck } from "./EngineProgress";
 import { WorkerSetup } from "./WorkerSetup";
 import {
   engineStatus,
@@ -265,6 +265,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     ? `Checks every ${engine.settings.interval_minutes} minutes`
                     : "Manual analysis available"}
                 </p>
+                <NextCheck engine={engine} />
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Last successful scan</p>
