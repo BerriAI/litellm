@@ -2,6 +2,7 @@
 ## API Handler for calling Vertex AI Partner Models
 from collections.abc import Callable
 from enum import Enum
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -298,7 +299,9 @@ class VertexAIPartnerModels(VertexBase):
             request_data: Final = {
                 "model": model,
                 "messages": messages,
-                **{key: value for key, value in (("system", system), ("tools", tools)) if value is not None},
+                **MappingProxyType(
+                    {key: value for key, value in (("system", system), ("tools", tools)) if value is not None}
+                ),
             }
 
             # Prepare litellm_params with credentials
