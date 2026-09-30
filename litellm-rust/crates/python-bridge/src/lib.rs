@@ -1,9 +1,12 @@
 mod cache;
+mod callable;
 mod coercion;
 mod credentials;
 mod diagnostics;
 mod errors;
+mod execution;
 mod http;
+mod lifecycle;
 mod logger;
 mod marshal;
 mod preflight;
@@ -14,7 +17,7 @@ mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
-    use crate::cache::{CacheResolver, CacheTestHandle, ResolvedCache};
+    use crate::cache::ResolvedCache;
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -40,6 +43,8 @@ mod _native {
     use crate::routes::responses::{ResponsesWebSocketConnection, aresponses, responses};
     #[pymodule_export]
     use crate::routes::token_counter::TokenCounter;
+    #[pymodule_export]
+    use crate::routes::traces::{trace_encode_rows, trace_ensure_schema, trace_query};
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
@@ -53,9 +58,10 @@ mod _native {
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let py = module.py();
         let dict = module.dict();
-        dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
-        dict.set_item("_CacheResolver", py.get_type::<CacheResolver>())?;
-        dict.set_item("_CacheTestResolver", py.get_type::<CacheResolver>())?;
+        dict.set_item(
+            "NativeCacheHandle",
+            py.get_type::<crate::cache::NativeCacheHandle>(),
+        )?;
         dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
         dict.set_item(
             "_SecretManagerRuntime",
@@ -75,11 +81,12 @@ pub(crate) fn native_module(py: Python<'_>) -> Bound<'_, PyModule> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[rstest::rstest]
     fn module_registration_preserves_the_public_surface() {
         Python::initialize();
         Python::attach(|py| {
             let mut expected = vec![
+                "NativeCacheHandle",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",
@@ -102,6 +109,9 @@ mod tests {
                 "aresponses",
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
+                "trace_encode_rows",
+                "trace_ensure_schema",
+                "trace_query",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

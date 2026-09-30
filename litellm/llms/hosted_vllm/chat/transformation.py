@@ -161,13 +161,14 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks and reasoning_content on assistant messages are removed,
-          and content lists are converted to strings for vLLM compatibility
+        - thinking_blocks and non-string reasoning_content on assistant messages
+          are removed, and content lists are converted to strings for vLLM compatibility
         """
         for message in messages:
             if message["role"] == "assistant":
                 message.pop("thinking_blocks", None)
-                message.pop("reasoning_content", None)
+                if not isinstance(message.get("reasoning_content"), str):
+                    message.pop("reasoning_content", None)
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []

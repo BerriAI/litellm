@@ -80,17 +80,18 @@ mod tests {
 
     use futures_util::future::BoxFuture;
     use litellm_core_utils::call_arguments::{CallArguments, compose_body, parse_options};
-    use litellm_host::event::WireRequest;
+    use litellm_host::interceptors::WireRequest;
     use litellm_llms::{
         base_llm::ocr::{
             error::Error,
             handler::{CallHooks, OcrClient},
-            transformation::{BaseOcrConfig, OcrResponseFormat},
+            transformation::BaseOcrConfig,
         },
         cohere::ocr::transformation::CohereParseConfig,
         mistral::ocr::transformation::MistralOcrConfig,
         vertex_ai::ocr::transformation::VertexAiOcrConfig,
     };
+    use litellm_llms_types::formats::ocr::OcrResponseFormat;
     use serde_json::{Value, json};
 
     use super::*;
@@ -100,7 +101,7 @@ mod tests {
         wire::{OcrWireRequest, decode_request},
     };
 
-    /// Stands in for a host with no hooks registered.
+    /// Stands in for a host with no interceptors registered.
     struct NoHooks;
 
     impl CallHooks<Error> for NoHooks {

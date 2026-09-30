@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.104.0"
+version = "1.105.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -75,8 +75,8 @@ proxy = [
     "mcp>=2.2.0,<3",
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.102",
-    "litellm-enterprise==0.1.71",
+    "litellm-proxy-extras==0.4.103",
+    "litellm-enterprise==0.1.72",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -317,6 +317,7 @@ include = [
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
+    "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/client/cli/commands/codex_base_instructions.md",
 ]
 exclude = [
@@ -356,7 +357,7 @@ litellm-enterprise = { workspace = true }
 members = ["enterprise", "litellm-proxy-extras"]
 
 [tool.commitizen]
-version = "1.104.0"
+version = "1.105.0"
 version_files = [
     "pyproject.toml:^version",
 ]

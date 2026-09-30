@@ -6,6 +6,33 @@ import inspect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
+import litellm
+
+_INFERENCE_CONTEXT: Final = frozenset(
+    {
+        "model",
+        "messages",
+        "input",
+        "api_key",
+        "api_base",
+        "base_url",
+        "custom_llm_provider",
+        "extra_headers",
+        "timeout",
+        "request_timeout",
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "metadata",
+        "litellm_metadata",
+        "litellm_call_id",
+        "litellm_trace_id",
+        "litellm_logging_obj",
+        "litellm_credential_name",
+        "proxy_server_request",
+    }
+)
+
 
 def signature(legacy: Callable[..., object]) -> inspect.Signature:
     return inspect.signature(legacy)
@@ -43,37 +70,13 @@ def optional_sequence(value: object) -> Sequence[object] | None:
 
 
 def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, object]) -> str | None:
-    import litellm
-
-    if litellm.cache is not None or litellm.drop_params or litellm.modify_params:
-        return "native inference does not implement the configured cache or parameter rewrites"
-    context: Final = frozenset(
-        {
-            "model",
-            "messages",
-            "input",
-            "api_key",
-            "api_base",
-            "base_url",
-            "custom_llm_provider",
-            "extra_headers",
-            "timeout",
-            "request_timeout",
-            "callbacks",
-            "success_callback",
-            "failure_callback",
-            "metadata",
-            "litellm_metadata",
-            "litellm_call_id",
-            "litellm_trace_id",
-            "litellm_logging_obj",
-            "litellm_credential_name",
-            "proxy_server_request",
-        }
-    )
+    if litellm.drop_params or litellm.modify_params:
+        return "native inference does not implement the configured parameter rewrites"
     for name, value in kwargs.items():
         if value is None:
             continue
-        if name not in parameters and name not in context:
+        if name in {"cache", "caching"}:
+            continue
+        if name not in parameters and name not in _INFERENCE_CONTEXT:
             return f"native inference does not implement {name}"
     return None

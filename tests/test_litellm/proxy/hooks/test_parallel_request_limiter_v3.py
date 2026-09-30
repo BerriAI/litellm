@@ -6974,6 +6974,39 @@ async def test_batch_increment_refunds_counters_already_applied_when_a_later_clu
     assert redis.increments == []
 
 
+@pytest.mark.parametrize("fail_closed", [True, False], ids=["fail_closed", "fail_open"])
+@pytest.mark.asyncio
+async def test_batch_increment_refunds_pipelined_groups_declared_after_the_one_that_failed(fail_closed):
+    from unittest.mock import patch
+
+    redis = _ScriptedRedis()
+    handler = _handler_with_redis(redis, fail_closed=fail_closed)
+    now = int(time.time())
+    groups = {"a": ["{a}:window", "{a}:requests"], "b": ["{b}:window", "{b}:requests"]}
+    loop = asyncio.get_running_loop()
+    failed_group = loop.create_future()
+    failed_group.set_exception(ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused."))
+    landed_group = loop.create_future()
+    landed_group.set_result([now, 1])
+
+    with (
+        patch.object(handler, "_group_keys_by_hash_tag", return_value=groups),
+        patch.object(handler, "_pipeline_scripts", return_value=[failed_group, landed_group]),
+    ):
+        if fail_closed:
+            with pytest.raises(HTTPException) as exc:
+                await handler._execute_redis_batch_rate_limiter_script(
+                    keys_to_fetch=[*groups["a"], *groups["b"]], now_int=now
+                )
+            assert exc.value.status_code == 503
+        else:
+            await handler._execute_redis_batch_rate_limiter_script(
+                keys_to_fetch=[*groups["a"], *groups["b"]], now_int=now
+            )
+
+    assert redis.guarded_increments == ([(groups["b"], [str(now), -1, 0])] if fail_closed else [])
+
+
 @pytest.mark.parametrize(
     "limits, request_data, counter_scope",
     [
@@ -7559,3 +7592,117 @@ async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_
     charged: Final = {op["key"]: op["increment_value"] for op in ops}
     assert charged[admission_bucket] == 150 - stash.reserved_tokens
     assert not any(":target-b" in key for key in charged)
+
+
+@pytest.mark.parametrize("self_call", [False, True])
+async def test_managed_invocations_enforce_actor_and_target_rate_policies(
+    monkeypatch: pytest.MonkeyPatch, self_call: bool
+) -> None:
+    from litellm.types.agents import AgentResponse
+
+    actor: Final = AgentResponse(
+        agent_id="actor", agent_name="Actor", agent_card_params={}, rpm_limit=10, tpm_limit=1000
+    )
+    target: Final = AgentResponse(
+        agent_id="target",
+        agent_name="Target",
+        agent_card_params={},
+        rpm_limit=1,
+        tpm_limit=1000,
+        session_rpm_limit=1,
+        session_tpm_limit=1000,
+    )
+    auth: Final = UserAPIKeyAuth(agent_id="actor")
+    auth.managed_agent_policy = actor
+    auth.invoked_agent_id = "actor" if self_call else "target"
+    auth.invoked_agent_policy = actor if self_call else target
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    monkeypatch.setattr(handler, "_get_agent_from_registry", lambda _: None)
+    descriptors: Final = handler._create_rate_limit_descriptors(
+        user_api_key_dict=auth,
+        data={"model": "a2a/target", "litellm_session_id": "session"},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    limits: Final = {(item["key"], item["value"]): item["rate_limit"]["requests_per_unit"] for item in descriptors}
+    assert limits == (
+        {("agent", "actor"): 10}
+        if self_call
+        else {("agent", "actor"): 10, ("agent", "target"): 1, ("agent_session", "target:session"): 1}
+    )
+    assert len(descriptors) == len(limits)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 20,
+            "litellm_session_id": "session",
+        },
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.reserved_tokens > 3
+    response: Final = ModelResponse(usage=Usage(prompt_tokens=2, completion_tokens=1, total_tokens=3))
+    operations: Final = handler._build_success_event_pipeline_operations(
+        kwargs={"standard_logging_object": {"metadata": {"agent_id": auth.invoked_agent_id, "session_id": "session"}}},
+        response_obj=response,
+        rate_limit_type="total",
+    )
+    increments: Final = {op["key"]: op["increment_value"] for op in operations}
+    for scope in stash.reserved_scopes:
+        if scope[0] in ("agent", "agent_session"):
+            assert increments[handler.create_rate_limit_keys(*scope, "tokens")] == 3 - stash.reserved_tokens
+
+
+@pytest.mark.parametrize("route", ["/a2a/expensive", "/a2a/expensive/message/send", "/v1/a2a/expensive/message/send"])
+async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import invocation_target, prepare_agent_invocation
+    from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+    from litellm.types.agents import AgentResponse
+
+    expensive: Final = AgentResponse(
+        agent_id="expensive", agent_name="Expensive", agent_card_params={}, rpm_limit=1,
+        litellm_params={"cost_per_query": 0.25},
+    )
+    cheap: Final = AgentResponse(
+        agent_id="cheap", agent_name="Cheap", agent_card_params={}, rpm_limit=100,
+        litellm_params={"cost_per_query": 0.01},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(expensive)
+    registry.register_agent(cheap)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(
+        side_effect=lambda where, include: {"expensive": expensive, "cheap": cheap}[where["agent_id"]]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    auth: Final = UserAPIKeyAuth(agent_id="caller")
+    auth.managed_agent_policy = AgentResponse(
+        agent_id="caller", agent_name="Caller", agent_card_params={},
+        object_permission={"object_permission_id": "both-targets", "agents": ["expensive", "cheap"]},
+    )
+    body: Final = {"model": "a2a/cheap"}
+    target: Final = invocation_target(route, body)
+    assert target is not None
+    await prepare_agent_invocation(auth, target, AgentIdentityStore.from_client(database))
+    assert auth.invoked_agent_id == "expensive"
+    assert auth.invoked_agent_policy == expensive
+    assert auth.agent_invocation_cost == pytest.approx(0.25)
+    cache: Final = DualCache()
+    limiter: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    await _rpm_request(limiter, cache, auth, "a2a/cheap")
+    with pytest.raises(HTTPException) as denied:
+        await _rpm_request(limiter, cache, auth, "a2a/cheap")
+    assert denied.value.status_code == 429
+    assert "expensive" in str(denied.value.detail)

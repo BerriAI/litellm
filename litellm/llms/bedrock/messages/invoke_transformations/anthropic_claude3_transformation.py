@@ -515,7 +515,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         tool_search_used: Final = anthropic_model_info.is_tool_search_used(tools)
         programmatic_tool_calling_used: Final = anthropic_model_info.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = anthropic_model_info.is_input_examples_used(tools)
-
+        outgoing_messages_typed: Final = cast(
+            list[AllMessageValues],
+            anthropic_messages_request["messages"],
+        )
+        is_mid_conversation_output_config_used: Final = anthropic_model_info.is_mid_conversation_output_config_used(
+            outgoing_messages_typed
+        )
         user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         beta_set: Final = set(user_beta_set)
         auto_betas: Final = anthropic_model_info.get_anthropic_beta_list(
@@ -528,6 +534,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_optional_request_params.get("mcp_servers")
             ),
             custom_llm_provider="bedrock",
+            is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
         )
         beta_set.update(auto_betas)
 

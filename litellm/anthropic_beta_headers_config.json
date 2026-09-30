@@ -33,7 +33,10 @@
     "thinking-binding-controls-2026-08-01": "thinking-binding-controls-2026-08-01",
     "token-efficient-tools-2025-02-19": "token-efficient-tools-2025-02-19",
     "web-fetch-2025-09-10": "web-fetch-2025-09-10",
-    "web-search-2025-03-05": "web-search-2025-03-05"
+    "web-search-2025-03-05": "web-search-2025-03-05",
+    "mid-conversation-output-config-2026-07-01": "mid-conversation-output-config-2026-07-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
+    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01"
   },
   "azure_ai": {
     "advisor-tool-2026-03-01": null,
@@ -134,7 +137,10 @@
     "token-efficient-tools-2025-02-19": null,
     "tool-search-tool-2025-10-19": "tool-search-tool-2025-10-19",
     "web-fetch-2025-09-10": null,
-    "web-search-2025-03-05": null
+    "web-search-2025-03-05": null,
+    "mid-conversation-output-config-2026-07-01": "mid-conversation-output-config-2026-07-01",
+    "thinking-display-updates-2026-08-18": "thinking-display-updates-2026-08-18",
+    "mid-conversation-tool-changes-2026-07-01": "mid-conversation-tool-changes-2026-07-01"
   },
   "bedrock_mantle": {
     "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
@@ -194,7 +200,7 @@
     "mcp-servers-2025-12-04": null,
     "output-128k-2025-02-19": null,
     "structured-output-2024-03-01": null,
-    "per-turn-control-2026-07-01": null,
+    "per-turn-control-2026-07-01": "per-turn-control-2026-07-01",
     "prompt-caching-scope-2026-01-05": null,
     "skills-2025-10-02": null,
     "structured-outputs-2025-11-13": null,

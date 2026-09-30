@@ -1,4 +1,5 @@
 import logging
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -235,3 +236,13 @@ async def test_a_database_fault_retrying_cannot_clear_is_not_reported_as_a_trans
     assert refusal == SubjectTokenRefusal(error="temporarily_unavailable", description=SUBJECT_TOKEN_CHECK_FAULTED)
     assert "retrying will not help" in refusal.description
     assert "faulted: " in caplog.text and "query engine binary not found" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "delegating-user"])
+async def test_agent_token_cannot_be_exchanged_for_a_user_identity(user_id: str | None) -> None:
+    authorizer: Final = _Authorizer({**_authorized(user_id=user_id), "agent_id": "managed-agent"})
+    result: Final = await _identity(authorizer)
+    assert isinstance(result, SubjectTokenRefusal)
+    assert result.error == "invalid_request"
+    assert "direct JWT authentication" in result.description
