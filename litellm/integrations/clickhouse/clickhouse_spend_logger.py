@@ -24,6 +24,7 @@ _CACHE_HIT_SUFFIX: Final = re.compile(r"_cache_hit[0-9.]*$")
 _TRACEPARENT: Final = re.compile(r"^[0-9a-f]{2}-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$")
 _INVALID_TRACE_ID: Final = "0" * 32
 _INVALID_SPAN_ID: Final = "0" * 16
+TRACE_INGEST_ROUTE: Final = "/v1/traces"
 
 
 def strip_cache_hit_suffix(request_id: str) -> str:
@@ -81,6 +82,11 @@ def _session_id(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> s
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
     request_metadata = (kwargs.get("litellm_params") or {}).get("metadata") or {}
     return str(payload.get("session_id") or request_metadata.get("session_id") or payload.get("trace_id") or "")
+
+
+def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
+    """OTLP exports to POST /v1/traces are not LLM requests; don't write them as spend rows."""
+    return str(payload.get("call_type") or "").startswith(TRACE_INGEST_ROUTE)
 
 
 def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
@@ -142,7 +148,7 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
     def _log(self, kwargs: Mapping[str, Any]) -> None:
         try:
             payload = kwargs.get("standard_logging_object")
-            if payload is None:
+            if payload is None or _is_trace_ingest(payload):
                 return
             self.enqueue([dict(spend_log_row_from_payload(payload, kwargs))])
         except Exception as e:
