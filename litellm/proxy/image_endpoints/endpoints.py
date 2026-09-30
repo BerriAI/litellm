@@ -298,13 +298,14 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
+    form_fields: Final = coerce_numeric_form_fields(
+        parsed_body=await _read_request_body(request=request),
+        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+    )
     data: Final = {
-        key: value
-        for key, value in coerce_numeric_form_fields(
-            parsed_body=await _read_request_body(request=request),
-            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-        ).items()
-        if key not in BRACKETED_FILE_FIELDS
+        "prompt": None,
+        "image": None,
+        **{key: value for key, value in form_fields.items() if key not in BRACKETED_FILE_FIELDS},
     }
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
@@ -319,12 +320,6 @@ async def image_edit_api(
                 status_code=422,
                 detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
             )
-
-    # Ensure prompt and image exist in data (default to None for models that don't require them)
-    if "prompt" not in data:
-        data["prompt"] = None
-    if "image" not in data:
-        data["image"] = None
 
     data["model"] = (
         model
