@@ -2114,7 +2114,9 @@ class ModelManagementAuthChecks:
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
         if member_operation is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             incoming_params = (
-                incoming_model_params.litellm_params if incoming_model_params is not None else model_params.litellm_params
+                incoming_model_params.litellm_params
+                if incoming_model_params is not None
+                else model_params.litellm_params
             )
             existing_params = model_params.litellm_params if member_operation == "update" else None
             reject_non_admin_jev_secret_reference(

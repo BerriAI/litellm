@@ -1176,9 +1176,7 @@ class TestAutoRouterSession:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mixed", [False, True])
-    async def test_session_preserves_historical_baseline_labels(
-        self, monkeypatch: pytest.MonkeyPatch, mixed: bool
-    ):
+    async def test_session_preserves_historical_baseline_labels(self, monkeypatch: pytest.MonkeyPatch, mixed: bool):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
         priced = {"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}
