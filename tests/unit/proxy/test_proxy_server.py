@@ -1,5 +1,8 @@
 import os
+import sys
 import traceback
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Final
 from unittest import mock
 
@@ -43,6 +46,53 @@ from litellm.proxy.proxy_server import (  # Replace with the actual module where
     save_worker_config,
 )
 from litellm.proxy.utils import ProxyLogging
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize("failure_phase", ["startup", "serving", "shutdown"])
+async def test_admin_mcp_failure_still_closes_proxy_resources(
+    monkeypatch: pytest.MonkeyPatch, failure_phase: str
+) -> None:
+    from litellm_admin_mcp import server as connector_server
+    from litellm_admin_mcp.gateway import Gateway
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "1234567890abcdef" * 4)
+    monkeypatch.delenv("WORKER_CONFIG", raising=False)
+    monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_info_refresh": True})
+
+    @asynccontextmanager
+    async def failing_connector(_app: FastAPI) -> AsyncGenerator[None, None]:
+        if failure_phase == "startup":
+            raise RuntimeError("connector startup failed")
+        yield
+        if failure_phase == "shutdown":
+            raise RuntimeError("connector shutdown failed")
+
+    def connector_app(_gateway: Gateway) -> FastAPI:
+        return FastAPI(lifespan=failing_connector)
+
+    monkeypatch.setattr(connector_server, "create_http_app", connector_app)
+    gateway_app: Final = FastAPI()
+
+    async def run_lifespan() -> None:
+        async with proxy_server.proxy_startup_event(gateway_app):
+            if failure_phase == "serving":
+                raise RuntimeError("serving failed")
+
+    with pytest.raises(RuntimeError, match=f"{failure_phase} failed"):
+        await run_lifespan()
+
+    assert proxy_server.shared_aiohttp_session is not None
+    assert proxy_server.shared_aiohttp_session.closed
+    assert proxy_server.master_key is None
+    assert all(route.name != "admin_mcp" for route in gateway_app.routes)
 
 # Your bearer token
 token = "sk-1234"
