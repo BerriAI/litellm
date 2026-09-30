@@ -892,6 +892,20 @@ class TestUserRepository:
         assert user is not None
 
     @pytest.mark.asyncio
+    async def test_find_by_emails_is_one_case_insensitive_query(self, repo):
+        repo._prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+        await repo.find_by_emails(["B@Example.com", "a@example.com", "B@Example.com"])
+        repo._prisma_client.db.litellm_usertable.find_many.assert_awaited_once()
+        where = repo._prisma_client.db.litellm_usertable.find_many.await_args.kwargs["where"]
+        assert where["user_email"] == {"in": ["B@Example.com", "a@example.com"], "mode": "insensitive"}
+
+    @pytest.mark.asyncio
+    async def test_find_by_emails_skips_the_query_for_no_emails(self, repo):
+        repo._prisma_client.db.litellm_usertable.find_many = AsyncMock()
+        assert await repo.find_by_emails(()) == ()
+        repo._prisma_client.db.litellm_usertable.find_many.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_find_by_sso_id(self, repo):
         repo._prisma_client.db.litellm_usertable._records["sso-123"] = {
             "user_id": "user-1",

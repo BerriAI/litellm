@@ -3,7 +3,7 @@ User repository for database operations on LiteLLM_UserTable.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
@@ -65,6 +65,24 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         """Find a user by email."""
         records: Final = await self.find_many(where={"user_email": user_email})
         return records[0] if records else None
+
+    async def find_by_emails(self, user_emails: Sequence[str]) -> Sequence[LiteLLM_UserTable]:
+        """Every user whose email matches one of ``user_emails``, ignoring case, in one query.
+
+        A roster entry stored by email can differ in case from its user row (member_add
+        resolves emails case-insensitively), so an exact match would miss it. One query for
+        the whole list keeps the round-trip count independent of how many emails there are.
+        """
+        if not user_emails:
+            return ()
+        return await self.find_many(
+            where={  # mutable-ok: Prisma query filters are dict-shaped
+                "user_email": {  # mutable-ok: Prisma query filters are dict-shaped
+                    "in": sorted(frozenset(user_emails)),
+                    "mode": "insensitive",
+                }
+            }
+        )
 
     async def find_by_sso_id(self, sso_user_id: str) -> LiteLLM_UserTable | None:
         """Find a user by SSO ID."""

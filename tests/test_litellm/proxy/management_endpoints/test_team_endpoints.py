@@ -9033,7 +9033,10 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
         team_id="team-doomed",
         team_alias="doomed-team",
         members_with_roles=[Member(user_id=user_id, role="user") for user_id in member_user_ids]
-        + [Member(user_id=None, user_email="invitee@example.com", role="user")],
+        + [
+            Member(user_id=None, user_email="invitee@example.com", role="user"),
+            Member(user_id=None, user_email="Second.Invitee@Example.com", role="user"),
+        ],
         metadata={},
         model_max_budget={},
         model_spend={},
@@ -9047,8 +9050,11 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.execute_raw = AsyncMock()
     mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
-    mock_prisma_client.get_data = AsyncMock(
-        return_value=[SimpleNamespace(user_id="invited-user", user_email="invitee@example.com")]
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[
+            LiteLLM_UserTable(user_id="invited-user", user_email="invitee@example.com"),
+            LiteLLM_UserTable(user_id="second-invited-user", user_email="second.invitee@example.com"),
+        ]
     )
 
     mock_tx = AsyncMock()
@@ -9063,6 +9069,7 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
     for user_id in member_user_ids:
         fresh_cache.set_cache(key=user_id, value=UserAPIKeyAuth(user_id=user_id))
     fresh_cache.set_cache(key="invited-user", value=UserAPIKeyAuth(user_id="invited-user"))
+    fresh_cache.set_cache(key="second-invited-user", value=UserAPIKeyAuth(user_id="second-invited-user"))
     fresh_cache.set_cache(key="bystander-user", value=UserAPIKeyAuth(user_id="bystander-user"))
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -9090,10 +9097,14 @@ async def test_delete_team_evicts_member_caches_with_one_transaction(
         assert fresh_cache.get_cache(key=user_id) is None, (
             f"member {user_id}'s cached user object survived the team delete"
         )
-    assert fresh_cache.get_cache(key="invited-user") is None, (
-        "the email-only roster entry resolves to invited-user, whose cached user object must be evicted too"
-    )
+    for user_id in ("invited-user", "second-invited-user"):
+        assert fresh_cache.get_cache(key=user_id) is None, (
+            f"the email-only roster entry resolving to {user_id} must have its cached user object evicted too"
+        )
     assert fresh_cache.get_cache(key="bystander-user") is not None
+    assert mock_prisma_client.db.litellm_usertable.find_many.await_count == 1, (
+        "email-only roster entries must resolve in one lookup, not one query per email"
+    )
 
 
 @pytest.mark.asyncio

@@ -121,7 +121,7 @@ def _team_membership_table(prisma_client: PrismaClient, tx: MemberWriteTx | None
     return tx.litellm_teammembership if tx is not None else TeamMembershipRepository(prisma_client).table
 
 
-async def find_users_by_email(
+async def _find_users_by_email(
     prisma_client: PrismaClient, tx: MemberWriteTx | None, user_email: str
 ) -> Sequence[_PrismaUserRecord]:
     if tx is not None:
@@ -450,7 +450,7 @@ async def add_new_member(
         new_user_defaults = get_new_internal_user_defaults(user_id=str(uuid.uuid4()), user_email=new_member.user_email)
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row: Final[Sequence[_PrismaUserRecord]] = await find_users_by_email(
+        existing_user_row: Final[Sequence[_PrismaUserRecord]] = await _find_users_by_email(
             prisma_client, tx, new_member.user_email
         )
         if len(existing_user_row) == 0:

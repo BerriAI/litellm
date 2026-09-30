@@ -175,7 +175,6 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
 from litellm.proxy.management_helpers.utils import (
     MemberWriteTx,
     add_new_member,
-    find_users_by_email,
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
@@ -4686,14 +4685,10 @@ async def _deleted_team_member_user_ids(team: LiteLLM_TeamTable, prisma_client: 
     )
     if not email_only_member_emails:
         return tuple(sorted(roster_user_ids))
-    email_user_rows: Final = await asyncio.gather(
-        *(
-            find_users_by_email(prisma_client=prisma_client, tx=None, user_email=user_email)
-            for user_email in email_only_member_emails
-        )
-    )
-    email_user_ids: Final = frozenset(row.user_id for rows in email_user_rows for row in rows)
-    return tuple(sorted(roster_user_ids | email_user_ids))
+    # One case-insensitive lookup for the whole roster. A per-email fan-out would size the
+    # query count by team membership, the same shape as the P2028 fan-out this path removed.
+    email_only_users: Final = await UserRepository(prisma_client).find_by_emails(sorted(email_only_member_emails))
+    return tuple(sorted(roster_user_ids.union(user.user_id for user in email_only_users)))
 
 
 def _transform_teams_to_deleted_records(
