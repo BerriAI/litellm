@@ -78,6 +78,7 @@ from litellm.proxy.agent_endpoints.auth.agent_caller import (
     load_agent_caller_team,
     load_agent_caller_user,
 )
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
@@ -142,7 +143,6 @@ from litellm.router import Router
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
-from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 
 from .auth_checks_organization import (
     add_team_org_context_to_request_body,

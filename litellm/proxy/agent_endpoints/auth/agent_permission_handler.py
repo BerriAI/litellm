@@ -27,9 +27,9 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     resolve_agent_access_group_ceiling,
 )
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
-from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 
 
 @dataclass(frozen=True, slots=True)

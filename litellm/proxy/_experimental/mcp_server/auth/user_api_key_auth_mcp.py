@@ -51,6 +51,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     resolve_agent_access_group_ceiling,
 )
 from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
@@ -68,7 +69,6 @@ from litellm.repositories.table_repositories import (
     MCPServerRepository,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
-from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient

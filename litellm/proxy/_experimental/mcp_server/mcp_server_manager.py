@@ -181,6 +181,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     is_per_server_oauth_discovery_eligible,
 )
+from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
@@ -210,7 +211,6 @@ from litellm.types.mcp_server.mcp_server_manager import (
     parse_pinned_tools,
 )
 from litellm.types.utils import CallTypes
-from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
