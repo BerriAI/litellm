@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
@@ -136,10 +136,18 @@ describe("Sidebar (leftnav)", () => {
     expect(classesOf(dark).has("dark:block")).toBe(true);
   });
 
+  const collapsedLogos = () => {
+    const home = within(screen.getByRole("link", { name: /litellm home/i }));
+    return {
+      light: home.getByRole("img", { name: "LiteLLM" }),
+      dark: home.getByRole("presentation", { hidden: true }),
+    };
+  };
+
   it("requests the bundled monogram for both themes when collapsed", () => {
     renderWithProviders(<Sidebar collapsed />);
 
-    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    const { light, dark } = collapsedLogos();
 
     expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image\?variant=monogram$/));
     expect(dark).toHaveAttribute("src", expect.stringMatching(/\/get_image\?theme=dark&variant=monogram$/));
@@ -153,7 +161,7 @@ describe("Sidebar (leftnav)", () => {
     });
     renderWithProviders(<Sidebar collapsed />);
 
-    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    const { light, dark } = collapsedLogos();
 
     expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
     expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
