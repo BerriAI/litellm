@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { mcpServersKeys } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -64,6 +66,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
+  const queryClient = useQueryClient();
   const canEdit = isProxyAdmin && !isViewOnly && !mcpServer.is_config;
   const returningFromEditOAuth = isReturningFromEditOAuth(canEdit, mcpServer.server_id);
   const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
@@ -75,6 +78,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
   const handleSuccess = (updated: MCPServer) => {
+    void queryClient.invalidateQueries({ queryKey: mcpServersKeys.all });
+    void queryClient.invalidateQueries({ queryKey: ["mcpTools", updated.server_id] });
     setEditing(false);
     onBack();
   };

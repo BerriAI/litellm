@@ -93,6 +93,7 @@ from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_bod
 from litellm.proxy.common_utils.http_parsing_utils import (
     get_client_requested_model,
     get_tags_from_request_body,
+    resolve_inference_model,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -2068,11 +2069,12 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        self.data["model"] = (
-            general_settings.get("completion_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or model  # for azure deployments
-            or self.data.get("model", None)  # default passed in http request
+        self.data["model"] = resolve_inference_model(
+            self.data.get("model"),
+            general_settings,
+            user_model,
+            model,
+            kind="image_edit" if route_type == "aimage_edit" else "completion",
         )
 
         # override with user settings, these are params passed via cli
@@ -2199,6 +2201,9 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
+        prefetch_model = self.data.get("model")
+        if llm_router is not None and isinstance(prefetch_model, str):
+            llm_router.arm_routing_read_prefetch(prefetch_model, self.data)
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,

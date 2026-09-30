@@ -40,7 +40,6 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -197,7 +196,6 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router import Router
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
@@ -206,9 +204,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkUpdateTeamMemberPermissionsRequest,
     BulkUpdateTeamMemberPermissionsResponse,
     GetTeamMemberPermissionsResponse,
-    TeamIdSearchFilter,
     TeamIdSearchMatch,
-    TeamKeyActivitySearchWhere,
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
@@ -4521,26 +4517,12 @@ async def delete_team(
         llm_router=llm_router,
     )
 
-    # ## DELETE TEAM MEMBERSHIPS
-    for team_row in team_rows:
-        ### get all team members
-        team_members = team_row.members_with_roles
-        ### call team_member_delete for each team member
-        tasks = []
-        for team_member in team_members:
-            tasks.append(
-                _team_member_delete(
-                    data=TeamMemberDeleteRequest(
-                        team_id=team_row.team_id,
-                        user_id=team_member.user_id,
-                        user_email=team_member.user_email,
-                    ),
-                    user_api_key_dict=user_api_key_dict,
-                )
-            )
-        await asyncio.gather(*tasks)
-
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
+
+    member_ids_per_team: Final = await _resolve_deleted_team_member_user_ids(
+        teams=team_rows,
+        prisma_client=prisma_client,
+    )
 
     ## DELETE TEAMS
     # Both the delete and the reconcile sweep run under every team's advisory lock
@@ -4569,8 +4551,15 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await _invalidate_deleted_team_member_cache(
+        member_ids_per_team=member_ids_per_team,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     for deleted_team in team_rows:
+        _emit_team_members_metric(
+            deleted_team.model_copy(update={"members_with_roles": ()})  # mutable-ok: pydantic update payload
+        )
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
@@ -4643,6 +4632,63 @@ async def _invalidate_deleted_team_cache(
             for team in teams
         )
     )
+
+
+async def _invalidate_deleted_team_member_cache(
+    member_ids_per_team: Sequence[tuple[str, Sequence[str]]],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    for team_id, member_user_ids in member_ids_per_team:
+        await _evict_deleted_team_member_cache(
+            team_id=team_id,
+            member_user_ids=member_user_ids,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+
+async def _evict_deleted_team_member_cache(
+    team_id: str,
+    member_user_ids: Sequence[str],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    await evict_and_broadcast(cache_keys=tuple(member_user_ids), user_api_key_cache=user_api_key_cache)
+    await asyncio.gather(
+        *(
+            invalidate_team_member_spend_state(
+                user_id=user_id,
+                team_id=team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
+            for user_id in member_user_ids
+        )
+    )
+
+
+async def _resolve_deleted_team_member_user_ids(
+    teams: Sequence[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    resolved: Final = await asyncio.gather(
+        *(_deleted_team_member_user_ids(team=team, prisma_client=prisma_client) for team in teams)
+    )
+    return tuple(zip((team.team_id for team in teams), resolved))
+
+
+async def _deleted_team_member_user_ids(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> tuple[str, ...]:
+    roster_user_ids: Final = frozenset(
+        member.user_id for member in team.members_with_roles if member.user_id is not None
+    )
+    email_only_member_emails: Final = frozenset(
+        member.user_email
+        for member in team.members_with_roles
+        if member.user_id is None and member.user_email is not None
+    )
+    if not email_only_member_emails:
+        return tuple(sorted(roster_user_ids))
+    # One case-insensitive lookup for the whole roster. A per-email fan-out would size the
+    # query count by team membership, the same shape as the P2028 fan-out this path removed.
+    email_only_users: Final = await UserRepository(prisma_client).find_by_emails(sorted(email_only_member_emails))
+    return tuple(sorted(roster_user_ids.union(user.user_id for user in email_only_users)))
 
 
 def _transform_teams_to_deleted_records(
@@ -6803,111 +6849,6 @@ async def get_team_daily_activity_aggregated(
         end_date=end_date,
         model=model,
         api_key=scope.api_key_filter,
-        exclude_entity_ids=scope.exclude_team_ids,
-        timezone_offset_minutes=timezone,
-        include_entity_breakdown=True,
-    )
-
-
-def _team_key_search_where(*, search: str, scope: _TeamDailyActivityScope) -> TeamKeyActivitySearchWhere:
-    """Caller scoping lives inside the same Prisma where as the search term so `take`
-    never trims visible matches in favour of keys the caller is not allowed to see."""
-    search_or: Final = (
-        {"token": search},  # mutable-ok: prisma where clause leaf
-        {"key_alias": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
-        {"user_id": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
-    )
-    own_keys: Final = tuple(scope.api_key_filter) if isinstance(scope.api_key_filter, list) else None
-    team_filter: Final[TeamIdSearchFilter | None] = (
-        {  # mutable-ok: prisma where clause leaf
-            "in": tuple(scope.team_ids),
-            "notIn": tuple(scope.exclude_team_ids),
-        }
-        if scope.team_ids is not None and scope.exclude_team_ids is not None
-        else {"in": tuple(scope.team_ids)}  # mutable-ok: prisma where clause leaf
-        if scope.team_ids is not None
-        else {"notIn": tuple(scope.exclude_team_ids)}  # mutable-ok: prisma where clause leaf
-        if scope.exclude_team_ids is not None
-        else None
-    )
-    if team_filter is None and own_keys is None:
-        return {"OR": search_or}  # mutable-ok: prisma where clause root
-    if team_filter is None and own_keys is not None:
-        return {"token": {"in": own_keys}, "OR": search_or}  # mutable-ok: prisma where clause root
-    if team_filter is not None and own_keys is None:
-        return {"team_id": team_filter, "OR": search_or}  # mutable-ok: prisma where clause root
-    assert team_filter is not None and own_keys is not None
-    return {  # mutable-ok: prisma where clause root
-        "team_id": team_filter,
-        "token": {"in": own_keys},  # mutable-ok: prisma where clause leaf
-        "OR": search_or,
-    }
-
-
-@router.get(
-    "/team/daily/activity/aggregated/search",
-    response_model=SpendAnalyticsPaginatedResponse,
-    tags=["team management"],  # mutable-ok: FastAPI route tags shape
-)
-async def search_team_daily_activity_keys(
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    search: str = fastapi.Query(
-        ...,
-        min_length=1,
-        description="Exact token hash, or a case-insensitive substring of the key alias or owning user id",
-    ),
-    team_ids: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    exclude_team_ids: str | None = None,
-    timezone: int | None = None,
-) -> SpendAnalyticsPaginatedResponse:
-    """Aggregated daily team activity for the keys matching `search`, across every key the caller may
-    see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend."""
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
-
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
-    if range_error is not None:
-        raise _daily_activity_error(status_code=400, message=range_error)
-
-    scope: Final = await _resolve_team_daily_activity_scope(
-        team_ids=team_ids,
-        exclude_team_ids=exclude_team_ids,
-        api_key=None,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    matched_keys: Final = await _tokens_db(prisma_client).find_many(
-        where=_team_key_search_where(search=search, scope=scope),
-        take=USAGE_TOP_API_KEYS_LIMIT,
-        order={"spend": "desc"},  # mutable-ok: prisma serializes order, keep it a plain dict
-    )
-    tokens: Final = [key.token for key in matched_keys]  # mutable-ok: get_daily_activity_aggregated takes list[str]
-    if not tokens:
-        return SpendAnalyticsPaginatedResponse(
-            results=[],  # mutable-ok: response model field shape
-            metadata=DailySpendMetadata(api_key_limit=USAGE_TOP_API_KEYS_LIMIT, total_api_keys=0),
-        )
-
-    return await get_daily_activity_aggregated(
-        prisma_client=prisma_client,
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=scope.team_ids,
-        entity_metadata_field=scope.team_alias_metadata,
-        start_date=start_date,
-        end_date=end_date,
-        model=None,
-        api_key=tokens,
         exclude_entity_ids=scope.exclude_team_ids,
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,

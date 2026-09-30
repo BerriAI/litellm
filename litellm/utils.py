@@ -628,9 +628,12 @@ def _custom_logger_class_exists_in_success_callbacks(
 
     Prevents double adding a custom logger callback to the litellm callbacks
 
-    Matches on the exact class; an instance of a subclass does not count as registered
+    Matches on the exact class and callback name; an instance of a subclass does not count as registered
     """
-    return any(type(cb) is type(callback_class) for cb in litellm.success_callback + litellm._async_success_callback)
+    return any(
+        _is_same_registered_custom_logger(cb, callback_class)
+        for cb in litellm.success_callback + litellm._async_success_callback
+    )
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
@@ -643,9 +646,23 @@ def _custom_logger_class_exists_in_failure_callbacks(
 
     Prevents double adding a custom logger callback to the litellm callbacks
 
-    Matches on the exact class; an instance of a subclass does not count as registered
+    Matches on the exact class and callback name; an instance of a subclass does not count as registered
     """
-    return any(type(cb) is type(callback_class) for cb in litellm.failure_callback + litellm._async_failure_callback)
+    return any(
+        _is_same_registered_custom_logger(cb, callback_class)
+        for cb in litellm.failure_callback + litellm._async_failure_callback
+    )
+
+
+def _is_same_registered_custom_logger(existing: object, callback_class: CustomLogger) -> bool:
+    """
+    One logger class can serve several callback names (every OTel v2 preset such as
+    ``otel`` and ``arize`` is an ``OpenTelemetryV2``), so a registered ``otel`` logger
+    must not count as an already registered ``arize`` logger
+    """
+    return type(existing) is type(callback_class) and getattr(existing, "callback_name", None) == getattr(
+        callback_class, "callback_name", None
+    )
 
 
 def get_request_guardrails(kwargs: dict[str, Any]) -> list[str]:
@@ -2309,6 +2326,7 @@ def _is_async_request(
         or kwargs.get("_arealtime", False) is True
         or kwargs.get("acreate_batch", False) is True
         or kwargs.get("acreate_fine_tuning_job", False) is True
+        or kwargs.get("aresponses", False) is True
         or is_pass_through is True
     ):
         return True
@@ -3603,7 +3621,7 @@ def get_optional_params_image_gen(
     passed_params.pop("provider_config", None)
     passed_params.pop("drop_params", None)
     drop_params = normalize_drop_params(drop_params)
-    additional_drop_params = passed_params.pop("additional_drop_params", None)
+    passed_params.pop("additional_drop_params", None)
     passed_params.pop("kwargs")
     special_params: Final[Mapping[str, object]] = kwargs
     for k, v in special_params.items():
@@ -4442,11 +4460,12 @@ def get_optional_params(
     store: bool | None = None,
     prompt_cache_key: str | None = None,
     base_model: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     drop_params = normalize_drop_params(drop_params)  # rebind-ok: config and DB deployments pass "true" as a string
     passed_params: Final = locals().copy()
-    special_params: Final = passed_params.pop("kwargs")
+    passed_params.pop("kwargs")
+    special_params: Final = kwargs
     # Remove base_model from passed_params so it doesn't interfere with
     # non_default_params / _check_valid_arg — it's a routing hint, not an
     # OpenAI param.
@@ -6117,6 +6136,9 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_272k_tokens_flex=_model_info.get(
                     "cache_creation_input_token_cost_above_272k_tokens_flex", None
                 ),
+                cache_creation_input_token_cost_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_creation_input_token_cost_above_272k_tokens_ultrafast", None
+                ),
                 cache_creation_input_token_cost_flex=_model_info.get("cache_creation_input_token_cost_flex", None),
                 cache_creation_input_token_cost_priority=_model_info.get(
                     "cache_creation_input_token_cost_priority", None
@@ -6141,6 +6163,9 @@ def _get_model_info_helper(
                 ),
                 cache_read_input_token_cost_above_272k_tokens_flex=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens_flex", None
+                ),
+                cache_read_input_token_cost_above_272k_tokens_ultrafast=_model_info.get(
+                    "cache_read_input_token_cost_above_272k_tokens_ultrafast", None
                 ),
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
@@ -6180,8 +6205,12 @@ def _get_model_info_helper(
                 input_cost_per_token_above_272k_tokens_flex=_model_info.get(
                     "input_cost_per_token_above_272k_tokens_flex", None
                 ),
+                input_cost_per_token_above_272k_tokens_ultrafast=_model_info.get(
+                    "input_cost_per_token_above_272k_tokens_ultrafast", None
+                ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
+                cost_per_second=_model_info.get("cost_per_second", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
@@ -6245,6 +6274,9 @@ def _get_model_info_helper(
                 ),
                 output_cost_per_token_above_272k_tokens_flex=_model_info.get(
                     "output_cost_per_token_above_272k_tokens_flex", None
+                ),
+                output_cost_per_token_above_272k_tokens_ultrafast=_model_info.get(
+                    "output_cost_per_token_above_272k_tokens_ultrafast", None
                 ),
                 output_cost_per_token_above_512k_tokens=_model_info.get(
                     "output_cost_per_token_above_512k_tokens", None

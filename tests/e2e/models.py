@@ -568,6 +568,17 @@ class AnthropicMessagesBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+class ResponsesStreamBody(BaseModel):
+    """POST /v1/responses body in the subset the spend tests stream with.
+    `input` stays a plain string: the tests only drive single-turn prompts."""
+
+    model: str
+    input: str
+    stream: bool = True
+    max_output_tokens: int | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
 class CountTokensBody(BaseModel):
     """POST /v1/messages/count_tokens body: the /v1/messages shape minus
     max_tokens (the endpoint only counts the prompt)."""
@@ -938,9 +949,14 @@ class GuardrailEntityMatch(BaseModel):
     end: int
 
 
+class GuardrailModeRecord(BaseModel):
+    tags: dict[str, str | list[str]] | None = None
+    default: str | list[str] | None = None
+
+
 class GuardrailRunRecord(BaseModel):
     guardrail_name: str | None = None
-    guardrail_mode: str | None = None
+    guardrail_mode: str | list[str] | GuardrailModeRecord | None = None
     guardrail_status: str | None = None
     guardrail_provider: str | None = None
     masked_entity_count: dict[str, int] | None = None
@@ -1474,7 +1490,7 @@ class TeamInfoResponse(BaseModel):
 
 class TeamMemberAddBody(BaseModel):
     team_id: str
-    member: TeamMemberEntry
+    member: TeamMemberEntry | list[TeamMemberEntry]
 
 
 class TeamMemberDeleteBody(BaseModel):

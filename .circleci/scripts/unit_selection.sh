@@ -89,6 +89,7 @@ legacy_paths() {
     proxy-db-auth-checks)
       echo tests/unit/proxy/auth/test_auth_checks.py
       echo tests/unit/proxy/auth/test_user_api_key_auth.py
+      echo tests/unit/proxy/test_credential_slot_registry.py
       echo tests/unit/proxy/test_deprecated_key_grace_period.py ;;
     proxy-db-budgets)
       echo tests/unit/proxy/auth/test_default_end_user_budget_simple.py
@@ -147,7 +148,10 @@ legacy_paths() {
       echo tests/unit/proxy/test_proxy_server.py ;;
     proxy-db-proxy-utils) echo tests/unit/proxy/test_proxy_utils.py ;;
     proxy-extras) echo tests/unit/litellm_proxy_extras ;;
-    proxy-infra) echo tests/unit/gateway ;;
+    proxy-infra)
+      echo tests/unit/gateway
+      echo tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+      echo tests/unit/proxy/roi_calculator ;;
     responses-caching-types)
       find tests/unit/responses -name 'test_*.py' -not -path 'tests/unit/responses/mcp/*'
       echo tests/unit/types ;;

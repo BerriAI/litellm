@@ -883,3 +883,13 @@ def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock
         {"role": "system", "content": "You are terse."},
         {"role": "user", "content": "Hello"},
     ]
+
+
+def test_chunk_parser_relays_the_served_service_tier():
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    with_tier: Final = iterator.chunk_parser({**_streaming_chunk(), "service_tier": "priority"})
+    assert with_tier.model_dump()["service_tier"] == "priority"
+
+    without_tier: Final = iterator.chunk_parser(_streaming_chunk())
+    assert getattr(without_tier, "service_tier", None) is None

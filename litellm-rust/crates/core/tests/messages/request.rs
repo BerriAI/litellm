@@ -1,6 +1,8 @@
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
-use litellm_types::llms::anthropic::{AnthropicBeta, BetaSet};
-use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::{
+    headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
+    providers::anthropic::{AnthropicBeta, BetaSet},
+};
 use rstest::rstest;
 
 use super::*;
