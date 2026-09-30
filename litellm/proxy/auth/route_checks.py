@@ -413,6 +413,11 @@ class RouteChecks:
         if route in LiteLLMRoutes.litellm_native_routes.value:
             return True
 
+        # native routes with placeholders, e.g. "/v1/traces/{trace_id}"
+        for native_route in LiteLLMRoutes.litellm_native_routes.value:
+            if "{" in native_route and RouteChecks._route_matches_pattern(route=route, pattern=native_route):
+                return True
+
         # fuzzy match routes like "/v1/threads/thread_49EIN5QF32s4mH20M7GFKdlZ"
         # Check for routes with placeholders or wildcard patterns
         for openai_route in LiteLLMRoutes.openai_routes.value:
