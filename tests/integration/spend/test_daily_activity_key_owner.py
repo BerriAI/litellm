@@ -24,6 +24,7 @@ from integration._support.daily_activity import (
 
 
 @pytest.mark.parametrize("route", ROUTES, ids=lambda route: route.path.strip("/").replace("/", "_"))
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.missing_key_one_user")
 def test_key_missing_from_the_key_tables_is_reported_with_the_one_user_its_daily_spend_names(
     gateway: Gateway, route: Route
 ) -> None:
@@ -45,6 +46,7 @@ def test_key_missing_from_the_key_tables_is_reported_with_the_one_user_its_daily
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.two_users_no_owner")
 def test_key_whose_daily_spend_names_two_users_is_reported_with_no_owner(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     with gateway.scenario() as scenario:
@@ -61,6 +63,7 @@ def test_key_whose_daily_spend_names_two_users_is_reported_with_no_owner(gateway
 
 
 @pytest.mark.parametrize("unnamed", ["", None], ids=["blank_user", "null_user"])
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.unnamed_rows_do_not_hide_one_user")
 def test_daily_spend_rows_naming_no_user_do_not_hide_the_one_user_the_others_name(
     gateway: Gateway, unnamed: str | None
 ) -> None:
@@ -77,6 +80,7 @@ def test_daily_spend_rows_naming_no_user_do_not_hide_the_one_user_the_others_nam
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.no_user_no_owner")
 def test_key_whose_daily_spend_names_no_user_at_all_is_reported_with_no_owner(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     with daily_rows((user_row("", api_key, DAY), user_row(None, api_key, DAY))):
@@ -89,6 +93,7 @@ def test_key_whose_daily_spend_names_no_user_at_all_is_reported_with_no_owner(ga
         )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.unknown_user_id_no_email")
 def test_owner_the_user_table_does_not_hold_is_reported_by_id_with_no_email(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     owner: Final = f"integration-departed-{uuid.uuid4().hex}"
@@ -112,6 +117,7 @@ def _deleted_key(gateway: Gateway, scenario: Scenario, alias: str, **fields: str
     return _stored_form(token)
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.live_key_keeps_own_user")
 def test_live_key_keeps_its_own_user_when_its_daily_spend_names_another(gateway: Gateway) -> None:
     alias: Final = f"integration-alias-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
@@ -128,6 +134,7 @@ def test_live_key_keeps_its_own_user_when_its_daily_spend_names_another(gateway:
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.live_key_without_user_not_given_one")
 def test_live_key_with_no_user_is_not_given_the_user_its_daily_spend_names(gateway: Gateway) -> None:
     alias: Final = f"integration-alias-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
@@ -143,6 +150,7 @@ def test_live_key_with_no_user_is_not_given_the_user_its_daily_spend_names(gatew
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.deleted_key_keeps_own_user")
 def test_deleted_key_keeps_its_own_user_when_its_daily_spend_names_another(gateway: Gateway) -> None:
     alias: Final = f"integration-alias-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
@@ -159,6 +167,7 @@ def test_deleted_key_keeps_its_own_user_when_its_daily_spend_names_another(gatew
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.deleted_key_without_user_gains_one")
 def test_deleted_key_with_no_user_keeps_its_alias_and_gains_the_one_user_its_daily_spend_names(
     gateway: Gateway,
 ) -> None:
@@ -176,6 +185,7 @@ def test_deleted_key_with_no_user_keeps_its_alias_and_gains_the_one_user_its_dai
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.spend_log_alias_gains_one_user")
 def test_key_named_only_by_a_spend_log_alias_keeps_that_alias_and_gains_the_one_user_its_daily_spend_names(
     gateway: Gateway,
 ) -> None:

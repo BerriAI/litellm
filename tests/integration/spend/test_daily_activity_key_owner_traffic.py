@@ -228,6 +228,7 @@ def _cli_session_token(user: str, team: str) -> str:
     return ExperimentalUIJWTToken.get_cli_jwt_auth_token(user_info=cli_user, team_id=team, team_alias="cli-team")
 
 
+@pytest.mark.covers("quota_management.spend_tracking.key_attribution.every_unified_endpoint")
 def test_key_used_on_every_unified_endpoint_is_reported_with_its_own_alias_and_user(gateway: Gateway) -> None:
     chat_prompt, messages_prompt, responses_prompt = _prompt(), _prompt(), _prompt()
     with wire_server(_provider) as wire, gateway.scenario() as scenario:
@@ -257,6 +258,7 @@ def test_key_used_on_every_unified_endpoint_is_reported_with_its_own_alias_and_u
         )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.key_attribution.purged_key_named_by_spend_logs")
 def test_key_purged_from_the_key_tables_is_reported_with_the_alias_its_spend_logs_name(gateway: Gateway) -> None:
     prompts: Final = (_prompt(), _prompt(), _prompt())
     with wire_server(_provider) as wire, gateway.scenario() as scenario:
@@ -290,6 +292,7 @@ def test_key_purged_from_the_key_tables_is_reported_with_the_alias_its_spend_log
         )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.key_attribution.cli_session_user_and_team")
 def test_cli_session_spend_is_reported_with_the_user_and_team_of_the_session(
     gateway: Gateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,6 +326,7 @@ def test_cli_session_spend_is_reported_with_the_user_and_team_of_the_session(
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.key_attribution.usage_ai_chat_without_key_owner")
 def test_usage_ai_chat_hands_the_model_the_usage_summary_without_any_key_owner(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -382,6 +386,7 @@ def test_usage_ai_chat_hands_the_model_the_usage_summary_without_any_key_owner(
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.key_attribution.every_route_under_provider_burst")
 def test_owner_is_reported_on_every_route_while_a_burst_of_requests_waits_on_the_provider(gateway: Gateway) -> None:
     released: Final = threading.Event()
     held: Final[SimpleQueue[str]] = SimpleQueue()

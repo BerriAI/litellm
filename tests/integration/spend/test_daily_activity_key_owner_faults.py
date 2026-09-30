@@ -77,6 +77,7 @@ def _running_children(owned: OwnedProxy) -> tuple[int, ...]:
     )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.shared_key_hides_other_user")
 def test_user_reading_a_key_shared_with_another_user_is_shown_no_owner_and_nothing_of_the_other_user(
     gateway: Gateway,
 ) -> None:
@@ -92,6 +93,7 @@ def test_user_reading_a_key_shared_with_another_user_is_shown_no_owner_and_nothi
         assert other_email not in response.text
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.own_key_shows_self")
 def test_user_reading_a_key_only_they_spent_with_is_shown_themselves_as_its_owner(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     with gateway.scenario() as scenario:
@@ -102,6 +104,7 @@ def test_user_reading_a_key_only_they_spent_with_is_shown_themselves_as_its_owne
         assert_key_reported(response, api_key, DAY, key_metadata(user=reader, email=email), seeded_metrics(1))
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.other_users_key_hidden")
 def test_user_reading_a_key_only_another_user_spent_with_is_shown_nothing_of_it(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     with gateway.scenario() as scenario:
@@ -116,6 +119,7 @@ def test_user_reading_a_key_only_another_user_spent_with_is_shown_nothing_of_it(
         assert other_email not in response.text
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.invalid_key_refused")
 def test_invalid_key_is_refused_without_naming_the_owner(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     with gateway.scenario() as scenario:
@@ -127,6 +131,7 @@ def test_invalid_key_is_refused_without_naming_the_owner(gateway: Gateway) -> No
         assert email not in response.text
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.five_kilobyte_key")
 def test_five_kilobyte_key_is_reported_with_the_one_user_its_daily_spend_names(gateway: Gateway) -> None:
     api_key: Final = f"integration-5kb-{uuid.uuid4().hex}-{'k' * 5000}"
     with gateway.scenario() as scenario:
@@ -141,6 +146,7 @@ def test_five_kilobyte_key_is_reported_with_the_one_user_its_daily_spend_names(g
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.no_daily_spend_no_activity")
 def test_key_with_no_daily_spend_is_reported_as_no_activity(gateway: Gateway) -> None:
     response: Final = activity_of_key(gateway, AGGREGATED_USER_ACTIVITY, key_no_key_table_holds())
     assert response.status_code == 200, response.text
@@ -150,6 +156,7 @@ def test_key_with_no_daily_spend_is_reported_as_no_activity(gateway: Gateway) ->
     assert [totals["total_spend"], totals["total_api_requests"]] == [0.0, 0], response.text
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.every_team_key_own_user")
 def test_every_key_of_a_team_is_reported_with_its_own_user(gateway: Gateway) -> None:
     team: Final = f"integration-entity-{uuid.uuid4().hex}"
     owners: Final = {key_no_key_table_holds(): f"integration-owner-{uuid.uuid4().hex}" for _ in range(KEYS_OF_ONE_TEAM)}
@@ -176,6 +183,7 @@ def test_every_key_of_a_team_is_reported_with_its_own_user(gateway: Gateway) -> 
     assert totals["total_spend"] == pytest.approx(0.25 * KEYS_OF_ONE_TEAM), response.text
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.repeat_read_same_answer")
 def test_reading_the_same_activity_twice_gives_the_same_answer(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     with gateway.scenario() as scenario:
@@ -188,6 +196,7 @@ def test_reading_the_same_activity_twice_gives_the_same_answer(gateway: Gateway)
     assert first.json() == second.json(), [first.text, second.text]
 
 
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.second_user_drops_owner")
 def test_key_stops_being_reported_with_an_owner_once_a_second_user_spends_with_it(gateway: Gateway) -> None:
     api_key: Final = key_no_key_table_holds()
     with gateway.scenario() as scenario:
@@ -202,6 +211,7 @@ def test_key_stops_being_reported_with_an_owner_once_a_second_user_spends_with_i
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.gives_up_while_locked")
 def test_owner_lookup_gives_up_while_daily_user_spend_is_locked_and_answers_once_it_is_not(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -222,6 +232,7 @@ def test_owner_lookup_gives_up_while_daily_user_spend_is_locked_and_answers_once
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.survives_worker_replacement")
 def test_owner_is_reported_while_a_worker_is_killed_and_after_it_is_replaced(gateway: Gateway, tmp_path: Path) -> None:
     api_key: Final = key_no_key_table_holds()
     with scratch_database() as database_url, _proxy_on(gateway, tmp_path, database_url, workers=2) as owned:
@@ -251,6 +262,7 @@ def test_owner_is_reported_while_a_worker_is_killed_and_after_it_is_replaced(gat
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.daily_spend_owner.survives_proxy_restart")
 def test_owner_is_reported_again_after_the_proxy_restarts(gateway: Gateway, tmp_path: Path) -> None:
     api_key: Final = key_no_key_table_holds()
     with scratch_database() as database_url:

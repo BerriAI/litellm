@@ -147,6 +147,7 @@ def _owner_on(candidate: Gateway) -> tuple[str, str]:
 
 
 @pytest.mark.parametrize("route", ROUTES, ids=lambda route: route.path.strip("/").replace("/", "_"))
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.every_daily_activity_route")
 def test_alias_named_only_by_a_spend_log_is_reported_on_every_daily_activity_route(
     gateway: Gateway, route: Route
 ) -> None:
@@ -183,6 +184,7 @@ def test_alias_named_only_by_a_spend_log_is_reported_on_every_daily_activity_rou
         pytest.param(_named_after_ninety_nine, id="99_nameless_named_100_nameless"),
     ),
 )
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.window_edge_reported")
 def test_alias_on_an_edge_of_the_window_is_reported_whatever_surrounds_it(
     gateway: Gateway, layout: Callable[[str], tuple[SpendLogRow, ...]]
 ) -> None:
@@ -200,6 +202,7 @@ def test_alias_on_an_edge_of_the_window_is_reported_whatever_surrounds_it(
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.middle_of_nameless_rows_not_picked_up")
 def test_alias_named_only_in_the_middle_of_two_hundred_nameless_rows_is_not_picked_up(gateway: Gateway) -> None:
     api_key: Final = digest_no_key_table_holds()
     with gateway.scenario() as scenario:
@@ -217,6 +220,7 @@ def test_alias_named_only_in_the_middle_of_two_hundred_nameless_rows_is_not_pick
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.rename_and_rename_back_both_edges")
 def test_key_renamed_and_renamed_back_is_reported_with_the_alias_on_both_edges(gateway: Gateway) -> None:
     api_key: Final = digest_no_key_table_holds()
     alias: Final = _alias()
@@ -240,6 +244,7 @@ def test_key_renamed_and_renamed_back_is_reported_with_the_alias_on_both_edges(g
         pytest.param(_team_in_the_metadata, id="team_id_in_metadata"),
     ),
 )
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.team_next_to_daily_owner")
 def test_team_named_only_by_a_spend_log_is_reported_next_to_the_daily_owner(
     gateway: Gateway, spend_log_of_team: Callable[[str], SpendLogRow]
 ) -> None:
@@ -264,6 +269,7 @@ def test_team_named_only_by_a_spend_log_is_reported_next_to_the_daily_owner(
         pytest.param(_user_in_the_metadata, id="user_id_in_metadata"),
     ),
 )
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.user_beats_daily_owner")
 def test_user_named_by_a_spend_log_beats_the_owner_the_daily_rows_name(
     gateway: Gateway, spend_log_of_user: Callable[[str], SpendLogRow]
 ) -> None:
@@ -284,6 +290,7 @@ def test_user_named_by_a_spend_log_beats_the_owner_the_daily_rows_name(
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.hashed_jwt_digest")
 def test_hashed_jwt_digest_is_named_by_its_spend_log(gateway: Gateway) -> None:
     api_key: Final = f"hashed-jwt-{sha256(uuid.uuid4().bytes).hexdigest()}"
     alias: Final = _alias()
@@ -308,6 +315,7 @@ def test_hashed_jwt_digest_is_named_by_its_spend_log(gateway: Gateway) -> None:
         pytest.param("2026-02-05 00:00:00", False, id="first_second_after_the_window"),
     ),
 )
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.lookup_window_bounds")
 def test_spend_log_names_the_key_only_from_one_day_before_to_two_days_after_the_read(
     gateway: Gateway, started: str, inside_the_window: bool
 ) -> None:
@@ -326,6 +334,7 @@ def test_spend_log_names_the_key_only_from_one_day_before_to_two_days_after_the_
             )
 
 
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.two_edge_aliases_unnamed")
 def test_two_aliases_on_the_two_edges_leave_the_key_unnamed(gateway: Gateway) -> None:
     api_key: Final = digest_no_key_table_holds()
     rows: Final = (named_row(0, _alias()), *nameless_rows(150, 1), named_row(151, _alias()))
@@ -350,6 +359,7 @@ def test_two_aliases_on_the_two_edges_leave_the_key_unnamed(gateway: Gateway) ->
         ),
     ),
 )
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.unusable_rows_do_not_hide_named_row")
 def test_rows_without_a_usable_alias_do_not_hide_the_named_row_after_them(
     gateway: Gateway, unnamed_rows: tuple[SpendLogRow, ...]
 ) -> None:
@@ -376,6 +386,7 @@ def test_rows_without_a_usable_alias_do_not_hide_the_named_row_after_them(
         pytest.param("a" * 5000, id="five_kb_string"),
     ),
 )
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.unexpected_shape_as_postgres_renders")
 def test_alias_of_an_unexpected_shape_is_reported_as_postgres_renders_it(
     gateway: Gateway, stored_alias: JsonValue
 ) -> None:
@@ -396,6 +407,7 @@ def test_alias_of_an_unexpected_shape_is_reported_as_postgres_renders_it(
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.cache_per_window")
 def test_alias_found_once_is_served_from_the_cache_for_the_same_window_only(gateway: Gateway, tmp_path: Path) -> None:
     api_key: Final = digest_no_key_table_holds()
     alias: Final = _alias()
@@ -420,6 +432,7 @@ def test_alias_found_once_is_served_from_the_cache_for_the_same_window_only(gate
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.cached_miss_expires")
 def test_alias_logged_after_a_cached_miss_shows_once_the_miss_expires(gateway: Gateway, tmp_path: Path) -> None:
     api_key: Final = digest_no_key_table_holds()
     alias: Final = _alias()
@@ -438,6 +451,7 @@ def test_alias_logged_after_a_cached_miss_shows_once_the_miss_expires(gateway: G
 
 
 @pytest.mark.timeout(300)
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.gives_up_while_locked")
 def test_alias_lookup_gives_up_while_spend_logs_are_locked_and_answers_once_they_are_not(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -463,6 +477,7 @@ def test_alias_lookup_gives_up_while_spend_logs_are_locked_and_answers_once_they
     assert_key_reported(unlocked, api_key, DAY, key_metadata(alias=alias, user=owner, email=email), seeded_metrics(1))
 
 
+@pytest.mark.covers("quota_management.spend_tracking.spend_log_alias.concurrent_reads_name_fresh_key")
 def test_concurrent_reads_over_every_route_all_name_a_fresh_key(gateway: Gateway) -> None:
     api_key: Final = digest_no_key_table_holds()
     alias: Final = _alias()
