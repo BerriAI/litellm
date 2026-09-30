@@ -1095,16 +1095,14 @@ def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
-    redact_credentials: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
 
     At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
-    which holds raw HTTP headers including Authorization tokens). With ``redact_credentials``, string
-    values under keys SensitiveDataMasker classifies as credentials are replaced with
-    REDACTED_BY_LITELM_STRING.
+    which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
+    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1124,9 +1122,7 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     def _sanitize_value(value: object) -> object:
         if isinstance(value, Mapping):
-            return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, redact_credentials
-            )
+            return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
         elif isinstance(value, list):
             return [_sanitize_value(item) for item in value]
         elif isinstance(value, str):
@@ -1164,7 +1160,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         return value
 
     return {
-        k: REDACTED_BY_LITELM_STRING if redact_credentials and _is_request_body_credential(k, v) else _sanitize_value(v)
+        k: REDACTED_BY_LITELM_STRING if _is_request_body_credential(k, v) else _sanitize_value(v)
         for k, v in request_body.items()
         if k not in _SENSITIVE_REQUEST_BODY_KEYS
     }
@@ -1582,7 +1578,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body, redact_credentials=True)
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str: Final = safe_dumps(_request_body)
             if LITELLM_TRUNCATED_PAYLOAD_FIELD in _request_body_json_str:
                 verbose_proxy_logger.info(

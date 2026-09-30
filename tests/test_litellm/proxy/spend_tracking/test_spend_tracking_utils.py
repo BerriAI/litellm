@@ -612,7 +612,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     request_body = {
         "text": long_string,
         "number": 42,
-        "nested": {"list": ["short", long_string], "dict": {"key": long_string}},
+        "nested": {"list": ["short", long_string], "dict": {"value": long_string}},
     }
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
 
@@ -631,7 +631,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     assert sanitized["number"] == 42
     assert sanitized["nested"]["list"][0] == "short"
     assert len(sanitized["nested"]["list"][1]) == expected_length
-    assert len(sanitized["nested"]["dict"]["key"]) == expected_length
+    assert len(sanitized["nested"]["dict"]["value"]) == expected_length
 
 
 def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
@@ -2781,10 +2781,12 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
     assert parsed["messages"] == [{"role": "user", "content": "hello"}]
 
 
-def test_sanitize_request_body_keeps_credential_named_fields_by_default() -> None:
-    response: Final = {"system_fingerprint": "fp_123", "usage": {"prompt_tokens": 1}}
+def test_sanitize_response_redacts_credential_named_fields() -> None:
+    response: Final = {"access_token": "canary-oauth-token", "usage": {"prompt_tokens": 1}}
 
-    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {"response": response}
+    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+        "response": {"access_token": REDACTED_BY_LITELM_STRING, "usage": {"prompt_tokens": 1}}
+    }
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
