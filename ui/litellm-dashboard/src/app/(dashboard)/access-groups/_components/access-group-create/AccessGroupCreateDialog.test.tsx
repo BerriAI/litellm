@@ -98,6 +98,31 @@ describe("AccessGroupCreateDialog", () => {
     });
   });
 
+  it("sends MCP servers and agents picked from the chip selectors as ids", async () => {
+    const user = userEvent.setup();
+    const { createAccessGroup } = renderDialog();
+
+    await user.type(screen.getByLabelText("Group Name"), "mcp-group");
+    await user.click(screen.getByRole("tab", { name: "MCP Servers" }));
+    await user.click(screen.getByLabelText("Allowed MCP Servers"));
+    await user.click(await screen.findByRole("option", { name: "GitHub MCP" }));
+    expect(screen.getByLabelText("GitHub MCP")).toHaveAttribute("data-slot", "combobox-chip");
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("tab", { name: "Agents" }));
+    await user.click(screen.getByLabelText("Allowed Agents"));
+    await user.click(await screen.findByRole("option", { name: "Support Agent" }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Create Group" }));
+
+    await waitFor(() => expect(createAccessGroup).toHaveBeenCalledTimes(1));
+    expect(createAccessGroup.mock.calls[0][0]).toStrictEqual({
+      access_group_name: "mcp-group",
+      access_mcp_server_ids: ["srv-1"],
+      access_agent_ids: ["agent-1"],
+    });
+  });
+
   it("keeps the dialog open with the entered values when the create fails", async () => {
     const user = userEvent.setup();
     const { createAccessGroup } = renderDialog({
