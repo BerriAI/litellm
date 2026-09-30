@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router import Router
 from litellm.router import _silent_experiment_kwargs_snapshot
 from litellm.router import _silent_experiment_targets
@@ -30,8 +31,18 @@ class _RecordingLogger(CustomLogger):
         ]
 
 
+async def _settle_shared_logging_worker() -> None:
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+    await GLOBAL_LOGGING_WORKER.stop()
+
+
 @pytest.fixture
 def recording_logger():
+    settle_loop: Final = asyncio.new_event_loop()
+    try:
+        settle_loop.run_until_complete(_settle_shared_logging_worker())
+    finally:
+        settle_loop.close()
     original_callbacks: Final = litellm.callbacks
     logger: Final = _RecordingLogger()
     litellm.callbacks = [logger]
