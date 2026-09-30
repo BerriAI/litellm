@@ -593,10 +593,10 @@ def test_redis_semantic_cache_prompt_extraction_keeps_tool_turns_distinct():
         ]
 
     assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("ls")) == (
-        'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}ok'
+        'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}{"result_of_call":1}ok'
     )
     assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("pwd")) == (
-        'fix the failing test{"name":"Bash","arguments":{"cmd":"pwd"}}ok'
+        'fix the failing test{"name":"Bash","arguments":{"cmd":"pwd"}}{"result_of_call":1}ok'
     )
 
 
@@ -611,7 +611,9 @@ def test_redis_semantic_cache_prompt_extraction_keeps_responses_function_calls()
         ]
     )
 
-    assert prompt == 'update the config\n{"name":"write_file","arguments":"{\\"path\\":\\"a.yaml\\"}"}\nok'
+    assert prompt == (
+        'update the config\n{"name":"write_file","arguments":"{\\"path\\":\\"a.yaml\\"}"}\n{"result_of_call":1}\nok'
+    )
 
 
 def test_redis_semantic_cache_prompt_extraction_keeps_structured_function_call_outputs():
@@ -631,8 +633,28 @@ def test_redis_semantic_cache_prompt_extraction_keeps_structured_function_call_o
         )
 
     expected_call = '{"name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}"}'
-    assert prompt_for("wrote 5 bytes") == f"write hello\n{expected_call}\nwrote 5 bytes"
+    assert prompt_for("wrote 5 bytes") == f'write hello\n{expected_call}\n{{"result_of_call":1}}\nwrote 5 bytes'
     assert prompt_for("wrote 5 bytes") != prompt_for("PermissionError")
+
+
+def test_redis_semantic_cache_prompt_extraction_tells_apart_parallel_outputs_answering_different_calls():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    def prompt_for(first_output_call_id: str, second_output_call_id: str) -> str | None:
+        return RedisSemanticCache._get_prompt_from_kwargs(
+            input=[
+                {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "a"},
+                {"type": "function_call", "call_id": "c2", "name": "read", "arguments": "b"},
+                {"type": "function_call_output", "call_id": first_output_call_id, "output": "empty"},
+                {"type": "function_call_output", "call_id": second_output_call_id, "output": "secret"},
+            ]
+        )
+
+    assert prompt_for("c2", "c1") == (
+        '{"name":"read","arguments":"a"}\n{"name":"read","arguments":"b"}\n'
+        '{"result_of_call":2}\nempty\n{"result_of_call":1}\nsecret'
+    )
+    assert prompt_for("c1", "c2") != prompt_for("c2", "c1")
 
 
 def test_redis_semantic_cache_prompt_extraction_handles_model_objects():

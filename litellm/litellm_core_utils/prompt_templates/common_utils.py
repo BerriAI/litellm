@@ -199,42 +199,68 @@ def get_str_from_messages_with_tools(messages: object) -> str:
     """
     ``get_str_from_messages`` that also keeps each conversation's tool calls and tool results, so agent turns
     that differ only in their tool exchange (Anthropic ``tool_use`` / ``tool_result``, OpenAI ``tool_calls``)
-    produce different text
+    produce different text. Each result is tagged with the position of the call it answers, since call ids are
+    random per session
     """
-    return "".join(_message_str_with_tools(message) for message in _str_mappings(messages))
+    message_mappings: Final = tuple(_str_mappings(messages))
+    call_ordinals: Final = tool_call_ordinals(_message_tool_call_ids(message_mappings))
+    return "".join(_message_str_with_tools(message, call_ordinals) for message in message_mappings)
 
 
 def tool_call_str(name: object, arguments: object) -> str:
     return f'{{"name":{_compact_json(name)},"arguments":{_compact_json(arguments)}}}'
 
 
+def tool_result_str(call_id: object, call_ordinals: Mapping[str, int]) -> str:
+    ordinal: Final = call_ordinals.get(call_id) if isinstance(call_id, str) else None
+    return "" if ordinal is None else f'{{"result_of_call":{ordinal}}}'
+
+
+def tool_call_ordinals(call_ids: Iterable[object]) -> Mapping[str, int]:
+    string_ids: Final = (call_id for call_id in call_ids if isinstance(call_id, str))
+    return MappingProxyType({call_id: ordinal for ordinal, call_id in enumerate(dict.fromkeys(string_ids), start=1)})
+
+
 def _compact_json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), default=str)
 
 
-def _message_str_with_tools(message: Mapping[str, object]) -> str:
+def _message_tool_call_ids(messages: Iterable[Mapping[str, object]]) -> Iterator[object]:
+    for message in messages:
+        yield from (
+            block.get("id") for block in _str_mappings(message.get("content")) if block.get("type") == "tool_use"
+        )
+        yield from (tool_call.get("id") for tool_call in _str_mappings(message.get("tool_calls")))
+
+
+def _message_str_with_tools(message: Mapping[str, object], call_ordinals: Mapping[str, int]) -> str:
+    result_tag: Final = (
+        tool_result_str(message.get("tool_call_id"), call_ordinals) if message.get("role") == "tool" else ""
+    )
     return (
-        _content_str_with_tools(message.get("content"))
+        result_tag
+        + _content_str_with_tools(message.get("content"), call_ordinals)
         + "".join(_openai_tool_call_str(tool_call) for tool_call in _str_mappings(message.get("tool_calls")))
         + extract_search_results_text(message.get("search_results"))
     )
 
 
-def _content_str_with_tools(content: object) -> str:
+def _content_str_with_tools(content: object, call_ordinals: Mapping[str, int]) -> str:
     if isinstance(content, str):
         return content
-    return "".join(_block_str_with_tools(block) for block in _str_mappings(content))
+    return "".join(_block_str_with_tools(block, call_ordinals) for block in _str_mappings(content))
 
 
-def _block_str_with_tools(block: Mapping[str, object]) -> str:
-    match block.get("type"):
-        case "tool_use":
-            return tool_call_str(block.get("name"), block.get("input"))
-        case "tool_result":
-            return _content_str_with_tools(block.get("content"))
-        case _:
-            text: Final = block.get("text")
-            return text if isinstance(text, str) else ""
+def _block_str_with_tools(block: Mapping[str, object], call_ordinals: Mapping[str, int]) -> str:
+    block_type: Final = block.get("type")
+    if block_type == "tool_use":
+        return tool_call_str(block.get("name"), block.get("input"))
+    if block_type == "tool_result":
+        return tool_result_str(block.get("tool_use_id"), call_ordinals) + _content_str_with_tools(
+            block.get("content"), call_ordinals
+        )
+    text: Final = block.get("text")
+    return text if isinstance(text, str) else ""
 
 
 def _openai_tool_call_str(tool_call: Mapping[str, object]) -> str:

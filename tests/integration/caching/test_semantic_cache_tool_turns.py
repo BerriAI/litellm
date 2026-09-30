@@ -241,10 +241,13 @@ def test_claude_code_tool_turns_on_messages_are_not_served_the_first_turn_answer
         },
     ]
 
-    answers: Final = _send_turns(semantic_proxy, "/v1/messages", _CLAUDE_MODEL, ([task], list_files, read_file))
+    answers: Final = _send_turns(
+        semantic_proxy, "/v1/messages", _CLAUDE_MODEL, ([task], list_files, read_file, list_files)
+    )
 
-    assert len(set(answers)) == 3, f"a later tool turn replayed an earlier cached answer: {answers}"
-    assert answers == semantic_proxy.peer.answered[-3:], semantic_proxy.peer.answered
+    assert len(set(answers[:3])) == 3, f"a later tool turn replayed an earlier cached answer: {answers}"
+    assert answers[:3] == semantic_proxy.peer.answered[-3:], semantic_proxy.peer.answered
+    assert answers[3] == answers[1], f"a repeated tool turn missed the cache: {answers}"
 
 
 def test_openai_agent_loop_tool_calls_on_chat_completions_are_not_served_a_cached_answer(
@@ -270,8 +273,9 @@ def test_openai_agent_loop_tool_calls_on_chat_completions_are_not_served_a_cache
         ]
 
     answers: Final = _send_turns(
-        semantic_proxy, "/v1/chat/completions", _CHAT_MODEL, (wrote("a.yaml"), wrote("b.yaml"))
+        semantic_proxy, "/v1/chat/completions", _CHAT_MODEL, (wrote("a.yaml"), wrote("b.yaml"), wrote("a.yaml"))
     )
 
-    assert len(set(answers)) == 2, f"a different tool call replayed an earlier cached answer: {answers}"
-    assert answers == semantic_proxy.peer.answered[-2:], semantic_proxy.peer.answered
+    assert len(set(answers[:2])) == 2, f"a different tool call replayed an earlier cached answer: {answers}"
+    assert answers[:2] == semantic_proxy.peer.answered[-2:], semantic_proxy.peer.answered
+    assert answers[2] == answers[0], f"a repeated tool call missed the cache: {answers}"

@@ -22,7 +22,9 @@ from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages_with_tools,
+    tool_call_ordinals,
     tool_call_str,
+    tool_result_str,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -269,14 +271,17 @@ class RedisSemanticCache(BaseCache):
         if "input" not in kwargs:
             return None
 
+        responses_input: Final = kwargs.get("input")
         prompt_parts: Final[list[str]] = []
-        cls._collect_responses_input_text(kwargs.get("input"), prompt_parts)
+        cls._collect_responses_input_text(responses_input, prompt_parts, cls._responses_call_ordinals(responses_input))
         prompt: Final = "\n".join(prompt_parts).strip()
         return prompt or None
 
     @classmethod
-    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:
-        value = cls._function_call_as_prompt(cls._coerce_response_input_value(value))
+    def _collect_responses_input_text(
+        cls, value: object, prompt_parts: list[str], call_ordinals: Mapping[str, int]
+    ) -> None:
+        value = cls._function_call_as_prompt(cls._coerce_response_input_value(value), call_ordinals)
         if value is None:
             return
 
@@ -288,21 +293,21 @@ class RedisSemanticCache(BaseCache):
 
         if isinstance(value, (list, tuple)):
             for item in value:
-                cls._collect_responses_input_text(item, prompt_parts)
+                cls._collect_responses_input_text(item, prompt_parts, call_ordinals)
             return
 
         if isinstance(value, dict):
             content = value.get("content")
             if content is not None:
-                cls._collect_responses_input_text(content, prompt_parts)
+                cls._collect_responses_input_text(content, prompt_parts, call_ordinals)
                 return
 
-            cls._collect_responses_text_fields(value, prompt_parts)
+            cls._collect_responses_text_fields(value, prompt_parts, call_ordinals)
             return
 
         content = getattr(value, "content", None)
         if content is not None:
-            cls._collect_responses_input_text(content, prompt_parts)
+            cls._collect_responses_input_text(content, prompt_parts, call_ordinals)
             return
 
         for text_key in ("text", "output", "input_text", "output_text"):
@@ -314,21 +319,38 @@ class RedisSemanticCache(BaseCache):
                     return
 
     @classmethod
-    def _collect_responses_text_fields(cls, value: dict, prompt_parts: list[str]) -> None:
+    def _collect_responses_text_fields(
+        cls, value: dict, prompt_parts: list[str], call_ordinals: Mapping[str, int]
+    ) -> None:
         for text_key in ("text", "output", "input_text", "output_text"):
             text_value = value.get(text_key)
             if isinstance(text_value, (list, tuple)):
-                cls._collect_responses_input_text(text_value, prompt_parts)
+                cls._collect_responses_input_text(text_value, prompt_parts, call_ordinals)
                 return
             if isinstance(text_value, str) and (stripped_text := text_value.strip()):
                 prompt_parts.append(stripped_text)
                 return
 
+    @classmethod
+    def _responses_call_ordinals(cls, responses_input: object) -> Mapping[str, int]:
+        items: Final = responses_input if isinstance(responses_input, (list, tuple)) else ()
+        dumped_items: Final = (cls._coerce_response_input_value(item) for item in items)
+        return tool_call_ordinals(
+            item.get("call_id")
+            for item in dumped_items
+            if isinstance(item, dict) and item.get("type") == "function_call"
+        )
+
     @staticmethod
-    def _function_call_as_prompt(value: object) -> object:
-        if isinstance(value, dict) and value.get("type") == "function_call":
+    def _function_call_as_prompt(value: object, call_ordinals: Mapping[str, int]) -> object:
+        if not isinstance(value, dict):
+            return value
+        if value.get("type") == "function_call":
             return tool_call_str(value.get("name"), value.get("arguments"))
-        return value
+        result_tag: Final = (
+            tool_result_str(value.get("call_id"), call_ordinals) if value.get("type") == "function_call_output" else ""
+        )
+        return (result_tag, value.get("output")) if result_tag else value
 
     @staticmethod
     def _coerce_response_input_value(value: object) -> object:

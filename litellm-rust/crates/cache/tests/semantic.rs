@@ -133,7 +133,40 @@ fn context(messages: Option<Value>, input: Option<Value>) -> SemanticCacheContex
         ]},
         {"role": "tool", "tool_call_id": "c1", "content": "ok"},
     ]),
-    r#"writing{"name":"write","arguments":"{\"path\": \"a\"}"}{"name":"write","arguments":"{\"path\": \"b\"}"}ok"#,
+    r#"writing{"name":"write","arguments":"{\"path\": \"a\"}"}{"name":"write","arguments":"{\"path\": \"b\"}"}{"result_of_call":1}ok"#,
+)]
+#[case::anthropic_parallel_tool_results_tagged_with_their_call(
+    json!([
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "a"}},
+            {"type": "tool_use", "id": "t2", "name": "Read", "input": {"path": "b"}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t2", "content": "B"},
+            {"type": "tool_result", "tool_use_id": "t1", "content": "A"},
+        ]},
+    ]),
+    r#"{"name":"Read","arguments":{"path":"a"}}{"name":"Read","arguments":{"path":"b"}}{"result_of_call":2}B{"result_of_call":1}A"#,
+)]
+#[case::reused_call_ids_keep_first_position(
+    json!([
+        {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "call_0", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+        ]},
+        {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "call_0", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+            {"id": "call_1", "type": "function", "function": {"name": "c", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "C"},
+    ]),
+    r#"{"name":"a","arguments":"{}"}{"name":"b","arguments":"{}"}{"name":"c","arguments":"{}"}{"result_of_call":2}C"#,
+)]
+#[case::unknown_call_ids_left_untagged(
+    json!([
+        {"role": "tool", "tool_call_id": "c9", "content": "ok"},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t9", "content": "done"}]},
+    ]),
+    "okdone",
 )]
 #[case::malformed_tool_call_entries(
     json!([{"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function"}, "junk"]}]),
@@ -238,7 +271,7 @@ fn prompt_from_messages_reads_messages_only(
         {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{\"path\":\"a.yaml\"}"},
         {"type": "function_call_output", "call_id": "c1", "output": "ok"},
     ])),
-    Some("update the config\n{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.yaml\\\"}\"}\nok"),
+    Some("update the config\n{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.yaml\\\"}\"}\n{\"result_of_call\":1}\nok"),
 )]
 #[case::responses_structured_function_call_output(
     None,
@@ -246,7 +279,22 @@ fn prompt_from_messages_reads_messages_only(
         {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{}"},
         {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "denied"}]},
     ])),
-    Some("{\"name\":\"write_file\",\"arguments\":\"{}\"}\ndenied"),
+    Some("{\"name\":\"write_file\",\"arguments\":\"{}\"}\n{\"result_of_call\":1}\ndenied"),
+)]
+#[case::responses_parallel_outputs_tagged_with_their_call(
+    None,
+    Some(json!([
+        {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "a"},
+        {"type": "function_call", "call_id": "c2", "name": "read", "arguments": "b"},
+        {"type": "function_call_output", "call_id": "c2", "output": "B"},
+        {"type": "function_call_output", "call_id": "c1", "output": "A"},
+    ])),
+    Some("{\"name\":\"read\",\"arguments\":\"a\"}\n{\"name\":\"read\",\"arguments\":\"b\"}\n{\"result_of_call\":2}\nB\n{\"result_of_call\":1}\nA"),
+)]
+#[case::responses_unknown_call_id_output_untagged(
+    None,
+    Some(json!([{"type": "function_call_output", "call_id": "c9", "output": "orphan"}])),
+    Some("orphan"),
 )]
 fn prompt_from_context_matches_python(
     #[case] messages: Option<Value>,
