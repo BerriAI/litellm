@@ -1026,7 +1026,7 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
     "prism",
     "sail",
-    "kimchi",  # Kimchi - JSON-configured provider
+    "kimchi",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))

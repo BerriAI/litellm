@@ -7,6 +7,13 @@ distinct `kimchi` slug so OpenAI-specific pricing and provider-level reporting
 never apply to traffic routed through Kimchi.
 """
 
+import json
+from pathlib import Path
+from typing import Final
+
+import pytest
+import respx
+
 import litellm
 
 
@@ -74,3 +81,49 @@ class TestKimchiProviderIdentity:
         assert provider == "kimchi"
         assert api_base == "https://llm.kimchi.dev/openai/v1"
         assert api_key == "sk-test"
+
+
+def test_kimchi_chat_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("KIMCHI_API_KEY", "kimchi-test-key")
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://llm.kimchi.dev/openai/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-kimchi",
+                "object": "chat.completion",
+                "created": 1_789_550_000,
+                "model": "kimi-k3",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "pong"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+            },
+        )
+        response: Final = litellm.completion(
+            model="kimchi/kimi-k3",
+            messages=[{"role": "user", "content": "Reply with the single word: pong"}],
+        )
+
+    request: Final = route.calls.last.request
+    assert route.call_count == 1
+    assert str(request.url) == "https://llm.kimchi.dev/openai/v1/chat/completions"
+    assert request.headers["authorization"] == "Bearer kimchi-test-key"
+    body: Final = json.loads(request.content)
+    assert body["model"] == "kimi-k3"
+    assert response.choices[0].message.content == "pong"
+
+
+def test_kimchi_cost_map_registry_mirrors_cost_map():
+    package_root: Final = Path(litellm.__file__).parent
+
+    cost_map: Final = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    backup: Final = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+
+    kimchi_entries: Final = {name: cost_map[name] for name in cost_map if name.startswith("kimchi/")}
+    assert kimchi_entries
+    assert kimchi_entries == {name: backup[name] for name in kimchi_entries}
