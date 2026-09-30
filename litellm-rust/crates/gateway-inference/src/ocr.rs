@@ -4,7 +4,8 @@ use std::sync::Arc;
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
 use litellm_core::ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
-use litellm_llms::base_llm::ocr::transformation::OcrDocument;
+use litellm_llms::base_llm::ocr::transformation::decode_request_value;
+use litellm_llms_types::formats::ocr::OcrDocument;
 use serde_json::Value;
 
 use crate::{
@@ -42,7 +43,11 @@ async fn handle(
             file_name: upload.file_name,
             mime_type: upload.mime_type,
         },
-        None => OcrDocument::try_from(body.get("document").cloned().unwrap_or_default())?.into(),
+        None => decode_request_value::<OcrDocument>(
+            body.get("document").cloned().unwrap_or_default(),
+            "document",
+        )?
+        .into(),
     };
     let format = body
         .get("req_format")
@@ -70,7 +75,7 @@ async fn handle(
             ..Default::default()
         },
     )?;
-    let response = gateway.ocr.execute(call, &()).await?;
+    let response = gateway.ocr.execute(call, &(), None).await?;
     match response.provider_native_response {
         Some(native) => Ok(Value::Object(native)),
         None => Ok(response.into_json()),

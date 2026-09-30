@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-cache-response.workspace = true
 axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
 bytes.workspace = true
@@ -13,15 +14,18 @@ litellm-auth.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-core.workspace = true
 litellm-host-http.workspace = true
+litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-router.workspace = true
 litellm-secrets.workspace = true
-litellm-types.workspace = true
+litellm-llms-types.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+litellm-cache-memory.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true

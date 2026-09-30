@@ -157,6 +157,7 @@ async def test_create_mcp_server_direct():
         # Mock server manager
         mock_manager.add_server = mock.AsyncMock()
         mock_manager.reload_servers_from_database = mock.AsyncMock()
+        mock_manager.get_mcp_server_by_id.return_value = None
 
         # Set up test data
         server_id = str(uuid.uuid4())

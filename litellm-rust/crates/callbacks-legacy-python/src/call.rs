@@ -3,15 +3,12 @@
 //! lifetime. No other callback host has that obligation, which is why nothing outside
 //! this crate holds them.
 
-use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{Preflight, PythonBinding, PythonHostCalls, lookup, run_call};
+use litellm_host_python::lookup;
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyTuple},
 };
-
-use crate::{LegacyLogging, LegacySurface};
 
 pub struct PublicCall {
     args: Py<PyTuple>,
@@ -32,6 +29,10 @@ impl PublicCall {
             kwargs: kwargs.copy()?.unbind(),
             request: request.clone().unbind(),
         })
+    }
+
+    pub fn arguments(&self, py: Python<'_>) -> Py<PyDict> {
+        self.kwargs.clone_ref(py)
     }
 
     pub(crate) fn args(&self) -> &Py<PyTuple> {
@@ -62,35 +63,6 @@ impl PublicCall {
         visit.call(&self.kwargs)?;
         visit.call(&self.request)
     }
-}
-
-/// Runs one native call under the legacy `Logging` contract: the protocol host projects from
-/// the keyword view the contract prepares and `preflight` rewrites, and the contract
-/// observes the call.
-pub fn run_legacy_call<H, M>(
-    py: Python<'_>,
-    surface: LegacySurface,
-    call: PublicCall,
-    start: impl FnOnce(<H::Protocol as Protocol>::Request) -> M + Send + Sync + 'static,
-    host: H,
-    preflight: Preflight,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>>
-where
-    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
-    M: Machine<Protocol = H::Protocol> + 'static,
-    M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
-{
-    let arguments = call.kwargs.clone_ref(py);
-    run_call(
-        py,
-        start,
-        host,
-        LegacyLogging::new(py, surface, call, asynchronous),
-        preflight,
-        arguments,
-        asynchronous,
-    )
 }
 
 #[cfg(test)]

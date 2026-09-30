@@ -4,18 +4,23 @@ mod prepare;
 pub mod route;
 mod types;
 
+use futures_util::FutureExt;
 use litellm_auth::AuthServices;
+use litellm_host::interceptors::{ExecutionFacts, Interceptors, ResultSource};
+
+use crate::{caching::CallCache, context::CallContext};
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
 pub use crate::error::RouteError as Error;
-pub use types::{MessagesCall, MessagesResponse, MessagesShaping, messages_body};
+pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
 
 #[derive(Clone)]
 pub struct MessagesRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
+    cache: Option<litellm_cache_response::ScopedCache>,
 }
 
 impl MessagesRoute {
@@ -28,15 +33,27 @@ impl MessagesRoute {
             http,
             auth,
             secrets,
+            cache: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+        Self {
+            cache: Some(cache),
+            ..self
         }
     }
 
     pub async fn execute(
         &self,
         call: MessagesCall,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-    ) -> Result<MessagesResponse, Error> {
-        litellm_host::lifecycle::observe_call(hooks.observer(), self.run(call, hooks)).await
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        options: impl Into<crate::CallOptions>,
+    ) -> Result<MessagesCallResponse, Error> {
+        let context = CallContext::new(interceptors, options.into());
+        litellm_host::lifecycle::observe_call(context.observers.clone(), self.run(call, context))
+            .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -50,14 +67,33 @@ impl MessagesRoute {
     async fn run(
         &self,
         call: MessagesCall,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-    ) -> Result<MessagesResponse, Error> {
+        context: CallContext<'_, impl Interceptors<Error>>,
+    ) -> Result<MessagesCallResponse, Error> {
         crate::diagnostic::call(async {
-            let request = prepare::prepare(call, self.secrets.as_ref()).await?;
-            crate::diagnostic::provider(&request.body.model, request.provider.as_str());
-            let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
-                Box::pin(handler::execute(&self.http, &self.auth, request, hooks));
-            execute.await
+            let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
+            crate::diagnostic::provider(&prepared.body.model, prepared.provider.as_str());
+            let request = self.prepare_outbound(prepared, &context).boxed().await?;
+            let cache = CallCache::<route::Messages>::from_wire(
+                self.cache.as_ref().filter(|_| request.cacheable()),
+                context.cache,
+                &request.identity,
+                &request.wire,
+            );
+            let identity = request.identity.clone();
+            let (output, source) = match cache.lookup().await {
+                Some(hit) => hit,
+                None => (
+                    self.call_provider(request, &context).await?,
+                    ResultSource::Provider,
+                ),
+            };
+            context
+                .result_ready(ExecutionFacts {
+                    provider: identity,
+                    source: source.clone(),
+                })
+                .await?;
+            Ok(cache.finish(output, &source).await)
         })
         .await
     }
