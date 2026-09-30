@@ -4,7 +4,7 @@ Tests for router retry backoff behavior.
 
 import asyncio
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -16,7 +16,6 @@ from litellm.router import _untried_fallback_target_exists
 from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets, record_disable_fallbacks
 from litellm.types.router import RetryPolicy
 
-_BACKOFF_DETECTION_TIMEOUT: Final = MAX_RETRY_DELAY / 4
 _SERVER_ERROR: Final = litellm.InternalServerError(message="provider down", model="gpt-5.4-mini", llm_provider="openai")
 _CONTENT_POLICY_ERROR: Final = litellm.ContentPolicyViolationError(
     message="flagged", model="gpt-5.4-mini", llm_provider="openai"
@@ -56,27 +55,35 @@ def _router_with_single_failing_deployment(
     )
 
 
+def _backoff_delays(sleeper: AsyncMock) -> tuple[float, ...]:
+    """
+    The delays the router asked to wait between retries. Reading its decision keeps these
+    tests off the clock, which tests/unit rules out, and off the CI scheduler's timing.
+    """
+    return tuple(call.args[0] for call in sleeper.await_args_list if call.args)
+
+
 @pytest.mark.asyncio
 async def test_single_deployment_group_with_fallback_does_not_back_off_before_falling_back():
     router: Final = _router_with_single_failing_deployment(fallbacks=[{"primary": ["backup"]}])
+    sleeper: Final = AsyncMock()
 
-    response: Final = await asyncio.wait_for(
-        router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}]),
-        timeout=_BACKOFF_DETECTION_TIMEOUT,
-    )
+    with patch.object(asyncio, "sleep", sleeper):
+        response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}])
 
     assert response.choices[0].message.content == "answered by backup"
+    assert not any(delay > 0 for delay in _backoff_delays(sleeper))
 
 
 @pytest.mark.asyncio
 async def test_fallback_configured_for_another_group_keeps_retry_backoff():
     router: Final = _router_with_single_failing_deployment(fallbacks=[{"backup": ["primary"]}])
+    sleeper: Final = AsyncMock()
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}]),
-            timeout=_BACKOFF_DETECTION_TIMEOUT,
-        )
+    with patch.object(asyncio, "sleep", sleeper), pytest.raises(litellm.InternalServerError):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}])
+
+    assert any(delay > 0 for delay in _backoff_delays(sleeper))
 
 
 @pytest.mark.asyncio
@@ -84,12 +91,12 @@ async def test_empty_fallback_chain_keeps_retry_backoff():
     """A chain configured as an empty list names no target, so the request has nothing to
     fall back to and the retries must still space themselves out."""
     router: Final = _router_with_single_failing_deployment(fallbacks=[{"primary": []}])
+    sleeper: Final = AsyncMock()
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}]),
-            timeout=_BACKOFF_DETECTION_TIMEOUT,
-        )
+    with patch.object(asyncio, "sleep", sleeper), pytest.raises(litellm.InternalServerError):
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}])
+
+    assert any(delay > 0 for delay in _backoff_delays(sleeper))
 
 
 def test_untried_fallback_target_exists_is_false_for_a_chain_with_no_entries():
@@ -102,16 +109,17 @@ def test_untried_fallback_target_exists_is_false_for_a_chain_with_no_entries():
 async def test_client_side_fallback_list_does_not_back_off_before_falling_back():
     router: Final = _router_with_single_failing_deployment(fallbacks=[])
 
-    response: Final = await asyncio.wait_for(
-        router.acompletion(
+    sleeper: Final = AsyncMock()
+
+    with patch.object(asyncio, "sleep", sleeper):
+        response: Final = await router.acompletion(
             model="primary",
             messages=[{"role": "user", "content": "Hello"}],
             fallbacks=[{"model": "backup"}],
-        ),
-        timeout=_BACKOFF_DETECTION_TIMEOUT,
-    )
+        )
 
     assert response.choices[0].message.content == "answered by backup"
+    assert not any(delay > 0 for delay in _backoff_delays(sleeper))
 
 
 @pytest.mark.asyncio
@@ -123,15 +131,16 @@ async def test_content_policy_error_keeps_backoff_when_its_dedicated_fallbacks_s
         retry_policy=RetryPolicy(ContentPolicyViolationErrorRetries=2),
     )
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            router.acompletion(
-                model="primary",
-                messages=[{"role": "user", "content": "Hello"}],
-                mock_response=_CONTENT_POLICY_ERROR,
-            ),
-            timeout=_BACKOFF_DETECTION_TIMEOUT,
+    sleeper: Final = AsyncMock()
+
+    with patch.object(asyncio, "sleep", sleeper), pytest.raises(litellm.ContentPolicyViolationError):
+        await router.acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response=_CONTENT_POLICY_ERROR,
         )
+
+    assert any(delay > 0 for delay in _backoff_delays(sleeper))
 
 
 @pytest.mark.parametrize(
