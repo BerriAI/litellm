@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Final
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
+from itertools import chain
+from typing import Final, TypeAlias
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_logger
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+EffectiveAuthContexts: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]]
+TeamObjectPermission: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]]
 
 
 def clone_user_api_key_auth_with_team(
@@ -153,3 +158,24 @@ async def can_access_mcp_server(
         if server_id in await allowed_servers(context):
             return True
     return False
+
+
+async def granted_toolset_ids(
+    user_api_key_auth: UserAPIKeyAuth,
+    effective_contexts: EffectiveAuthContexts = build_effective_auth_contexts,
+    team_object_permission: TeamObjectPermission | None = None,
+) -> frozenset[str]:
+    """Toolset ids the credential holds through any of its effective contexts: each context's own object
+    permission plus the object permission of the team it is pinned to, the same two grant sources the
+    aggregate /mcp tool listing expands. No grant anywhere yields the empty set."""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    load_team_permission: Final = team_object_permission or MCPRequestHandler._get_team_object_permission
+    contexts: Final = await effective_contexts(user_api_key_auth)
+    team_permissions: Final = await asyncio.gather(*(load_team_permission(context) for context in contexts))
+    permissions: Final = (*(context.object_permission for context in contexts), *team_permissions)
+    return frozenset(
+        chain.from_iterable(permission.mcp_toolsets or () for permission in permissions if permission is not None)
+    )

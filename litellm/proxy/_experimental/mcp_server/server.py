@@ -66,7 +66,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_route_relative_request_path,
     well_known_root_suffix,
 )
-from litellm.proxy._experimental.mcp_server.ui_session_utils import is_ui_session_credential
+from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids, is_ui_session_credential
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -1522,9 +1522,9 @@ if MCP_AVAILABLE:
         When a request arrives via /toolset/{name}/mcp we override the key's
         object_permission so that only the toolset's tools are visible.
 
-        Raises HTTPException(403) if the key has an explicit toolset grant list
-        that does not include toolset_id (i.e. mcp_toolsets is set but empty,
-        or set to a list that omits this toolset).  Admin keys always pass.
+        Raises HTTPException(403) unless the key holds toolset_id through one of
+        its grant sources (its own object_permission, its team, or, for a dashboard
+        session, any of the user's teams or the user row). Admin keys always pass.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
@@ -1540,20 +1540,12 @@ if MCP_AVAILABLE:
                 detail="API key is scoped to no MCP servers; toolset access is denied.",
             )
 
-        # Access control: non-admin keys must have this toolset in their grant list.
-        # Use _user_has_admin_view so that PROXY_ADMIN_VIEW_ONLY is also treated as admin.
         is_admin: Final = _user_has_admin_view(user_api_key_auth)
-        if not is_admin:
-            op: Final = user_api_key_auth.object_permission
-            granted: Final = getattr(op, "mcp_toolsets", None) if op else None
-            # granted=None → key has no explicit toolset grants → deny (same semantics as
-            # fetch_mcp_toolsets which returns [] for non-admin keys with no grants configured).
-            # granted=[] or list without toolset_id → also deny.
-            if granted is None or toolset_id not in granted:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"API key does not have access to toolset '{toolset_id}'.",
-                )
+        if not is_admin and toolset_id not in await granted_toolset_ids(user_api_key_auth):
+            raise HTTPException(
+                status_code=403,
+                detail=f"API key does not have access to toolset '{toolset_id}'.",
+            )
 
         tool_permissions = await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
             toolset_ids=[toolset_id]

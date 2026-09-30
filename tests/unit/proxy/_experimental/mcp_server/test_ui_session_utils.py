@@ -6,11 +6,12 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
     clone_user_api_key_auth_with_team,
+    granted_toolset_ids,
     resolve_ui_session_team_ids,
 )
 
@@ -32,9 +33,7 @@ async def test_resolve_ui_session_team_ids_returns_unique_ids(monkeypatch):
         user_id="user-1",
     )
 
-    fake_user = SimpleNamespace(
-        teams=["team-a", "team-b", "team-a", "", None, "team-c"]
-    )
+    fake_user = SimpleNamespace(teams=["team-a", "team-b", "team-a", "", None, "team-c"])
 
     monkeypatch.setattr(
         "litellm.proxy.auth.auth_checks.get_user_object",
@@ -258,3 +257,44 @@ async def test_admitted_user_context_carries_the_request_span(monkeypatch):
 
     assert (await acting_user_auth(user_auth)).parent_otel_span is parent_span
     assert (await build_effective_auth_contexts(user_auth))[-1].parent_otel_span is parent_span
+
+
+def _toolset_permission(*toolset_ids: str) -> LiteLLM_ObjectPermissionTable:
+    return LiteLLM_ObjectPermissionTable(
+        object_permission_id=f"op-{'-'.join(toolset_ids)}", mcp_toolsets=list(toolset_ids)
+    )
+
+
+@pytest.mark.asyncio
+async def test_granted_toolset_ids_unions_own_and_team_grants_over_every_effective_context():
+    """A dashboard session of a user in two teams holds the toolsets of both teams plus the ones on
+    the user row itself, exactly the grant sources the aggregate /mcp listing expands."""
+    session = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-1")
+    team_a = UserAPIKeyAuth(team_id="team-a", user_id="user-1")
+    team_b = UserAPIKeyAuth(team_id="team-b", user_id="user-1", object_permission=_toolset_permission())
+    admitted = UserAPIKeyAuth(user_id="user-1", object_permission=_toolset_permission("ts-user"))
+    team_grants = {"team-a": _toolset_permission("ts-a", "ts-shared"), "team-b": _toolset_permission("ts-b")}
+
+    async def effective_contexts(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+        assert auth is session
+        return [team_a, team_b, admitted]
+
+    async def team_permission(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+        return team_grants.get(auth.team_id or "")
+
+    granted = await granted_toolset_ids(session, effective_contexts, team_permission)
+
+    assert granted == frozenset({"ts-a", "ts-shared", "ts-b", "ts-user"})
+
+
+@pytest.mark.asyncio
+async def test_granted_toolset_ids_is_empty_when_neither_key_nor_team_grants_a_toolset():
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a", object_permission=_toolset_permission())
+
+    async def effective_contexts(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+        return [auth]
+
+    async def no_team_permission(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+        return None
+
+    assert await granted_toolset_ids(key, effective_contexts, no_team_permission) == frozenset()
