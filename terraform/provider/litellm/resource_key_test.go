@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
@@ -17,7 +19,40 @@ import (
 
 func newKeyResourceData(t *testing.T, raw map[string]interface{}) *schema.ResourceData {
 	t.Helper()
-	return schema.TestResourceDataRaw(t, resourceKey().Schema, raw)
+	diff, err := resourceKey().Diff(context.Background(), nil, terraform.NewResourceConfigRaw(raw), nil)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	if diff == nil {
+		diff = &terraform.InstanceDiff{Attributes: map[string]*terraform.ResourceAttrDiff{}}
+	}
+	// The protocol apply path sets RawConfig; the legacy Diff used here does not.
+	diff.RawConfig = keyRawConfig(raw)
+	data, err := schema.InternalMap(resourceKey().Schema).Data(nil, diff)
+	if err != nil {
+		t.Fatalf("resource data: %v", err)
+	}
+	return data
+}
+
+func keyRawConfig(raw map[string]interface{}) cty.Value {
+	vals := make(map[string]cty.Value, len(raw))
+	for key, value := range raw {
+		switch typed := value.(type) {
+		case bool:
+			vals[key] = cty.BoolVal(typed)
+		case string:
+			vals[key] = cty.StringVal(typed)
+		case int:
+			vals[key] = cty.NumberIntVal(int64(typed))
+		case float64:
+			vals[key] = cty.NumberFloatVal(typed)
+		}
+	}
+	if len(vals) == 0 {
+		return cty.EmptyObjectVal
+	}
+	return cty.ObjectVal(vals)
 }
 
 func TestMapResourceDataToKeyNewFields(t *testing.T) {
@@ -128,6 +163,7 @@ func TestUpdateKeyOmitsUnsetNewFields(t *testing.T) {
 	for _, k := range []string{
 		"budget_id", "enforced_params", "allowed_routes", "allowed_passthrough_routes",
 		"rpm_limit_type", "tpm_limit_type", "prompts", "organization_id",
+		"auto_rotate", "rotation_interval", "key_rotation_at",
 	} {
 		if _, present := captured[k]; present {
 			t.Errorf("update payload unexpectedly contains %s", k)
@@ -485,10 +521,19 @@ func TestGetKeyPrefersTopLevelOverMetadataCopy(t *testing.T) {
 }
 
 func TestResourceKeyReadDropsMissingKeyFromState(t *testing.T) {
+	var listed atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/list" {
+			listed.Add(1)
+			if r.URL.Query().Get("key_alias") != "stale" || r.URL.Query().Get("substring_matching") != "" {
+				t.Errorf("list query = %s", r.URL.RawQuery)
+			}
+			io.WriteString(w, `{"keys":[],"total_count":0}`)
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error":{"message":"Key not found in database","type":"not_found_error","param":"key","code":"404"}}`))
+		io.WriteString(w, keyNotFoundBody)
 	}))
 	defer srv.Close()
 
@@ -501,6 +546,9 @@ func TestResourceKeyReadDropsMissingKeyFromState(t *testing.T) {
 	}
 	if d.Id() != "" {
 		t.Errorf("Id = %q, want empty so Terraform plans a recreate", d.Id())
+	}
+	if got := listed.Load(); got != 1 {
+		t.Errorf("list calls = %d, want 1", got)
 	}
 }
 
@@ -527,8 +575,9 @@ func TestResourceKeyReadStillFailsOnNon404Errors(t *testing.T) {
 // the way the proxy does: an absent "metadata" keeps the stored map, a
 // present one replaces it wholesale.
 type fakeKeyProxy struct {
-	metadata map[string]interface{}
-	updates  []map[string]interface{}
+	metadata  map[string]interface{}
+	updates   []map[string]interface{}
+	infoExtra map[string]interface{}
 }
 
 func (p *fakeKeyProxy) handler() http.HandlerFunc {
@@ -536,9 +585,13 @@ func (p *fakeKeyProxy) handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/key/info":
+			info := map[string]interface{}{"key_alias": "alias-1", "models": []string{"gpt-4o-mini"}, "metadata": p.metadata}
+			for k, v := range p.infoExtra {
+				info[k] = v
+			}
 			json.NewEncoder(w).Encode(map[string]interface{}{
 				"key":  "hash-1",
-				"info": map[string]interface{}{"key_alias": "alias-1", "models": []string{"gpt-4o-mini"}, "metadata": p.metadata},
+				"info": info,
 			})
 		case "/key/update":
 			var body map[string]interface{}
@@ -565,6 +618,7 @@ func applyKeyUpdate(t *testing.T, client *Client, stateAttrs map[string]string, 
 	if diff == nil {
 		t.Fatalf("expected a non-empty diff between %v and %v", stateAttrs, config)
 	}
+	diff.RawConfig = keyRawConfig(config)
 	newState, diags := r.Apply(context.Background(), state, diff, client)
 	if diags.HasError() {
 		t.Fatalf("Apply returned error: %v", diags)
@@ -906,5 +960,309 @@ func TestResourceKeyUpdateRecreatesCascadeDeletedKeyWithMetadataChange(t *testin
 	}
 	if d.Id() != "new-token" {
 		t.Errorf("Id = %q, want the recreated key's new-token", d.Id())
+	}
+}
+
+func TestParseKeyRotationFields(t *testing.T) {
+	client := NewClient("http://localhost:4000", "test-key", true)
+	key, err := client.parseKeyResponse(map[string]interface{}{
+		"auto_rotate":       true,
+		"rotation_interval": "30d",
+		"key_rotation_at":   "2026-04-01T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("parseKeyResponse returned error: %v", err)
+	}
+	if key.AutoRotate == nil || !*key.AutoRotate {
+		t.Errorf("AutoRotate = %v, want true", key.AutoRotate)
+	}
+	if key.RotationInterval != "30d" {
+		t.Errorf("RotationInterval = %q, want 30d", key.RotationInterval)
+	}
+	if key.KeyRotationAt != "2026-04-01T00:00:00Z" {
+		t.Errorf("KeyRotationAt = %q, want the API string unchanged", key.KeyRotationAt)
+	}
+}
+
+func TestUpdateKeySendsExplicitAutoRotateFalse(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"key":"hash-1"}`)
+	}))
+	defer srv.Close()
+
+	disabled := false
+	client := NewClient(srv.URL, "test-key", true)
+	if _, err := client.UpdateKey(&Key{Key: "hash-1", AutoRotate: &disabled, KeyRotationAt: "2026-04-01T00:00:00Z"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if captured["auto_rotate"] != false {
+		t.Errorf("update payload auto_rotate = %v, want false", captured["auto_rotate"])
+	}
+	for _, field := range []string{"rotation_interval", "key_rotation_at"} {
+		if _, present := captured[field]; present {
+			t.Errorf("update payload unexpectedly contains %s", field)
+		}
+	}
+}
+
+func captureKeyGenerate(t *testing.T) (*httptest.Server, *map[string]interface{}, *atomic.Int32) {
+	t.Helper()
+	captured := map[string]interface{}{}
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path == "/key/generate" {
+			body, _ := io.ReadAll(r.Body)
+			json.Unmarshal(body, &captured)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"key":"sk-test","token_id":"hash-1"}`)
+	}))
+	return srv, &captured, &calls
+}
+
+func TestCreateKeyOmitsRotationWhenUnset(t *testing.T) {
+	srv, captured, _ := captureKeyGenerate(t)
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "alias-1"})
+	if diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("create returned error: %v", diags)
+	}
+	for _, field := range []string{"auto_rotate", "rotation_interval", "key_rotation_at"} {
+		if _, present := (*captured)[field]; present {
+			t.Errorf("create payload unexpectedly contains %s = %v", field, (*captured)[field])
+		}
+	}
+}
+
+func TestCreateKeySendsRotationSchedule(t *testing.T) {
+	srv, captured, _ := captureKeyGenerate(t)
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":         "alias-1",
+		"auto_rotate":       true,
+		"rotation_interval": "30d",
+	})
+	if diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("create returned error: %v", diags)
+	}
+	if (*captured)["auto_rotate"] != true || (*captured)["rotation_interval"] != "30d" {
+		t.Fatalf("create payload = %v, want auto_rotate true and rotation_interval 30d", *captured)
+	}
+	if _, present := (*captured)["key_rotation_at"]; present {
+		t.Errorf("create payload unexpectedly contains key_rotation_at")
+	}
+}
+
+func TestCreateKeyRejectsAutoRotateWithoutSchedule(t *testing.T) {
+	srv, _, calls := captureKeyGenerate(t)
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	missingAlias := newKeyResourceData(t, map[string]interface{}{
+		"auto_rotate":       true,
+		"rotation_interval": "30d",
+	})
+	diags := resourceKeyCreate(context.Background(), missingAlias, client)
+	if !diags.HasError() || !strings.Contains(diags[0].Summary, "key_alias") {
+		t.Fatalf("missing key_alias diag = %v", diags)
+	}
+
+	missingInterval := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":   "alias-1",
+		"auto_rotate": true,
+	})
+	diags = resourceKeyCreate(context.Background(), missingInterval, client)
+	if !diags.HasError() || !strings.Contains(diags[0].Summary, "rotation_interval") {
+		t.Fatalf("missing rotation_interval diag = %v", diags)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Errorf("generate calls = %d, want 0", got)
+	}
+}
+
+func TestKeyUpdateOmitsRotationWhenConfigOmitsIt(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}, infoExtra: map[string]interface{}{
+		"auto_rotate":       true,
+		"rotation_interval": "30d",
+		"key_rotation_at":   "2026-04-01T00:00:00Z",
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+
+	newState := applyKeyUpdate(t, NewClient(srv.URL, "test-key", true),
+		map[string]string{"key_alias": "alias-1", "auto_rotate": "true", "rotation_interval": "30d", "key_rotation_at": "2026-04-01T00:00:00Z"},
+		map[string]interface{}{"key_alias": "alias-2"},
+	)
+	for _, field := range []string{"auto_rotate", "rotation_interval", "key_rotation_at"} {
+		if _, present := proxy.updates[0][field]; present {
+			t.Errorf("update payload unexpectedly contains %s = %v", field, proxy.updates[0][field])
+		}
+	}
+	if newState.Attributes["key_rotation_at"] != "2026-04-01T00:00:00Z" {
+		t.Errorf("state key_rotation_at = %q, want the value read from /key/info", newState.Attributes["key_rotation_at"])
+	}
+}
+
+func TestKeyUpdateOmitsUnchangedRotation(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+
+	applyKeyUpdate(t, NewClient(srv.URL, "test-key", true),
+		map[string]string{"key_alias": "alias-1", "auto_rotate": "true", "rotation_interval": "30d"},
+		map[string]interface{}{"key_alias": "alias-2", "auto_rotate": true, "rotation_interval": "30d"},
+	)
+	for _, field := range []string{"auto_rotate", "rotation_interval", "key_rotation_at"} {
+		if _, present := proxy.updates[0][field]; present {
+			t.Errorf("update payload unexpectedly contains %s = %v", field, proxy.updates[0][field])
+		}
+	}
+}
+
+func TestKeyUpdateSendsRotationIntervalChangeWithAutoRotate(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+
+	applyKeyUpdate(t, NewClient(srv.URL, "test-key", true),
+		map[string]string{"key_alias": "alias-1", "auto_rotate": "true", "rotation_interval": "30d"},
+		map[string]interface{}{"key_alias": "alias-1", "auto_rotate": true, "rotation_interval": "90d"},
+	)
+	if proxy.updates[0]["auto_rotate"] != true || proxy.updates[0]["rotation_interval"] != "90d" {
+		t.Fatalf("update payload = %v, want auto_rotate true and rotation_interval 90d", proxy.updates[0])
+	}
+	if _, present := proxy.updates[0]["key_rotation_at"]; present {
+		t.Errorf("update payload unexpectedly contains key_rotation_at")
+	}
+}
+
+func TestKeyUpdateSendsAutoRotateFalseWithoutEmptyInterval(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+
+	applyKeyUpdate(t, NewClient(srv.URL, "test-key", true),
+		map[string]string{"key_alias": "alias-1", "auto_rotate": "true", "rotation_interval": "30d"},
+		map[string]interface{}{"key_alias": "alias-1", "auto_rotate": false, "rotation_interval": ""},
+	)
+	if proxy.updates[0]["auto_rotate"] != false {
+		t.Fatalf("update payload auto_rotate = %v, want false", proxy.updates[0]["auto_rotate"])
+	}
+	if _, present := proxy.updates[0]["rotation_interval"]; present {
+		t.Errorf("update payload unexpectedly contains rotation_interval = %v", proxy.updates[0]["rotation_interval"])
+	}
+}
+
+func TestResourceKeyReadDoesNotListWhenTokenExists(t *testing.T) {
+	var listed atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/list" {
+			listed.Add(1)
+		}
+		io.WriteString(w, `{"key":"hash-1","info":{"key_alias":"alias-1"}}`)
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "alias-1"})
+	d.SetId("hash-1")
+	if diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("read returned error: %v", diags)
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("Id = %q, want hash-1", d.Id())
+	}
+	if got := listed.Load(); got != 0 {
+		t.Errorf("list calls = %d, want 0", got)
+	}
+}
+
+func TestResourceKeyReadDropsMissingKeyWithoutAlias(t *testing.T) {
+	var listed atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/key/list" {
+			listed.Add(1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		io.WriteString(w, keyNotFoundBody)
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{})
+	d.SetId("deleted-out-of-band")
+	if diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("read of a missing key must not error, got: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Errorf("Id = %q, want empty", d.Id())
+	}
+	if got := listed.Load(); got != 0 {
+		t.Errorf("list calls = %d, want 0", got)
+	}
+}
+
+func TestResourceKeyReadAdoptsRotatedKeyByAlias(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/key/list":
+			if r.URL.Query().Get("key_alias") != "prod" || r.URL.Query().Get("substring_matching") != "" {
+				t.Errorf("list query = %s", r.URL.RawQuery)
+			}
+			io.WriteString(w, `{"keys":[{"token":"new-hash","key_alias":"prod"}],"total_count":1}`)
+		case "/key/info":
+			if r.URL.Query().Get("key") == "old-hash" {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, keyNotFoundBody)
+				return
+			}
+			io.WriteString(w, `{"key":"new-hash","info":{"key_alias":"prod","auto_rotate":true,"rotation_interval":"30d","key_rotation_at":"2026-04-01T00:00:00Z"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "prod"})
+	d.SetId("old-hash")
+	if diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true)); diags.HasError() {
+		t.Fatalf("read returned error: %v", diags)
+	}
+	if d.Id() != "new-hash" {
+		t.Fatalf("Id = %q, want new-hash", d.Id())
+	}
+	if d.Get("key_rotation_at") != "2026-04-01T00:00:00Z" || d.Get("rotation_interval") != "30d" || d.Get("auto_rotate") != true {
+		t.Errorf("state alias rotation = auto_rotate %v interval %v at %v", d.Get("auto_rotate"), d.Get("rotation_interval"), d.Get("key_rotation_at"))
+	}
+}
+
+func TestResourceKeyReadErrorsWhenAliasMatchesMultipleKeys(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/list" {
+			io.WriteString(w, `{"keys":[{"token":"new-a","key_alias":"prod"},{"token":"new-b","key_alias":"prod"}],"total_count":2}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		io.WriteString(w, keyNotFoundBody)
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "prod"})
+	d.SetId("old-hash")
+	diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() || !strings.Contains(diags[0].Summary, "multiple keys") {
+		t.Fatalf("diag = %v, want an error that the alias is ambiguous", diags)
+	}
+	if d.Id() != "old-hash" {
+		t.Errorf("Id = %q, want old-hash left in place", d.Id())
 	}
 }

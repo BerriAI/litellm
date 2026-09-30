@@ -145,6 +145,9 @@ type Key struct {
 	SoftBudget               *float64               `json:"soft_budget,omitempty"`
 	KeyAlias                 string                 `json:"key_alias,omitempty"`
 	Duration                 string                 `json:"duration,omitempty"`
+	AutoRotate               *bool                  `json:"auto_rotate,omitempty"`
+	RotationInterval         string                 `json:"rotation_interval,omitempty"`
+	KeyRotationAt            string                 `json:"-"`
 	Aliases                  map[string]interface{} `json:"aliases,omitempty"`
 	Config                   map[string]interface{} `json:"config,omitempty"`
 	Permissions              map[string]interface{} `json:"permissions,omitempty"`

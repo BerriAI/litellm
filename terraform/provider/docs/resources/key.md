@@ -74,7 +74,11 @@ The following arguments are supported:
 
 * `soft_budget` - (Optional) Soft budget limit for this key. This can be used to set a warning threshold before reaching the `max_budget`.
 
-* `key_alias` - (Optional) Alias for this key. This provides a human-readable identifier for the key.
+* `key_alias` - (Optional) Alias for this key. This provides a human-readable identifier for the key. Required when `auto_rotate` is true, because a rotation replaces the token id and refresh finds the key again by this alias.
+
+* `auto_rotate` - (Optional) Whether the proxy rotates this key on its own schedule. Omit it to leave the current setting unchanged, including on keys imported or scheduled outside Terraform. Set it to `false` to stop rotation. That does not clear `rotation_interval` or `key_rotation_at`. The proxy only rotates keys whose `auto_rotate` is true, and the rotation itself is the proxy's enterprise key-rotation job. This provider does not check the license and does not call regenerate.
+
+* `rotation_interval` - (Optional) How often the proxy rotates this key when `auto_rotate` is true, for example `30d` or `12h`. Required in that case. Omit it to leave the stored interval unchanged. An empty value is never sent. Removing `auto_rotate` and `rotation_interval` from configuration does not clear a schedule that is already stored.
 
 * `duration` - (Optional) How long the key stays valid, e.g. "30d" or "12h". The proxy stores this as an absolute `expires` timestamp. Changing the value resets the expiry to the time of the update plus the new duration; removing it from the configuration leaves the current expiry in place.
 
@@ -123,6 +127,8 @@ In addition to all arguments above, the following attributes are exported:
 * `server_metadata` - Map of every metadata entry the proxy stores for this key, including entries not declared in `metadata`, so drift on them is visible on refresh. Entries already exposed as their own attributes (`model_rpm_limit`, `model_tpm_limit`, `tags`, `guardrails`, `enforced_params`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type`, `prompts`) are omitted and non-string values are JSON encoded. Terraform never writes it; `metadata` still tracks only the entries declared in the configuration.
 
 * `spend` - The current spend for this key. This reflects the total amount spent using this key so far.
+
+* `key_rotation_at` - When the proxy will next rotate this key, copied from the API response. Terraform never sends it. After the proxy rotates the key, refresh keeps this resource when exactly one key still has the stored `key_alias`, and drops it when the alias is free. A refresh that still finds the current token does not search by alias. The new secret is not written to state.
 
 ## State Management
 

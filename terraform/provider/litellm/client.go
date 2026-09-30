@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -204,6 +205,12 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	if key.OrganizationID != "" {
 		updateData["organization_id"] = key.OrganizationID
 	}
+	if key.AutoRotate != nil {
+		updateData["auto_rotate"] = *key.AutoRotate
+	}
+	if key.RotationInterval != "" {
+		updateData["rotation_interval"] = key.RotationInterval
+	}
 
 	resp, err := c.sendRequest("POST", "/key/update", updateData)
 	if err != nil {
@@ -211,6 +218,43 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	}
 
 	return c.parseKeyResponse(resp)
+}
+
+// keyTokenForAlias lists keys by exact alias. An empty token means no match.
+// More than one exact match is an error so refresh does not guess.
+func (c *Client) keyTokenForAlias(alias string) (string, error) {
+	query := url.Values{}
+	query.Set("key_alias", alias)
+	query.Set("return_full_object", "true")
+	query.Set("page", "1")
+	query.Set("size", "2")
+	resp, err := c.sendRequest("GET", "/key/list?"+query.Encode(), nil)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("error encoding key list response: %s", err)
+	}
+	var envelope keyListEnvelope
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		return "", fmt.Errorf("error decoding key list response: %s", err)
+	}
+	var tokens []string
+	for _, row := range envelope.Keys {
+		if row.KeyAlias != alias || row.Token == "" {
+			continue
+		}
+		tokens = append(tokens, row.Token)
+	}
+	switch len(tokens) {
+	case 0:
+		return "", nil
+	case 1:
+		return tokens[0], nil
+	default:
+		return "", fmt.Errorf("multiple keys share key_alias %q", alias)
+	}
 }
 
 func (c *Client) DeleteKey(keyID string) error {
@@ -297,6 +341,18 @@ func (c *Client) parseKeyResponse(resp map[string]interface{}) (*Key, error) {
 		case "key_alias":
 			if s, ok := v.(string); ok {
 				createdKey.KeyAlias = s
+			}
+		case "auto_rotate":
+			if b, ok := v.(bool); ok {
+				createdKey.AutoRotate = &b
+			}
+		case "rotation_interval":
+			if s, ok := v.(string); ok {
+				createdKey.RotationInterval = s
+			}
+		case "key_rotation_at":
+			if s, ok := v.(string); ok {
+				createdKey.KeyRotationAt = s
 			}
 		case "duration":
 			if s, ok := v.(string); ok {
