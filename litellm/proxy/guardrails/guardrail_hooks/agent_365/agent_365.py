@@ -500,22 +500,15 @@ class Agent365Guardrail(CustomGuardrail):
         if isinstance(exchange_result, Ok):
             return SignedIn()
         error: Final = exchange_result.error
-        match error.tag:
-            case "unauthorized":
-                return Rejected(detail=error.unauthorized.detail, claims=error.unauthorized.claims)
-            case "misconfigured":
-                return Unavailable(
-                    detail=(
-                        f"Entra rejected the gateway's own Agent 365 credentials ({error.misconfigured}); "
-                        "check the guardrail's client_id and client_secret"
-                    ),
-                    fail_open=self.unreachable_fallback == "fail_open",
-                )
-            case _:
-                return Unavailable(
-                    detail=f"the Entra token exchange failed ({error.summary})",
-                    fail_open=self.unreachable_fallback == "fail_open",
-                )
+        if error.tag == "unauthorized":
+            return Rejected(detail=error.unauthorized.detail, claims=error.unauthorized.claims)
+        detail: Final = (
+            f"Entra rejected the gateway's own Agent 365 credentials ({error.misconfigured}); "
+            "check the guardrail's client_id and client_secret"
+            if error.tag == "misconfigured"
+            else f"the Entra token exchange failed ({error.summary})"
+        )
+        return Unavailable(detail=detail, fail_open=self.unreachable_fallback == "fail_open")
 
     async def _post_allowing_error_status(
         self,

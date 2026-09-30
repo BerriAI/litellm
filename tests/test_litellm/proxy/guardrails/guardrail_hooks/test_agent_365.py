@@ -1285,6 +1285,17 @@ class TestPreflightCallerSignIn:
         )
 
     @pytest.mark.asyncio
+    async def test_token_endpoint_failure_is_unavailable_under_the_fallback_policy(self):
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_upstream_unavailable("token endpoint 503"))])
+        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger, unreachable_fallback="fail_open")
+
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+
+        assert verdict == Unavailable(
+            detail="the Entra token exchange failed (upstream unavailable: token endpoint 503)", fail_open=True
+        )
+
+    @pytest.mark.asyncio
     async def test_endpoint_unreachable_fail_open_is_unavailable(self):
         exchanger: Final = StubTokenExchanger(
             [httpx.ConnectError("refused", request=httpx.Request("POST", "https://example.test"))]
