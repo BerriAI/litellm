@@ -1260,6 +1260,8 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token_flex: float | None = None
     output_cost_per_token_flex: float | None = None
     cache_read_input_token_cost_flex: float | None = None
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
