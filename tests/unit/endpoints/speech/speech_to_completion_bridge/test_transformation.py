@@ -11,14 +11,14 @@ from litellm.endpoints.speech.speech_to_completion_bridge.transformation import 
 )
 from litellm.types.utils import ChatCompletionAudioResponse, Choices, Message, ModelResponse
 
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
 GEMINI_TTS_MODEL: Final = "gemini-3.1-flash-tts-preview"
 PCM_BYTES: Final = b"\x01\x02\x03\x04" * 6
 
 
 def _model_response(model: str, pcm: bytes) -> ModelResponse:
-    audio: Final = ChatCompletionAudioResponse(
-        data=base64.b64encode(pcm).decode(), expires_at=0, transcript="hello"
-    )
+    audio: Final = ChatCompletionAudioResponse(data=base64.b64encode(pcm).decode(), expires_at=0, transcript="hello")
     return ModelResponse(model=model, choices=[Choices(message=Message(content=None, audio=audio))])
 
 
@@ -72,6 +72,44 @@ def test_non_gemini_request_forwards_speech_response_format_as_audio_format() ->
     assert request["audio"] == {"voice": "alloy", "format": "wav"}
 
 
+def test_gemini_request_keeps_voice_beside_nested_speech_config() -> None:
+    request: Final = SpeechToCompletionBridgeTransformationHandler().transform_request(
+        model=GEMINI_TTS_MODEL,
+        input="Bonjour",
+        voice={"speech_config": {"language_code": "fr-FR"}, "voice": "Kore"},
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+
+    assert request["audio"]["speech_config"] == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}},
+    }
+
+
+@pytest.mark.parametrize("wrapper", (None, "speech_config", "speechConfig"))
+def test_gemini_request_keeps_voice_and_language_without_audio_format(wrapper: str | None) -> None:
+    voice: Final = {"language_code": "fr-FR", "voice": "Kore", "format": "pcm16"}
+    request: Final = SpeechToCompletionBridgeTransformationHandler().transform_request(
+        model=GEMINI_TTS_MODEL,
+        input="Bonjour",
+        voice=voice if wrapper is None else {wrapper: voice},
+        optional_params={},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=MagicMock(),
+        custom_llm_provider="gemini",
+    )
+
+    assert request["audio"]["speech_config"] == {
+        "languageCode": "fr-FR",
+        "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}},
+    }
+
+
 @pytest.mark.parametrize("response_format", ["mp3", "flac", "opus", "aac"])
 def test_gemini_tts_request_rejects_formats_gemini_cannot_produce(response_format: str) -> None:
     with pytest.raises(litellm.BadRequestError) as excinfo:
@@ -86,6 +124,7 @@ def test_gemini_tts_request_rejects_formats_gemini_cannot_produce(response_forma
 def test_gemini_tts_pcm_response_returns_raw_pcm_bytes() -> None:
     response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
         model_response=_model_response(GEMINI_TTS_MODEL, PCM_BYTES),
+        model=GEMINI_TTS_MODEL,
         response_format="pcm",
     )
 
@@ -97,6 +136,7 @@ def test_gemini_tts_pcm_response_returns_raw_pcm_bytes() -> None:
 def test_gemini_tts_wav_and_default_responses_wrap_pcm_in_wav(response_format: str | None) -> None:
     response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
         model_response=_model_response(GEMINI_TTS_MODEL, PCM_BYTES),
+        model=GEMINI_TTS_MODEL,
         response_format=response_format,
     )
 
@@ -110,8 +150,20 @@ def test_gemini_tts_wav_and_default_responses_wrap_pcm_in_wav(response_format: s
 def test_non_gemini_response_keeps_original_bytes_and_mpeg_content_type() -> None:
     response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
         model_response=_model_response("gpt-4o-audio-preview", PCM_BYTES),
+        model="gpt-4o-audio-preview",
         response_format="mp3",
     )
 
     assert response.response.content == PCM_BYTES
     assert response.response.headers["content-type"] == "audio/mpeg"
+
+
+def test_gemini_response_uses_requested_model_when_served_name_differs() -> None:
+    response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
+        model_response=_model_response("served-speech-alias", PCM_BYTES),
+        model=GEMINI_TTS_MODEL,
+        response_format=None,
+    )
+
+    assert response.response.content[:4] == b"RIFF"
+    assert response.response.headers["content-type"] == "audio/wav"

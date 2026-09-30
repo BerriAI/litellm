@@ -17,10 +17,26 @@ from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
+    normalize_gemini_speech_config,
 )
 from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
+
+
+def test_gemini_speech_config_drops_non_string_keys_without_adding_voice():
+    speech_config: Final = {
+        "speech_config": {
+            "language_code": "fr-FR",
+            "metadata": {1: "discard", "source": ["studio", 2]},
+        },
+        "format": "pcm16",
+    }
+
+    assert normalize_gemini_speech_config(speech_config) == {
+        "languageCode": "fr-FR",
+        "metadata": {"source": ["studio", 2]},
+    }
 
 
 def test_top_logprobs():

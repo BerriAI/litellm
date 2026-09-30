@@ -16,7 +16,10 @@ from litellm.llms.vertex_ai.common_utils import (
     _build_vertex_schema,
     supports_response_json_schema,
 )
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexLLM,
+    normalize_gemini_speech_config,
+)
 from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
@@ -140,7 +143,10 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             if is_supported:
                 # Always output in camelCase for Google GenAI API
                 output_key = param_camel if param != param_camel else param
-                _generate_content_config_dict[output_key] = value
+                if param_snake == "speech_config" and isinstance(value, dict):
+                    _generate_content_config_dict[output_key] = normalize_gemini_speech_config(value)
+                else:
+                    _generate_content_config_dict[output_key] = value
         return _generate_content_config_dict
 
     def validate_environment(
