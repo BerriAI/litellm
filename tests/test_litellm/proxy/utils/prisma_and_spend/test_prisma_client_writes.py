@@ -155,6 +155,7 @@ async def test_update_data_token_hashes_and_updates(
             "token": hashlib.sha256(token.encode()).hexdigest(),
             "spend": 1.0,
             "user_id": "u1",
+            "object_permission": {"mcp_servers": ["srv-1"]},
         },
     )
     prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=response)
@@ -167,15 +168,22 @@ async def test_update_data_token_hashes_and_updates(
     actual = {
         "result": result,
         "where": update_kwargs["where"],
+        "include": update_kwargs["include"],
         "data_token": update_kwargs["data"]["token"],
         "data_spend": update_kwargs["data"]["spend"],
     }
     assert actual == {
         "result": {
             "token": hashed,
-            "data": {"token": hashed, "spend": 1.0, "user_id": "u1"},
+            "data": {
+                "token": hashed,
+                "spend": 1.0,
+                "user_id": "u1",
+                "object_permission": {"mcp_servers": ["srv-1"]},
+            },
         },
         "where": {"token": hashed},
+        "include": {"object_permission": True},
         "data_token": hashed,
         "data_spend": 1.0,
     }

@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import pytest
+from coverage_registry.management_cases import case_properties
 
 # Hardcoded because the runner image copies tests/e2e/ to /app/e2e, so nothing
 # at runtime names this suite's place in the repo. test_junit_properties.py
@@ -94,7 +95,7 @@ def result_properties(item: pytest.Item) -> tuple[tuple[str, str], ...]:
         ("package", package_from_nodeid(item.nodeid)),
         ("covers", ",".join(covers_from_item(item))),
         ("source", source_from_item(item)),
-    )
+    ) + case_properties(item.nodeid)
 
 
 def attach_result_properties(item: pytest.Item) -> None:

@@ -7,13 +7,18 @@ so a read-back reflects the change. Router settings, which mutate global proxy
 state, are exercised with a benign, self-restoring change so a shared proxy is left
 as it was found.
 
-Cache settings and the Vault config override are deliberately not covered here.
-Both routes reconfigure the whole proxy: /cache/settings persists what it receives
-into a row that outranks the YAML cache_params and is re-applied on a timer, and
-/config_overrides/hashicorp_vault swaps the process-wide secret manager. Neither can
-be exercised safely against the shared proxy the suites run on, so they need an
-isolated proxy before a test lands. Do not add a read-then-write-back test for
-either one.
+Cache settings, the Vault config override and the allowed-IP routes are deliberately
+not covered here. All three reconfigure the whole proxy: /cache/settings persists what
+it receives into a row that outranks the YAML cache_params and is re-applied on a timer,
+/config_overrides/hashicorp_vault swaps the process-wide secret manager, and
+/add/allowed_ip mutates the live general_settings["allowed_ips"] that
+auth_utils._check_valid_ip reads, so the first call locks every other client out of the
+shared proxy. The allowlist is an exact string match with no CIDR support, and no route
+reports the caller's address as the proxy sees it, so a test cannot allowlist itself
+first; /delete/allowed_ip sits behind the same auth dependency, so the cleanup is locked
+out too and the proxy stays poisoned for the rest of the build. None of the three can be
+exercised safely against the shared proxy the suites run on, so they need an isolated
+proxy before a test lands. Do not add a read-then-write-back test for any of them.
 """
 
 from __future__ import annotations
@@ -187,7 +192,7 @@ class JwtKeyMappingResponse(BaseModel):
 
 
 class RouterSettingsPatch(BaseModel):
-    num_retries: int
+    retry_after: int
 
 
 class ConfigUpdateBody(BaseModel):
@@ -199,7 +204,7 @@ class ConfigUpdateResponse(BaseModel):
 
 
 class RouterCurrentValues(BaseModel):
-    num_retries: int | None = None
+    retry_after: int | None = None
 
 
 class RouterSettingsResponse(BaseModel):
@@ -461,17 +466,25 @@ class TestRouterSettings:
     ) -> None:
         """/config/update is the only write path for router_settings (there is no
         dedicated router-settings write route). The change is restored on teardown so
-        the shared proxy keeps its original retry policy."""
-        original = self._read_num_retries(client)
-        assert original is not None, "GET /router/settings did not report num_retries; cannot prove a change"
-        resources.defer(lambda: self._write_num_retries(client, original))
+        the shared proxy keeps its original retry policy.
 
-        target = original + 5
+        retry_after is the subject because it satisfies all three constraints at once:
+        no lane's config file declares it, so the database owns it and the write is not
+        refused as config-owned; it is in RUNTIME_UPDATABLE_ROUTER_SETTINGS, so
+        /config/update accepts it; and it is in ROUTER_SETTINGS_FIELDS backed by an
+        always-set Router attribute, so GET /router/settings reports it for the
+        read-back. Bumping it by one second is the smallest change that proves the
+        round-trip without slowing a concurrent test that hits a retry."""
+        original = self._read_retry_after(client)
+        assert original is not None, "GET /router/settings did not report retry_after; cannot prove a change"
+        resources.defer(lambda: self._write_retry_after(client, original))
+
+        target = original + 1
         response = unwrap(
             client.proxy.transport.post(
                 "/config/update",
                 headers=client.proxy.transport.master,
-                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(num_retries=target)),
+                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(retry_after=target)),
                 response_type=ConfigUpdateResponse,
             )
         )
@@ -481,20 +494,20 @@ class TestRouterSettings:
 
         _ = _poll(
             client,
-            lambda: True if self._read_num_retries(client) == target else None,
-            f"GET /router/settings never reported num_retries {target} after /config/update",
+            lambda: True if self._read_retry_after(client) == target else None,
+            f"GET /router/settings never reported retry_after {target} after /config/update",
         )
 
-        self._write_num_retries(client, original)
+        self._write_retry_after(client, original)
         restored = _poll(
             client,
-            lambda: original if self._read_num_retries(client) == original else None,
-            f"GET /router/settings never returned to the original num_retries {original} after the restore",
+            lambda: original if self._read_retry_after(client) == original else None,
+            f"GET /router/settings never returned to the original retry_after {original} after the restore",
         )
-        assert restored == original, f"router num_retries left at {restored}, expected the original {original}"
+        assert restored == original, f"router retry_after left at {restored}, expected the original {original}"
 
     @staticmethod
-    def _read_num_retries(client: ManagementClient) -> int | None:
+    def _read_retry_after(client: ManagementClient) -> int | None:
         return unwrap(
             client.proxy.transport.get(
                 "/router/settings",
@@ -502,15 +515,15 @@ class TestRouterSettings:
                 params=NoBody(),
                 response_type=RouterSettingsResponse,
             )
-        ).current_values.num_retries
+        ).current_values.retry_after
 
     @staticmethod
-    def _write_num_retries(client: ManagementClient, value: int) -> None:
+    def _write_retry_after(client: ManagementClient, value: int) -> None:
         _ = unwrap(
             client.proxy.transport.post(
                 "/config/update",
                 headers=client.proxy.transport.master,
-                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(num_retries=value)),
+                json=ConfigUpdateBody(router_settings=RouterSettingsPatch(retry_after=value)),
                 response_type=ConfigUpdateResponse,
             )
         )

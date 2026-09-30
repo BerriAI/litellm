@@ -244,7 +244,7 @@ async def vector_store_create(
             )
 
         # Create vector store across multiple models
-        response: Final = await managed_vector_stores.acreate_vector_store(
+        response: Final[object] = await managed_vector_stores.acreate_vector_store(
             create_request=data,
             llm_router=llm_router,
             target_model_names_list=target_model_names_list,

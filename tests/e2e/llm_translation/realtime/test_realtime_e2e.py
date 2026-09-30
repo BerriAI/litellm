@@ -13,8 +13,9 @@ failure. See REALTIME_COVERAGE_MATRIX.md.
 """
 
 import pytest
+from lifecycle import ResourceManager
+from models import LiteLLMParamsBody
 from pydantic import BaseModel
-
 from realtime_client import (
     PROVIDERS,
     ConversationItemCreate,
@@ -27,14 +28,17 @@ from realtime_client import (
     RealtimeProvider,
     ResponseCreate,
     ResponseDone,
+    ServerEnvelope,
     SessionConfig,
     SessionUpdate,
+    as_text,
     function_call_item,
     parse_last,
     realtime_model,
     transcript,
     user_message,
 )
+from websockets.exceptions import ConnectionClosedError
 
 pytestmark = pytest.mark.e2e
 
@@ -147,3 +151,39 @@ def test_tool_call_round_trip(
         second = session.collect_until("response.done", timeout=60)
 
         assert "72" in transcript(second), "follow-up did not use the tool result"
+
+
+_REFUSED_UPSTREAMS = (
+    RealtimeProvider(
+        "azure-bad-key",
+        "azure-realtime-refused",
+        LiteLLMParamsBody(
+            model="azure/gpt-realtime",
+            api_key="invalid-e2e-key",
+            api_version="2025-08-28",
+            realtime_protocol="GA",
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize("provider", _REFUSED_UPSTREAMS, ids=[p.id for p in _REFUSED_UPSTREAMS])
+def test_upstream_handshake_refusal_is_an_error_event_and_policy_close(
+    client: RealtimeClient,
+    resources: ResourceManager,
+    scoped_key: str,
+    provider: RealtimeProvider,
+) -> None:
+    model_name, model_id = client.provision(provider)
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+
+    with client.connect(key=scoped_key, model=model_name) as session:
+        first = ServerEnvelope.model_validate_json(
+            as_text(session.connection.recv(timeout=15))
+        )
+        assert first.type == "error", first
+        with pytest.raises(ConnectionClosedError) as closed:
+            session.connection.recv(timeout=15)
+
+    assert closed.value.rcvd is not None
+    assert closed.value.rcvd.code == 1008, closed.value

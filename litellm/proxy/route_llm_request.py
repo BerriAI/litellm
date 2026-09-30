@@ -142,6 +142,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acancel_run": "/evals/{eval_id}/runs/{run_id}/cancel",
     "adelete_run": "/evals/{eval_id}/runs/{run_id}",
     "acreate_batch": "/batches",
+    "aretrieve_batch": "/batches",
 }
 
 
@@ -159,6 +160,7 @@ class ProxyModelNotFoundError(HTTPException):
 REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "acompletion": ("messages",),
     "aembedding": ("input",),
+    "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }
 
