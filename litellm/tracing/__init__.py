@@ -9,8 +9,8 @@ from litellm.tracing.receiver import (
     TracingPayloadTooLargeError,
 )
 
-__all__ = [
+__all__ = (
     "Tenant",
     "TraceReceiver",
     "TracingPayloadTooLargeError",
-]
+)

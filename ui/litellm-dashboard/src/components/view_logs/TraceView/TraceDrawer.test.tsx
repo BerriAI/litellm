@@ -144,3 +144,9 @@ describe("initialRunSelection", () => {
     expect(initialRunSelection(trace).selectedId).toBe("agent");
   });
 });
+
+it("opens a cited span instead of the default failed span", () => {
+  const cited = research.spans.find((span) => span.parent_span_id !== null)!;
+  expect(initialRunSelection(research, cited.span_id).selectedId).toBe(cited.span_id);
+  expect(initialRunSelection(research, "missing")).toEqual(initialRunSelection(research));
+});

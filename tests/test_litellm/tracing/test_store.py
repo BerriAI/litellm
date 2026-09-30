@@ -7,7 +7,6 @@ import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 
@@ -120,7 +119,7 @@ def test_summary_totals():
     assert summary["tool_calls"] == 2
     assert summary["error_count"] == 0
     assert (summary["input_tokens"], summary["output_tokens"]) == (200, 40)
-    assert summary["models"] == ["claude-sonnet-4-5"]
+    assert tuple(summary["models"]) == ("claude-sonnet-4-5",)
     assert summary["duration_ms"] == 1000
     assert summary["start_time"].startswith("2026-09-30T")
 
@@ -159,7 +158,7 @@ def test_span_from_row_optional_fields():
 def test_agent_nodes_parent_and_per_agent_counts():
     trace = trace_from_rows("t1", _deep_agent_rows())
     assert trace is not None
-    assert trace["agents"] == [
+    assert list(trace["agents"]) == [
         {
             "name": "deep_research_agent",
             "parent_agent": None,
@@ -218,7 +217,7 @@ def test_parent_agent_stops_at_cyclic_parents():
 
 def test_agent_nodes_ignores_spans_of_unknown_agents():
     spans = [span_from_row(_row("t", "", "tool", "tool", "ghost"), T0)]
-    assert agent_nodes(spans) == []
+    assert not agent_nodes(spans)
 
 
 # ---------------------------------------------------------------- list helpers

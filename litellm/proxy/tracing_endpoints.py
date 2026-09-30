@@ -60,7 +60,7 @@ def scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
 
 
 async def _read_otlp_body(request: Request) -> bytes:
-    body: Final = bytearray()  # mutable-ok: accumulate request chunks without exceeding the configured body limit
+    body: Final = bytearray()
     async for chunk in request.stream():
         if len(body) + len(chunk) > OTLP_MAX_BODY_BYTES:
             raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")

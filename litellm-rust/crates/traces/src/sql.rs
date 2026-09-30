@@ -112,3 +112,28 @@ pub async fn execute_read(
     }
     String::from_utf8(body).map_err(|_| Error::InvalidResponse)
 }
+
+#[derive(Clone, Copy)]
+pub enum LensQuery {
+    Sample,
+    Content,
+    Evidence,
+}
+
+impl LensQuery {
+    pub fn parse(name: &str) -> Result<Self, Error> {
+        match name {
+            "sample" => Ok(Self::Sample),
+            "content" => Ok(Self::Content),
+            "evidence" => Ok(Self::Evidence),
+            _ => Err(Error::InvalidQuery),
+        }
+    }
+    pub fn sql(self) -> &'static str {
+        match self {
+            Self::Sample => include_str!("../query/lens_sample.sql"),
+            Self::Content => include_str!("../query/lens_content.sql"),
+            Self::Evidence => include_str!("../query/lens_evidence.sql"),
+        }
+    }
+}

@@ -40,7 +40,15 @@ const INITIAL_STATE: SpanTreeState = {
 };
 
 /** First failed span if the run has errors (with its tree path opened), otherwise the root agent. */
-export function initialRunSelection(trace: Trace): { selectedId: string; state: SpanTreeState } {
+export function initialRunSelection(
+  trace: Trace,
+  initialSpanId?: string,
+): { selectedId: string; state: SpanTreeState } {
+  if (initialSpanId && trace.spans.some((span) => span.span_id === initialSpanId)) {
+    const selectedId = nearestVisibleSpanId(trace.spans, initialSpanId, false);
+    const state = revealSpanInState(trace.spans, { ...INITIAL_STATE, hideFramework: false }, selectedId);
+    return { selectedId, state };
+  }
   const failed = firstErrorSpan(trace.spans);
   if (!failed || failed.parent_span_id === null) {
     const root = trace.spans.find((s) => s.parent_span_id === null);
@@ -72,7 +80,9 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
       variant="outline"
       size="xs"
       className="shrink-0 gap-1.5 rounded-[4px] font-mono text-[10px] shadow-none"
-      onClick={async () => setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))}
+      onClick={async () =>
+        setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))
+      }
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
       {copied ? "Command copied" : "Copy for agent"}
@@ -128,8 +138,8 @@ function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
 }
 
 /** Tree + detail pane for one loaded run, with J/K/arrow keyboard navigation. */
-function RunBody({ trace, accessToken }: { trace: Trace; accessToken: string }) {
-  const initial = useMemo(() => initialRunSelection(trace), [trace]);
+function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessToken: string; initialSpanId?: string }) {
+  const initial = useMemo(() => initialRunSelection(trace, initialSpanId), [trace, initialSpanId]);
   const [state, setState] = useState<SpanTreeState>(initial.state);
   const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
   const [detailOpen, setDetailOpen] = useState(true);
@@ -223,12 +233,13 @@ function RunBody({ trace, accessToken }: { trace: Trace; accessToken: string }) 
 interface RunViewProps {
   traceId: string;
   traceRef?: string;
+  initialSpanId?: string;
   accessToken: string;
   onBack: () => void;
 }
 
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
-export function RunView({ traceId, traceRef, accessToken, onBack }: RunViewProps) {
+export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack }: RunViewProps) {
   const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
     queryFn: () => agentTraceCall(accessToken, traceId, traceRef),
@@ -264,7 +275,7 @@ export function RunView({ traceId, traceRef, accessToken, onBack }: RunViewProps
       data-testid="run-view"
     >
       <RunHeader trace={trace} onBack={onBack} />
-      <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} />
+      <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} initialSpanId={initialSpanId} />
     </div>
   );
 }

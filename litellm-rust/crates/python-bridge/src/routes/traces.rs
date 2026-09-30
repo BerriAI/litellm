@@ -9,9 +9,11 @@ use pyo3::{
 
 fn map_error(error: Error) -> PyErr {
     match error {
-        Error::InvalidRow | Error::InvalidTable | Error::InvalidSchema | Error::EmptySql => {
-            PyValueError::new_err(error.to_string())
-        }
+        Error::InvalidRow
+        | Error::InvalidTable
+        | Error::InvalidSchema
+        | Error::EmptySql
+        | Error::InvalidQuery => PyValueError::new_err(error.to_string()),
         Error::InsertTooLarge => PyOverflowError::new_err(error.to_string()),
         Error::InvalidUrl
         | Error::QueryFailed(_)
@@ -89,6 +91,19 @@ impl NativeTraceStorage {
             },
             map_error,
         )
+    }
+
+    fn lens_query<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] parameters: BTreeMap<
+            String,
+            Parameter,
+        >,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = litellm_traces::LensQuery::parse(name).map_err(map_error)?;
+        self.query(py, query.sql().to_owned(), parameters)
     }
 
     fn query<'py>(

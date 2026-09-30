@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -109,7 +108,7 @@ async def test_large_body_is_decoded_off_the_event_loop():
 async def test_empty_export_writes_nothing():
     store = _fake_store()
     assert await TraceReceiver(store).ingest(b"", "application/x-protobuf", None, TENANT) == 0
-    store.insert_spans.assert_awaited_once_with([])
+    store.insert_spans.assert_awaited_once_with(())
 
 
 @pytest.mark.asyncio

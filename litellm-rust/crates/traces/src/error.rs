@@ -10,6 +10,8 @@ pub enum Error {
     InvalidSchema,
     #[error("SQL query must not be empty")]
     EmptySql,
+    #[error("unknown named trace query")]
+    InvalidQuery,
     #[error("ClickHouse query failed with HTTP status {0}")]
     QueryFailed(u16),
     #[error("ClickHouse insert failed with HTTP status {0}")]

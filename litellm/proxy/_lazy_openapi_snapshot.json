@@ -33361,6 +33361,28 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
+        "Scope": {
+          "additionalProperties": false,
+          "properties": {
+            "all_teams": {
+              "default": false,
+              "title": "All Teams",
+              "type": "boolean"
+            },
+            "api_key_hash": {
+              "default": "",
+              "title": "Api Key Hash",
+              "type": "string"
+            },
+            "team_id": {
+              "default": "",
+              "title": "Team Id",
+              "type": "string"
+            }
+          },
+          "title": "Scope",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -33399,6 +33421,71 @@
             "type"
           ],
           "title": "ValidationError",
+          "type": "object"
+        },
+        "Worker": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "last_seen": {
+              "format": "date-time",
+              "title": "Last Seen",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "revoked": {
+              "default": false,
+              "title": "Revoked",
+              "type": "boolean"
+            },
+            "scope": {
+              "$ref": "#/components/schemas/Scope"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "scope",
+            "last_seen"
+          ],
+          "title": "Worker",
+          "type": "object"
+        },
+        "WorkerCreated": {
+          "additionalProperties": false,
+          "properties": {
+            "token": {
+              "title": "Token",
+              "type": "string"
+            },
+            "worker": {
+              "$ref": "#/components/schemas/Worker"
+            }
+          },
+          "required": [
+            "worker",
+            "token"
+          ],
+          "title": "WorkerCreated",
+          "type": "object"
+        },
+        "WorkerName": {
+          "properties": {
+            "name": {
+              "default": "Lens worker",
+              "maxLength": 100,
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "title": "WorkerName",
           "type": "object"
         }
       }
@@ -34329,6 +34416,52 @@
             }
           ],
           "summary": "List Callbacks",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/engine/workers/register": {
+        "post": {
+          "operationId": "register_worker_engine_workers_register_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerName"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WorkerCreated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Register Worker",
           "tags": [
             "mcp_discoverable"
           ]

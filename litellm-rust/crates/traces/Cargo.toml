@@ -12,6 +12,7 @@ opentelemetry-proto = { version = "0.33.0", default-features = false, features =
 prost = "0.14.4"
 time = { workspace = true, features = ["formatting"] }
 litellm-http.workspace = true
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -14,6 +14,7 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 
 import asyncio
 import os
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import (
@@ -48,15 +49,20 @@ class Tenant:
         self.org_id = org_id
 
     def stamp(self, row: SpanRow) -> SpanRow:
-        row["TeamId"] = self.team_id
-        row["ApiKeyHash"] = self.api_key_hash
-        row["ResourceAttributes"] = {
-            **row["ResourceAttributes"],
-            "litellm.team_id": self.team_id,
-            "litellm.api_key_hash": self.api_key_hash,
-            "litellm.org_id": self.org_id,
+        result: Final[SpanRow] = {
+            **row,
+            "TeamId": self.team_id,
+            "ApiKeyHash": self.api_key_hash,
+            "ResourceAttributes": MappingProxyType(
+                {
+                    **row["ResourceAttributes"],
+                    "litellm.team_id": self.team_id,
+                    "litellm.api_key_hash": self.api_key_hash,
+                    "litellm.org_id": self.org_id,
+                }
+            ),
         }
-        return row
+        return result
 
 
 class TraceReceiver:
@@ -103,7 +109,7 @@ class TraceReceiver:
         except OTLPPayloadTooLargeError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         try:
-            await self.store.insert_spans([tenant.stamp(r) for r in rows])
+            await self.store.insert_spans(tuple(tenant.stamp(r) for r in rows))
         except OverflowError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         return len(rows)

@@ -2,11 +2,7 @@
 Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
-
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 from fastapi import FastAPI, HTTPException

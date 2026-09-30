@@ -11,6 +11,8 @@ Pure functions, no I/O. Two steps:
 import json
 from collections.abc import Callable, Mapping
 from typing import Any, Final
+from types import MappingProxyType
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
 from litellm.rust_bridge.traces import DecodedSpan
@@ -39,8 +41,8 @@ _FRAMEWORK_SUFFIXES: Final = (
     ".after_model",
 )
 _LLM_OPERATIONS: Final = frozenset({"chat", "text_completion", "generate_content"})
-_LC_ROLES: Final = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
-_OPENINFERENCE_TYPES: Final[dict[str, SpanType]] = {"AGENT": "agent", "LLM": "llm", "TOOL": "tool"}
+_LC_ROLES: Final = MappingProxyType({"human": "user", "ai": "assistant", "system": "system", "tool": "tool"})
+_OPENINFERENCE_TYPES: Final[Mapping[str, SpanType]] = MappingProxyType({"AGENT": "agent", "LLM": "llm", "TOOL": "tool"})
 
 
 class InvalidOTLPPayloadError(ValueError):
@@ -62,7 +64,9 @@ def _truncate(value: str) -> str:
     return f"{kept}…[truncated {size - OTLP_MAX_ATTRIBUTE_VALUE_BYTES} bytes]"
 
 
-def decode_otlp(body: bytes, content_type: str | None = None, content_encoding: str | None = None) -> list[SpanRow]:
+def decode_otlp(
+    body: bytes, content_type: str | None = None, content_encoding: str | None = None
+) -> tuple[SpanRow, ...]:
     """Decode an OTLP trace export and normalize every span."""
     try:
         spans: Final = native_decode_otlp(body, content_type, content_encoding, OTLP_MAX_BODY_BYTES)
@@ -70,7 +74,7 @@ def decode_otlp(body: bytes, content_type: str | None = None, content_encoding: 
         raise OTLPPayloadTooLargeError(str(error)) from error
     except ValueError as error:
         raise InvalidOTLPPayloadError(str(error)) from error
-    return [_span_row(span) for span in spans]
+    return tuple(_span_row(span) for span in spans)
 
 
 def _exception_message(span: DecodedSpan) -> str:
@@ -97,7 +101,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         ResourceAttributes=resource,
         ScopeName=span["scope_name"],
         ScopeVersion=span["scope_version"],
-        SpanAttributes={},
+        SpanAttributes=span["attributes"],
         Duration=max(span["end_ns"] - span["start_ns"], 0),
         StatusCode=span["status_code"],
         StatusMessage=span["status_message"] or _exception_message(span),
@@ -112,10 +116,16 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         Input="",
         Output="",
     )
-    normalize(row, attributes)
-    row["SpanAttributes"] = {k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES}
-    row["Input"], row["Output"] = _truncate(row["Input"]), _truncate(row["Output"])
-    return row
+    normalized: Final = normalize(row, attributes)
+    result: Final[SpanRow] = {
+        **normalized,
+        "SpanAttributes": MappingProxyType(
+            {k: _truncate(v) for k, v in attributes.items() if k not in _HEAVY_ATTRIBUTES}
+        ),
+        "Input": _truncate(normalized["Input"]),
+        "Output": _truncate(normalized["Output"]),
+    }
+    return result
 
 
 # ---------------------------------------------------------------- normalize
@@ -128,17 +138,25 @@ def _loads(value: str) -> object:
         return None
 
 
+class ToolCall(TypedDict):
+    name: ReadOnly[object]
+    args: ReadOnly[object]
+
+
 def _lc_message(message: Mapping[str, Any]) -> dict[str, Any]:
-    """LangChain serialized message (or plain {role, content}) -> {role, content, tool_calls?}."""
-    kwargs = message.get("kwargs", message)
-    role = _LC_ROLES.get(kwargs.get("type") or kwargs.get("role"), kwargs.get("role") or kwargs.get("type") or "")
-    content = kwargs.get("content", "")
-    out: dict[str, Any] = {"role": role, "content": content if isinstance(content, str) else json.dumps(content)}
-    if kwargs.get("tool_calls"):
-        out["tool_calls"] = [{"name": t.get("name"), "args": t.get("args")} for t in kwargs["tool_calls"]]
-    if role == "tool" and kwargs.get("name"):
-        out["name"] = kwargs["name"]
-    return out
+    kwargs: Final = message.get("kwargs", message)
+    role: Final = _LC_ROLES.get(
+        kwargs.get("type") or kwargs.get("role"), kwargs.get("role") or kwargs.get("type") or ""
+    )
+    content: Final = kwargs.get("content", "")
+    base: Final = (("role", role), ("content", content if isinstance(content, str) else json.dumps(content)))
+    calls: Final = (
+        (("tool_calls", tuple(ToolCall(name=t.get("name"), args=t.get("args")) for t in kwargs["tool_calls"])),)
+        if kwargs.get("tool_calls")
+        else ()
+    )
+    tool: Final = (("name", kwargs["name"]),) if role == "tool" and kwargs.get("name") else ()
+    return dict((*base, *calls, *tool))  # mutable-ok: json.dumps requires a dict for the normalized message object
 
 
 def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
@@ -146,22 +164,24 @@ def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
     name = row["SpanName"]
     if not row["ParentSpanId"] or name == attributes.get("langsmith.metadata.lc_agent_name"):
         return "agent"
-    if kind in {"llm", "tool"}:
+    if kind in ("llm", "tool"):
         return kind
     if name.endswith(_FRAMEWORK_SUFFIXES):
         return "framework"
     return "chain"
 
 
-def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    prompt = _loads(attributes.get("gen_ai.prompt", ""))
-    completion = _loads(attributes.get("gen_ai.completion", ""))
-    prompt_payload = prompt if isinstance(prompt, dict) else {}
+def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> tuple[str, str, str]:
+    prompt: Final = _loads(attributes.get("gen_ai.prompt", ""))
+    completion: Final = _loads(attributes.get("gen_ai.completion", ""))
+    prompt_payload: Final = prompt if isinstance(prompt, dict) else MappingProxyType({})
     if row["ObservationType"] == "llm" and isinstance(completion, dict):
-        messages = prompt_payload.get("messages") or [[]]
-        batch = messages[0] if messages and isinstance(messages[0], list) else messages
-        row["Input"] = (
-            json.dumps([_lc_message(m) for m in batch if isinstance(m, dict)]) if isinstance(batch, list) else ""
+        messages: Final = prompt_payload.get("messages") or ((),)
+        batch: Final = messages[0] if messages and isinstance(messages[0], list) else messages
+        input_text: Final = (
+            json.dumps(tuple(_lc_message(m) for m in batch if isinstance(m, dict)))
+            if isinstance(batch, (tuple, list))
+            else ""
         )
         generations: Final = completion.get("generations")
         first: Final = generations[0] if isinstance(generations, list) and generations else None
@@ -169,77 +189,92 @@ def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
         message: Final = item.get("message") if isinstance(item, dict) else None
         generation: Final = message.get("kwargs") if isinstance(message, dict) else None
         if isinstance(generation, dict):
-            row["Output"] = json.dumps(_lc_message({"kwargs": generation}))
             metadata: Final = generation.get("response_metadata")
-            row["LiteLLMRequestId"] = metadata.get("id", "") if isinstance(metadata, dict) else ""
-        else:
-            row["Output"] = attributes.get("gen_ai.completion", "")
-        return
+            return (
+                input_text,
+                json.dumps(_lc_message(MappingProxyType({"kwargs": generation}))),
+                metadata.get("id", "") if isinstance(metadata, dict) else "",
+            )
+        return input_text, attributes.get("gen_ai.completion", ""), row["LiteLLMRequestId"]
     if row["ObservationType"] == "tool":
-        output = (completion or {}).get("output", completion) if isinstance(completion, dict) else completion
-        if isinstance(output, dict) and "update" in output:  # LangGraph Command, e.g. Deep Agents `task`
-            update_messages = (output.get("update") or {}).get("messages") or []
-            output = update_messages[-1] if update_messages else output
-        if isinstance(output, dict):
-            output = output.get("content", output)
-        row["Input"] = attributes.get("gen_ai.prompt", "")
-        row["Output"] = output if isinstance(output, str) else json.dumps(output)
-        return
+        output: Final = completion.get("output", completion) if isinstance(completion, dict) else completion
+        update_messages: Final = (
+            (output.get("update") or MappingProxyType({})).get("messages") or ()
+            if isinstance(output, dict) and "update" in output
+            else ()
+        )
+        latest: Final = update_messages[-1] if update_messages else output
+        content: Final = latest.get("content", latest) if isinstance(latest, dict) else latest
+        return (
+            attributes.get("gen_ai.prompt", ""),
+            content if isinstance(content, str) else json.dumps(content),
+            row["LiteLLMRequestId"],
+        )
     if row["ObservationType"] == "agent":
-        input_messages = (prompt or {}).get("messages") if isinstance(prompt, dict) else None
-        output_messages = (completion or {}).get("messages") if isinstance(completion, dict) else None
-        # agents built with @traceable take arbitrary args, not a message list: keep the raw payload then
-        row["Input"] = (
-            json.dumps([_lc_message(m) for m in input_messages if isinstance(m, dict)])
+        input_messages: Final = prompt.get("messages") if isinstance(prompt, dict) else None
+        output_messages: Final = completion.get("messages") if isinstance(completion, dict) else None
+        input_text: Final = (
+            json.dumps(tuple(_lc_message(m) for m in input_messages if isinstance(m, dict)))
             if input_messages
             else attributes.get("gen_ai.prompt", "")
         )
-        row["Output"] = (
+        output_text: Final = (
             json.dumps(_lc_message(output_messages[-1]))
             if output_messages and isinstance(output_messages[-1], dict)
             else attributes.get("gen_ai.completion", "")
         )
-        return
-    row["Input"] = attributes.get("gen_ai.prompt", "")
-    row["Output"] = attributes.get("gen_ai.completion", "")
+        return input_text, output_text, row["LiteLLMRequestId"]
+    return attributes.get("gen_ai.prompt", ""), attributes.get("gen_ai.completion", ""), row["LiteLLMRequestId"]
 
 
-def normalize_langsmith(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    row["ObservationType"] = _langsmith_type(row, attributes)
-    row["AgentName"] = attributes.get("langsmith.metadata.lc_agent_name", "")
-    row["Model"] = attributes.get("gen_ai.request.model", "")
-    _langsmith_io(row, attributes)
+def normalize_langsmith(row: SpanRow, attributes: Mapping[str, str]) -> SpanRow:
+    named: Final[SpanRow] = {
+        **row,
+        "ObservationType": _langsmith_type(row, attributes),
+        "AgentName": attributes.get("langsmith.metadata.lc_agent_name", ""),
+        "Model": attributes.get("gen_ai.request.model", ""),
+    }
+    input_text, output_text, request_id = _langsmith_io(named, attributes)
+    result: Final[SpanRow] = {**named, "Input": input_text, "Output": output_text, "LiteLLMRequestId": request_id}
+    return result
 
 
-def normalize_genai(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    operation = attributes.get("gen_ai.operation.name", "")
-    if operation == "invoke_agent" or not row["ParentSpanId"]:
-        row["ObservationType"] = "agent"
-    elif operation in _LLM_OPERATIONS:
-        row["ObservationType"] = "llm"
-    elif operation == "execute_tool":
-        row["ObservationType"] = "tool"
-    row["AgentName"] = attributes.get("gen_ai.agent.name", "")
-    row["Model"] = attributes.get("gen_ai.request.model") or attributes.get("gen_ai.response.model", "")
-    row["LiteLLMRequestId"] = attributes.get("gen_ai.response.id", "")
-    row["Input"] = attributes.get("gen_ai.input.messages") or attributes.get("gen_ai.tool.call.arguments", "")
-    row["Output"] = attributes.get("gen_ai.output.messages") or attributes.get("gen_ai.tool.call.result", "")
+def normalize_genai(row: SpanRow, attributes: Mapping[str, str]) -> SpanRow:
+    operation: Final = attributes.get("gen_ai.operation.name", "")
+    kind: Final[SpanType] = (
+        "agent"
+        if operation == "invoke_agent" or not row["ParentSpanId"]
+        else "llm"
+        if operation in _LLM_OPERATIONS
+        else "tool"
+        if operation == "execute_tool"
+        else row["ObservationType"]
+    )
+    result: Final[SpanRow] = {
+        **row,
+        "ObservationType": kind,
+        "AgentName": attributes.get("gen_ai.agent.name", ""),
+        "Model": attributes.get("gen_ai.request.model") or attributes.get("gen_ai.response.model", ""),
+        "LiteLLMRequestId": attributes.get("gen_ai.response.id", ""),
+        "Input": attributes.get("gen_ai.input.messages") or attributes.get("gen_ai.tool.call.arguments", ""),
+        "Output": attributes.get("gen_ai.output.messages") or attributes.get("gen_ai.tool.call.result", ""),
+    }
+    return result
 
 
-def normalize_openinference(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    kind = attributes.get("openinference.span.kind", "").upper()
-    row["ObservationType"] = _OPENINFERENCE_TYPES.get(kind, "agent" if not row["ParentSpanId"] else "chain")
-    row["AgentName"] = attributes.get("agent.name", "")
-    row["Model"] = attributes.get("llm.model_name", "")
-    row["Input"] = attributes.get("input.value", "")
-    row["Output"] = attributes.get("output.value", "")
-    row["InputTokens"] = _to_int(attributes.get("llm.token_count.prompt"))
-    row["OutputTokens"] = _to_int(attributes.get("llm.token_count.completion"))
-
-
-def _set_tokens(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    row["InputTokens"] = _to_int(attributes.get("gen_ai.usage.input_tokens"))
-    row["OutputTokens"] = _to_int(attributes.get("gen_ai.usage.output_tokens"))
+def normalize_openinference(row: SpanRow, attributes: Mapping[str, str]) -> SpanRow:
+    kind: Final = attributes.get("openinference.span.kind", "").upper()
+    result: Final[SpanRow] = {
+        **row,
+        "ObservationType": _OPENINFERENCE_TYPES.get(kind, "agent" if not row["ParentSpanId"] else "chain"),
+        "AgentName": attributes.get("agent.name", ""),
+        "Model": attributes.get("llm.model_name", ""),
+        "Input": attributes.get("input.value", ""),
+        "Output": attributes.get("output.value", ""),
+        "InputTokens": _to_int(attributes.get("llm.token_count.prompt")),
+        "OutputTokens": _to_int(attributes.get("llm.token_count.completion")),
+    }
+    return result
 
 
 def _to_int(value: str | None) -> int:
@@ -249,7 +284,9 @@ def _to_int(value: str | None) -> int:
         return 0
 
 
-def select_normalizer(scope_name: str, attributes: Mapping[str, str]) -> Callable[[SpanRow, Mapping[str, str]], None]:
+def select_normalizer(
+    scope_name: str, attributes: Mapping[str, str]
+) -> Callable[[SpanRow, Mapping[str, str]], SpanRow]:
     if scope_name == "langsmith" or "langsmith.span.kind" in attributes:
         return normalize_langsmith
     if "openinference.span.kind" in attributes:
@@ -257,10 +294,16 @@ def select_normalizer(scope_name: str, attributes: Mapping[str, str]) -> Callabl
     return normalize_genai
 
 
-def normalize(row: SpanRow, attributes: Mapping[str, str]) -> None:
-    select_normalizer(row["ScopeName"], attributes)(row, attributes)
-    if not row["InputTokens"] and not row["OutputTokens"]:
-        _set_tokens(row, attributes)
+def normalize(row: SpanRow, attributes: Mapping[str, str]) -> SpanRow:
+    normalized: Final = select_normalizer(row["ScopeName"], attributes)(row, attributes)
+    if normalized["InputTokens"] or normalized["OutputTokens"]:
+        return normalized
+    result: Final[SpanRow] = {
+        **normalized,
+        "InputTokens": _to_int(attributes.get("gen_ai.usage.input_tokens")),
+        "OutputTokens": _to_int(attributes.get("gen_ai.usage.output_tokens")),
+    }
+    return result
 
 
 def encode_otlp_response(content_type: str | None) -> tuple[bytes, str]:

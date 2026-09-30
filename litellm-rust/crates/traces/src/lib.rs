@@ -8,7 +8,7 @@ pub use error::{DecodeError, Error};
 pub use insert::{InsertTable, encode_rows, insert_rows};
 pub use otlp::{DecodedSpan, decode_otlp};
 pub use schema::{ensure_schema, schema_statements};
-pub use sql::{Parameter, execute_read};
+pub use sql::{LensQuery, Parameter, execute_read};
 use url::Url;
 
 #[derive(Clone)]

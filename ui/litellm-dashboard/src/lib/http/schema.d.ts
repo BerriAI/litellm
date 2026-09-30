@@ -4796,6 +4796,279 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/engine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Engines */
+        get: operations["list_engines_engine_get"];
+        put?: never;
+        /** Create Engine */
+        post: operations["create_engine_engine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/preview/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Sample */
+        post: operations["preview_sample_engine_preview_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim */
+        post: operations["claim_engine_worker_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Content */
+        get: operations["content_engine_worker__engine_id___job_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Heartbeat */
+        post: operations["heartbeat_engine_worker__engine_id___job_id__heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model */
+        post: operations["model_engine_worker__engine_id___job_id__model_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Progress */
+        post: operations["progress_engine_worker__engine_id___job_id__progress_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Result */
+        post: operations["result_engine_worker__engine_id___job_id__result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sample */
+        get: operations["sample_engine_worker__engine_id___job_id__sample_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/workers/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Worker */
+        post: operations["register_worker_engine_workers_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/workers/{worker_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Worker */
+        delete: operations["revoke_worker_engine_workers__worker_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Engine */
+        put: operations["update_engine_engine__engine_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Engine */
+        post: operations["cancel_engine_engine__engine_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/executions/{execution_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evidence Content */
+        get: operations["evidence_content_engine__engine_id__executions__execution_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Finding */
+        patch: operations["update_finding_engine__engine_id__findings__finding_id__patch"];
+        trace?: never;
+    };
+    "/engine/{engine_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Engine */
+        post: operations["run_engine_engine__engine_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/engines/{model}/chat/completions": {
         parameters: {
             query?: never;
@@ -27469,6 +27742,18 @@ export interface components {
              */
             role: "user" | "assistant";
         };
+        /** Check */
+        Check: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Instruction */
+            instruction: string;
+        };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
             /** Content */
@@ -27579,6 +27864,14 @@ export interface components {
         CitationsObject: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** Claim */
+        Claim: {
+            /** Engine Id */
+            engine_id: string;
+            /** Findings */
+            findings: components["schemas"]["Finding"][];
+            job: components["schemas"]["Job"];
         };
         /**
          * ClassificationRubric
@@ -29384,6 +29677,54 @@ export interface components {
              */
             reasoning_tokens: number;
         };
+        /** Coverage */
+        Coverage: {
+            /**
+             * Candidates
+             * @default 0
+             */
+            candidates: number;
+            /**
+             * Eligible
+             * @default 0
+             */
+            eligible: number;
+            /**
+             * Grouped Batches
+             * @default 0
+             */
+            grouped_batches: number;
+            /**
+             * Grouping Batches
+             * @default 0
+             */
+            grouping_batches: number;
+            /**
+             * Investigated
+             * @default 0
+             */
+            investigated: number;
+            /**
+             * Partial
+             * @default 0
+             */
+            partial: number;
+            /**
+             * Screened
+             * @default 0
+             */
+            screened: number;
+            /**
+             * Selected
+             * @default 0
+             */
+            selected: number;
+            /**
+             * Unassessable
+             * @default 0
+             */
+            unassessable: number;
+        };
         /** CreateCredentialItem */
         CreateCredentialItem: {
             /** Credential Info */
@@ -30217,6 +30558,116 @@ export interface components {
             /** Slug */
             slug: string;
         };
+        /** Engine */
+        Engine: {
+            /** Budget Month */
+            budget_month: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Findings
+             * @default []
+             */
+            findings: components["schemas"]["Finding"][];
+            /** Id */
+            id: string;
+            /**
+             * Jobs
+             * @default []
+             */
+            jobs: components["schemas"]["Job"][];
+            /** Last Scan At */
+            last_scan_at?: string | null;
+            /**
+             * Next Run At
+             * Format: date-time
+             */
+            next_run_at: string;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            scope: components["schemas"]["Scope"];
+            settings: components["schemas"]["EngineSettings"];
+            /**
+             * Spent
+             * @default 0
+             */
+            spent: number;
+            /**
+             * Version
+             * @default 0
+             */
+            version: number;
+        };
+        /** EngineList */
+        EngineList: {
+            /** Engines */
+            engines: components["schemas"]["Engine"][];
+            /** Tracing Enabled */
+            tracing_enabled: boolean;
+            /** Workers */
+            workers: components["schemas"]["Worker"][];
+        };
+        /** EngineSettings */
+        EngineSettings: {
+            /** Checks */
+            checks: components["schemas"]["Check"][];
+            /**
+             * Context
+             * @default
+             */
+            context: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Filters
+             * @default []
+             */
+            filters: components["schemas"]["MetadataFilter"][];
+            /**
+             * Interval Minutes
+             * @default 15
+             */
+            interval_minutes: number;
+            /**
+             * Lookback Hours
+             * @default 24
+             */
+            lookback_hours: number;
+            /** Model */
+            model: string;
+            /**
+             * Monthly Budget
+             * @default 20
+             */
+            monthly_budget: number;
+            /** Name */
+            name: string;
+            /**
+             * Sample Size
+             * @default 100
+             */
+            sample_size: number;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @default traces
+             * @enum {string}
+             */
+            source: "traces" | "requests" | "both";
+        };
         /** EnrichTemplateRequest */
         EnrichTemplateRequest: {
             /**
@@ -30301,6 +30752,68 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /** Evidence */
+        Evidence: {
+            /** Execution Id */
+            execution_id: string;
+            /** Quote */
+            quote: string;
+            /** Span Id */
+            span_id: string;
+        };
+        /** Execution */
+        Execution: {
+            /** Id */
+            id: string;
+            /**
+             * Metadata
+             * @default []
+             */
+            metadata: components["schemas"]["MetadataFilter"][];
+            /** Name */
+            name: string;
+            /**
+             * Root Seen
+             * @default false
+             */
+            root_seen: boolean;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "traces" | "requests";
+            /** Span Count */
+            span_count: number;
+            /** Start Time */
+            start_time: string;
+            /** Team Id */
+            team_id: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** ExecutionContent */
+        ExecutionContent: {
+            execution: components["schemas"]["Execution"];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /** Parts */
+            parts: components["schemas"]["TracePart"][];
         };
         /**
          * FacetListResponse
@@ -30481,6 +30994,119 @@ export interface components {
             allowed_domains?: string[] | null;
         } & {
             [key: string]: unknown;
+        };
+        /** Finding */
+        Finding: {
+            /** Check Id */
+            check_id: string;
+            /** Description */
+            description: string;
+            /** Evidence */
+            evidence: components["schemas"]["Evidence"][];
+            /** Existing Finding Id */
+            existing_finding_id?: string | null;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /**
+             * Limitation
+             * @default
+             */
+            limitation: string;
+            /**
+             * Occurrences
+             * @default []
+             */
+            occurrences: string[];
+            /**
+             * Priority
+             * @default medium
+             * @enum {string}
+             */
+            priority: "high" | "medium" | "low";
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Status
+             * @default open
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /**
+             * Suggestion
+             * @default
+             */
+            suggestion: string;
+            /** Title */
+            title: string;
+        };
+        /** FindingDraft */
+        FindingDraft: {
+            /** Check Id */
+            check_id: string;
+            /** Description */
+            description: string;
+            /** Evidence */
+            evidence: components["schemas"]["Evidence"][];
+            /** Existing Finding Id */
+            existing_finding_id?: string | null;
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /**
+             * Limitation
+             * @default
+             */
+            limitation: string;
+            /**
+             * Priority
+             * @default medium
+             * @enum {string}
+             */
+            priority: "high" | "medium" | "low";
+            /**
+             * Suggestion
+             * @default
+             */
+            suggestion: string;
+            /** Title */
+            title: string;
+        };
+        /** FindingUpdate */
+        FindingUpdate: {
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
         };
         /** FunctionCall */
         FunctionCall: {
@@ -31696,6 +32322,76 @@ export interface components {
              * @default 3000
              */
             timeout_ms: number;
+        };
+        /** Job */
+        Job: {
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /**
+             * Cost
+             * @default 0
+             */
+            cost: number;
+            /**
+             * @default {
+             *       "candidates": 0,
+             *       "eligible": 0,
+             *       "grouped_batches": 0,
+             *       "grouping_batches": 0,
+             *       "investigated": 0,
+             *       "partial": 0,
+             *       "screened": 0,
+             *       "selected": 0,
+             *       "unassessable": 0
+             *     }
+             */
+            coverage: components["schemas"]["Coverage"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Id */
+            id: string;
+            /** Lease Until */
+            lease_until?: string | null;
+            /** Revision */
+            revision: number;
+            sample?: components["schemas"]["Sample"] | null;
+            settings: components["schemas"]["EngineSettings"];
+            /**
+             * Stage
+             * @default Queued
+             */
+            stage: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * Status
+             * @default queued
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /** Worker Id */
+            worker_id?: string | null;
         };
         JsonValue: unknown;
         /** KeyHealthResponse */
@@ -35948,6 +36644,13 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** MetadataFilter */
+        MetadataFilter: {
+            /** Key */
+            key: string;
+            /** Value */
+            value: string;
+        };
         /** MetricWithMetadata */
         MetricWithMetadata: {
             /** Api Key Breakdown */
@@ -36237,6 +36940,16 @@ export interface components {
             /** Model Name */
             model_name: string;
         };
+        /** ModelRequest */
+        ModelRequest: {
+            /** Prompt */
+            prompt: string;
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "extract" | "cluster" | "investigate";
+        };
         /** ModelResponse */
         ModelResponse: {
             /** Choices */
@@ -36253,6 +36966,13 @@ export interface components {
             system_fingerprint?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** ModelResult */
+        ModelResult: {
+            /** Content */
+            content: string;
+            /** Cost */
+            cost: number;
         };
         /**
          * Move
@@ -38858,6 +39578,34 @@ export interface components {
              */
             version_status: string;
         };
+        /** Preview */
+        Preview: {
+            /**
+             * Lookback Hours
+             * @default 24
+             */
+            lookback_hours: number;
+            settings: components["schemas"]["EngineSettings"];
+        };
+        /** Progress */
+        Progress: {
+            /**
+             * @default {
+             *       "candidates": 0,
+             *       "eligible": 0,
+             *       "grouped_batches": 0,
+             *       "grouping_batches": 0,
+             *       "investigated": 0,
+             *       "partial": 0,
+             *       "screened": 0,
+             *       "selected": 0,
+             *       "unassessable": 0
+             *     }
+             */
+            coverage: components["schemas"]["Coverage"];
+            /** Stage */
+            stage: string;
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -40463,7 +41211,7 @@ export interface components {
             /** Queries */
             queries: string[];
             /** Results */
-            results?: components["schemas"]["Result"][] | null;
+            results?: components["schemas"]["Result-Output"][] | null;
             /**
              * Status
              * @enum {string}
@@ -41524,6 +42272,35 @@ export interface components {
                 [key: string]: string | number | boolean;
             } | null;
             /** File Id */
+            file_id?: string;
+            /** Filename */
+            filename?: string;
+            /** Score */
+            score?: number;
+            /** Text */
+            text?: string;
+        };
+        /** Result */
+        "Result-Input": {
+            coverage: components["schemas"]["Coverage"];
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /**
+             * Findings
+             * @default []
+             */
+            findings: components["schemas"]["FindingDraft"][];
+        };
+        /** Result */
+        "Result-Output": {
+            /** Attributes */
+            attributes?: {
+                [key: string]: string | number | boolean;
+            } | null;
+            /** File Id */
             file_id?: string | null;
             /** Filename */
             filename?: string | null;
@@ -41779,6 +42556,11 @@ export interface components {
             object: string | null;
             /** Run Id */
             run_id: string;
+        };
+        /** RunRequest */
+        RunRequest: {
+            /** Lookback Hours */
+            lookback_hours?: number | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -42165,6 +42947,13 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** Sample */
+        Sample: {
+            /** Eligible */
+            eligible: number;
+            /** Executions */
+            executions: components["schemas"]["Execution"][];
+        };
         /**
          * ScheduledJobStaggerSettings
          * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
@@ -42195,6 +42984,24 @@ export interface components {
              * @default 300
              */
             window_seconds: number;
+        };
+        /** Scope */
+        Scope: {
+            /**
+             * All Teams
+             * @default false
+             */
+            all_teams: boolean;
+            /**
+             * Api Key Hash
+             * @default
+             */
+            api_key_hash: string;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
         };
         /**
          * Screenshot
@@ -44465,6 +45272,29 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** TracePart */
+        TracePart: {
+            /** Content */
+            content: string;
+            /** Execution Id */
+            execution_id: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /**
+             * Parent Span Id
+             * @default
+             */
+            parent_span_id: string;
+            /** Span Id */
+            span_id: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /** TrainedTierArtifact */
         TrainedTierArtifact: {
             /**
@@ -46561,6 +47391,38 @@ export interface components {
              */
             type: "web_search" | "web_search_2025_08_26";
             user_location?: components["schemas"]["openai__types__responses__web_search_tool_param__UserLocation"] | null;
+        };
+        /** Worker */
+        Worker: {
+            /** Id */
+            id: string;
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Name */
+            name: string;
+            /**
+             * Revoked
+             * @default false
+             */
+            revoked: boolean;
+            scope: components["schemas"]["Scope"];
+        };
+        /** WorkerCreated */
+        WorkerCreated: {
+            /** Token */
+            token: string;
+            worker: components["schemas"]["Worker"];
+        };
+        /** WorkerName */
+        WorkerName: {
+            /**
+             * Name
+             * @default Lens worker
+             */
+            name: string;
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -53975,6 +54837,556 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_engines_engine_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineList"];
+                };
+            };
+        };
+    };
+    create_engine_engine_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EngineSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_sample_engine_preview_sample_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Preview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sample"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_engine_worker_claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Claim"] | null;
+                };
+            };
+        };
+    };
+    content_engine_worker__engine_id___job_id__content_get: {
+        parameters: {
+            query: {
+                execution_id: string;
+                cursor?: string;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    heartbeat_engine_worker__engine_id___job_id__heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_engine_worker__engine_id___job_id__model_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    progress_engine_worker__engine_id___job_id__progress_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Progress"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    result_engine_worker__engine_id___job_id__result_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Result-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sample_engine_worker__engine_id___job_id__sample_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sample"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_worker_engine_workers_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerName"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_worker_engine_workers__worker_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_engine_engine__engine_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EngineSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_engine_engine__engine_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evidence_content_engine__engine_id__executions__execution_id__get: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                engine_id: string;
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_finding_engine__engine_id__findings__finding_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FindingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_engine_engine__engine_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
                 };
             };
             /** @description Validation Error */
@@ -74758,7 +76170,9 @@ export interface operations {
     };
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                trace_ref?: string;
+            };
             header?: never;
             path: {
                 trace_id: string;
@@ -74789,7 +76203,9 @@ export interface operations {
     };
     get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                trace_ref?: string;
+            };
             header?: never;
             path: {
                 trace_id: string;

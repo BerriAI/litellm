@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import Final, Protocol, TypedDict, cast
+from types import MappingProxyType
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
@@ -36,6 +37,8 @@ class NativeStore(Protocol):
     def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> Awaitable[None]: ...
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, JsonValue]]) -> Awaitable[None]: ...
+
+    def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
     def query(self, sql: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
@@ -85,5 +88,20 @@ class TraceStorage:
         await self._native.insert_rows(table, INSERT_ROWS.validate_python(rows))
 
     async def query(self, sql: str, parameters: Mapping[str, object] | None = None) -> list[dict[str, JsonValue]]:
-        result: Final = await self._native.query(sql, QUERY_PARAMETERS.validate_python(parameters or {}))
+        result: Final = await self._native.query(
+            sql, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
+        )
         return QueryResponse.model_validate_json(result).data
+
+    async def _lens_query(self, name: str, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        result: Final = await self._native.lens_query(name, QUERY_PARAMETERS.validate_python(parameters))
+        return QueryResponse.model_validate_json(result).data
+
+    async def lens_sample(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("sample", parameters)
+
+    async def lens_content(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("content", parameters)
+
+    async def lens_evidence(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("evidence", parameters)

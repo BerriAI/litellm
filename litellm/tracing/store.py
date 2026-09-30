@@ -5,6 +5,8 @@ import binascii
 import json
 from datetime import datetime, timezone
 from typing import Any, Final
+from types import MappingProxyType
+from collections.abc import Mapping, Sequence
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
 from litellm.integrations.clickhouse.schema import (
@@ -25,7 +27,7 @@ from litellm.tracing.types import (
 )
 
 NANOS_PER_MS: Final = 1_000_000
-_STATUS: Final[dict[str, SpanStatus]] = {"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"}
+_STATUS: Final[Mapping[str, SpanStatus]] = MappingProxyType({"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"})
 
 _SCOPE_OTEL: Final = (
     "(empty({team_ids:Array(String)}) OR TeamId IN {team_ids:Array(String)})"
@@ -80,7 +82,7 @@ LIMIT 1
 
 
 def encode_cursor(start_ms: int, trace_id: str) -> str:
-    return base64.urlsafe_b64encode(json.dumps([start_ms, trace_id]).encode()).decode()
+    return base64.urlsafe_b64encode(json.dumps((start_ms, trace_id)).encode()).decode()
 
 
 def decode_cursor(cursor: str | None) -> tuple[int, str]:
@@ -129,7 +131,7 @@ def trace_summary_from_row(row: dict[str, Any]) -> TraceSummary:
         error_count=int(row.get("error_count") or 0),
         input_tokens=int(row["input_tokens"]),
         output_tokens=int(row["output_tokens"]),
-        models=list(row["models"]),
+        models=tuple(row["models"]),
     )
 
 
@@ -152,9 +154,9 @@ def span_from_row(row: dict[str, Any], trace_start_ns: int) -> Span:
     )
 
 
-def _parent_agent_of(span: Span, by_id: dict[str, Span]) -> str | None:
+def _parent_agent_of(span: Span, by_id: Mapping[str, Span]) -> str | None:
     parent_id = span["parent_span_id"]
-    visited: Final = {span["span_id"]}
+    visited: Final = set((span["span_id"],))  # mutable-ok: ancestor traversal tracks visited IDs to stop cycles
     while parent_id is not None and parent_id in by_id and parent_id not in visited:
         visited.add(parent_id)
         parent = by_id[parent_id]
@@ -164,35 +166,22 @@ def _parent_agent_of(span: Span, by_id: dict[str, Span]) -> str | None:
     return None
 
 
-def agent_nodes(spans: list[Span]) -> list[AgentNode]:
-    """One node per distinct agent name (200 `researcher` invocations = 1 node), with who invoked it."""
-    by_id: Final = {s["span_id"]: s for s in spans}
-    agents: dict[str, AgentNode] = {}
-    for span in spans:
-        if span["type"] != "agent":
-            continue
-        node = agents.setdefault(
-            span["name"],
-            AgentNode(
-                name=span["name"],
-                parent_agent=_parent_agent_of(span, by_id),
-                invocations=0,
-                llm_calls=0,
-                tool_calls=0,
-                duration_ms=0.0,
-            ),
+def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
+    by_id: Final = MappingProxyType({span["span_id"]: span for span in spans})
+    names: Final = tuple(dict.fromkeys(span["name"] for span in spans if span["type"] == "agent"))
+
+    def node(name: str) -> AgentNode:
+        invocations: Final = tuple(span for span in spans if span["type"] == "agent" and span["name"] == name)
+        return AgentNode(
+            name=name,
+            parent_agent=_parent_agent_of(invocations[0], by_id),
+            invocations=len(invocations),
+            duration_ms=sum(span["duration_ms"] for span in invocations),
+            llm_calls=sum(1 for span in spans if span["agent"] == name and span["type"] == "llm"),
+            tool_calls=sum(1 for span in spans if span["agent"] == name and span["type"] == "tool"),
         )
-        node["invocations"] += 1
-        node["duration_ms"] += span["duration_ms"]
-    for span in spans:
-        owner = agents.get(span["agent"])
-        if owner is None:
-            continue
-        if span["type"] == "llm":
-            owner["llm_calls"] += 1
-        elif span["type"] == "tool":
-            owner["tool_calls"] += 1
-    return list(agents.values())
+
+    return tuple(node(name) for name in names)
 
 
 def trace_from_rows(trace_id: str, rows: list[dict[str, Any]], trace_ref: str = "") -> Trace | None:
@@ -200,10 +189,10 @@ def trace_from_rows(trace_id: str, rows: list[dict[str, Any]], trace_ref: str = 
         return None
     trace_start_ns: Final = min(int(r["start_ns"]) for r in rows)
     trace_end_ns: Final = max(int(r["start_ns"]) + int(r["duration_ns"]) for r in rows)
-    spans: Final = [span_from_row(r, trace_start_ns) for r in rows]
+    spans: Final = tuple(span_from_row(r, trace_start_ns) for r in rows)
     root: Final = next((s for s in spans if s["parent_span_id"] is None), spans[0])
     agents: Final = agent_nodes(spans)
-    llm_spans: Final = [s for s in spans if s["type"] == "llm"]
+    llm_spans: Final = tuple(s for s in spans if s["type"] == "llm")
     return Trace(
         summary=TraceSummary(
             trace_id=trace_id,
@@ -222,7 +211,7 @@ def trace_from_rows(trace_id: str, rows: list[dict[str, Any]], trace_ref: str = 
             error_count=sum(1 for s in spans if s["status"] == "error"),
             input_tokens=sum(s["input_tokens"] for s in spans),
             output_tokens=sum(s["output_tokens"] for s in spans),
-            models=sorted({s["model"] for s in llm_spans if s["model"]}),
+            models=tuple(sorted(frozenset(s["model"] for s in llm_spans if s["model"]))),
         ),
         agents=agents,
         spans=spans,
@@ -235,8 +224,8 @@ class ClickHouseTraceStore:
     def __init__(self, storage: TraceStorage) -> None:
         self.storage = storage
 
-    async def insert_spans(self, rows: list[SpanRow]) -> None:
-        await self.storage.insert_rows(OTEL_TRACES_TABLE, [dict(row) for row in rows])
+    async def insert_spans(self, rows: Sequence[SpanRow]) -> None:
+        await self.storage.insert_rows(OTEL_TRACES_TABLE, tuple(row for row in rows))
 
     async def list_traces(
         self,
@@ -249,25 +238,30 @@ class ClickHouseTraceStore:
         cursor_ms, cursor_trace_id = decode_cursor(cursor)
         rows = await self.storage.query(
             LIST_TRACES_SQL,
-            {
-                **scope,
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-                "cursor_ms": cursor_ms,
-                "cursor_trace_id": cursor_trace_id,
-                "limit": limit,
-            },
+            MappingProxyType(
+                {
+                    **scope,
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "cursor_ms": cursor_ms,
+                    "cursor_trace_id": cursor_trace_id,
+                    "limit": limit,
+                }
+            ),
         )
         next_cursor = encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_ref"]) if len(rows) == limit else None
-        return TracePage(data=[trace_summary_from_row(r) for r in rows], next_cursor=next_cursor)
+        return TracePage(data=tuple(trace_summary_from_row(r) for r in rows), next_cursor=next_cursor)
 
     async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
-        rows = await self.storage.query(TRACE_SPANS_SQL, {**scope, "trace_id": trace_id, "trace_ref": trace_ref})
+        rows = await self.storage.query(
+            TRACE_SPANS_SQL, MappingProxyType({**scope, "trace_id": trace_id, "trace_ref": trace_ref})
+        )
         return trace_from_rows(trace_id, rows, trace_ref)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         rows = await self.storage.query(
-            SPAN_DETAIL_SQL, {**scope, "trace_id": trace_id, "span_id": span_id, "trace_ref": trace_ref}
+            SPAN_DETAIL_SQL,
+            MappingProxyType({**scope, "trace_id": trace_id, "span_id": span_id, "trace_ref": trace_ref}),
         )
         if not rows:
             return None
@@ -275,5 +269,5 @@ class ClickHouseTraceStore:
             span_id=rows[0]["span_id"],
             input=rows[0]["input"],
             output=rows[0]["output"],
-            attributes=dict(rows[0]["attributes"]),
+            attributes=MappingProxyType(rows[0]["attributes"]),
         )
