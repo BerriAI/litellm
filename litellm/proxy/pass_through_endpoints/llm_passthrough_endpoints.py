@@ -43,7 +43,7 @@ from litellm.constants import (
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
@@ -850,7 +850,10 @@ async def anthropic_proxy_route(
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    client_forwards_own_oauth: Final = is_anthropic_oauth_key(request.headers.get("authorization"))
+    auth_header: Final = (
+        None if client_forwards_own_oauth else AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
