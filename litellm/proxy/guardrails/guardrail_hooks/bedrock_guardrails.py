@@ -227,8 +227,8 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
 
 
-def _without_image_bytes(content: Sequence[BedrockContentItem]) -> list[BedrockContentItem]:
-    return [
+def _without_image_bytes(content: Sequence[BedrockContentItem]) -> tuple[BedrockContentItem, ...]:
+    return tuple(
         BedrockContentItem(
             image=BedrockImageContent(
                 format=item["image"]["format"],
@@ -238,7 +238,7 @@ def _without_image_bytes(content: Sequence[BedrockContentItem]) -> list[BedrockC
         if "image" in item
         else item
         for item in content
-    ]
+    )
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -980,12 +980,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict | None,  # mutable-ok: proxy request body dict, read by the dynamic-params helper
     ) -> tuple[dict, str | None]:
         """Merge the request's dynamic ApplyGuardrail params into `base_request` and pick up its api_key."""
-        bedrock_request_data: Final[dict] = dict(base_request)
+        bedrock_request_data: Final[dict] = dict(base_request)  # mutable-ok: JSON request body
         api_key: str | None = None
         if request_data:
             dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
             bedrock_request_data.update(
-                {
+                {  # mutable-ok: JSON request body
                     key: value
                     for key, value in dynamic_request_body_params.items()
                     if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
@@ -1279,7 +1279,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         headers_dict: Final = dict(prepared_request.headers)  # mutable-ok: the masking helper requires a dict
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
-            {**bedrock_request_data, "content": _without_image_bytes(content)}
+            {**bedrock_request_data, "content": _without_image_bytes(content)}  # mutable-ok: JSON request body
             if any("image" in item for item in content)
             else bedrock_request_data,
             prepared_request.url,
@@ -2630,7 +2630,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Scan text documents like a user turn and block when the guardrail intervenes on them."""
         response: Final = await self.make_bedrock_api_request(
             source="INPUT",
-            messages=[{"role": "user", "content": text} for text in document_texts],
+            messages=[{"role": "user", "content": text} for text in document_texts],  # mutable-ok: API message payload
             request_data=request_data,
             logging_event_type=event_type,
         )
@@ -2650,12 +2650,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Log the refusal and build the block error for attachments ApplyGuardrail cannot scan."""
         reason: Final = (
             f"Bedrock guardrail cannot scan {len(unscannable)} attachment(s) "
-            f"({', '.join(sorted(set(unscannable)))}), so the request was blocked"
+            f"({', '.join(sorted(frozenset(unscannable)))}), so the request was blocked"
         )
         now: Final = datetime.now(timezone.utc).timestamp()
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response={"unscannable_attachments": list(unscannable)},
+            guardrail_json_response={"unscannable_attachments": list(unscannable)},  # mutable-ok: JSON wire format
             request_data=request_data,
             guardrail_status="guardrail_intervened",
             start_time=now,
@@ -2670,7 +2670,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 request_data=request_data,
                 guardrail_name=self.guardrail_name,
             )
-        detail: Final[dict[str, object]] = {"error": "Violated guardrail policy", "reason": reason}
+        detail: Final[dict[str, object]] = {  # mutable-ok: HTTPException detail
+            "error": "Violated guardrail policy",
+            "reason": reason,
+        }
         if self.guardrailIdentifier:
             detail["guardrailIdentifier"] = self.guardrailIdentifier
         if self.guardrailVersion:

@@ -10,6 +10,7 @@ request instead of letting the attachment reach the model unread.
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from functools import reduce
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, TypeGuard
@@ -17,6 +18,7 @@ from typing import Final, Literal, NamedTuple, TypeGuard
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockImageContent,
+    BedrockImageSource,
 )
 from litellm.types.utils import CallTypes
 
@@ -48,8 +50,11 @@ class _Block(NamedTuple):
 
 
 _Classified = _Image | _Unscannable | _DocumentText | None
-_BlockClassifier = Callable[[Mapping[str, object]], _Classified]
-_NestedToolBlocks = Callable[[Mapping[str, object]], tuple[Mapping[str, object], ...]]
+_BlockClassifier = Callable[[Mapping[str, object]], _Classified]  # mutable-ok: Callable parameter list
+_NestedToolBlocks = Callable[
+    [Mapping[str, object]],  # mutable-ok: Callable parameter list
+    tuple[Mapping[str, object], ...],
+]
 
 NO_ATTACHMENTS: Final = RequestAttachments(images=(), unscannable=())
 
@@ -85,11 +90,11 @@ def find_request_attachments(
     """List the scannable images, the document text and the unscannable attachments in the message content and tool results."""
     messages, classify, nested_tool_blocks = _messages_and_classifier(data, call_type)
     selected: Final = messages if not latest_user_message_only else _latest_user_message(messages)
+    entries: Final = chain.from_iterable(_message_blocks(message, nested_tool_blocks) for message in selected)
     classified: Final = tuple(
         chain.from_iterable(
             _classify_entry(entry, classify)
-            for message in selected
-            for entry in _message_blocks(message, nested_tool_blocks)
+            for entry in entries
             if _in_scope(entry, skip_tool_messages, scan_only_tool_results)
         )
     )
@@ -191,26 +196,28 @@ def _message_blocks(message: Mapping[str, object], nested_tool_blocks: _NestedTo
 
 
 def _with_document_contents(entries: Iterable[_Block]) -> tuple[_Block, ...]:
-    return tuple(chain.from_iterable(_with_document_content(entry) for entry in entries))
+    return reduce(_with_document_level_expanded, range(_MAX_DOCUMENT_DEPTH), tuple(entries))
 
 
-def _with_document_content(entry: _Block) -> tuple[_Block, ...]:
-    expanded: Final[list[_Block]] = []
-    pending: Final[list[_Block]] = [entry]
-    while pending:
-        current = pending.pop()
-        expanded.append(current)
-        source = _content_document_source(current.block)
-        if source is not None and current.document_depth < _MAX_DOCUMENT_DEPTH:
-            pending.extend(
-                reversed(
-                    [
-                        _Block(inner, from_tool=current.from_tool, document_depth=current.document_depth + 1)
-                        for inner in _mappings(source.get("content"))
-                    ]
-                )
-            )
-    return tuple(expanded)
+def _with_document_level_expanded(entries: tuple[_Block, ...], depth: int) -> tuple[_Block, ...]:
+    return tuple(
+        chain.from_iterable(
+            _with_document_children(entry) if entry.document_depth == depth else (entry,) for entry in entries
+        )
+    )
+
+
+def _with_document_children(entry: _Block) -> tuple[_Block, ...]:
+    source: Final = _content_document_source(entry.block)
+    if source is None:
+        return (entry,)
+    return (
+        entry,
+        *(
+            _Block(inner, from_tool=entry.from_tool, document_depth=entry.document_depth + 1)
+            for inner in _mappings(source.get("content"))
+        ),
+    )
 
 
 def _content_document_source(block: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -312,7 +319,9 @@ def _classify_base64(mime: object, encoded: object, label: str) -> _Classified:
         return _Unscannable(f"{label} (invalid base64)")
     if decoded_size > _MAX_IMAGE_BYTES:
         return _Unscannable(f"{label} (over 4 MB)")
-    return _Image(BedrockContentItem(image=BedrockImageContent(format=image_format, source={"bytes": standard})))
+    return _Image(
+        BedrockContentItem(image=BedrockImageContent(format=image_format, source=BedrockImageSource(bytes=standard)))
+    )
 
 
 def _standard_base64(encoded: object) -> str:
