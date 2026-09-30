@@ -8,7 +8,7 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
 
 import time
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
@@ -121,8 +121,18 @@ async def get_agent_trace(
     trace_id: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     trace_ref: Annotated[str, Query()] = "",
-) -> Trace:
-    trace: Final = await get_receiver().get_trace(trace_id, scope_for(user_api_key_dict), trace_ref)
+    format: Annotated[
+        Literal["json", "md"], Query(description="`md` returns Markdown for pasting into Claude / Codex")
+    ] = "json",
+    span_id: Annotated[str | None, Query(description="With format=md: only the subtree under this span")] = None,
+) -> Trace | Response:
+    scope: Final = scope_for(user_api_key_dict)
+    if format == "md":
+        markdown: Final = await get_receiver().get_trace_markdown(trace_id, scope, span_id, trace_ref)
+        if markdown is None:
+            raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
+        return Response(content=markdown, media_type="text/markdown; charset=utf-8")
+    trace: Final = await get_receiver().get_trace(trace_id, scope, trace_ref)
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
     return trace
