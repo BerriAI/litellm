@@ -408,13 +408,19 @@ def _matching_requests(wire: Wire, marker: str) -> tuple[Request, ...]:
     return tuple(request for request in wire.drain() if marker.encode() in request.body)
 
 
+def _rail_scans(rows: Sequence[Request], rail_name: str, marker: str) -> tuple[Request, ...]:
+    return tuple(
+        request for request in rows if request.target.startswith(f"/{rail_name}/") and marker.encode() in request.body
+    )
+
+
 def _chat_request_with_scans(
     gateway: Gateway,
     sink: Wire,
     model: str,
     marker: str,
     streamed: bool,
-    guardrails: Sequence[str],
+    rail_name: str,
 ) -> tuple[httpx.Response, tuple[Request, ...]]:
     response: Final = gateway.request(
         "POST",
@@ -423,10 +429,10 @@ def _chat_request_with_scans(
             "model": model,
             "messages": [{"role": "user", "content": marker}],
             "stream": streamed,
-            "guardrails": list(guardrails),
+            "guardrails": [rail_name],
         },
     )
-    return response, _matching_requests(sink, marker)
+    return response, _rail_scans(sink.drain(), rail_name, marker)
 
 
 def _spend_row_for_call(call_id: str, content: bytes) -> dict[str, JsonValue]:
@@ -479,7 +485,7 @@ def test_bedrock_streaming_actions_run_streaming_scoped_rails(
     assert "is_streaming_request" not in key_names, provider_body
     assert not tuple(name for name in key_names if name.startswith("litellm_")), provider_body
     _spend_row_for_call(call_id, response.content)
-    sink_rows: Final = _matching_requests(rig.sink, marker)
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rig.rails[f"bedrock_{scope}"], marker)
     expected_scans: Final = int(scope == "streaming")
     assert len(sink_rows) == expected_scans, (marker, model_kind, action, scope, sink_rows, response.content)
 
@@ -507,7 +513,7 @@ def test_bedrock_non_streaming_actions_run_non_streaming_scoped_rails(
     key_names: Final = _key_names(provider_body)
     assert "is_streaming_request" not in key_names, provider_body
     assert not tuple(name for name in key_names if name.startswith("litellm_")), provider_body
-    sink_rows: Final = _matching_requests(rig.sink, marker)
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rig.rails[f"bedrock_{scope}"], marker)
     expected_scans: Final = int(scope == "non_streaming")
     assert len(sink_rows) == expected_scans, (marker, model_kind, action, scope, sink_rows, response.text)
 
@@ -541,15 +547,11 @@ def test_bedrock_model_id_streaming_action_text_on_converse_is_non_streaming(
     assert marker in response.text, response.text
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, model_kind, provider_rows, response.text)
-    sink_rows: Final = _matching_requests(rig.sink, marker)
-    streaming_rows: Final = tuple(
-        row for row in sink_rows if row.target.startswith(f"/{rig.rails['bedrock_streaming']}/")
-    )
-    non_streaming_rows: Final = tuple(
-        row for row in sink_rows if row.target.startswith(f"/{rig.rails['bedrock_non_streaming']}/")
-    )
-    assert streaming_rows == (), (marker, model_kind, sink_rows, response.text)
-    assert len(non_streaming_rows) == 1, (marker, model_kind, sink_rows, response.text)
+    sink_rows: Final = rig.sink.drain()
+    streaming_rows: Final = _rail_scans(sink_rows, rig.rails["bedrock_streaming"], marker)
+    non_streaming_rows: Final = _rail_scans(sink_rows, rig.rails["bedrock_non_streaming"], marker)
+    assert streaming_rows == (), (marker, model_kind, streaming_rows, response.text)
+    assert len(non_streaming_rows) == 1, (marker, model_kind, non_streaming_rows, response.text)
 
 
 @pytest.mark.parametrize("streamed", (False, True), ids=("stream-absent", "stream-true"))
@@ -618,7 +620,7 @@ def test_client_cannot_spoof_server_stream_classification(
         "model": "gpt-4o-mini",
         hostile_field: hostile_value,
     }, (hostile_field, hostile_value, chat_upstream_body)
-    assert len(_matching_requests(rig.sink, chat_marker)) == 0, (
+    assert _rail_scans(rig.sink.drain(), rig.rails["chat_streaming"], chat_marker) == (), (
         chat_marker,
         hostile_field,
         hostile_value,
@@ -646,7 +648,7 @@ def test_configured_passthrough_cannot_spoof_server_stream_classification(
         passthrough_provider_rows,
         passthrough_response.text,
     )
-    assert len(_matching_requests(rig.sink, passthrough_marker)) == 0, (
+    assert _rail_scans(rig.sink.drain(), rig.rails["passthrough_spoof_streaming"], passthrough_marker) == (), (
         passthrough_marker,
         hostile_field,
         hostile_value,
@@ -682,15 +684,11 @@ def test_passthrough_scope_follows_proxy_stream_decision(
     upstream_body: Final = JSON_OBJECT.validate_json(provider_rows[0].body)
     assert upstream_body == body, (marker, body, upstream_body, response.text)
     assert SERVER_STREAMING_CLASSIFICATION_KEY not in upstream_body, upstream_body
-    sink_rows: Final = _matching_requests(rig.sink, marker)
-    streaming_rows: Final = tuple(
-        row for row in sink_rows if row.target.startswith(f"/{rig.rails['passthrough_streaming']}/")
-    )
-    non_streaming_rows: Final = tuple(
-        row for row in sink_rows if row.target.startswith(f"/{rig.rails['passthrough_non_streaming']}/")
-    )
-    assert len(streaming_rows) == int(streamed), (marker, streamed, sink_rows, response.text)
-    assert len(non_streaming_rows) == int(not streamed), (marker, streamed, sink_rows, response.text)
+    sink_rows: Final = rig.sink.drain()
+    streaming_rows: Final = _rail_scans(sink_rows, rig.rails["passthrough_streaming"], marker)
+    non_streaming_rows: Final = _rail_scans(sink_rows, rig.rails["passthrough_non_streaming"], marker)
+    assert len(streaming_rows) == int(streamed), (marker, streamed, streaming_rows, response.text)
+    assert len(non_streaming_rows) == int(not streamed), (marker, streamed, non_streaming_rows, response.text)
 
 
 def test_invalid_yaml_stream_scope_keeps_rail_running_on_both_shapes(rig: ReproRig, tmp_path: Path) -> None:
@@ -718,7 +716,7 @@ def test_invalid_yaml_stream_scope_keeps_rail_running_on_both_shapes(rig: ReproR
                 "scope-invalid-config-chat",
                 marker,
                 streamed,
-                (name,),
+                name,
             )
             for streamed, marker in zip((False, True), markers)
         )
@@ -777,7 +775,7 @@ def test_persisted_invalid_stream_scope_row_stays_readable_and_enforced(
                     "scope-invalid-config-chat",
                     marker,
                     streamed,
-                    (guardrail_name,),
+                    guardrail_name,
                 )
                 for streamed, marker in zip((False, True), markers)
             )

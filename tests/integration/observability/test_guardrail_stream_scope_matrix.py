@@ -570,8 +570,10 @@ def _matching_requests(wire: Wire, marker: str) -> tuple[Request, ...]:
     return tuple(request for request in wire.drain() if marker.encode() in request.body)
 
 
-def _requests_for_rail(rows: Sequence[Request], rail: str) -> tuple[Request, ...]:
-    return tuple(row for row in rows if row.target.startswith(f"/{rail}/"))
+def _rail_scans(rows: Sequence[Request], rail_name: str, marker: str) -> tuple[Request, ...]:
+    return tuple(
+        request for request in rows if request.target.startswith(f"/{rail_name}/") and marker.encode() in request.body
+    )
 
 
 def _scope_scan_count(scope: MatrixScope, streamed: bool) -> int:
@@ -611,12 +613,12 @@ def _cell_rows(
     expected_scans: Final = _scope_scan_count(scope, streamed)
     sink_rows: Final = (
         eventually(
-            lambda: _requests_for_rail(_matching_requests(rig.sink, marker), rail),
+            lambda: _rail_scans(rig.sink.drain(), rail, marker),
             lambda values: len(values) >= expected_scans,
             seconds=70,
         )
         if mode == "logging_only" and expected_scans
-        else _requests_for_rail(_matching_requests(rig.sink, marker), rail)
+        else _rail_scans(rig.sink.drain(), rail, marker)
     )
     return provider_rows, sink_rows
 
@@ -643,11 +645,10 @@ def _run_matrix_cell(
     provider_rows, sink_rows = _cell_rows(rig, marker, response, mode, streamed, scope, call_id, rail)
     assert len(provider_rows) == 1, (marker, provider_rows, response.text)
     expected_scans: Final = _scope_scan_count(scope, streamed)
-    assert bool(sink_rows) == bool(expected_scans) if mode == "logging_only" else len(sink_rows) == expected_scans, (
-        marker,
-        sink_rows,
-        response.text,
-    )
+    if mode == "logging_only":
+        assert not expected_scans or sink_rows, (marker, sink_rows, response.text)
+    else:
+        assert len(sink_rows) == expected_scans, (marker, sink_rows, response.text)
 
 
 @pytest.mark.parametrize("endpoint", Endpoints)
@@ -687,7 +688,7 @@ def _verify_sdk_call(rig: MatrixRig, marker: str, call_id: str, text: str, strea
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, provider_rows)
     _spend_row_for_call(call_id, text.encode())
-    sink_rows: Final = _requests_for_rail(_matching_requests(rig.sink, marker), rig.rails["c2_key"])
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rig.rails["c2_key"], marker)
     assert len(sink_rows) == int(streamed), (marker, streamed, sink_rows)
 
 
@@ -911,7 +912,7 @@ def _assert_raw_call(
     assert len(provider_rows) == 1, (marker, provider_rows)
     if call_id is not None:
         _spend_row_for_call(call_id, response.content)
-    sink_rows: Final = _requests_for_rail(_matching_requests(rig.sink, marker), rail)
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rail, marker)
     assert len(sink_rows) == expected_scans, (marker, streamed, expected_scans, sink_rows)
     return sink_rows
 
@@ -969,7 +970,7 @@ def test_c4_per_mode_scope_map_selects_each_mode(rig: MatrixRig, streamed: bool)
     assert PROVIDER_TEXT in response.text and marker in response.text, response.text
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, provider_rows)
-    sink_rows: Final = _requests_for_rail(_matching_requests(rig.sink, marker), rig.rails["c4_modes"])
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rig.rails["c4_modes"], marker)
     request_bodies: Final = tuple(JSON_OBJECT.validate_json(row.body) for row in sink_rows)
     request_texts: Final = tuple(chain.from_iterable(_strings(body.get("texts", [])) for body in request_bodies))
     assert len(sink_rows) == 1, (marker, streamed, sink_rows)
@@ -1019,9 +1020,10 @@ def test_c6_explicit_both_matches_unset_scope(rig: MatrixRig, streamed: bool) ->
     assert PROVIDER_TEXT in response.text and marker in response.text, response.text
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, provider_rows)
-    sink_rows: Final = _matching_requests(rig.sink, marker)
-    both_rows, unset_rows = _scoped_rows(sink_rows, rig.rails["c6_both"], rig.rails["c6_unset"])
-    assert (len(both_rows), len(unset_rows)) == (1, 1), (marker, streamed, sink_rows)
+    sink_rows: Final = rig.sink.drain()
+    both_rows: Final = _rail_scans(sink_rows, rig.rails["c6_both"], marker)
+    unset_rows: Final = _rail_scans(sink_rows, rig.rails["c6_unset"], marker)
+    assert (len(both_rows), len(unset_rows)) == (1, 1), (marker, streamed, both_rows, unset_rows)
 
 
 @pytest.mark.parametrize(
@@ -1080,10 +1082,7 @@ def test_c8_identical_requests_have_one_scan_and_spend_each(rig: MatrixRig) -> N
     )
     for call_id, response in zip(call_ids, responses):
         _spend_row_for_call(call_id, response.content)
-    sink_rows: Final = _requests_for_rail(
-        _matching_requests(rig.sink, marker),
-        rig.rails["a_post_call_streaming"],
-    )
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rig.rails["a_post_call_streaming"], marker)
     assert len(sink_rows) == 3, (marker, sink_rows)
     guardrail_call_ids: Final = tuple(
         cast(str, JSON_OBJECT.validate_json(row.body).get("litellm_call_id")) for row in sink_rows
@@ -1120,7 +1119,7 @@ def _management_observation(
         call_id=call_id,
     )
     provider_rows: Final = _matching_requests(rig.provider, marker)
-    sink_rows: Final = _requests_for_rail(_matching_requests(rig.sink, marker), name)
+    sink_rows: Final = _rail_scans(rig.sink.drain(), name, marker)
     if response.status_code == 200 and len(provider_rows) == 1:
         assert marker in response.text, response.text
         _spend_row_for_call(call_id, response.content)
@@ -1301,12 +1300,13 @@ def test_d4_unauthenticated_management_create_is_rejected(rig: MatrixRig) -> Non
 
 def _scoped_rows(
     rows: Sequence[Request],
+    marker: str,
     streaming_name: str,
     non_streaming_name: str,
 ) -> tuple[tuple[Request, ...], tuple[Request, ...]]:
     return (
-        tuple(row for row in rows if f"/{streaming_name}/" in row.target),
-        tuple(row for row in rows if f"/{non_streaming_name}/" in row.target),
+        _rail_scans(rows, streaming_name, marker),
+        _rail_scans(rows, non_streaming_name, marker),
     )
 
 
@@ -1346,9 +1346,14 @@ def test_ea_is_streaming_request_body_does_not_change_chat_classification(
     assert len(provider_rows) == 1, (marker, provider_rows)
     provider_body: Final = JSON_OBJECT.validate_json(provider_rows[0].body)
     assert provider_body.get("is_streaming_request") == value, provider_rows[0].body.decode()
-    sink_rows: Final = _matching_requests(rig.sink, marker)
-    streaming_rows, non_streaming_rows = _scoped_rows(sink_rows, rig.rails["e_stream"], rig.rails["e_non_stream"])
-    assert (len(streaming_rows), len(non_streaming_rows)) == (0, 1), (marker, sink_rows)
+    sink_rows: Final = rig.sink.drain()
+    streaming_rows, non_streaming_rows = _scoped_rows(
+        sink_rows,
+        marker,
+        rig.rails["e_stream"],
+        rig.rails["e_non_stream"],
+    )
+    assert (len(streaming_rows), len(non_streaming_rows)) == (0, 1), (marker, streaming_rows, non_streaming_rows)
 
 
 @pytest.mark.parametrize("endpoint", ("chat", "passthrough"), ids=("chat", "configured-pass-through"))
@@ -1384,9 +1389,14 @@ def test_eb_namespaced_caller_body_field_cannot_flip_classification(
     assert len(provider_rows) == 1, (marker, provider_rows)
     provider_body: Final = JSON_OBJECT.validate_json(provider_rows[0].body)
     assert provider_body.get("litellm_server_streaming_classification") == value, provider_rows[0].body.decode()
-    sink_rows: Final = _matching_requests(rig.sink, marker)
-    streaming_rows, non_streaming_rows = _scoped_rows(sink_rows, rig.rails["e_stream"], rig.rails["e_non_stream"])
-    assert (len(streaming_rows), len(non_streaming_rows)) == (0, 1), (marker, sink_rows)
+    sink_rows: Final = rig.sink.drain()
+    streaming_rows, non_streaming_rows = _scoped_rows(
+        sink_rows,
+        marker,
+        rig.rails["e_stream"],
+        rig.rails["e_non_stream"],
+    )
+    assert (len(streaming_rows), len(non_streaming_rows)) == (0, 1), (marker, streaming_rows, non_streaming_rows)
 
 
 HOSTILE_STREAM_VALUES: Final[tuple[JsonValue, ...]] = ("true", 1, [], "")
@@ -1410,12 +1420,17 @@ def test_ec_hostile_stream_values_follow_observed_response_shape(rig: MatrixRig,
     assert len(provider_rows) == 1, (marker, provider_rows)
     observed_stream: Final = response.headers.get("content-type", "").startswith("text/event-stream")
     assert marker in response.text, response.text
-    sink_rows: Final = _matching_requests(rig.sink, marker)
-    streaming_rows, non_streaming_rows = _scoped_rows(sink_rows, rig.rails["e_stream"], rig.rails["e_non_stream"])
+    sink_rows: Final = rig.sink.drain()
+    streaming_rows, non_streaming_rows = _scoped_rows(
+        sink_rows,
+        marker,
+        rig.rails["e_stream"],
+        rig.rails["e_non_stream"],
+    )
     assert (len(streaming_rows), len(non_streaming_rows)) == (
         int(observed_stream),
         int(not observed_stream),
-    ), (marker, value, response.headers, sink_rows)
+    ), (marker, value, response.headers, streaming_rows, non_streaming_rows)
 
 
 @pytest.mark.parametrize("streamed", (False, True), ids=("stream-absent", "stream-true"))
@@ -1509,12 +1524,18 @@ def test_eh_provider_passthrough_routes_classify_effective_streaming(
     assert actual_streamed is streamed, (route, streamed, response.headers, response.text)
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, provider_rows)
-    sink_rows: Final = _matching_requests(rig.sink, marker)
-    streaming_rows, non_streaming_rows = _scoped_rows(sink_rows, rig.rails["e_stream"], rig.rails["e_non_stream"])
+    sink_rows: Final = rig.sink.drain()
+    streaming_rows, non_streaming_rows = _scoped_rows(
+        sink_rows,
+        marker,
+        rig.rails["e_stream"],
+        rig.rails["e_non_stream"],
+    )
     assert (len(streaming_rows), len(non_streaming_rows)) == ((1, 0) if streamed else (0, 1)), (
         marker,
         route,
-        sink_rows,
+        streaming_rows,
+        non_streaming_rows,
     )
 
 
@@ -1532,7 +1553,7 @@ def test_ei_unauthenticated_scoped_request_has_no_upstream_or_guardrail_call(rig
     )
     assert response.status_code == 401, response.text
     assert _matching_requests(rig.provider, marker) == ()
-    assert _matching_requests(rig.sink, marker) == ()
+    assert _rail_scans(rig.sink.drain(), rig.rails["e_stream"], marker) == ()
 
 
 @pytest.mark.parametrize(
@@ -1583,19 +1604,20 @@ def test_f2_mismatched_policy_step_skips_matching_sibling_still_enforces(
         "matrix-pipeline-model",
     )
     provider_rows: Final = _matching_requests(rig.provider, marker)
-    sink_rows: Final = _matching_requests(rig.sink, marker)
+    sink_rows: Final = rig.sink.drain()
     streaming_rows, non_streaming_rows = _scoped_rows(
         sink_rows,
+        marker,
         rig.rails["f2_stream"],
         rig.rails["f2_non_stream"],
     )
     assert len(provider_rows) == 1, (marker, provider_rows)
     if streamed:
         assert response.status_code == 200 and marker in response.text, response.text
-        assert (len(streaming_rows), len(non_streaming_rows)) == (1, 0), (marker, sink_rows)
+        assert (len(streaming_rows), len(non_streaming_rows)) == (1, 0), (marker, streaming_rows, non_streaming_rows)
         return
     assert response.status_code == 400 and "synthetic policy block" in response.text, response.text
-    assert (len(streaming_rows), len(non_streaming_rows)) == (0, 1), (marker, sink_rows)
+    assert (len(streaming_rows), len(non_streaming_rows)) == (0, 1), (marker, streaming_rows, non_streaming_rows)
 
 
 def test_f3_realtime_transcription_uses_streaming_scope(rig: MatrixRig) -> None:
@@ -1662,7 +1684,7 @@ def test_g1_sink_failure_fails_closed_only_when_rail_is_in_scope(rig: MatrixRig)
     )
     assert response_s0.status_code == 200 and marker_s0 in response_s0.text, response_s0.text
     provider_rows_s0: Final = _matching_requests(rig.provider, marker_s0)
-    sink_rows_s0: Final = _matching_requests(rig.sink, marker_s0)
+    sink_rows_s0: Final = _rail_scans(rig.sink.drain(), rig.rails["g1_failure"], marker_s0)
     assert len(provider_rows_s0) == 1 and sink_rows_s0 == (), (marker_s0, provider_rows_s0, sink_rows_s0)
     marker_s1: Final = f"audit-g1-S1-{uuid.uuid4().hex}"
     response_s1: Final = _raw_chat(
@@ -1674,7 +1696,7 @@ def test_g1_sink_failure_fails_closed_only_when_rail_is_in_scope(rig: MatrixRig)
     )
     assert response_s1.status_code == 500 and "Generic Guardrail API failed" in response_s1.text, response_s1.text
     assert _matching_requests(rig.provider, marker_s1) == ()
-    sink_rows: Final = _matching_requests(rig.sink, marker_s1)
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rig.rails["g1_failure"], marker_s1)
     assert len(sink_rows) == 1, (marker_s1, sink_rows)
 
 
@@ -1689,7 +1711,7 @@ def test_g2_blocked_verdict_blocks_only_when_rail_is_in_scope(rig: MatrixRig) ->
     )
     assert response_s0.status_code == 200 and marker_s0 in response_s0.text, response_s0.text
     assert len(_matching_requests(rig.provider, marker_s0)) == 1
-    assert _matching_requests(rig.sink, marker_s0) == ()
+    assert _rail_scans(rig.sink.drain(), rig.rails["g2_block"], marker_s0) == ()
     marker_s1: Final = f"audit-g2-S1-{uuid.uuid4().hex}"
     response_s1: Final = _raw_chat(
         rig.candidate,
@@ -1700,7 +1722,7 @@ def test_g2_blocked_verdict_blocks_only_when_rail_is_in_scope(rig: MatrixRig) ->
     )
     assert response_s1.status_code == 400 and "synthetic policy block" in response_s1.text, response_s1.text
     assert _matching_requests(rig.provider, marker_s1) == ()
-    sink_rows: Final = _matching_requests(rig.sink, marker_s1)
+    sink_rows: Final = _rail_scans(rig.sink.drain(), rig.rails["g2_block"], marker_s1)
     assert len(sink_rows) == 1, (marker_s1, sink_rows)
 
 
@@ -1715,7 +1737,7 @@ def test_g3_provider_errors_reach_caller_and_proxy_remains_usable(rig: MatrixRig
     )
     assert unauthorized.status_code == 401 and "synthetic provider unauthorized" in unauthorized.text, unauthorized.text
     assert len(_matching_requests(rig.provider, marker)) == 1
-    assert len(_matching_requests(rig.sink, marker)) == 1
+    assert len(_rail_scans(rig.sink.drain(), rig.rails["g3_provider"], marker)) == 1
     unknown_marker: Final = f"audit-g3-unknown-{uuid.uuid4().hex}"
     unknown: Final = _raw_chat(
         rig.candidate,

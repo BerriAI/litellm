@@ -371,6 +371,12 @@ def _rows_for_marker(rows: Sequence[Request], marker: str) -> tuple[Request, ...
     return tuple(request for request in rows if marker.encode() in request.body)
 
 
+def _rail_scans(rows: Sequence[Request], rail_name: str, marker: str) -> tuple[Request, ...]:
+    return tuple(
+        request for request in rows if request.target.startswith(f"/{rail_name}/") and marker.encode() in request.body
+    )
+
+
 def _spend_rows(call_id: str, database_url: str | None = None) -> list[dict[str, JsonValue]]:
     return read_rows(
         'SELECT request_id, litellm_call_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s OR litellm_call_id=%s',
@@ -394,8 +400,8 @@ def _one_spend_row(
     return rows[0]
 
 
-def _expected_in_scope(plan: CallPlan, sink_a: Wire, sink_b: Wire) -> tuple[Wire, Wire]:
-    return (sink_a, sink_b) if plan.streamed else (sink_b, sink_a)
+def _expected_in_scope(plan: CallPlan, sink_a_name: str, sink_b_name: str) -> tuple[str, str]:
+    return (sink_a_name, sink_b_name) if plan.streamed else (sink_b_name, sink_a_name)
 
 
 def _assert_successful_calls(
@@ -404,8 +410,8 @@ def _assert_successful_calls(
     provider_rows: Sequence[Request],
     sink_a_rows: Sequence[Request],
     sink_b_rows: Sequence[Request],
-    sink_a: Wire,
-    sink_b: Wire,
+    sink_a_name: str,
+    sink_b_name: str,
 ) -> None:
     for plan, response in zip(plans, responses):
         if response.status_code != 200:
@@ -413,9 +419,17 @@ def _assert_successful_calls(
         assert plan.marker in response.text, (plan, response.text)
         provider_match: Final = _rows_for_marker(provider_rows, plan.marker)
         assert len(provider_match) == 1, (plan, provider_match)
-        in_sink, out_sink = _expected_in_scope(plan, sink_a, sink_b)
-        in_rows: Final = _rows_for_marker(sink_a_rows if in_sink is sink_a else sink_b_rows, plan.marker)
-        out_rows: Final = _rows_for_marker(sink_a_rows if out_sink is sink_a else sink_b_rows, plan.marker)
+        in_sink, out_sink = _expected_in_scope(plan, sink_a_name, sink_b_name)
+        in_rows: Final = _rail_scans(
+            sink_a_rows if in_sink == sink_a_name else sink_b_rows,
+            in_sink,
+            plan.marker,
+        )
+        out_rows: Final = _rail_scans(
+            sink_a_rows if out_sink == sink_a_name else sink_b_rows,
+            out_sink,
+            plan.marker,
+        )
         assert len(in_rows) == 1 and len(out_rows) == 0, (plan, in_rows, out_rows)
         spend: Final = _one_spend_row(plan.call_id)
         assert plan.call_id in (spend.get("request_id"), spend.get("litellm_call_id")), (plan, spend)
@@ -455,17 +469,19 @@ def _assert_down_wave(
     provider_rows: Sequence[Request],
     sink_a_rows: Sequence[Request],
     sink_b_rows: Sequence[Request],
+    sink_a_name: str,
+    sink_b_name: str,
 ) -> None:
     for plan, response in zip(plans, responses):
         if plan.streamed:
             assert response.status_code >= 500 and response.content, (plan, response.status_code, response.text)
             assert _rows_for_marker(provider_rows, plan.marker) == (), (plan, provider_rows)
-            assert _rows_for_marker(sink_b_rows, plan.marker) == (), (plan, sink_b_rows)
+            assert _rail_scans(sink_b_rows, sink_b_name, plan.marker) == (), (plan, sink_b_name)
             continue
         assert response.status_code == 200 and plan.marker in response.text, (plan, response.status_code, response.text)
         assert len(_rows_for_marker(provider_rows, plan.marker)) == 1, (plan, provider_rows)
-        assert _rows_for_marker(sink_a_rows, plan.marker) == (), (plan, sink_a_rows)
-        assert len(_rows_for_marker(sink_b_rows, plan.marker)) == 1, (plan, sink_b_rows)
+        assert _rail_scans(sink_a_rows, sink_a_name, plan.marker) == (), (plan, sink_a_name)
+        assert len(_rail_scans(sink_b_rows, sink_b_name, plan.marker)) == 1, (plan, sink_b_name)
         spend: Final = _one_spend_row(plan.call_id)
         assert plan.call_id in (spend.get("request_id"), spend.get("litellm_call_id")), (plan, spend)
 
@@ -506,7 +522,7 @@ def test_h1_sink_outage_keeps_scope_isolated_through_recovery(rig: ChaosRig, tmp
             outage_provider: Final = rig.provider.drain()
             outage_a: Final = sink_a.drain()
             outage_b: Final = sink_b.drain()
-            _assert_down_wave(outage_plans, outage_responses, outage_provider, outage_a, outage_b)
+            _assert_down_wave(outage_plans, outage_responses, outage_provider, outage_a, outage_b, name_a, name_b)
 
             with wire_server(_sink, port=port_a) as recovered_sink_a:
                 recovery_plans: Final = _plans("h1-recovery", 20)
@@ -521,8 +537,8 @@ def test_h1_sink_outage_keeps_scope_isolated_through_recovery(rig: ChaosRig, tmp
                     recovery_provider,
                     recovery_a,
                     recovery_b,
-                    recovered_sink_a,
-                    sink_b,
+                    name_a,
+                    name_b,
                 )
 
 
@@ -575,8 +591,8 @@ def test_h2_stream_sink_gate_does_not_block_out_of_scope_calls(rig: ChaosRig, tm
                 provider_rows,
                 sink_a_rows,
                 sink_b_rows,
-                sink_a,
-                sink_b,
+                name_a,
+                name_b,
             )
 
 
@@ -662,8 +678,8 @@ def test_h3_worker_kill_mid_burst_keeps_remaining_worker_serving(rig: ChaosRig, 
                 provider_rows,
                 sink_a_rows,
                 sink_b_rows,
-                sink_a,
-                sink_b,
+                name_a,
+                name_b,
             )
 
 
@@ -703,10 +719,9 @@ def _assert_one_scope_wave(
     for plan, response in zip(plans, responses):
         assert response.status_code == 200 and plan.marker in response.text, (plan, response.status_code, response.text)
         provider_match: Final = _rows_for_marker(provider_rows, plan.marker)
-        sink_match: Final = _rows_for_marker(sink_rows, plan.marker)
+        sink_match: Final = _rail_scans(sink_rows, sink_name, plan.marker)
         assert len(provider_match) == 1, (plan, provider_match)
         assert len(sink_match) == int(plan.streamed), (plan, sink_match)
-        assert all(f"/{sink_name}/" in row.target for row in sink_match), (plan, sink_match)
         spend: Final = _one_spend_row(plan.call_id, database_url)
         assert plan.call_id in (spend.get("request_id"), spend.get("litellm_call_id")), (plan, spend)
 
@@ -920,9 +935,8 @@ def test_h5_stored_scope_survives_owned_postgres_outage_and_recovers_once(
                         response.text,
                     )
                     assert len(_rows_for_marker(outage_provider, plan.marker)) == 1, (plan, outage_provider)
-                    sink_match: Final = _rows_for_marker(outage_sink, plan.marker)
+                    sink_match: Final = _rail_scans(outage_sink, name, plan.marker)
                     assert len(sink_match) == int(plan.streamed), (plan, sink_match)
-                    assert all(f"/{name}/" in row.target for row in sink_match), (plan, sink_match)
 
                 recovered_database: Final = _start_postgres(database)
                 assert recovered_database.returncode == 0, recovered_database.stderr
