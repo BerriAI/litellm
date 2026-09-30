@@ -728,10 +728,10 @@ def test_get_image_dimensions_raw_base64():
     assert h == 1
 
 
-def test_get_image_dimensions_failed_url_raises_valueerror(monkeypatch):
+def test_get_image_dimensions_failed_url_raises_valueerror(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
-    def _failing_get(client, url, **kw):
+    def _failing_get(client: object, url: str, **kw: object) -> object:
         raise Exception("Connection timeout")
 
     monkeypatch.setattr(
@@ -739,7 +739,7 @@ def test_get_image_dimensions_failed_url_raises_valueerror(monkeypatch):
         _failing_get,
     )
 
-    with pytest.raises(ValueError, match="Unable to parse or decode image data"):
+    with pytest.raises(ValueError, match="Failed to fetch image from URL"):
         get_image_dimensions(data="https://unreachable-endpoint.com/test.png")
 
 

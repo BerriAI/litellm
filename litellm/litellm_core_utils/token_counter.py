@@ -233,18 +233,20 @@ def get_image_dimensions(
         try:
             client: Final = _get_httpx_client()
             response: Final[httpx.Response] = safe_get(client, data)
+            response.raise_for_status()
             max_bytes: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
             content_length: Final[str | None] = response.headers.get("Content-Length")
             if content_length is not None and int(content_length) > max_bytes:
-                pass  # skip download; img_data stays None
+                raise ValueError(f"Image at {data} exceeds maximum allowed size of {MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB")
+            body: Final = response.read()
+            if len(body) <= max_bytes:
+                img_data = body
             else:
-                body: Final = response.read()
-                if len(body) <= max_bytes:
-                    img_data = body
-        except Exception:
-            pass
-    if img_data is None:
-        # Not a URL or fetch failed — assume base64
+                raise ValueError(f"Image at {data} exceeds maximum allowed size of {MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB")
+        except Exception as e:
+            raise ValueError(f"Failed to fetch image from URL {data}: {e}") from e
+    else:
+        # Base64 string (with or without data URI header)
         if "," in data:
             _header, encoded = data.split(",", 1)
         else:
