@@ -949,6 +949,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://api.wallabytoken.com/v1",
     "https://api.prisminference.com/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
@@ -1023,6 +1024,7 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
+    "wallaby",
     "prism",
     "sail",
 ]
