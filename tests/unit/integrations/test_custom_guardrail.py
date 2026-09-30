@@ -3177,6 +3177,17 @@ class TestCustomGuardrailTimeout:
 
         assert guardrail.timeout is None
 
+    @pytest.mark.parametrize("configured, expected", [(None, 10.0), (3, 3)])
+    def test_unset_timeout_keeps_default_assigned_before_super_init(self, configured, expected):
+        class PresetTimeoutGuardrail(CustomGuardrail):
+            def __init__(self, **kwargs):
+                self.timeout = 10.0
+                super().__init__(guardrail_name="preset", **kwargs)
+
+        guardrail = PresetTimeoutGuardrail(timeout=configured)
+
+        assert guardrail.timeout == expected
+
     def test_update_in_memory_litellm_params_refreshes_timeout(self):
         from litellm.types.guardrails import LitellmParams
 
