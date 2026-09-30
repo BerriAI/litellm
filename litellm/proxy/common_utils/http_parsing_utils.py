@@ -56,7 +56,7 @@ def resolve_inference_model(
             return endpoint_model
         case "completion":
             return settings.get("completion_model") or cli_model or endpoint_model or body_model
-    assert_never(kind)
+    return assert_never(kind)
 
 
 def _normalize_media_type(content_type: str) -> str:
