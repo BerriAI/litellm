@@ -75,10 +75,6 @@ class ManagedObjectRepository(PrismaTableRepository["prisma_models.LiteLLM_Manag
     table_name = "litellm_managedobjecttable"
 
 
-class OrganizationMembershipRepository(PrismaTableRepository["prisma_models.LiteLLM_OrganizationMembership"]):
-    table_name = "litellm_organizationmembership"
-
-
 class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs"]):
     table_name = "litellm_spendlogs"
 

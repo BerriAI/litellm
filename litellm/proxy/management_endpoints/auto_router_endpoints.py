@@ -41,7 +41,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
-from litellm.proxy.management.teams.access import is_team_admin
+from litellm.proxy.management.teams.authz import roles_on
+from litellm.proxy.management.teams.dependencies import get_org_roles
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
@@ -247,11 +248,12 @@ async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: 
         )
 
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
+    roles: Final = await roles_on(team, user_api_key_dict, get_org_roles())
+    if roles:
         ModelManagementAuthChecks.can_user_make_team_model_call(
             team_id=team_id,
             user_api_key_dict=user_api_key_dict,
-            team_obj=team,
+            roles=roles,
             premium_user=premium_user,
         )
         return None

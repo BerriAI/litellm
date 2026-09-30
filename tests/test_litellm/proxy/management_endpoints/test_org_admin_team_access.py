@@ -7,7 +7,7 @@ Covers:
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -66,19 +66,23 @@ def _make_caller_user(
     )
 
 
-def _patch_org_admin_deps(get_user_return):
-    """Context manager that patches the lazy imports inside PrismaOrgRoles.is_org_admin."""
-    return (
-        patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
-            new_callable=AsyncMock,
-            return_value=get_user_return,
-        ),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock(), create=True),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(), create=True),
-        patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", MagicMock(), create=True
-        ),
+class _OrgAdmins:
+    def __init__(self, user: LiteLLM_UserTable) -> None:
+        self.of = frozenset(
+            (membership.user_id, membership.organization_id)
+            for membership in user.organization_memberships or []
+            if membership.user_role == LitellmUserRoles.ORG_ADMIN.value
+        )
+
+    async def is_org_admin(self, user_id: str, organization_id: str) -> bool:
+        return (user_id, organization_id) in self.of
+
+
+def _patch_org_admin_deps(caller: LiteLLM_UserTable):
+    """Answer the team handlers' org-admin lookup from the caller's memberships instead of prisma."""
+    org_roles = _OrgAdmins(caller)
+    return patch(  # test-quality-ok: the handler reads its org-role lookup through this module-level provider, so it is the seam to inject through
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_roles", lambda: org_roles
     )
 
 
@@ -120,8 +124,7 @@ class TestValidateMembership:
         key = _make_user_key(user_id="org-admin-user")
         caller = _make_caller_user(user_id="org-admin-user", org_id="org-1")
 
-        p1, p2, p3, p4 = _patch_org_admin_deps(caller)
-        with p1, p2, p3, p4:
+        with _patch_org_admin_deps(caller):
             await validate_membership(user_api_key_dict=key, team_table=team)
 
     @pytest.mark.asyncio
@@ -137,8 +140,7 @@ class TestValidateMembership:
             user_id="random-user", org_id="org-2", org_role="user"
         )
 
-        p1, p2, p3, p4 = _patch_org_admin_deps(caller)
-        with p1, p2, p3, p4:
+        with _patch_org_admin_deps(caller):
             with pytest.raises(HTTPException) as exc_info:
                 await validate_membership(user_api_key_dict=key, team_table=team)
             assert exc_info.value.status_code == 403
