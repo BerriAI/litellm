@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_traces::{Connection, encode_rows, ensure_schema, execute_read, schema_statements};
+use litellm_traces::{
+    Connection, Error, InsertTable, Parameter, ReadQuery, ensure_schema, execute_named_read,
+    execute_read, insert_rows, schema_statements,
+};
 use rstest::rstest;
 use testcontainers_modules::{
     clickhouse::ClickHouse,
@@ -40,22 +43,61 @@ async fn schema_supports_span_rollups_and_spend_joins() -> Result<(), Box<dyn st
         "start_time": timestamp / 1_000_000, "end_time": timestamp / 1_000_000 + 100,
         "completion_start_time": null
     }))?;
-    for (table, row) in [("otel_traces", span), ("spend_logs", spend)] {
-        client
-            .post(&url)
-            .query(&[
-                (
-                    "query",
-                    format!("INSERT INTO trace_test.{table} FORMAT JSONEachRow"),
-                ),
-                ("date_time_input_format", "best_effort".into()),
-            ])
-            .body(encode_rows(vec![row])?)
-            .send()
-            .await?
-            .error_for_status()?;
-    }
+    insert_rows(
+        &client,
+        &writer,
+        "trace_test",
+        InsertTable::OtelTraces,
+        vec![span],
+    )
+    .await?;
+    insert_rows(
+        &client,
+        &writer,
+        "trace_test",
+        InsertTable::SpendLogs,
+        vec![spend],
+    )
+    .await?;
+    let invalid = serde_json::from_value(serde_json::json!({
+        "Timestamp": timestamp,
+        "TraceId": "trace-1",
+        "SpanId": "span-invalid",
+        "UnexpectedColumn": "must fail"
+    }))?;
+    let rejected = insert_rows(
+        &client,
+        &writer,
+        "trace_test",
+        InsertTable::OtelTraces,
+        vec![invalid],
+    )
+    .await;
+    assert!(
+        matches!(rejected, Err(Error::InsertFailed(_))),
+        "{rejected:?}"
+    );
     let connection = Connection::configured(&url, "trace_test", "default", "")?;
+    let detail = execute_named_read(
+        &client,
+        &connection,
+        ReadQuery::SpanDetail,
+        &BTreeMap::from([
+            ("trace_id".to_owned(), Parameter::Text("trace-1".to_owned())),
+            ("span_id".to_owned(), Parameter::Text("span-1".to_owned())),
+            (
+                "team_ids".to_owned(),
+                Parameter::Strings(vec!["team-1".to_owned()]),
+            ),
+            (
+                "api_key_hash".to_owned(),
+                Parameter::Text("hash-1".to_owned()),
+            ),
+        ]),
+    )
+    .await?;
+    let detail: serde_json::Value = serde_json::from_str(&detail)?;
+    assert_eq!(detail["data"][0]["span_id"], "span-1");
     let body = execute_read(&client, &connection,
         "SELECT o.TeamId, o.ApiKeyHash, o.ObservationType, o.InputPreview, s.spend, \
          toString(toUnixTimestamp64Nano(o.Timestamp)) AS timestamp_ns, \

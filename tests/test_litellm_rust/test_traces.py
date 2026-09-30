@@ -17,11 +17,11 @@ async def test_trace_reader_projects_connection_and_parameters(recording_server:
     recording_server.enqueue(ResponseSpec(body={"data": [{"trace_id": "trace-1"}]}))
     reader_url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
     storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, reader_url + "?database=wrong")
-    rows: Final = json.loads(await storage.query("SELECT {trace_id:String} AS trace_id", {"trace_id": "trace-1"}))
+    rows: Final = json.loads(await storage.query("span_detail", {"trace_id": "trace-1", "span_id": "span-1"}))["data"]
     request: Final = recording_server.requests[0]
     parameters: Final = parse_qs(urlsplit(request.path).query)
     assert rows == [{"trace_id": "trace-1"}]
-    assert request.raw_body == b"SELECT {trace_id:String} AS trace_id"
+    assert b"WHERE TraceId = {trace_id:String} AND SpanId = {span_id:String}" in request.raw_body
     assert parameters["database"] == ["trace_test"]
     assert parameters["param_trace_id"] == ["trace-1"]
     assert parameters["readonly"] == ["1"]
@@ -35,7 +35,16 @@ async def test_trace_reader_rejects_success_status_with_embedded_error(recording
     recording_server.enqueue(ResponseSpec(body={"data": [], "exception": "query failed"}))
     storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
     with pytest.raises(RuntimeError, match="invalid or failed JSON"):
-        await storage.query("SELECT 1", {})
+        await storage.query("span_detail", {})
+
+
+@pytest.mark.asyncio
+async def test_trace_reader_rejects_raw_sql(recording_server: RecordingServer) -> None:
+    recording_server.expected_requests = 0
+    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    with pytest.raises(ValueError, match="invalid trace read query"):
+        await storage.query("SELECT * FROM otel_traces", {})
+    assert recording_server.requests == []
 
 
 @pytest.mark.asyncio
@@ -52,7 +61,9 @@ async def test_schema_binding_rejects_non_positive_retention() -> None:
 
 
 @pytest.mark.asyncio
-async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement(recording_server: RecordingServer) -> None:
+async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement(
+    recording_server: RecordingServer,
+) -> None:
     recording_server.expected_requests = 2
     recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(status=403, body="denied"))
@@ -72,12 +83,17 @@ async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement
 @pytest.mark.asyncio
 async def test_insert_encodes_and_sends_rows(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body=""))
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url)
+    storage: Final = NativeTraceStorage(
+        "trace_test", recording_server.base_url + "?input_format_skip_unknown_fields=1"
+    )
     await storage.insert_rows("otel_traces", [{"Timestamp": 1_234_567_890, "Input": "hello"}])
     request: Final = recording_server.requests[0]
     assert json.loads(gzip.decompress(request.raw_body)) == {
         "Input": "hello",
         "Timestamp": "1970-01-01T00:00:01.23456789Z",
     }
-    assert parse_qs(urlsplit(request.path).query)["query"] == ["INSERT INTO `trace_test`.otel_traces FORMAT JSONEachRow"]
+    assert parse_qs(urlsplit(request.path).query)["query"] == [
+        "INSERT INTO `trace_test`.otel_traces FORMAT JSONEachRow"
+    ]
+    assert parse_qs(urlsplit(request.path).query)["input_format_skip_unknown_fields"] == ["0"]
     assert request.headers["content-encoding"] == "gzip"
