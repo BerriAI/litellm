@@ -2345,3 +2345,34 @@ class TestMalformedContentListItems:
                 api_key=FAKE_REGULAR_KEY,
                 max_tokens=5,
             )
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("nested_output_config", [False, True])
+@pytest.mark.parametrize("explicit_beta", [False, True])
+@pytest.mark.parametrize("output_config", [{}, {"effort": "high"}, {"format": {"type": "text"}}])
+def test_validate_environment_adds_mid_conversation_output_config_beta(
+    nested_output_config: bool, explicit_beta: bool, output_config: dict[str, object]
+) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+
+    messages: Final = [
+        {"role": "user", "content": "Hello"},
+        *([{"role": "system", "content": [], "output_config": output_config}] if nested_output_config else []),
+        {"role": "user", "content": "Reply with OK"},
+    ]
+
+    headers: Final = AnthropicModelInfo().validate_environment(
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+        model="claude-fable-5-1",
+        messages=messages,
+        optional_params={"output_config": {"effort": "high"}},
+        litellm_params={},
+        api_key=FAKE_REGULAR_KEY,
+    )
+
+    assert headers.get("anthropic-beta", "").split(",").count(beta) == int(nested_output_config or explicit_beta)
+    assert headers["x-api-key"] == FAKE_REGULAR_KEY

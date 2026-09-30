@@ -3494,3 +3494,56 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     remaining: Final = tuple([chunk async for chunk in iterator])
     assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
     await iterator.aclose()
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("nested_output_config", [False, True])
+@pytest.mark.parametrize("explicit_beta", [False, True])
+@pytest.mark.parametrize("output_config", [{}, {"effort": "high"}, {"format": {"type": "text"}}])
+def test_bedrock_messages_mid_conversation_output_config_beta(
+    nested_output_config: bool, explicit_beta: bool, output_config: dict[str, object]
+) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+
+    messages: Final = [
+        {"role": "user", "content": "Hello"},
+        *([{"role": "system", "content": [], "output_config": output_config}] if nested_output_config else []),
+        {"role": "user", "content": "Reply with OK"},
+    ]
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024, "output_config": {"effort": "high"}},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result.get("anthropic_beta", []).count(beta) == int(nested_output_config or explicit_beta)
+    assert result["messages"] == messages
+    assert result["output_config"] == {"effort": "high"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("explicit_beta", [False, True])
+def test_bedrock_messages_removed_output_config_does_not_add_beta(explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=[
+            {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}},
+            {"role": "user", "content": "Reply with OK"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
+    assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)
