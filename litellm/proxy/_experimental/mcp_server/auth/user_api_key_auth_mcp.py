@@ -2068,6 +2068,10 @@ class MCPRequestHandler:
         return user_api_key_auth.object_permission
 
     @staticmethod
+    async def team_object_permission(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+        return await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+
+    @staticmethod
     async def _get_team_object_permission(
         user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:

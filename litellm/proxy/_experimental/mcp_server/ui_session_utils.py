@@ -13,8 +13,12 @@ from litellm._logging import verbose_logger
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 
-EffectiveAuthContexts: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]]
-TeamObjectPermission: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]]
+EffectiveAuthContexts: TypeAlias = Callable[
+    [UserAPIKeyAuth], Awaitable[Sequence[UserAPIKeyAuth]]  # mutable-ok: Callable parameter syntax
+]
+TeamObjectPermission: TypeAlias = Callable[
+    [UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]  # mutable-ok: Callable parameter syntax
+]
 
 
 def clone_user_api_key_auth_with_team(
@@ -172,7 +176,7 @@ async def granted_toolset_ids(
         MCPRequestHandler,
     )
 
-    load_team_permission: Final = team_object_permission or MCPRequestHandler._get_team_object_permission
+    load_team_permission: Final = team_object_permission or MCPRequestHandler.team_object_permission
     contexts: Final = await effective_contexts(user_api_key_auth)
     team_permissions: Final = await asyncio.gather(*(load_team_permission(context) for context in contexts))
     permissions: Final = (*(context.object_permission for context in contexts), *team_permissions)

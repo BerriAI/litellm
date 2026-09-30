@@ -279,23 +279,20 @@ class LiteLLM_Proxy_MCP_Handler:
                     if prisma_client is not None:
                         toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
                         if toolset is not None:
-                            # Access control: only allow if the key explicitly grants this toolset.
+                            # Access control: the key itself or its team must grant this toolset.
                             if user_api_key_auth is not None:
+                                from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+                                    granted_toolset_ids,
+                                )
                                 from litellm.proxy.management_endpoints.common_utils import (
                                     _user_has_admin_view,
                                 )
 
-                                is_admin = _user_has_admin_view(user_api_key_auth)
-                                if not is_admin:
-                                    op = user_api_key_auth.object_permission
-                                    granted = getattr(op, "mcp_toolsets", None) if op else None
-                                    # None means no grants configured → deny (consistent with
-                                    # fetch_mcp_toolsets which returns [] for unconfigured keys)
-                                    if granted is None or toolset.toolset_id not in granted:
-                                        verbose_logger.debug(
-                                            "Key does not have access to toolset '%s', skipping.", name
-                                        )
-                                        continue
+                                if not _user_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
+                                    await granted_toolset_ids(user_api_key_auth)
+                                ):
+                                    verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
+                                    continue
                             resolved_toolset_ids.append(toolset.toolset_id)
                             # Don't add to resolved_mcp_servers — toolset scope
                             # restricts via object_permission, not server name filter.

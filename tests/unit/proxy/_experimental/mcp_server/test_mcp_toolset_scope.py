@@ -348,6 +348,7 @@ class TestFetchMCPToolsetsAccess:
         auth = _make_auth(mcp_toolsets=["ts-1"])
         auth.user_role = LitellmUserRoles.PROXY_ADMIN
         mock_client = MagicMock()
+        own_toolsets = [{"toolset_id": "ts-1", "toolset_name": "own"}]
 
         with (
             patch(
@@ -356,14 +357,15 @@ class TestFetchMCPToolsetsAccess:
             ),
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.list_mcp_toolsets",
-                new=AsyncMock(return_value=[]),
+                new=AsyncMock(return_value=own_toolsets),
             ) as mock_list,
             patch.object(
                 MCPRequestHandler, "_get_team_object_permission", new=AsyncMock(return_value=None)
             ) as team_lookup,
         ):
-            await fetch_mcp_toolsets(user_api_key_dict=auth)
+            result = await fetch_mcp_toolsets(user_api_key_dict=auth)
 
+        assert result == own_toolsets
         mock_list.assert_called_once_with(mock_client, toolset_ids=["ts-1"])
         team_lookup.assert_not_awaited()
 

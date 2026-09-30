@@ -6,14 +6,13 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
-
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
     clone_user_api_key_auth_with_team,
     granted_toolset_ids,
     resolve_ui_session_team_ids,
 )
+from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 
 
 def test_clone_user_api_key_auth_with_team_creates_independent_copy():

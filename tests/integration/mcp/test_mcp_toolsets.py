@@ -3,9 +3,9 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, object_value, string_value
+from integration._support.client import Gateway, Scenario, object_value
 from integration._support.mcp import INITIALIZE, Outcome, _outcome_from_rpc, mcp_peer, register_mcp, tool_calls
-from integration._support.mcp_grants import delete_toolset
+from integration._support.mcp_grants import create_toolset
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
@@ -20,13 +20,7 @@ def _dashboard_ui_session_token(user_id: str) -> str:
 
 def _toolset(scenario: Scenario, server_id: str, tool: str) -> tuple[str, str]:
     name: Final = "lit6029_" + uuid.uuid4().hex[:10]
-    response: Final = scenario.gateway.request(
-        "POST", "/v1/mcp/toolset", {"toolset_name": name, "tools": [{"server_id": server_id, "tool_name": tool}]}
-    )
-    assert response.status_code == 201, response.text
-    identity: Final = string_value(response.json()["toolset_id"])
-    scenario.cleanups.callback(delete_toolset, scenario.gateway, identity)
-    return identity, name
+    return create_toolset(scenario, ((server_id, tool),), toolset_name=name), name
 
 
 def _toolset_rpc(

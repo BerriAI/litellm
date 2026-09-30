@@ -9,6 +9,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.mcp import McpPeer, mcp_peer, register_mcp, tool_calls
+from integration._support.mcp_grants import create_toolset
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 Surface = Literal["chat", "responses", "messages", "messages_bridge"]
@@ -194,9 +195,7 @@ class Rig:
         )
 
     def upstream_tools(self) -> tuple[tuple[str, ...], ...]:
-        return tuple(
-            _tool_names(json.loads(request.body)) for request in self.wire.drain() if request.method == "POST"
-        )
+        return tuple(_tool_names(json.loads(request.body)) for request in self.wire.drain() if request.method == "POST")
 
     def final_text(self, body: Mapping[str, object]) -> str:
         if self.surface == "chat":
@@ -311,6 +310,22 @@ def test_allowed_tools_narrows_the_tool_list_handed_to_the_model(gateway: Gatewa
         assert response.status_code == 200, response.text
         requests: Final = rig.upstream_tools()
         assert requests and all(names == (rig.tool,) for names in requests), requests
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_toolset_gateway_url_serves_a_team_granted_toolset_to_a_key_without_its_own_grant(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        toolset_name: Final = "ts" + uuid.uuid4().hex[:8]
+        toolset_id: Final = create_toolset(rig.scenario, ((rig.server_id, "add"),), toolset_name=toolset_name)
+        team_id: Final = rig.scenario.team(object_permission={"mcp_toolsets": [toolset_id]})
+        key: Final = rig.scenario.key(team_id=team_id)
+        response: Final = rig.send(key, [{**AUTO, "server_url": f"litellm_proxy/mcp/{toolset_name}"}])
+        assert response.status_code == 200, response.text
+        requests: Final = rig.upstream_tools()
+        assert requests and all(rig.tool in names for names in requests), requests
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
