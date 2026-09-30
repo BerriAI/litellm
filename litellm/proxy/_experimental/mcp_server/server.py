@@ -67,6 +67,8 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     well_known_root_suffix,
 )
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    ActingUser,
+    GrantedToolsetIds,
     acting_user_auth,
     granted_toolset_ids,
     is_ui_session_credential,
@@ -1519,6 +1521,8 @@ if MCP_AVAILABLE:
     async def _apply_toolset_scope(
         user_api_key_auth: UserAPIKeyAuth,
         toolset_id: str,
+        acting_user: ActingUser = acting_user_auth,
+        granted: GrantedToolsetIds = granted_toolset_ids,
     ) -> UserAPIKeyAuth:
         """
         Pin a principal's MCP permissions to a single toolset for /toolset/{name}/mcp.
@@ -1547,9 +1551,9 @@ if MCP_AVAILABLE:
                 detail="API key is scoped to no MCP servers; toolset access is denied.",
             )
 
-        acting: Final = await acting_user_auth(user_api_key_auth)
+        acting: Final = await acting_user(user_api_key_auth)
         is_admin: Final = _user_has_admin_view(acting)
-        if not is_admin and toolset_id not in await granted_toolset_ids(acting):
+        if not is_admin and toolset_id not in await granted(acting):
             raise HTTPException(
                 status_code=403,
                 detail=f"API key does not have access to toolset '{toolset_id}'.",

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from mcp.types import Tool as MCPTool
 
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
 else:
@@ -237,6 +238,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        granted_toolsets: "GrantedToolsetIds | None" = None,
     ) -> tuple[list[MCPTool], list[str]]:
         """
         Get available tools from the MCP server manager.
@@ -287,8 +289,9 @@ class LiteLLM_Proxy_MCP_Handler:
                                     _user_has_admin_view,
                                 )
 
+                                granted: Final = granted_toolsets or granted_toolset_ids
                                 if not _user_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
-                                    await granted_toolset_ids(user_api_key_auth)
+                                    await granted(user_api_key_auth)
                                 ):
                                     verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
                                     continue

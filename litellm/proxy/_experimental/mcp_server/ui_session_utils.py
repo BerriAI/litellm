@@ -25,6 +25,12 @@ OwnObjectPermission: TypeAlias = Callable[
 AdmittedContext: TypeAlias = Callable[
     [UserAPIKeyAuth], Awaitable[UserAPIKeyAuth | None]  # mutable-ok: Callable parameter syntax
 ]
+ActingUser: TypeAlias = Callable[
+    [UserAPIKeyAuth], Awaitable[UserAPIKeyAuth]  # mutable-ok: Callable parameter syntax
+]
+GrantedToolsetIds: TypeAlias = Callable[
+    [UserAPIKeyAuth], Awaitable[frozenset[str]]  # mutable-ok: Callable parameter syntax
+]
 
 
 def clone_user_api_key_auth_with_team(
