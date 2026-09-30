@@ -125,7 +125,12 @@ def jwt_auth_issuers() -> tuple[str, ...]:
     env_issuer: Final = os.getenv("JWT_ISSUER")
     env: Final[tuple[str, ...]] = (env_issuer,) if env_issuer else ()
 
-    settings: Final[Mapping[str, object]] = cast(Mapping[str, object], general_settings)
+    settings: Final = (
+        cast(  # cast-ok: general_settings is a raw dict; the value is validated by _jwt_auth_issuer_entries
+            Mapping[str, object],
+            general_settings,
+        )
+    )
     configured: Final = tuple(
         entry.issuer for entry in _jwt_auth_issuer_entries(settings.get("litellm_jwtauth")) if entry.issuer
     )
