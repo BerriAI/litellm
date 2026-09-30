@@ -668,6 +668,19 @@ class TestPerformRedaction:
         assert real_dict["text"] == "redacted-by-litellm"
         assert real_dict["content"][0]["text"] == "redacted-by-litellm"
 
+    def test_redact_responses_api_output_handles_none(self):
+        from litellm.litellm_core_utils.redact_messages import (
+            _redact_responses_api_output,
+            _redact_responses_api_output_dict,
+        )
+
+        _redact_responses_api_output(None)
+        _redact_responses_api_output_dict(None, "redacted-by-litellm")
+
+        result = {"output": None}
+        redacted = perform_redaction({}, result)
+        assert redacted["output"] is None
+
     def test_skips_non_dict_response_output_items(self):
         result = {
             "output": [
