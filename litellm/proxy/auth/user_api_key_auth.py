@@ -3204,6 +3204,15 @@ async def _authorize_authenticated_request(
     # admin-only-route / model-access / budget checks) surface as
     # ProxyException consistently with pre-refactor behavior.
     try:
+        from litellm.proxy.agent_endpoints.auth.managed_authorization import admit_managed_actor
+        from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+        from litellm.proxy.proxy_server import prisma_client
+
+        if user_api_key_auth_obj.agent_id is not None:
+            await admit_managed_actor(
+                user_api_key_auth_obj,
+                AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None,
+            )
         await _run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
             request=request,

@@ -15,9 +15,14 @@ if TYPE_CHECKING:
 class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
     """Repository for object permission database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer = use_writer
+
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
-        return self.prisma_client.db.litellm_objectpermissiontable
+        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        return database.litellm_objectpermissiontable
 
     @property
     def model_class(self) -> type[LiteLLM_ObjectPermissionTable]:

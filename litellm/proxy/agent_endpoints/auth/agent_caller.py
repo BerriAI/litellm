@@ -8,6 +8,7 @@ can only narrow access and need no trust.
 """
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -45,7 +46,7 @@ def agent_caller_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth | Non
         user_id=caller.user_id,
         team_id=caller.team_id,
         parent_otel_span=user_api_key_auth.parent_otel_span,
-    )
+    ).model_copy(update=MappingProxyType({"requires_fresh_policy": user_api_key_auth.requires_fresh_policy}))
 
 
 async def load_agent_caller_team(user_api_key_auth: UserAPIKeyAuth) -> LiteLLM_TeamTable | None:

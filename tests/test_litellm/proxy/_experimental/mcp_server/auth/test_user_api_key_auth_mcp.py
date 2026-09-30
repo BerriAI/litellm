@@ -369,7 +369,9 @@ class TestMCPRequestHandler:
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
         assert result == ["server-a"]
-        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(
+            toolset_ids=["toolset-1"], requires_fresh_policy=False
+        )
 
     async def test_get_allowed_mcp_servers_for_key_skips_toolset_resolution_when_none_granted(self):
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
@@ -4147,7 +4149,7 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
                 "group-server2",
             }
 
-            mock_get_access_group_servers.assert_called_once_with(["dev-group"])
+            mock_get_access_group_servers.assert_called_once_with(["dev-group"], requires_fresh_policy=False)
     finally:
         for sid in ("direct-server1", "direct-server2"):
             global_mcp_server_manager.registry.pop(sid, None)
@@ -4316,7 +4318,7 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
 
         assert set(result) == {"direct-server", "group-server"}
         mock_get_perm.assert_not_called()
-        mock_access_groups.assert_called_once_with(["grp-alpha"])
+        mock_access_groups.assert_called_once_with(["grp-alpha"], requires_fresh_policy=False)
     finally:
         global_mcp_server_manager.registry.pop("direct-server", None)
 
@@ -4383,7 +4385,7 @@ class TestAgentMCPPermissions:
                 self._team_servers({"callers": ["server_2", "server_3"]}),
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: neither the agent's owner nor the caller has a personal grant
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({})
@@ -4402,7 +4404,7 @@ class TestAgentMCPPermissions:
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: same seam, keyed by which user is being asked about
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": ["server_1"]})
@@ -4421,7 +4423,7 @@ class TestAgentMCPPermissions:
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: None is the resolver's own "entitlement unresolvable" signal
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": None})
@@ -4538,7 +4540,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_1"]
@@ -4555,7 +4557,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = []  # no agent-level restriction
@@ -4611,7 +4613,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_2", "server_3"]
@@ -4637,7 +4639,7 @@ class TestAgentMCPPermissions:
             ):
                 with patch.object(
                     MCPRequestHandler,
-                    "_get_agent_tool_permissions_for_server",
+                    "get_agent_tool_permissions_for_server",
                     new_callable=AsyncMock,
                     return_value=["tool_a"],
                 ) as mock_agent_tools:
@@ -4669,7 +4671,7 @@ class TestAgentMCPPermissions:
             ):
                 with patch.object(
                     MCPRequestHandler,
-                    "_get_agent_tool_permissions_for_server",
+                    "get_agent_tool_permissions_for_server",
                     new_callable=AsyncMock,
                     return_value=None,
                 ):
@@ -4718,10 +4720,12 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+            result = await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth)
 
         assert sorted(result) == ["server-a", "server-direct"]
-        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(
+            toolset_ids=["toolset-1"], requires_fresh_policy=False
+        )
 
     async def test_get_allowed_mcp_servers_toolset_only_agent_caps_key_servers(self):
         """Regression: an agent whose only grant is a toolset used to resolve to [] and place
@@ -4760,7 +4764,7 @@ class TestAgentMCPPermissions:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
             with pytest.raises(UnloadableEntitlementError):
-                await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+                await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
                     MCPRequestHandler,
@@ -4789,13 +4793,13 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            server_a_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
                 "server-a", user_api_key_auth
             )
-            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            server_b_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
                 "server-b", user_api_key_auth
             )
-            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server(
+            server_c_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
                 "server-c", user_api_key_auth
             )
 
@@ -5833,7 +5837,7 @@ def test_expand_permission_list_does_not_honor_all_proxy_sentinel():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynamically():
+async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynamically(monkeypatch):
     """The TEAM resolver expands the all-proxy sentinel to every registered server and
     picks up a server registered later, so a team scoped to all-proxy tracks the live
     registry without any change to its stored permission. Reverting the team-side
@@ -5849,6 +5853,9 @@ async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynam
     )
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setattr(global_mcp_server_manager, "registry", {})
+    monkeypatch.setattr(global_mcp_server_manager, "config_mcp_servers", {})
 
     for sid in ("srv-x", "srv-y"):
         global_mcp_server_manager.registry[sid] = MCPServer(
@@ -8305,7 +8312,7 @@ class TestUserSubjectTeamUnion:
         ) == ["t1"]
         # An admitted subject never fans out HERE: it resolves one source per team first, and each of
         # those pins a team_id, so this helper only ever answers the single-team question. The fan-out
-        # itself is _admitted_subject_sources' job, asserted below.
+        # itself is admitted_subject_sources' job, asserted below.
         with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
             assert await MCPRequestHandler._team_ids_for_mcp_grant(_make_admitted_subject("u")) == []
         # keyless, no user_id -> nothing
@@ -8868,7 +8875,7 @@ class TestUserSubjectTeamUnion:
         teams["t-member"].organization_id = "org-a"
         auth = _make_admitted_subject("sso-user")
         with self._patch(teams_by_id=teams, user_teams=["t-member", "t-stale"]):
-            sources = await MCPRequestHandler._admitted_subject_sources(auth)
+            sources = await MCPRequestHandler.admitted_subject_sources(auth)
 
         assert [(s.team_id, s.org_id) for s in sources] == [(None, None), ("t-member", "org-a")]
         # The user's own source carries their grants; a team source must NOT, or the team would be
@@ -9673,7 +9680,10 @@ class TestGetUserObjectPermission:
 
     def _prisma_with_user(self, user_row):
         prisma_client = MagicMock()
-        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        row = LiteLLM_UserTable(user_id="human", object_permission_id=user_row.object_permission_id) if user_row is not None else None
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
         return prisma_client
 
     async def test_resolves_through_the_shared_permission_cache(self):
@@ -9688,7 +9698,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission",
                 new_callable=AsyncMock,
@@ -9715,7 +9725,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch("litellm.proxy.auth.auth_checks.get_object_permission", new_callable=AsyncMock) as mock_get_perm,
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
@@ -9734,7 +9744,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
@@ -9748,7 +9758,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
@@ -9765,7 +9775,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission",
                 new_callable=AsyncMock,
@@ -10085,3 +10095,47 @@ class TestScopedSessionAdmission:
     def test_scope_field_cannot_be_forged_through_construction(self):
         forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
         assert forged.mcp_session_resource_server_id is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    cached = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="revoked")
+    current = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="current")
+    cache = DualCache()
+    await cache.async_set_cache(key="fresh-human", value=cached)
+    database = MagicMock()
+    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=current)
+    database.db.litellm_usertable.find_unique = AsyncMock(return_value=cached)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    assert await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True) == "current"
+    database.db.litellm_usertable.find_unique.assert_not_awaited()
+    database.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("unavailable")
+    with pytest.raises(HTTPException) as denied:
+        await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
+    assert denied.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["servers", "tools"])
+async def test_managed_agent_permission_resolution_outage_is_not_an_unrestricted_grant(monkeypatch, operation):
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.types.agents import AgentResponse
+
+    auth = UserAPIKeyAuth(agent_id="managed")
+    auth.managed_agent_policy = AgentResponse(agent_id="managed", agent_name="Managed", agent_card_params={})
+    permission = LiteLLM_ObjectPermissionTable(object_permission_id="policy", mcp_toolsets=["unavailable"])
+    manager = MagicMock()
+    manager.expand_permission_list.return_value = []
+    manager.resolve_toolset_tool_permissions = AsyncMock(side_effect=RuntimeError("policy unavailable"))
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    resolution = (
+        MCPRequestHandler.get_allowed_mcp_servers_for_agent(auth, permission)
+        if operation == "servers"
+        else MCPRequestHandler.get_agent_tool_permissions_for_server("slack", auth, permission)
+    )
+    with pytest.raises(RuntimeError, match="policy unavailable"):
+        await resolution

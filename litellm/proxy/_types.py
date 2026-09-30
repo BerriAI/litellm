@@ -15,6 +15,7 @@ from pydantic import (
     Json,
     JsonValue,
     PositiveInt,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
@@ -3334,6 +3335,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     invoked_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     agent_invocation_cost: float | None = Field(default=None, exclude=True)
     billing_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
+    _managed_delegation_verified: bool = PrivateAttr(default=False)
     managed_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     managed_agent_context: ManagedAgentContext | None = Field(default=None, exclude=True)
     agent_caller: AgentCaller | None = Field(

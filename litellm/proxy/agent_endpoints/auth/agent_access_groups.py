@@ -1,12 +1,15 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_AccessGroupTable
+
+if TYPE_CHECKING:
+    from litellm.types.agents import AgentResponse
 
 AccessGroupIds: TypeAlias = tuple[str, ...]
 AccessGroupIdsLoader: TypeAlias = Callable[[str], Awaitable[AccessGroupIds]]  # mutable-ok: Callable params
@@ -34,7 +37,7 @@ async def _registry_access_group_ids(agent_id: str) -> AccessGroupIds:
     return tuple(agent.access_group_ids or ()) if agent is not None else ()
 
 
-async def _load_access_group(access_group_id: str) -> LoadedAccessGroup:
+async def _load_access_group(access_group_id: str, *, check_db_only: bool = False) -> LoadedAccessGroup:
     from litellm.proxy.auth.auth_checks import get_access_object
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
@@ -47,8 +50,11 @@ async def _load_access_group(access_group_id: str) -> LoadedAccessGroup:
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            check_db_only=check_db_only,
         )
     except HTTPException as e:
+        if check_db_only:
+            raise
         verbose_proxy_logger.warning(
             "Agent access group %s could not be loaded, treating it as empty: %s", access_group_id, e.detail
         )
@@ -59,13 +65,20 @@ async def resolve_agent_access_group_ceiling(
     agent_id: str,
     load_access_group_ids: AccessGroupIdsLoader = _registry_access_group_ids,
     load_access_group: AccessGroupLoader = _load_access_group,
+    *,
+    check_db_only: bool = False,
 ) -> AgentAccessGroupCeiling | None:
     """``None`` when the agent has no access groups attached, so nothing is capped."""
     access_group_ids: Final = await load_access_group_ids(agent_id)
     if not access_group_ids:
         return None
 
-    loaded: Final = await asyncio.gather(*(load_access_group(group_id) for group_id in access_group_ids))
+    loaded: Final = await asyncio.gather(
+        *(
+            _load_access_group(group_id, check_db_only=True) if check_db_only else load_access_group(group_id)
+            for group_id in access_group_ids
+        )
+    )
     groups: Final = tuple(group for group in loaded if group is not None)
     return AgentAccessGroupCeiling(
         access_group_ids=access_group_ids,
@@ -73,3 +86,16 @@ async def resolve_agent_access_group_ceiling(
         mcp_server_ids=frozenset(server_id for group in groups for server_id in group.access_mcp_server_ids),
         agent_ids=frozenset(target_id for group in groups for target_id in group.access_agent_ids),
     )
+
+
+async def resolve_managed_agent_ceilings(agent: "AgentResponse") -> tuple[AgentAccessGroupCeiling, ...]:
+    async def authoritative_group(group_id: str) -> LoadedAccessGroup:
+        return await _load_access_group(group_id, check_db_only=True)
+
+    async def manual_ids(_agent_id: str) -> AccessGroupIds:
+        return tuple(agent.access_group_ids or ())
+
+    manual: Final = await resolve_agent_access_group_ceiling(
+        agent.agent_id, load_access_group_ids=manual_ids, load_access_group=authoritative_group
+    )
+    return (manual,) if manual is not None else ()

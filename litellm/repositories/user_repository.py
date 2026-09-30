@@ -38,9 +38,14 @@ _PLACEHOLDER_ROWS_ADAPTER: Final = TypeAdapter(tuple[SCIMPlaceholder, ...])
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer = use_writer
+
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
-        return self.prisma_client.db.litellm_usertable
+        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        return database.litellm_usertable
 
     @property
     def model_class(self) -> type[LiteLLM_UserTable]:
