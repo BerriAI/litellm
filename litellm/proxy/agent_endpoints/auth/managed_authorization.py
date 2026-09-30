@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from itertools import product
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from pydantic import Field, TypeAdapter, ValidationError
 
@@ -62,6 +62,22 @@ _MANAGED_MCP_ROUTES: Final = tuple(
 )
 
 
+_MODEL_ROUTE_KINDS: Final[
+    Mapping[str, Literal["image_generation", "image_edit", "moderation", "speech", "body", "path"]]
+] = MappingProxyType(
+    {
+        "/images/generations": "image_generation",
+        "/images/edits": "image_edit",
+        "/moderations": "moderation",
+        "/audio/transcriptions": "moderation",
+        "/audio/speech": "speech",
+        "/rerank": "body",
+        "/messages/count_tokens": "body",
+        ":countTokens": "path",
+    }
+)
+
+
 def managed_agent_route_allowed(route: str, method: str | None) -> bool:
     from litellm.proxy.auth.route_checks import RouteChecks
 
@@ -92,26 +108,12 @@ def managed_inference_request(
             raise_identity_failure(
                 AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
             )
-        return {**body, "model": model}
+        return {**body, "model": model}  # mutable-ok: centralized auth hooks add request tags and budget metadata
     if route not in _MANAGED_MODEL_ROUTES and not RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
-        return dict(body)
+        return dict(body)  # mutable-ok: centralized auth hooks add request tags and budget metadata
     from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
 
-    kind: Final = (
-        "image_generation"
-        if route.endswith("/images/generations")
-        else "image_edit"
-        if route.endswith("/images/edits")
-        else "moderation"
-        if route.endswith(("/moderations", "/audio/transcriptions"))
-        else "speech"
-        if route.endswith("/audio/speech")
-        else "body"
-        if route.endswith(("/rerank", "/messages/count_tokens"))
-        else "path"
-        if route.endswith(":countTokens")
-        else "completion"
-    )
+    kind: Final = next((kind for suffix, kind in _MODEL_ROUTE_KINDS.items() if route.endswith(suffix)), "completion")
     endpoint_model: Final = path_model or (
         query_model if route.endswith(("/completions", "/embeddings", "/images/generations", "/images/edits")) else None
     )
@@ -120,7 +122,7 @@ def managed_inference_request(
         raise_identity_failure(
             AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
         )
-    return {**body, "model": effective}
+    return {**body, "model": effective}  # mutable-ok: centralized auth hooks add request tags and budget metadata
 
 
 def managed_agent_policy(auth: "UserAPIKeyAuth | None") -> AgentResponse | None:
@@ -204,12 +206,12 @@ _INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
-    model: Final = body.get("model")
-    if isinstance(model, str) and model.startswith("a2a/"):
-        return model.removeprefix("a2a/") or None
     components: Final = tuple(route.strip("/").split("/"))
     path: Final = components[1:] if components and components[0] == "v1" else components
-    return path[1] if len(path) >= 2 and path[0] == "a2a" else None
+    if len(path) >= 2 and path[0] == "a2a":
+        return path[1] or None
+    model: Final = body.get("model")
+    return model.removeprefix("a2a/") or None if isinstance(model, str) and model.startswith("a2a/") else None
 
 
 async def prepare_agent_invocation(

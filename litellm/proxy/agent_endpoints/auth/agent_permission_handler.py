@@ -200,6 +200,7 @@ class AgentRequestHandler:
                     if key_hash
                     and managed_agent_policy(user_api_key_auth) is None
                     and not user_api_key_auth.is_session_token
+                    and not user_api_key_auth.authenticated_by_custom_auth
                     else user_api_key_auth
                 )
                 fresh_auth: Final = authority.model_copy(

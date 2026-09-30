@@ -7656,3 +7656,53 @@ async def test_managed_invocations_enforce_actor_and_target_rate_policies(
     for scope in stash.reserved_scopes:
         if scope[0] in ("agent", "agent_session"):
             assert increments[handler.create_rate_limit_keys(*scope, "tokens")] == 3 - stash.reserved_tokens
+
+
+@pytest.mark.parametrize("route", ["/a2a/expensive", "/a2a/expensive/message/send", "/v1/a2a/expensive/message/send"])
+async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import invocation_target, prepare_agent_invocation
+    from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
+    from litellm.types.agents import AgentResponse
+
+    expensive: Final = AgentResponse(
+        agent_id="expensive", agent_name="Expensive", agent_card_params={}, rpm_limit=1,
+        litellm_params={"cost_per_query": 0.25},
+    )
+    cheap: Final = AgentResponse(
+        agent_id="cheap", agent_name="Cheap", agent_card_params={}, rpm_limit=100,
+        litellm_params={"cost_per_query": 0.01},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(expensive)
+    registry.register_agent(cheap)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(
+        side_effect=lambda where, include: {"expensive": expensive, "cheap": cheap}[where["agent_id"]]
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    auth: Final = UserAPIKeyAuth(agent_id="caller")
+    auth.managed_agent_policy = AgentResponse(
+        agent_id="caller", agent_name="Caller", agent_card_params={},
+        object_permission={"object_permission_id": "both-targets", "agents": ["expensive", "cheap"]},
+    )
+    body: Final = {"model": "a2a/cheap"}
+    target: Final = invocation_target(route, body)
+    assert target is not None
+    await prepare_agent_invocation(auth, target, AgentIdentityStore.from_client(database))
+    assert auth.invoked_agent_id == "expensive"
+    assert auth.invoked_agent_policy == expensive
+    assert auth.agent_invocation_cost == pytest.approx(0.25)
+    cache: Final = DualCache()
+    limiter: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    await _rpm_request(limiter, cache, auth, "a2a/cheap")
+    with pytest.raises(HTTPException) as denied:
+        await _rpm_request(limiter, cache, auth, "a2a/cheap")
+    assert denied.value.status_code == 429
+    assert "expensive" in str(denied.value.detail)

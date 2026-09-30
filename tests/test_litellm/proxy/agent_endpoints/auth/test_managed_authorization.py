@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.auth.managed_authorization import (
     actor_admission_failure,
     admit_managed_actor,
@@ -78,6 +78,7 @@ def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
         {
             "managed_agent_context": context,
             "requires_fresh_policy": True,
+            "authenticated_by_custom_auth": True,
             "mcp_explicit_grants_only": True,
             "managed_agent_policy": agent(),
             "billing_agent_policy": agent(),
@@ -86,6 +87,8 @@ def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
         }
     )
     assert auth.requires_fresh_policy is False
+    assert auth.authenticated_by_custom_auth is False
+    assert "authenticated_by_custom_auth" not in auth.model_dump()
     assert auth.mcp_explicit_grants_only is False
     assert "mcp_explicit_grants_only" not in auth.model_dump()
     assert auth.managed_agent_context is None
@@ -161,6 +164,9 @@ async def test_agent_history_outage_does_not_permit_legacy_fallback() -> None:
     "route,body,expected",
     [
         ("/a2a/agent", {}, "agent"),
+        ("/a2a/expensive", {"model": "a2a/cheap"}, "expensive"),
+        ("/a2a/expensive/message/send", {"model": "a2a/cheap"}, "expensive"),
+        ("/v1/a2a/expensive/message/send", {"model": "a2a/cheap"}, "expensive"),
         ("/v1/a2a/agent/", {}, "agent"),
         ("/v1/chat/completions", {"model": "a2a/Readable name"}, "Readable name"),
         ("/v1/chat/completions", {"model": "a2a/"}, None),
@@ -496,6 +502,8 @@ async def test_admitted_managed_actor_requires_fresh_policy_so_revocations_bind_
     auth: Final = UserAPIKeyAuth(agent_id="agent")
     auth.managed_agent_context = ManagedAgentContext(agent_id="agent", binding_revision="current", mode="autonomous")
     assert auth.requires_fresh_policy is False
+    assert auth.authenticated_by_custom_auth is False
+    assert "authenticated_by_custom_auth" not in auth.model_dump()
     await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
     assert auth.requires_fresh_policy is True
 
@@ -545,3 +553,27 @@ async def test_ordinary_agent_admission_preserves_legacy_authentication(
     assert auth.agent_id == "agent"
     assert auth.managed_agent_policy is None
     assert auth.requires_fresh_policy is False
+    assert auth.authenticated_by_custom_auth is False
+    assert "authenticated_by_custom_auth" not in auth.model_dump()
+
+
+@pytest.mark.parametrize(
+    "route",
+    tuple(dict.fromkeys(
+        LiteLLMRoutes.openai_routes.value
+        + LiteLLMRoutes.anthropic_routes.value
+        + LiteLLMRoutes.google_routes.value
+    )),
+)
+def test_registered_inference_routes_have_an_explicit_managed_access_decision(route: str) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
+
+    normalized: Final = route.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
+    unsupported: Final = normalized.startswith((
+        "/videos", "/batches", "/files", "/fine_tuning", "/assistants", "/threads", "/utils/",
+        "/vector_stores", "/vector_store/", "/search", "/containers", "/skills", "/claude-code/",
+        "/interactions", "/agents", "/responses/{", "/responses/input_tokens",
+        "/realtime/client_secrets", "/realtime/calls", "/realtime/transcription_sessions",
+    )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
+    concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")
+    assert managed_agent_route_allowed(concrete, None) is not unsupported, route

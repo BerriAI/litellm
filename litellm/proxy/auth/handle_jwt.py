@@ -2965,7 +2965,7 @@ class JWTAuthManager:
             ),
         )
         auth.managed_agent_context = result.get("managed_agent_context")
-        auth._managed_delegation_verified = (
+        auth._managed_delegation_verified = (  # pyright: ignore[reportPrivateUsage]  # JWT admission produces the one-shot proof consumed by managed authorization
             auth.managed_agent_context is not None and auth.managed_agent_context.mode == "delegated"
         )
         return auth

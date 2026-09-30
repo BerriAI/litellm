@@ -1561,6 +1561,7 @@ async def _user_api_key_auth_builder(
                         route=route,
                         parent_otel_span=parent_otel_span,
                     )
+                validated.authenticated_by_custom_auth = True
                 return validated
             elif response is not None and isinstance(response, str):
                 api_key = response
@@ -1576,6 +1577,7 @@ async def _user_api_key_auth_builder(
                     route=route,
                     parent_otel_span=parent_otel_span,
                 )
+            validated.authenticated_by_custom_auth = True
             return validated
 
         ### LITELLM-DEFINED AUTH FUNCTION ###

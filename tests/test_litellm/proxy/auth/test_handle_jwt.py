@@ -8055,7 +8055,10 @@ def test_managed_issuer_requires_configured_audience_validation(
 
 
 @pytest.mark.asyncio
-async def test_managed_jwt_reuses_binding_lookup_but_rechecks_disabled_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("authentication_write", ["success", "revoked", "unavailable"])
+async def test_managed_jwt_reuses_binding_lookup_but_rechecks_disabled_policy(
+    monkeypatch: pytest.MonkeyPatch, authentication_write: str
+) -> None:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.types.proxy.agent_identity import AgentIdentityBinding
 
@@ -8093,6 +8096,16 @@ async def test_managed_jwt_reuses_binding_lookup_but_rechecks_disabled_policy(mo
     database.writer_db.litellm_agentidentity.find_unique.assert_awaited_once()
     assert database.writer_db.litellm_agentstable.find_unique.await_count == 2
     assert database.writer_db.litellm_agentidentity.update_many.await_count == 2
+    if authentication_write != "success":
+        database.writer_db.litellm_agentidentity.update_many.return_value = 0
+        database.writer_db.litellm_agentidentity.update_many.side_effect = (
+            RuntimeError("storage unavailable") if authentication_write == "unavailable" else None
+        )
+        with pytest.raises(HTTPException) as failed_write:
+            await JWTAuthManager.authorize_jwt(**arguments)
+        assert failed_write.value.status_code == (503 if authentication_write == "unavailable" else 403)
+        assert database.writer_db.litellm_agentidentity.update_many.await_count == 3
+        return
     database.writer_db.litellm_agentstable.find_unique.return_value = agent.model_copy(update={"enabled": False})
     with pytest.raises(HTTPException) as denied:
         await JWTAuthManager.authorize_jwt(**arguments)

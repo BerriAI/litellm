@@ -9453,16 +9453,18 @@ async def test_managed_actor_cannot_access_provider_resource_routes(monkeypatch,
     request.scope["method"] = "GET"
     from litellm.types.proxy.agent_identity import ManagedAgentContext
 
-    auth = UserAPIKeyAuth(
-        agent_id="managed", api_key="persisted-key", models=["test-model"],
-        managed_agent_context=(
-            ManagedAgentContext(agent_id="managed", binding_revision="revision", mode="autonomous")
-            if verified_identity else None
-        ),
-    )
+    auth = UserAPIKeyAuth(agent_id="managed", api_key="persisted-key", models=["test-model"])
+    if verified_identity:
+        auth.managed_agent_context = ManagedAgentContext(
+            agent_id="managed", binding_revision="revision", mode="autonomous"
+        )
     with pytest.raises(ProxyException) as denied:
         await _authorize_authenticated_request(auth, request, {}, "/v1/files", "persisted-key")
     assert denied.value.code == "403"
+    if verified_identity:
+        assert denied.value.message == "Agent identities can only access inference and agent discovery routes"
+    else:
+        assert denied.value.message == "This agent requires its bound identity provider token"
 
 
 @pytest.mark.asyncio
@@ -9613,3 +9615,76 @@ async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monk
             UserAPIKeyAuth(agent_id="bound"), request, data, "/v1/chat/completions", "sk-test"
         )
     checks.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enterprise", [False, True])
+@pytest.mark.parametrize("credential", ["custom-credential", "sk-custom-credential"])
+@pytest.mark.parametrize("granted", [False, True])
+async def test_custom_auth_grants_reach_managed_targets_without_a_virtual_key_row(
+    monkeypatch: pytest.MonkeyPatch, enterprise: bool, credential: str, granted: bool
+) -> None:
+    import importlib
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import AgentRequestHandler
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    target: Final = AgentResponse(
+        agent_id="target", agent_name="Target", agent_card_params={}, identity_managed=True,
+        identity=AgentIdentityBinding(
+            agent_id="target", provider="microsoft_entra", tenant_id="tenant", client_id="client",
+            issuer="issuer", revision="current",
+        ),
+    )
+    registry: Final = AgentRegistry()
+    registry.register_agent(target)
+    trusted: Final = UserAPIKeyAuth(
+        api_key=credential, object_permission={"object_permission_id": "custom", "agents": ["target"] if granted else ["other"]}
+    )
+    custom: Final = AsyncMock(return_value=trusted)
+    database: Final = MagicMock()
+    database.get_data = AsyncMock(return_value=None)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    for name, value in {
+        **_proxy_server_attrs_for_custom_auth(user_custom_auth=None if enterprise else custom),
+        "prisma_client": database,
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setattr(module, "enterprise_custom_auth", custom if enterprise else None)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", False, raising=False)
+    admitted: Final = await _user_api_key_auth_builder(
+        request=_alias_request("/a2a/target/message/send", {}), api_key=f"Bearer {credential}",
+        azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
+        azure_apim_header=None, request_data={},
+    )
+    assert await AgentRequestHandler.is_agent_allowed("target", admitted) is granted
+    custom.assert_awaited_once()
+    database.get_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enterprise_custom_auth_key_return_stays_a_proxy_validated_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+
+    custom: Final = AsyncMock(return_value="sk-master-key")
+    for name, value in _proxy_server_attrs_for_custom_auth(user_custom_auth=custom).items():
+        monkeypatch.setattr(proxy_server, name, value)
+    module: Final = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    monkeypatch.setattr(module, "enterprise_custom_auth", custom)
+    admitted: Final = await _user_api_key_auth_builder(
+        request=_alias_request("/v1/chat/completions", {}), api_key="Bearer external-credential",
+        azure_api_key_header="", anthropic_api_key_header=None, google_ai_studio_api_key_header=None,
+        azure_apim_header=None, request_data={},
+    )
+    assert admitted.authenticated_by_custom_auth is False
+    assert admitted.via_virtual_key is True
