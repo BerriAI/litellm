@@ -30,8 +30,9 @@ from litellm.constants import (
     HARNESS_PROCESS_KILL_GRACE_SECONDS,
     HARNESS_SESSION_TOKEN_BYTES,
 )
+from litellm.harness.context import GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
-from litellm.harness.types import Gateway, Harness, Usage
+from litellm.harness.types import Harness, Usage
 
 if TYPE_CHECKING:
     from starlette.requests import Request
@@ -263,7 +264,7 @@ def extract_token(headers: Mapping[str, str]) -> str | None:
 
 def gateway_headers(
     incoming: Mapping[str, str],
-    gateway: Gateway,
+    gateway: GatewayTarget,
     harness: Harness,
     metadata: Mapping[str, Any] | None,
 ) -> dict[str, str]:
@@ -362,7 +363,7 @@ class ModelEndpoint:
         self,
         harness: Harness,
         model: str | None,
-        gateway: Gateway | None,
+        gateway: GatewayTarget | None,
         api_key: str | None = None,
         api_base: str | None = None,
         metadata: Mapping[str, Any] | None = None,
