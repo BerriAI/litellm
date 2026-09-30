@@ -549,7 +549,11 @@ def _next_update(settings: ROISettings, status: ROISyncStatus, report: ROIReport
     ):
         return None
     anchor: Final = status.finished_at or status.started_at or report["synced_at"]
-    return datetime.fromisoformat(anchor.replace("Z", "+00:00")) + timedelta(minutes=settings.update_interval_minutes)
+    parsed: Final = datetime.fromisoformat(anchor.replace("Z", "+00:00"))
+    utc_anchor: Final = (
+        parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    )
+    return utc_anchor + timedelta(minutes=settings.update_interval_minutes)
 
 
 async def run_scheduled_sync() -> None:

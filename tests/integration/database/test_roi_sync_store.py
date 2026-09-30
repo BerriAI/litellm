@@ -72,7 +72,18 @@ async def test_roi_cache_survives_scope_changes_and_uses_writer(monkeypatch: pyt
             ) == ("roi_calculator_pull_new", "roi_calculator_pull_outside-window")
             assert not await store.acquire("scheduled", running, 1440)
             assert await store.acquire("manual", running)
-            assert await store.finish("manual", complete, empty)
+            write_rows(
+                "UPDATE \"LiteLLM_Config\" SET last_run_at = NOW() - INTERVAL '2 minutes' WHERE param_name = %s",
+                ("roi_calculator_sync",),
+                database_url=writer_url,
+            )
+            expired: Final = await store.status()
+            assert expired is not None and expired.phase == "error" and expired.finished_at is not None
+            assert datetime.fromisoformat(expired.finished_at).tzinfo == timezone.utc
+            assert not await store.heartbeat("manual", running)
+            assert await store.acquire("replacement", running)
+            assert not await store.finish("manual", complete, empty)
+            assert await store.finish("replacement", complete, empty)
             assert (
                 len(
                     read_rows(

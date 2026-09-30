@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251 - PrismaWrapper dynamically delegates database methods
 
@@ -117,7 +117,7 @@ class SyncStore:
                     {
                         "running": False,
                         "phase": "error",
-                        "finished_at": rows[0].last_run_at.isoformat(),
+                        "finished_at": rows[0].last_run_at.replace(tzinfo=timezone.utc).isoformat(),
                         "stage": "Sync interrupted",
                         "error": "The worker stopped responding. Run analysis again to resume saved estimates.",
                     }

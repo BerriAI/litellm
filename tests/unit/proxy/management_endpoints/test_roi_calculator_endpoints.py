@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -12,11 +13,13 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
     _estimator_models_from_deployments,
+    _next_update,
     get_roi_config_repository,
     router,
 )
 from litellm.proxy.roi_calculator.estimator import estimator_options
-from litellm.types.roi_calculator import ROISettings
+from litellm.proxy.roi_calculator.sample import sample_report
+from litellm.types.roi_calculator import ROISettings, ROISyncStatus
 
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
 
@@ -187,3 +190,22 @@ def test_sample_preview_does_not_change_live_settings_or_report() -> None:
 def test_schedule_rejects_intervals_under_five_minutes(interval: float) -> None:
     client: Final = _client(LitellmUserRoles.PROXY_ADMIN, _ConfigRepository())
     assert client.put("/roi-calculator/settings", json={"update_interval_minutes": interval}).status_code == 422
+
+
+@pytest.mark.parametrize("anchor", ("2026-09-30T12:00:00", "2026-09-30T12:00:00Z", "2026-09-30T14:00:00+02:00"))
+def test_schedule_normalizes_legacy_and_offset_timestamps(anchor: str) -> None:
+    settings: Final = ROISettings(repos=("example/repo",), estimator_model="estimator", update_interval_minutes=60)
+    status: Final = ROISyncStatus(
+        running=False,
+        phase="error",
+        stage="Interrupted",
+        done=0,
+        total=0,
+        estimated=0,
+        reused=0,
+        needs_attention=0,
+        error=None,
+        finished_at=anchor,
+    )
+    report: Final = sample_report(datetime(2026, 9, 30, tzinfo=timezone.utc))
+    assert _next_update(settings, status, report) == datetime(2026, 9, 30, 13, tzinfo=timezone.utc)
