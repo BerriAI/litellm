@@ -285,7 +285,7 @@ def _pipeline_stream_scope_allows(
     event_type: Final = _PIPELINE_EVENT_HOOKS.get(mode)
     if event_type is None:
         return True
-    return callback._stream_scope_allows(
+    return callback.stream_scope_allows(
         hook_input if streaming_chunks is None else {**hook_input, "stream": True},
         event_type,
     )

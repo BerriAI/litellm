@@ -1100,7 +1100,7 @@ class CustomGuardrail(CustomLogger):
         self.stream_scope_default: GuardrailStreamScope = default
         self.stream_scope_by_hook: MappingProxyType[str, GuardrailStreamScope] = by_hook
 
-    def _stream_scope_allows(self, data: object, event_type: GuardrailEventHooks) -> bool:
+    def stream_scope_allows(self, data: object, event_type: GuardrailEventHooks) -> bool:
         scope: Final = self.stream_scope_by_hook.get(event_type.value, self.stream_scope_default)
         if scope == "both":
             return True
@@ -1152,8 +1152,8 @@ class CustomGuardrail(CustomLogger):
                         data, self.event_hook, event_type
                     )
                     if result is not None:
-                        return bool(result) and self._stream_scope_allows(data, event_type)
-                return self._stream_scope_allows(data, event_type)
+                        return bool(result) and self.stream_scope_allows(data, event_type)
+                return self.stream_scope_allows(data, event_type)
             return False
 
         if (
@@ -1177,8 +1177,8 @@ class CustomGuardrail(CustomLogger):
                 )
             result = EnterpriseCustomGuardrailHelper._should_run_if_mode_by_tag(data, self.event_hook, event_type)
             if result is not None:
-                return bool(result) and self._stream_scope_allows(data, event_type)
-        return self._stream_scope_allows(data, event_type)
+                return bool(result) and self.stream_scope_allows(data, event_type)
+        return self.stream_scope_allows(data, event_type)
 
     def _event_hook_is_event_type(self, event_type: GuardrailEventHooks) -> bool:
         """

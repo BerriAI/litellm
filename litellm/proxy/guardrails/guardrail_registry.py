@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 from pydantic import ValidationError
@@ -630,14 +631,17 @@ class InMemoryGuardrailHandler:
         # Extract additional params from litellm_params to pass to custom guardrail
         # This matches the behavior of other guardrail initializers (e.g., initialize_lakera)
         # and aligns with the documented behavior for custom guardrails
-        if hasattr(litellm_params, "model_dump"):
-            extra_params = litellm_params.model_dump(exclude_none=True)
-        else:
-            extra_params = dict(litellm_params) if litellm_params else {}
-
-        # Remove params that are handled explicitly or are internal
-        for key in ["guardrail", "mode", "default_on", "stream_scope"]:
-            extra_params.pop(key, None)
+        excluded_extra_param_keys: Final = frozenset(("guardrail", "mode", "default_on", "stream_scope"))
+        extra_params_items: Final = (
+            litellm_params.model_dump(exclude_none=True).items()
+            if hasattr(litellm_params, "model_dump")
+            else iter(litellm_params)
+            if litellm_params
+            else ()
+        )
+        extra_params: Final = MappingProxyType(
+            {key: value for key, value in extra_params_items if key not in excluded_extra_param_keys}
+        )
 
         _guardrail_callback: Final = _guardrail_class(
             guardrail_name=guardrail["guardrail_name"],
