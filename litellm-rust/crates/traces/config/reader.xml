@@ -23,9 +23,9 @@
             <networks><ip>::/0</ip></networks>
             <profile>litellm_traces_reader</profile>
             <grants>
-                <query>GRANT SELECT ON default.otel_traces</query>
-                <query>GRANT SELECT ON default.agent_traces</query>
-                <query>GRANT SELECT ON default.spend_logs</query>
+                <query>GRANT SELECT ON litellm.otel_traces</query>
+                <query>GRANT SELECT ON litellm.agent_traces</query>
+                <query>GRANT SELECT ON litellm.spend_logs</query>
             </grants>
         </litellm_traces_reader>
     </users>

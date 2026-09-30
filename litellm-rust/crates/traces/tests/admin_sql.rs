@@ -37,9 +37,10 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
     );
     let client = Client::no_redirect_for_test();
     for sql in [
-        "CREATE TABLE otel_traces (n UInt8) ENGINE = Memory",
-        "INSERT INTO otel_traces VALUES (1)",
-        "CREATE TABLE private_traces (n UInt8) ENGINE = Memory",
+        "CREATE DATABASE litellm",
+        "CREATE TABLE litellm.otel_traces (n UInt8) ENGINE = Memory",
+        "INSERT INTO litellm.otel_traces VALUES (1)",
+        "CREATE TABLE litellm.private_traces (n UInt8) ENGINE = Memory",
     ] {
         client
             .post(&admin_url)
@@ -48,7 +49,10 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
             .await?
             .error_for_status()?;
     }
-    let url = admin_url.replacen("http://", "http://litellm_traces_reader:test_password@", 1);
+    let url = format!(
+        "{}?database=litellm",
+        admin_url.replacen("http://", "http://litellm_traces_reader:test_password@", 1)
+    );
     Ok(Database {
         _container: container,
         url,
@@ -64,7 +68,7 @@ async fn admin_sql_reads_rows_with_enforced_settings(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database = database?;
     let connection = Connection::parse(&format!(
-        "{}?readonly=0&default_format=TabSeparated&query=SELECT+2",
+        "{}&readonly=0&default_format=TabSeparated&query=SELECT+2",
         database.url,
     ))?;
 
@@ -98,7 +102,7 @@ async fn reader_rejects_writes_and_privilege_escalation(
     #[case] sql: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database = database?;
-    let connection = Connection::parse(&format!("{}?readonly=0", database.url))?;
+    let connection = Connection::parse(&format!("{}&readonly=0", database.url))?;
 
     let result = read(&database.client, &connection, sql).await;
 
@@ -142,7 +146,7 @@ async fn admin_sql_enforces_result_row_limit(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database = database?;
     let connection = Connection::parse(&format!(
-        "{}?max_result_rows=0&result_overflow_mode=throw&wait_end_of_query=1",
+        "{}&max_result_rows=0&result_overflow_mode=throw&wait_end_of_query=1",
         database.url,
     ))?;
 
@@ -227,7 +231,7 @@ async fn query_parameters_preserve_values_and_replace_url_parameters(
     #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database = database?;
-    let connection = Connection::parse(&format!("{}?param_value=wrong", database.url))?;
+    let connection = Connection::parse(&format!("{}&param_value=wrong", database.url))?;
     let values = vec![
         "a'b".to_owned(),
         "back\\slash".to_owned(),
