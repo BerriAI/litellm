@@ -324,7 +324,7 @@ ROUTES: Final[tuple[Route, ...]] = (
           lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 5}),
           team_admin=403, others=403, org_admin=200),
     Route("team_update_budget_permitted",
-          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 7}),
+          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 4}),
           team_admin=200, others=403, org_admin=200, permission="max_budget"),
     Route("project_new",
           lambda s: Call("POST", "/project/new", {"team_id": s.team_id, "project_alias": f"matrix-{uuid.uuid4().hex}"}),
