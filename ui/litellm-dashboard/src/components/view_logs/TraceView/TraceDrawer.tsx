@@ -72,7 +72,9 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
       variant="outline"
       size="xs"
       className="shrink-0 gap-1.5 rounded-[4px] font-mono text-[10px] shadow-none"
-      onClick={async () => setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))}
+      onClick={async () =>
+        setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))
+      }
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
       {copied ? "Command copied" : "Copy for agent"}

@@ -11323,8 +11323,8 @@ class ProxyStartupEvent:
               tracing:
                 store: clickhouse       # CLICKHOUSE_URL / _USER / _PASSWORD / _DATABASE
         """
-        settings = general_settings.get("tracing") or {}
-        if settings.get("store") != "clickhouse":
+        settings: Final = general_settings.get("tracing")
+        if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
             return
         try:
             tracing: Final = TraceReceiver.from_env()

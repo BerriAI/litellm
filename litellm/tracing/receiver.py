@@ -103,7 +103,7 @@ class TraceReceiver:
         except OTLPPayloadTooLargeError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         try:
-            await self.store.insert_spans([tenant.stamp(r) for r in rows])
+            await self.store.insert_spans(tuple(tenant.stamp(r) for r in rows))
         except OverflowError as error:
             raise TracingPayloadTooLargeError(str(error)) from error
         return len(rows)

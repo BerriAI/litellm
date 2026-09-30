@@ -10,6 +10,7 @@ Pure functions, no I/O. Two steps:
 
 import json
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
@@ -39,8 +40,10 @@ _FRAMEWORK_SUFFIXES: Final = (
     ".after_model",
 )
 _LLM_OPERATIONS: Final = frozenset({"chat", "text_completion", "generate_content"})
-_LC_ROLES: Final = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
-_OPENINFERENCE_TYPES: Final[dict[str, SpanType]] = {"AGENT": "agent", "LLM": "llm", "TOOL": "tool"}
+_LC_ROLES: Final = MappingProxyType({"human": "user", "ai": "assistant", "system": "system", "tool": "tool"})
+_OPENINFERENCE_TYPES: Final[Mapping[str, SpanType]] = MappingProxyType(
+    {"AGENT": "agent", "LLM": "llm", "TOOL": "tool"}
+)
 
 
 class InvalidOTLPPayloadError(ValueError):
@@ -146,7 +149,7 @@ def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
     name = row["SpanName"]
     if not row["ParentSpanId"] or name == attributes.get("langsmith.metadata.lc_agent_name"):
         return "agent"
-    if kind in {"llm", "tool"}:
+    if kind in ("llm", "tool"):
         return kind
     if name.endswith(_FRAMEWORK_SUFFIXES):
         return "framework"
@@ -156,12 +159,14 @@ def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
 def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
     prompt = _loads(attributes.get("gen_ai.prompt", ""))
     completion = _loads(attributes.get("gen_ai.completion", ""))
-    prompt_payload = prompt if isinstance(prompt, dict) else {}
+    prompt_payload = prompt if isinstance(prompt, dict) else MappingProxyType({})
     if row["ObservationType"] == "llm" and isinstance(completion, dict):
-        messages = prompt_payload.get("messages") or [[]]
+        messages = prompt_payload.get("messages") or ((),)
         batch = messages[0] if messages and isinstance(messages[0], list) else messages
         row["Input"] = (
-            json.dumps([_lc_message(m) for m in batch if isinstance(m, dict)]) if isinstance(batch, list) else ""
+            json.dumps(tuple(_lc_message(m) for m in batch if isinstance(m, dict)))
+            if isinstance(batch, (list, tuple))
+            else ""
         )
         generations: Final = completion.get("generations")
         first: Final = generations[0] if isinstance(generations, list) and generations else None
@@ -169,16 +174,17 @@ def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
         message: Final = item.get("message") if isinstance(item, dict) else None
         generation: Final = message.get("kwargs") if isinstance(message, dict) else None
         if isinstance(generation, dict):
-            row["Output"] = json.dumps(_lc_message({"kwargs": generation}))
+            row["Output"] = json.dumps(_lc_message(generation))
             metadata: Final = generation.get("response_metadata")
             row["LiteLLMRequestId"] = metadata.get("id", "") if isinstance(metadata, dict) else ""
         else:
             row["Output"] = attributes.get("gen_ai.completion", "")
         return
     if row["ObservationType"] == "tool":
-        output = (completion or {}).get("output", completion) if isinstance(completion, dict) else completion
+        output = completion.get("output", completion) if isinstance(completion, dict) else completion
         if isinstance(output, dict) and "update" in output:  # LangGraph Command, e.g. Deep Agents `task`
-            update_messages = (output.get("update") or {}).get("messages") or []
+            update: Final = output.get("update")
+            update_messages = update.get("messages") or () if isinstance(update, dict) else ()
             output = update_messages[-1] if update_messages else output
         if isinstance(output, dict):
             output = output.get("content", output)
@@ -186,11 +192,11 @@ def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
         row["Output"] = output if isinstance(output, str) else json.dumps(output)
         return
     if row["ObservationType"] == "agent":
-        input_messages = (prompt or {}).get("messages") if isinstance(prompt, dict) else None
-        output_messages = (completion or {}).get("messages") if isinstance(completion, dict) else None
+        input_messages = prompt.get("messages") if isinstance(prompt, dict) else None
+        output_messages = completion.get("messages") if isinstance(completion, dict) else None
         # agents built with @traceable take arbitrary args, not a message list: keep the raw payload then
         row["Input"] = (
-            json.dumps([_lc_message(m) for m in input_messages if isinstance(m, dict)])
+            json.dumps(tuple(_lc_message(m) for m in input_messages if isinstance(m, dict)))
             if input_messages
             else attributes.get("gen_ai.prompt", "")
         )

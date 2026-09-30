@@ -121,7 +121,14 @@ export function AgentTracesSection({
   }
 
   if (openTrace !== null) {
-    return <RunView traceId={openTrace.trace_id} traceRef={openTrace.trace_ref} accessToken={accessToken} onBack={() => openRun(null)} />;
+    return (
+      <RunView
+        traceId={openTrace.trace_id}
+        traceRef={openTrace.trace_ref}
+        accessToken={accessToken}
+        onBack={() => openRun(null)}
+      />
+    );
   }
 
   return (

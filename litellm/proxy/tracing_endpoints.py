@@ -23,7 +23,7 @@ from litellm.tracing import (
 from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
 from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
 
-router = APIRouter(tags=["agent tracing"])
+router = APIRouter(tags=("agent tracing",))
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 _ADMIN_ROLES: Final = (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
@@ -51,16 +51,16 @@ def tenant_for(user_api_key_dict: UserAPIKeyAuth) -> Tenant:
 def scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
     """Admins see everything; team members see their team; team-less keys see their own traces."""
     if user_api_key_dict.user_role in _ADMIN_ROLES:
-        return TraceScope(team_ids=[], api_key_hash="")
+        return TraceScope(team_ids=(), api_key_hash="")
     if user_api_key_dict.team_id:
-        return TraceScope(team_ids=[user_api_key_dict.team_id], api_key_hash="")
+        return TraceScope(team_ids=(user_api_key_dict.team_id,), api_key_hash="")
     if not user_api_key_dict.token:
         raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-    return TraceScope(team_ids=[""], api_key_hash=user_api_key_dict.token)
+    return TraceScope(team_ids=("",), api_key_hash=user_api_key_dict.token)
 
 
 async def _read_otlp_body(request: Request) -> bytes:
-    body: Final = bytearray()  # mutable-ok: accumulate request chunks without exceeding the configured body limit
+    body: Final = bytearray()
     async for chunk in request.stream():
         if len(body) + len(chunk) > OTLP_MAX_BODY_BYTES:
             raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
