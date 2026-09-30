@@ -120,13 +120,13 @@ impl NativeTraceStorage {
     fn query<'py>(
         &self,
         py: Python<'py>,
-        query: &str,
+        sql: &str,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] parameters: BTreeMap<
             String,
             Parameter,
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let query = ReadQuery::parse(query).map_err(map_error)?;
+        let query = ReadQuery::parse(sql).map_err(map_error)?;
         let connection = self.reader.clone().ok_or_else(|| {
             PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
         })?;
