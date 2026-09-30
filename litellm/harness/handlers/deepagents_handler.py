@@ -14,7 +14,7 @@ import importlib
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
@@ -41,6 +41,16 @@ from litellm.llms.deepagents.harness.transformation import (
     structured_json,
     update_events,
 )
+
+if TYPE_CHECKING:
+    from langchain_core.callbacks import BaseCallbackHandler
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.runnables import RunnableConfig
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+    from langgraph.graph.state import CompiledStateGraph
+    from langgraph.types import Command
+
+    from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
 
 _MODEL_NODE = "model"
 
@@ -84,7 +94,7 @@ def load_deps() -> DeepAgentsDeps:
 _SHARED_CHECKPOINTER: dict[str, Any] = {}
 
 
-def shared_checkpointer(deps: DeepAgentsDeps) -> Any:
+def shared_checkpointer(deps: DeepAgentsDeps) -> BaseCheckpointSaver:
     """One in-memory checkpointer per process, so resume() works across sessions in-process."""
     saver = _SHARED_CHECKPOINTER.get("saver")
     if saver is None:
@@ -93,13 +103,13 @@ def shared_checkpointer(deps: DeepAgentsDeps) -> Any:
     return saver
 
 
-def build_chat_model(ctx: SessionContext, deps: DeepAgentsDeps) -> Any:
+def build_chat_model(ctx: SessionContext, deps: DeepAgentsDeps) -> BaseChatModel:
     """The LangChain chat model for this session. Tests monkeypatch this."""
     return deps.chat_litellm(**chat_model_kwargs(ctx))
 
 
 class DeepAgentsHandler(BaseHarnessHandler):
-    def __init__(self, config: Any) -> None:
+    def __init__(self, config: BaseHarnessConfig) -> None:
         super().__init__(config)
         self._deps: DeepAgentsDeps | None = None
         self._agent: Any = None
@@ -152,7 +162,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
     async def turn(self, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
         agent, deps = self._require_agent()
         run_config = self._run_config(ctx, deps.backend.UsageCallback(ctx, ctx.model))
-        payload: Any = {"messages": [{"role": "user", "content": prompt}]}
+        payload: dict[str, object] | Command = {"messages": [{"role": "user", "content": prompt}]}
         while True:
             state = TurnState()
             async for event in self._stream_pass(agent, payload, run_config, state):
@@ -174,9 +184,17 @@ class DeepAgentsHandler(BaseHarnessHandler):
         await self._finish_turn(ctx, agent, run_config)
 
     async def _stream_pass(
-        self, agent: Any, payload: Any, run_config: dict[str, Any], state: TurnState
+        self,
+        agent: CompiledStateGraph,
+        payload: dict[str, object] | Command,
+        run_config: RunnableConfig,
+        state: TurnState,
     ) -> AsyncIterator[Event]:
-        async for mode, chunk in agent.astream(payload, run_config, stream_mode=["messages", "updates"]):
+        async for part in agent.astream(payload, run_config, stream_mode=["messages", "updates"]):
+            # A list stream_mode yields (mode, chunk) tuples; LangGraph's overloads don't say so.
+            if not isinstance(part, tuple) or len(part) != 2:
+                continue
+            mode, chunk = part
             if mode == "messages":
                 message, meta = chunk
                 if isinstance(meta, Mapping) and meta.get("langgraph_node") == _MODEL_NODE:
@@ -187,7 +205,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
                 for event in update_events(chunk, self._skip_tools):
                     yield event
 
-    async def _finish_turn(self, ctx: SessionContext, agent: Any, run_config: dict[str, Any]) -> None:
+    async def _finish_turn(self, ctx: SessionContext, agent: CompiledStateGraph, run_config: RunnableConfig) -> None:
         snapshot = await agent.aget_state(run_config)
         values = snapshot.values or {}
         ctx.final_text = final_ai_text(values.get("messages") or [])
@@ -199,8 +217,8 @@ class DeepAgentsHandler(BaseHarnessHandler):
             raise HarnessError("Deep Agents session is not started")
         return self._agent, self._deps
 
-    def _run_config(self, ctx: SessionContext, usage_callback: Any) -> dict[str, Any]:
-        run_config: dict[str, Any] = {
+    def _run_config(self, ctx: SessionContext, usage_callback: BaseCallbackHandler | None) -> RunnableConfig:
+        run_config: RunnableConfig = {
             "configurable": {"thread_id": self._thread_id or ctx.session_id},
             "recursion_limit": recursion_limit(ctx),
         }
