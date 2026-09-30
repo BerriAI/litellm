@@ -40,7 +40,7 @@ SELECT *, count() OVER () AS eligible FROM (
           OR JSONExtractString(metadata,'requester_metadata',k)=v OR (k='tag' AND has(request_tags,v)),
           {filter_keys:Array(String)},{filter_values:Array(String)})
       AND ({service:String}='' OR model_group={service:String})
-      AND NOT has(request_tags,'litellm-engine')
+      AND NOT JSONExtractBool(metadata,'litellm_lens_internal')
       AND ({source:String}!='both' OR (team_id,api_key,response_id) NOT IN (
           SELECT TeamId,ApiKeyHash,LiteLLMRequestId FROM otel_traces
           WHERE ({all_teams:UInt8}=1 OR TeamId={team:String})

@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 import litellm
+from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.proxy.engine.models import Engine, Job, ModelRequest, ModelResult
 from litellm.proxy.engine.repository import EngineRepository
 from litellm.proxy.engine.state import current_job, renew_budget, replace_job
@@ -110,23 +111,24 @@ async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker_id: s
 
     if await repo.update(engine.id, reserve) is None:
         raise HTTPException(409, "Could not reserve analysis budget")
-    response: Final = await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router forwards provider-specific keyword arguments
-        model=job.settings.model,
-        messages=[  # mutable-ok: Router requires OpenAI message dictionaries in a list
-            {"role": "system", "content": _SYSTEM},  # mutable-ok: provider message dictionary
-            {"role": "user", "content": body.prompt},  # mutable-ok: provider message dictionary
-        ],
-        max_tokens=4096,
-        stream=False,
-        timeout=120,
-        num_retries=0,
-        disable_fallbacks=True,
-        response_format={"type": "json_object"},  # mutable-ok: provider response-format JSON object
-        metadata={  # mutable-ok: Router mutates metadata
-            "tags": ["litellm-engine"],  # mutable-ok: logging callbacks require a tag list
-            "user_api_key_team_id": engine.scope.team_id,
-        },
-    )
+    with lens_analysis():
+        response: Final = await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router forwards provider-specific keyword arguments
+            model=job.settings.model,
+            messages=[  # mutable-ok: Router requires OpenAI message dictionaries in a list
+                {"role": "system", "content": _SYSTEM},  # mutable-ok: provider message dictionary
+                {"role": "user", "content": body.prompt},  # mutable-ok: provider message dictionary
+            ],
+            max_tokens=4096,
+            stream=False,
+            timeout=120,
+            num_retries=0,
+            disable_fallbacks=True,
+            response_format={"type": "json_object"},  # mutable-ok: provider response-format JSON object
+            metadata={  # mutable-ok: Router mutates metadata
+                "tags": ["litellm-engine"],  # mutable-ok: logging callbacks require a tag list
+                "user_api_key_team_id": engine.scope.team_id,
+            },
+        )
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     cost: Final = completion_charge(deployments, response, estimate)
 

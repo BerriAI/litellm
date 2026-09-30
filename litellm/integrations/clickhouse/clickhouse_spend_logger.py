@@ -14,6 +14,7 @@ from typing import Any, Final
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
+from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
 from litellm.tracing.types import SpendLogRecord
 from litellm.types.utils import StandardLoggingPayload
@@ -143,7 +144,7 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         trace_id=trace_id,
         span_id=span_id,
         request_tags=_request_tags(payload.get("request_tags")),
-        metadata=_json_mapping(metadata),
+        metadata=_json_mapping(MappingProxyType({**metadata, "litellm_lens_internal": is_lens_analysis()})),
         messages="" if redact else _json(payload.get("messages")),
         response="" if redact else _json(payload.get("response")),
     )

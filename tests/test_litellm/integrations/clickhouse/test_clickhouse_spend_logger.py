@@ -5,7 +5,7 @@ Tests for the `clickhouse` spend-log callback.
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -19,6 +19,7 @@ from litellm.integrations.clickhouse.clickhouse_spend_logger import (
     strip_cache_hit_suffix,
 )
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils import litellm_logging
 from litellm.tracing.types import SpendLogRecord
@@ -206,3 +207,26 @@ async def test_clickhouse_callback_resolves_via_factory(monkeypatch):
     assert isinstance(created, ClickHouseSpendLogger)
     assert litellm_logging._init_custom_logger_compatible_class("clickhouse", None, None) is created
     assert litellm_logging.get_custom_logger_compatible_class("clickhouse") is created
+
+
+@pytest.mark.asyncio
+async def test_caller_tags_cannot_impersonate_internal_lens_analysis():
+    import asyncio
+
+    payload: Final = _payload(
+        request_tags=["litellm-engine"],
+        metadata={"litellm_lens_internal": True},
+    )
+
+    async def logged_internal():
+        return spend_log_row_from_payload(payload, {})
+
+    external: Final = spend_log_row_from_payload(payload, {})
+    with lens_analysis():
+        callback: Final = asyncio.create_task(logged_internal())
+    internal: Final = await callback
+    following: Final = spend_log_row_from_payload(payload, {})
+    assert json.loads(external["metadata"])["litellm_lens_internal"] is False
+    assert json.loads(internal["metadata"])["litellm_lens_internal"] is True
+    assert json.loads(following["metadata"])["litellm_lens_internal"] is False
+    assert external["request_tags"] == ["litellm-engine"]
