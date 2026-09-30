@@ -268,6 +268,33 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 
 </details>
 
+<details>
+<summary><b>Agent Harnesses</b> - Run Claude Code, Codex, OpenCode or Deep Agents on any model (Python SDK)</summary>
+
+### Python SDK - Agent Harnesses
+
+```python
+import litellm
+from litellm import sandbox
+from litellm.harness import Gateway, Harness
+
+result = litellm.harness.run(
+    Harness.CLAUDE_CODE,  # or Harness.CODEX, Harness.OPENCODE, Harness.DEEPAGENTS
+    "Find why tests/test_router.py is flaky and fix it.",
+    sandbox=sandbox.local("./repo"),
+    model="claude-sonnet-4-5",
+    gateway=Gateway(api_base="http://0.0.0.0:4000", api_key="sk-1234"),
+)
+
+print(result.text, result.cost, [f.path for f in result.files])
+```
+
+Every model call the harness makes goes through your AI Gateway, tagged `harness,claude_code`. Install `starlette uvicorn` plus the harness CLI (`claude`, `codex` or `opencode`), or `deepagents langchain-litellm` for Deep Agents.
+
+[**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
+
+</details>
+
 ### Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
