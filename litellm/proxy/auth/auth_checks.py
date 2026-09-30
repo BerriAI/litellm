@@ -6611,6 +6611,18 @@ def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
     return "*" in allowed_model_pattern
 
 
+def _get_rag_query_vector_store_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    retrieval_config: Final = request_body.get("retrieval_config")
+    if not isinstance(retrieval_config, dict):
+        return ()
+
+    vector_store_id: Final[object] = retrieval_config.get("vector_store_id")
+    if isinstance(vector_store_id, str) and vector_store_id:
+        return (vector_store_id,)
+
+    return ()
+
+
 async def vector_store_access_check(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -6630,12 +6642,20 @@ async def vector_store_access_check(
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
 
-    if litellm.vector_store_registry is None:
-        verbose_proxy_logger.debug("Vector store registry not found, skipping vector store access check")
-        return True
-
-    vector_store_ids_to_run: Final = litellm.vector_store_registry.get_vector_store_ids_to_run(
-        non_default_params=request_body, tools=request_body.get("tools", None)
+    registry_ids: Final = (
+        (
+            litellm.vector_store_registry.get_vector_store_ids_to_run(
+                non_default_params=request_body, tools=request_body.get("tools", None)
+            )
+            or ()
+        )
+        if litellm.vector_store_registry is not None
+        else ()
+    )
+    vector_store_ids_to_run: Final = list(  # mutable-ok: _can_object_call_vector_stores takes list[str]
+        dict.fromkeys(
+            [*registry_ids, *_get_rag_query_vector_store_ids(request_body)]  # mutable-ok: preserve ordered IDs
+        )
     )
     if not vector_store_ids_to_run:
         verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")

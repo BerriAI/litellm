@@ -94,6 +94,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
 )
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
 def _rendered_log_message(call):
@@ -1594,6 +1595,131 @@ async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_r
         result = await vector_store_access_check(
             request_body={"messages": [{"role": "user", "content": "test"}]},
             team_object=team_object,
+            valid_token=valid_token,
+        )
+
+    assert result is True
+    find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vector_store_registry", [None, VectorStoreRegistry()])
+@pytest.mark.parametrize(
+    "vector_store_id, expected_error_type",
+    [
+        ("KBOTHERTEAM99", ProxyErrorTypes.team_vector_store_access_denied),
+        ("KBALLOWED123", None),
+    ],
+)
+async def test_vector_store_access_check_enforces_rag_query_team_permissions(
+    vector_store_registry: VectorStoreRegistry | None,
+    vector_store_id: str,
+    expected_error_type: ProxyErrorTypes | None,
+) -> None:
+    request_body: Final = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "test"}],
+        "retrieval_config": {
+            "vector_store_id": vector_store_id,
+            "custom_llm_provider": "bedrock",
+        },
+    }
+    team_object: Final = MagicMock(object_permission_id="team-permission")
+    team_permissions: Final = MagicMock(vector_stores=["KBALLOWED123"])
+    mock_prisma_client: Final = MagicMock()
+    find_unique: Final = AsyncMock(return_value=team_permissions)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
+
+    with (
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", vector_store_registry
+        ),
+    ):
+        if expected_error_type is None:
+            result: Final = await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=None,
+            )
+            assert result is True
+            return
+
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=None,
+            )
+
+    assert exc_info.value.type == expected_error_type
+
+
+@pytest.mark.asyncio
+async def test_vector_store_access_check_enforces_rag_query_key_permissions() -> None:
+    request_body: Final = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "test"}],
+        "retrieval_config": {
+            "vector_store_id": "KBOTHERTEAM99",
+            "custom_llm_provider": "bedrock",
+        },
+    }
+    valid_token: Final = UserAPIKeyAuth(token="test-token", object_permission_id="key-permission")
+    key_permissions: Final = MagicMock(vector_stores=["KBALLOWED123"])
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=key_permissions)
+
+    with (
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", None
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=None,
+                valid_token=valid_token,
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"retrieval_config": []},
+        {"retrieval_config": {}},
+        {"retrieval_config": {"vector_store_id": ""}},
+        {"retrieval_config": {"vector_store_id": 123}},
+        {},
+    ],
+)
+async def test_vector_store_access_check_skips_invalid_rag_query_vector_store_ids(
+    request_body: dict[str, object],
+) -> None:
+    valid_token: Final = UserAPIKeyAuth(token="test-token", object_permission_id="key-permission")
+    mock_prisma_client: Final = MagicMock()
+    find_unique: Final = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
+
+    with (
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", None
+        ),
+    ):
+        result: Final = await vector_store_access_check(
+            request_body=request_body,
+            team_object=None,
             valid_token=valid_token,
         )
 
