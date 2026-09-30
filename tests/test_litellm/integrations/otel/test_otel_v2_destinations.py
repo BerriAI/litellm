@@ -157,7 +157,7 @@ class TestRoutingMode:
 
     OPERATOR_SINK = ("https://cloud.langfuse.com/api/public/otel/v1/traces", (("authorization", "Basic op"),))
     #: What a tenant destination for that same project looks like before normalizing:
-    #: no signal path yet, and the header name cased the way the backend writes it.
+    #: the signal path is present, and the header name cased the way the backend writes it.
     SAME_ACCOUNT_ENDPOINT = "https://cloud.langfuse.com/api/public/otel/v1/traces"
 
     @staticmethod
