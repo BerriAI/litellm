@@ -3,11 +3,14 @@ Lazy registration for optional feature routers. Each LAZY_FEATURES entry
 imports its module only on the first request matching its path prefix,
 saving ~700 MB at idle for deployments that don't use these features.
 First hit pays the import cost (1-3 s for heavy modules); /openapi.json
-omits each feature's routes until the feature is warmed.
+omits each feature's routes until the feature is warmed. Setting
+LITELLM_DISABLE_LAZY_ROUTES registers every feature while the app is built
+instead, so the route table is complete before the first request.
 """
 
 import asyncio
 import importlib
+import os
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
@@ -423,57 +426,93 @@ def _in_registry_order(
 async def _force_load(app: "FastAPI", feat: LazyFeature, features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> bool:
     """Import + register a lazy feature exactly once per (app, module).
     Shared by the middleware and the /lazy/warm endpoint."""
-    if not hasattr(app.state, "lazy_loaded"):
-        app.state.lazy_loaded = set()
-        app.state.lazy_locks = {}
-    lock: Final = app.state.lazy_locks.setdefault(feat.module_path, asyncio.Lock())
-    async with lock:
-        if feat.module_path in app.state.lazy_loaded:
+    async with _lazy_lock(app, feat.module_path):
+        if feat.module_path in _lazy_loaded(app):
             return False
         try:
             # Import on a thread (heavy modules take 1-3 s). register_fn
             # mutates app.router.routes, so it stays on the loop thread.
             loop: Final = asyncio.get_running_loop()
             module: Final = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
-            before: Final = len(app.router.routes)
-            feat.register_fn(app, module)
-            previous: Final[Mapping[str, tuple[BaseRoute, ...]]] = (
-                app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
-            )
-            lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]]] = MappingProxyType(
-                {**previous, feat.module_path: tuple(app.router.routes[before:])}
-            )
-            app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
-            app.router.routes[:] = hot_routes_first(  # rebind-ok: the app owns its route table
-                _in_registry_order(app.router.routes, lazy_routes, features, _lazy_slots(app))
-            )
-            app.state.lazy_loaded.add(feat.module_path)
-            app.openapi_schema = None
-            verbose_proxy_logger.info(
-                "Lazy-loaded optional feature %r (module: %s)",
-                feat.name,
-                feat.module_path,
-            )
+            _register_feature(app, feat, module, features)
             return True
         except Exception as exc:
-            # Mark loaded anyway so we don't retry on every request.
-            app.state.lazy_loaded.add(feat.module_path)
-            verbose_proxy_logger.warning(
-                "Failed to lazy-load optional feature %r (module: %s): %s. "
-                "This feature's endpoints will return 404 until restart.",
-                feat.name,
-                feat.module_path,
-                exc,
-            )
+            _mark_failed(app, feat, exc)
             return False
 
 
-def attach_lazy_features(app: "FastAPI") -> None:
-    app.include_router(_make_warmup_router(app))
-    app.add_middleware(LazyFeatureMiddleware, fastapi_app=app)
+def _lazy_loaded(app: "FastAPI") -> set[str]:
+    if not hasattr(app.state, "lazy_loaded"):
+        app.state.lazy_loaded = set[str]()
+        app.state.lazy_locks = dict[str, asyncio.Lock]()
+    loaded: Final[set[str]] = app.state.lazy_loaded
+    return loaded
 
 
-def _make_warmup_router(app: "FastAPI") -> "APIRouter":
+def _lazy_lock(app: "FastAPI", module_path: str) -> asyncio.Lock:
+    if not hasattr(app.state, "lazy_locks"):
+        app.state.lazy_locks = dict[str, asyncio.Lock]()
+    locks: Final[dict[str, asyncio.Lock]] = app.state.lazy_locks
+    return locks.setdefault(module_path, asyncio.Lock())
+
+
+def _register_feature(app: "FastAPI", feat: LazyFeature, module: object, features: tuple[LazyFeature, ...]) -> None:
+    before: Final = len(app.router.routes)
+    feat.register_fn(app, module)
+    previous: Final[Mapping[str, tuple[BaseRoute, ...]]] = (
+        app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
+    )
+    lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]]] = MappingProxyType(
+        {**previous, feat.module_path: tuple(app.router.routes[before:])}
+    )
+    app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
+    app.router.routes[:] = hot_routes_first(  # rebind-ok: the app owns its route table
+        _in_registry_order(app.router.routes, lazy_routes, features, _lazy_slots(app))
+    )
+    _lazy_loaded(app).add(feat.module_path)
+    app.openapi_schema = None
+    verbose_proxy_logger.info(
+        "Lazy-loaded optional feature %r (module: %s)",
+        feat.name,
+        feat.module_path,
+    )
+
+
+def _mark_failed(app: "FastAPI", feat: LazyFeature, exc: Exception) -> None:
+    # Mark loaded anyway so we don't retry on every request.
+    _lazy_loaded(app).add(feat.module_path)
+    verbose_proxy_logger.warning(
+        "Failed to lazy-load optional feature %r (module: %s): %s. "
+        "This feature's endpoints will return 404 until restart.",
+        feat.name,
+        feat.module_path,
+        exc,
+    )
+
+
+def lazy_routes_disabled() -> bool:
+    return os.getenv("LITELLM_DISABLE_LAZY_ROUTES", "").lower() in ("1", "true", "yes", "on")
+
+
+def register_all_features(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
+    """Register every feature router now, in registry order, so app.routes is
+    complete before the app serves its first request."""
+    for feat in features:
+        try:
+            _register_feature(app, feat, importlib.import_module(feat.module_path), features)
+        except Exception as exc:
+            _mark_failed(app, feat, exc)
+
+
+def attach_lazy_features(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
+    if lazy_routes_disabled():
+        register_all_features(app, features)
+        return
+    app.include_router(_make_warmup_router(app, features))
+    app.add_middleware(LazyFeatureMiddleware, fastapi_app=app, features=features)
+
+
+def _make_warmup_router(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> "APIRouter":
     """POST /lazy/warm/{name}: load a feature and return its partial openapi
     so the Swagger plugin can merge in-place without a full /openapi.json refetch.
     Requires auth — anyone who can hit the proxy can already trigger the same
@@ -492,13 +531,13 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
         dependencies=[Depends(user_api_key_auth)],
     )
     async def warm(name: str):
-        feat: Final = next((f for f in LAZY_FEATURES if f.name == name), None)
+        feat: Final = next((f for f in features if f.name == name), None)
         if feat is None:
             raise HTTPException(404, f"unknown lazy feature: {name}")
         if feat.persistent_swagger_stub:
             return {"stub_path": None, "paths": {}, "components": {"schemas": {}}}
 
-        await _force_load(app, feat)
+        await _force_load(app, feat, features)
 
         feat_routes: Final = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
         full: Final = get_openapi(title=app.title, version=app.version, routes=feat_routes)
@@ -578,6 +617,6 @@ def lazy_tag_to_prefix() -> dict[str, str]:
     because /openapi.json already has full route info."""
     from litellm.proxy._lazy_openapi_snapshot import load_snapshot
 
-    if load_snapshot():
+    if lazy_routes_disabled() or load_snapshot():
         return {}
     return {feat.name: feat.path_prefixes[0] for feat in LAZY_FEATURES if not feat.persistent_swagger_stub}
