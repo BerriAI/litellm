@@ -168,7 +168,7 @@ async fn admin_sql_enforces_response_byte_limit(
     let result = read(
         &database.client,
         &connection,
-        "SELECT repeat('x', 5 * 1024 * 1024)",
+        "SELECT repeat('x', 512 * 1024) AS payload FROM numbers(9)",
     )
     .await;
 
