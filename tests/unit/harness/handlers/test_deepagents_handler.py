@@ -275,7 +275,7 @@ async def test_turn_and_history_before_start_and_after_stop(
 
 async def test_start_validates_model(tmp_path: Path, fake_model) -> None:
     fake_model([final("ok")])
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="needs model="):
         await started(make_ctx(tmp_path, model=None))
 
 
