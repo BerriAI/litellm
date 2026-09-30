@@ -140,3 +140,7 @@ export const getDeletedKeysTableColumns = (): ColumnDef<DeletedKeyResponse>[] =>
     cell: ({ row }) => <UserLinkCell userId={row.original.deleted_by} />,
   },
 ];
+
+export const DELETED_KEYS_SORT_FIELDS: readonly string[] = getDeletedKeysTableColumns().flatMap((column) =>
+  column.enableSorting && column.id ? [column.id] : [],
+);
