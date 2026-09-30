@@ -155,6 +155,7 @@ def get_litellm_params(
     allm_passthrough_route=None,
     preset_cache_key=None,
     no_log=None,
+    cost_per_second: float | None = None,
     input_cost_per_second=None,
     input_cost_per_token=None,
     output_cost_per_token=None,
@@ -216,6 +217,7 @@ def get_litellm_params(
         "preset_cache_key": preset_cache_key,
         "no-log": no_log or kwargs.get("no-log"),
         "stream_response": {},  # litellm_call_id: ModelResponse Dict
+        "cost_per_second": cost_per_second,
         "input_cost_per_token": input_cost_per_token,
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,

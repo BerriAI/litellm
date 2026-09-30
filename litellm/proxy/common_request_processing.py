@@ -2202,6 +2202,9 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
+        prefetch_model = self.data.get("model")
+        if llm_router is not None and isinstance(prefetch_model, str):
+            llm_router.arm_routing_read_prefetch(prefetch_model, self.data)
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,

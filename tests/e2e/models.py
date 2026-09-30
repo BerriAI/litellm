@@ -568,6 +568,17 @@ class AnthropicMessagesBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+class ResponsesStreamBody(BaseModel):
+    """POST /v1/responses body in the subset the spend tests stream with.
+    `input` stays a plain string: the tests only drive single-turn prompts."""
+
+    model: str
+    input: str
+    stream: bool = True
+    max_output_tokens: int | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
 class CountTokensBody(BaseModel):
     """POST /v1/messages/count_tokens body: the /v1/messages shape minus
     max_tokens (the endpoint only counts the prompt)."""
