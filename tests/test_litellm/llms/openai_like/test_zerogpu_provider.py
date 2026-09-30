@@ -17,6 +17,7 @@ ZEROGPU_MODELS: Final = (
     "gpt-5.4-nano",
     "gpt-5.6-luna",
     "gpt-oss-120b",
+    "LFM2.5-1.2B-Instruct",
     "llama-3.1-8b-instruct-fast",
     "qwen3-30b-a3b-fp8",
 )
@@ -100,11 +101,11 @@ def test_zerogpu_completion_is_charged_at_the_cost_map_rates(model: str):
 
 
 @pytest.mark.parametrize(
-    ("model", "forwards_reasoning_effort"),
-    [("gpt-5.6-luna", True), ("gpt-oss-120b", False)],
+    ("model", "forwards_tools", "forwards_reasoning_effort"),
+    [("gpt-5.6-luna", True, True), ("gpt-oss-120b", True, False), ("LFM2.5-1.2B-Instruct", False, False)],
 )
-def test_tools_reach_zerogpu_and_reasoning_effort_only_for_reasoning_models(
-    model: str, forwards_reasoning_effort: bool
+def test_tools_and_reasoning_effort_reach_zerogpu_only_for_models_that_support_them(
+    model: str, forwards_tools: bool, forwards_reasoning_effort: bool
 ):
     requests: Final[list[httpx.Request]] = []
     client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
@@ -120,12 +121,12 @@ def test_tools_reach_zerogpu_and_reasoning_effort_only_for_reasoning_models(
             client=client,
         )
 
+    tools: Final = {"tools": [WEATHER_TOOL], "tool_choice": "auto"} if forwards_tools else {}
     reasoning: Final = {"reasoning_effort": "high"} if forwards_reasoning_effort else {}
     assert json.loads(requests[0].content) == {
         "model": model,
         "messages": [{"role": "user", "content": "weather in Paris?"}],
-        "tools": [WEATHER_TOOL],
-        "tool_choice": "auto",
+        **tools,
         **reasoning,
     }
 
