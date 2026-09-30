@@ -1608,6 +1608,11 @@ async def _list_mcp_resource_templates(
 
 
 def _registered_tool_metadata(name: str, registered: RegisteredTool, server: MCPServer) -> MCPTool:
+    """The tool as ``tools/list`` served it (pinned, overridden, guardrail-masked) when a listing was
+    recorded for ``server``, else the registry entry with the admin description override applied."""
+    listed: Final = global_mcp_server_manager.get_listed_tool(server, name)
+    if listed is not None:
+        return listed
     overrides: Final = server.tool_name_to_description
     description: Final = overrides.get(name, registered.description) if overrides else registered.description
     return MCPTool(name=name, description=description, input_schema=registered.input_schema)

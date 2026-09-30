@@ -24,6 +24,7 @@ from mcp.types import (
     TextContent,
     TextResourceContents,
 )
+from mcp.types import Tool as MCPTool
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION, MODERN_PROTOCOL_VERSIONS
 from pydantic import TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
@@ -86,9 +87,6 @@ def cleanup_mcp_global_state():
         yield
 
 
-
-
-
 def _call_tool_params(name, arguments=None):
     from mcp.types import CallToolRequestParams
 
@@ -99,6 +97,7 @@ def _paged_params():
     from mcp.types import PaginatedRequestParams
 
     return PaginatedRequestParams()
+
 
 @pytest.mark.asyncio
 async def test_mcp_server_tool_call_body_contains_request_data(_mcp_request_ctx):
@@ -296,7 +295,9 @@ async def test_mcp_server_tool_call_relays_upstream_auth_error_as_iserror(_mcp_r
         ):
             with patch("litellm.proxy.proxy_server.proxy_config", MagicMock()):
                 with patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger", mock_logger):
-                    result = await mcp_server_tool_call(_mcp_request_ctx(), _call_tool_params("test_tool", {"param": "value"}))
+                    result = await mcp_server_tool_call(
+                        _mcp_request_ctx(), _call_tool_params("test_tool", {"param": "value"})
+                    )
 
     assert result.is_error is True
     # The dedicated MCPUpstreamAuthError branch (not the generic Exception fallthrough) produces this
@@ -1168,20 +1169,32 @@ async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, 
         else BlobResourceContents(uri=uri, blob="aGVsbG8=", mimeType="image/png", meta=metadata)
     )
     with (
-        patch.object(server, "get_or_extract_auth_context", AsyncMock(return_value=(caller, None, ["catalog"], None, None, None, None))),
+        patch.object(
+            server,
+            "get_or_extract_auth_context",
+            AsyncMock(return_value=(caller, None, ["catalog"], None, None, None, None)),
+        ),
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream_server])),
-        patch.object(operations.global_mcp_server_manager, "read_resource_from_server", AsyncMock(return_value=ReadResourceResult(contents=[content]))),
+        patch.object(
+            operations.global_mcp_server_manager,
+            "read_resource_from_server",
+            AsyncMock(return_value=ReadResourceResult(contents=[content])),
+        ),
     ):
         result: Final = await server.read_resource(_mcp_request_ctx(), ReadResourceRequestParams(uri=uri))
 
     assert result.model_dump(mode="json", by_alias=True, exclude_none=True) == {
-        "cacheScope": "private", "resultType": "complete", "ttlMs": 0,
-        "contents": [{
-            "uri": uri,
-            "mimeType": "text/plain" if kind == "text" else "image/png",
-            "text" if kind == "text" else "blob": "hello world" if kind == "text" else "aGVsbG8=",
-            **({"_meta": metadata} if metadata is not None else {}),
-        }],
+        "cacheScope": "private",
+        "resultType": "complete",
+        "ttlMs": 0,
+        "contents": [
+            {
+                "uri": uri,
+                "mimeType": "text/plain" if kind == "text" else "image/png",
+                "text" if kind == "text" else "blob": "hello world" if kind == "text" else "aGVsbG8=",
+                **({"_meta": metadata} if metadata is not None else {}),
+            }
+        ],
     }
 
 
@@ -1675,7 +1688,9 @@ async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error(
     with (
         patch(  # test-quality-ok: the protocol handler reads auth from module context; no injection seam
             "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
-            new=AsyncMock(return_value=(None, None, None, None, None, None, None), side_effect=denial if denial_at_auth else None),
+            new=AsyncMock(
+                return_value=(None, None, None, None, None, None, None), side_effect=denial if denial_at_auth else None
+            ),
         ),
         patch(  # test-quality-ok: the listing helper is the handler's only collaborator; the suite's seam
             "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
@@ -1914,8 +1929,8 @@ async def test_streamable_http_session_manager_is_stateless():
         ("DELETE", b"", False),
     ),
 )
-async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(_mcp_request_ctx,
-    debug: bool, method: str, request_body: bytes, stateful: bool
+async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(
+    _mcp_request_ctx, debug: bool, method: str, request_body: bytes, stateful: bool
 ) -> None:
     from starlette.requests import Request
     from starlette.types import Message, Receive, Scope, Send
@@ -4057,7 +4072,8 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
     # parsed, with a nested "method" key in the first bytes to trip a flat
     # substring heuristic.
     response_prefix: Final = (
-        '{"jsonrpc":"2.0","id":99,"' + response_field
+        '{"jsonrpc":"2.0","id":99,"'
+        + response_field
         + '":{"code":-32000,"message":"test","data":{"method":"GET","payload":"'
     ).encode()
     response_body: Final = (
@@ -6565,8 +6581,12 @@ class TestGatewayCreateInitializationOptions:
             yield (None, None)
 
         async def record_request(
-            serving_server: object, read_stream: object, write_stream: object,
-            *, lifespan_state: object, init_options: InitializationOptions,
+            serving_server: object,
+            read_stream: object,
+            write_stream: object,
+            *,
+            lifespan_state: object,
+            init_options: InitializationOptions,
         ) -> None:
             captured["server_name"] = init_options.server_name
 
@@ -7412,7 +7432,8 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
             return_value=oauth_server,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -7658,7 +7679,8 @@ async def test_execute_mcp_tool_strips_a_prefix_that_contains_the_separator():
             return_value=alias_less_server,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -7933,7 +7955,8 @@ async def test_execute_mcp_tool_rest_hyphenated_upstream_tool_name_routes_to_req
             return_value=None,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -8133,6 +8156,57 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_admin_description_client
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_openapi_hooks_the_guarded_catalog_entry_clients_saw():
+    """When tools/list pinned the schema and masked the description of an OpenAPI tool, the local-registry
+    call path must hand the pre-call hooks that served entry, not the raw registry one."""
+    from litellm.proxy._experimental.mcp_server import operations as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+        tool_name_to_description={"getpetbyid": "Find a SECRET pet"},
+    )
+    registry_schema = {"type": "object", "properties": {"petId": {"type": "integer"}, "dump_all": {"type": "boolean"}}}
+    pinned_schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
+    mcp_module.global_mcp_tool_registry.register_tool(
+        name="petstore-getpetbyid",
+        description="Find pet by ID",
+        input_schema=registry_schema,
+        handler=lambda petId: "ok",
+    )
+    manager = mcp_module.global_mcp_server_manager
+    manager._record_listed_tools(
+        petstore, [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=pinned_schema)], None
+    )
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            await mcp_module.execute_mcp_tool(
+                name="petstore-getpetbyid",
+                arguments={"petId": 1},
+                allowed_mcp_servers=[petstore],
+                start_time=datetime.now(),
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
+            )
+    finally:
+        mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+        manager._listed_tools_by_server_id.pop(petstore.server_id, None)
+
+    handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
+    assert (handed_tool.description, handed_tool.input_schema) == ("Find a [MASKED] pet", pinned_schema), (
+        "the pre-call policy must evaluate the entry tools/list served, not the raw registry entry"
+    )
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tool_hands_hooks_the_metadata_of_the_operation_it_runs_when_names_collide():
     """An OpenAPI operation whose name starts with its own server prefix must not be reported to the
     pre-call hooks with the metadata of the shorter operation, since that is not the one that runs."""
@@ -8236,7 +8310,8 @@ async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requeste
             return_value=None,
         ),
         patch.object(
-            mcp_operations, "_handle_managed_mcp_tool",
+            mcp_operations,
+            "_handle_managed_mcp_tool",
             new=fake_handle_managed_mcp_tool,
         ),
         patch.object(
@@ -8735,7 +8810,9 @@ class TestMCPMetaTraceCarrier:
 
         assert _mcp_meta_trace_carrier(None) is None
         assert _mcp_meta_trace_carrier(SimpleNamespace(meta=None)) is None
-        only_progress = CallToolRequestParams.model_validate({"name": "t", "_meta": {"progressToken": "p1"}}, by_name=False).meta
+        only_progress = CallToolRequestParams.model_validate(
+            {"name": "t", "_meta": {"progressToken": "p1"}}, by_name=False
+        ).meta
         assert _mcp_meta_trace_carrier(SimpleNamespace(meta=only_progress)) is None
 
 
@@ -10532,7 +10609,9 @@ async def test_mcp_origin_admission_precedes_authentication(
         patch("litellm.proxy.proxy_server.origins", allowed_origins),
         patch.object(server, "extract_mcp_auth_context", authenticate),
     ):
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://gateway") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app), base_url="http://gateway"
+        ) as client:
             response: Final = await client.request(method, path, headers=(*session_headers, *origin_headers))
 
     assert response.status_code == expected_status
@@ -10615,12 +10694,15 @@ async def test_streamable_http_rejects_modern_protocol_version(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("handler_name,field", [
-    ("handle_list_tools", "tools"),
-    ("list_prompts", "prompts"),
-    ("list_resources", "resources"),
-    ("list_resource_templates", "resource_templates"),
-])
+@pytest.mark.parametrize(
+    "handler_name,field",
+    [
+        ("handle_list_tools", "tools"),
+        ("list_prompts", "prompts"),
+        ("list_resources", "resources"),
+        ("list_resource_templates", "resource_templates"),
+    ],
+)
 async def test_native_listing_preserves_empty_result_on_auth_failure(_mcp_request_ctx, handler_name, field):
     from litellm.proxy._experimental.mcp_server import server
 
@@ -10638,7 +10720,9 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
     auth = UserAPIKeyAuth(user_id="denied-caller")
     denial = HTTPException(status_code=403, detail="scope denied")
     logger = MagicMock()
-    logger.post_call_failure_hook = AsyncMock(side_effect=RuntimeError("log unavailable") if failure_hook_raises else None)
+    logger.post_call_failure_hook = AsyncMock(
+        side_effect=RuntimeError("log unavailable") if failure_hook_raises else None
+    )
     upstream = AsyncMock()
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(side_effect=denial)),
@@ -10647,7 +10731,9 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
         patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
     ):
         with pytest.raises(HTTPException) as rejected:
-            await operations._get_tools_from_mcp_servers(user_api_key_auth=auth, mcp_auth_header=None, mcp_servers=["catalog"], log_list_tools_to_spendlogs=True)
+            await operations._get_tools_from_mcp_servers(
+                user_api_key_auth=auth, mcp_auth_header=None, mcp_servers=["catalog"], log_list_tools_to_spendlogs=True
+            )
     assert rejected.value is denial
     upstream.assert_not_awaited()
     logger.post_call_failure_hook.assert_awaited_once()
@@ -10659,7 +10745,9 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
 @pytest.mark.parametrize("prefix,suffix", (("", ""), ("/gateway", "/")))
 @pytest.mark.parametrize("opening_protocol", (None, *MODERN_PROTOCOL_VERSIONS))
 async def test_legacy_sse_mount_emits_message_endpoint(
-    prefix: str, suffix: str, opening_protocol: str | None,
+    prefix: str,
+    suffix: str,
+    opening_protocol: str | None,
 ) -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
@@ -10724,16 +10812,20 @@ async def test_legacy_sse_mount_emits_message_endpoint(
                 return (await messages.get())["status"]
 
             if opening_protocol is not None:
-                discover: Final = json.dumps({
-                    "jsonrpc": "2.0",
-                    "id": 0,
-                    "method": "server/discover",
-                    "params": {"_meta": {
-                        "io.modelcontextprotocol/protocolVersion": opening_protocol,
-                        "io.modelcontextprotocol/clientInfo": {"name": "modern-client", "version": "1"},
-                        "io.modelcontextprotocol/clientCapabilities": {},
-                    }},
-                }).encode()
+                discover: Final = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 0,
+                        "method": "server/discover",
+                        "params": {
+                            "_meta": {
+                                "io.modelcontextprotocol/protocolVersion": opening_protocol,
+                                "io.modelcontextprotocol/clientInfo": {"name": "modern-client", "version": "1"},
+                                "io.modelcontextprotocol/clientCapabilities": {},
+                            }
+                        },
+                    }
+                ).encode()
                 assert await post(discover) == 202
                 discovered_frame: Final = (await asyncio.wait_for(outgoing.get(), 2))["body"].decode()
                 discovered: Final = json.loads(discovered_frame.split("data: ", 1)[1].splitlines()[0])
@@ -10766,7 +10858,16 @@ async def test_legacy_sse_mount_emits_message_endpoint(
                     patch.object(
                         mcp_server,
                         "extract_mcp_auth_context",
-                        AsyncMock(return_value=(post_auth, None, [marker], {marker: {"Authorization": marker}}, {"Authorization": marker}, {"x-request-marker": marker})),
+                        AsyncMock(
+                            return_value=(
+                                post_auth,
+                                None,
+                                [marker],
+                                {marker: {"Authorization": marker}},
+                                {"Authorization": marker},
+                                {"x-request-marker": marker},
+                            )
+                        ),
                     ),
                     patch.object(mcp_server.operations, "_get_tools_from_mcp_servers", listing),
                 ):
@@ -10815,7 +10916,11 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
     dispatched = AsyncMock(return_value=expected)
     auth = UserAPIKeyAuth(user_id="discover-caller")
     with (
-        patch.object(server, "get_or_extract_auth_context", AsyncMock(return_value=(auth, None, ["allowed"], None, None, None, None))),
+        patch.object(
+            server,
+            "get_or_extract_auth_context",
+            AsyncMock(return_value=(auth, None, ["allowed"], None, None, None, None)),
+        ),
         patch.object(server.operations.GatewayOperations, "execute", dispatched),
     ):
         result = await server.discover(_mcp_request_ctx(), RequestParams())

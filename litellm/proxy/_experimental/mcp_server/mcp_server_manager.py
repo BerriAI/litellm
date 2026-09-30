@@ -5647,11 +5647,7 @@ class MCPServerManager:
         listed: Final = self._listed_tools_by_server_id.get(server.server_id, MappingProxyType({})).get(identity)
         if not listed:
             return None
-        tool: Final = listed.get(name) or listed.get(strip_known_server_prefix(name, server))
-        if tool is None:
-            return None
-        description: Final = server.tool_name_to_description.get(tool.name) if server.tool_name_to_description else None
-        return tool if description is None else tool.model_copy(update={"description": description})
+        return listed.get(name) or listed.get(strip_known_server_prefix(name, server))
 
     def _create_prefixed_prompts(
         self, prompts: Sequence[Prompt], server: MCPServer, add_prefix: bool = True

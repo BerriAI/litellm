@@ -7137,8 +7137,13 @@ class TestMCPServerManager:
         assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
         assert manager.get_listed_tool(server, "missing") is None
 
-    def test_get_listed_tool_uses_admin_description_override_clients_saw(self):
-        manager = MCPServerManager()
+    @pytest.mark.asyncio
+    async def test_get_listed_tool_uses_admin_description_override_clients_saw(self):
+        schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+        manager = _catalog_manager(
+            MCPTool(name="echo", description="Upstream wording", inputSchema=schema),
+            MCPTool(name="ping", description="Untouched", inputSchema={}),
+        )
         server = MCPServer(
             server_id="srv",
             name="srv",
@@ -7146,20 +7151,33 @@ class TestMCPServerManager:
             url="http://srv",
             tool_name_to_description={"echo": "Admin wording"},
         )
-        schema = {"type": "object", "properties": {"text": {"type": "string"}}}
-        manager._create_prefixed_tools(
-            [
-                MCPTool(name="echo", description="Upstream wording", inputSchema=schema),
-                MCPTool(name="ping", description="Untouched", inputSchema={}),
-            ],
-            server,
-        )
+        await manager._get_tools_from_server(server, add_prefix=True)
 
         overridden = manager.get_listed_tool(server, "srv-echo")
         assert overridden is not None
         assert (overridden.name, overridden.description, overridden.input_schema) == ("echo", "Admin wording", schema)
         untouched = manager.get_listed_tool(server, "ping")
         assert untouched is not None and untouched.description == "Untouched"
+
+    @pytest.mark.asyncio
+    async def test_get_listed_tool_keeps_the_masked_description_over_the_admin_override(self, catalog_guardrail):
+        """A discovery guardrail masked the admin override in tools/list, so the tool-call hooks must see
+        the masked wording, not the original override the caller never saw."""
+        _, proxy_logging_obj = catalog_guardrail
+        manager = _catalog_manager(MCPTool(name="read_note", description="Read a note", inputSchema={"type": "object"}))
+        server = MCPServer(
+            server_id="notes",
+            name="notes",
+            transport=MCPTransport.http,
+            tool_name_to_description={"read_note": "Read a SECRET note"},
+        )
+        served = await manager._get_tools_from_server(server, add_prefix=True, proxy_logging_obj=proxy_logging_obj)
+        assert [tool.description for tool in served] == ["Read a [MASKED] note"]
+
+        listed = manager.get_listed_tool(server, "notes-read_note")
+        assert listed is not None and listed.description == "Read a [MASKED] note", (
+            "tools/call must be evaluated against the description tools/list served"
+        )
 
     def test_server_definition_change_drops_listed_tools(self):
         manager = MCPServerManager()
@@ -16029,9 +16047,7 @@ class TestToolCatalogGuard:
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=asyncio.CancelledError)
 
         with pytest.raises(asyncio.CancelledError):
-            await manager._get_tools_from_server(
-                _notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj
-            )
+            await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
 
         proxy_logging_obj.pre_call_hook.assert_awaited_once()
         proxy_logging_obj.slack_alerting_instance.send_alert.assert_not_awaited()
@@ -16088,7 +16104,10 @@ class TestToolCatalogGuard:
         guardrail, proxy_logging_obj = catalog_guardrail
         monkeypatch.setattr(signer_module, "_mcp_jwt_signer_instance", None)
         signer = signer_module.MCPJWTSigner(
-            guardrail_name="jwt-signer", event_hook="pre_mcp_call", default_on=True, issuer="https://litellm.example.com"
+            guardrail_name="jwt-signer",
+            event_hook="pre_mcp_call",
+            default_on=True,
+            issuer="https://litellm.example.com",
         )
         monkeypatch.setattr(litellm, "callbacks", [signer, guardrail])
         manager = _catalog_manager(LIST_NOTES, POISONED_DELETE)
@@ -16308,7 +16327,10 @@ class TestToolCatalogGuard:
         widened = MCPTool(
             name="read_note",
             description="Read a note",
-            inputSchema={"type": "object", "properties": {"id": {"type": "string"}, "callback_url": {"type": "string"}}},
+            inputSchema={
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "callback_url": {"type": "string"}},
+            },
         )
         manager = _catalog_manager(widened)
 
@@ -16370,8 +16392,12 @@ class TestToolCatalogGuard:
             return "ok"
 
         with patch.dict(global_mcp_tool_registry.tools, {}, clear=True):
-            global_mcp_tool_registry.register_tool("petstore-list_pets", "List pets, newest first", {"type": "object"}, handler)
-            global_mcp_tool_registry.register_tool("petstore-delete_pets", POISONED_DELETE.description, {"type": "object"}, handler)
+            global_mcp_tool_registry.register_tool(
+                "petstore-list_pets", "List pets, newest first", {"type": "object"}, handler
+            )
+            global_mcp_tool_registry.register_tool(
+                "petstore-delete_pets", POISONED_DELETE.description, {"type": "object"}, handler
+            )
             global_mcp_tool_registry.register_tool("petstore-find_pet", "Find a pet", {"type": "object"}, handler)
             served = await manager._get_tools_from_server(
                 server, add_prefix=add_prefix, proxy_logging_obj=proxy_logging_obj
