@@ -61,7 +61,6 @@ from litellm.proxy.auth.auth_checks import (
     _check_agent_caller_model_access,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
-    _restricted_end_user_where,
     get_key_object,
     get_user_object,
     invalidate_team_member_spend_state,
@@ -8816,12 +8815,18 @@ async def _run_common_checks(
     )
 
 
-async def _common_checks_for_customer_model(*, model: str, customer_models: list[str]) -> bool:
+async def _common_checks_for_customer_model(
+    *,
+    model: str,
+    customer_models: list[str],
+    team_object: LiteLLM_TeamTable | None = None,
+    valid_token: UserAPIKeyAuth | None = None,
+) -> bool:
     from litellm.proxy.auth.auth_checks import common_checks
 
     return await common_checks(
         request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
-        team_object=None,
+        team_object=team_object,
         user_object=None,
         end_user_object=LiteLLM_EndUserTable(
             user_id="customer-1",
@@ -8833,7 +8838,7 @@ async def _common_checks_for_customer_model(*, model: str, customer_models: list
         route="/chat/completions",
         llm_router=None,
         proxy_logging_obj=MagicMock(),
-        valid_token=UserAPIKeyAuth(token="test-token"),
+        valid_token=valid_token if valid_token is not None else UserAPIKeyAuth(token="test-token"),
         request=MagicMock(spec=Request),
         skip_budget_checks=True,
     )
@@ -8858,6 +8863,40 @@ async def test_common_checks_denies_model_outside_customer_allowlist() -> None:
 @pytest.mark.asyncio
 async def test_common_checks_allows_customer_allowlist_models(model: str, customer_models: list[str]) -> None:
     assert await _common_checks_for_customer_model(model=model, customer_models=customer_models) is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_allows_customer_allowlist_for_team_model_alias_target() -> None:
+    result = await _common_checks_for_customer_model(
+        model="my-alias",
+        customer_models=["gpt-underlying"],
+        team_object=LiteLLM_TeamTable(team_id="team-1", models=["gpt-underlying"]),
+        valid_token=UserAPIKeyAuth(
+            token="test-token",
+            team_id="team-1",
+            team_model_aliases={"my-alias": "gpt-underlying"},
+        ),
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_denies_customer_allowlist_when_team_alias_target_is_not_allowed() -> None:
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _common_checks_for_customer_model(
+            model="my-alias",
+            customer_models=["other"],
+            team_object=LiteLLM_TeamTable(team_id="team-1", models=["gpt-underlying"]),
+            valid_token=UserAPIKeyAuth(
+                token="test-token",
+                team_id="team-1",
+                team_model_aliases={"my-alias": "gpt-underlying"},
+            ),
+        )
+
+    assert exc_info.value.code == "403"
+    assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
 
 
 @pytest.mark.asyncio

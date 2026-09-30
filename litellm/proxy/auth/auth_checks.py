@@ -1083,6 +1083,8 @@ async def common_checks(
                 model=_model,
                 llm_router=llm_router,
                 models=end_user_object.models,
+                team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+                team_id=valid_token.team_id if valid_token else None,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                 object_type="customer",
             )
@@ -4433,6 +4435,7 @@ def _can_object_call_model(
         )
     )
     after_team_alias: Final = team_model_aliases.get(model, model) if team_model_aliases else model
+    team_alias_applied: Final = after_team_alias != model
     after_key_alias: Final = (
         key_model_aliases.get(after_team_alias, after_team_alias) if key_model_aliases else after_team_alias
     )
@@ -4446,6 +4449,7 @@ def _can_object_call_model(
         if key_alias_applied
         else (
             *((model, compaction_parent) if compaction_parent is not None else (model,)),
+            *((after_team_alias,) if object_type == "customer" and team_alias_applied else ()),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
         )
     )
@@ -4456,7 +4460,7 @@ def _can_object_call_model(
             model=m,
             llm_router=llm_router,
             models=models,
-            team_model_aliases=team_model_aliases,
+            team_model_aliases=team_model_aliases if object_type != "customer" else None,
             team_id=team_id,
         ):
             return True
