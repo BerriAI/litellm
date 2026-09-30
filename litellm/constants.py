@@ -2184,3 +2184,24 @@ EMPTY_MAPPING: Final = MappingProxyType({})
 
 # API endpoint for breached password k-anonymity search
 HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"
+
+# litellm.harness defaults
+HARNESS_ENDPOINT_HOST: Final = "127.0.0.1"
+HARNESS_ENDPOINT_STARTUP_TIMEOUT_SECONDS: Final = 10.0
+HARNESS_ENDPOINT_REQUEST_TIMEOUT_SECONDS: Final = 600.0
+HARNESS_SESSION_TOKEN_BYTES: Final = 32
+HARNESS_MAX_DIFF_BYTES: Final = 256 * 1024
+HARNESS_STDERR_TAIL_LINES: Final = 40
+HARNESS_PROCESS_KILL_GRACE_SECONDS: Final = 5.0
+HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
+    {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+    }
+)
