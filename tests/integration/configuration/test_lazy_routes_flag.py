@@ -19,6 +19,7 @@ from tests.integration._support.client import Gateway, object_value, string_valu
 from tests.integration._support.process import owned_proxy_process
 
 TICKET_FEATURES: Final = ("mcp_management", "mcp_byok_oauth")
+FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
 HOOK_MODULE: Final = "lazy_routes_route_filter_hook"
 HOOK_SOURCE: Final = """from litellm.proxy.proxy_server import app
 
@@ -55,7 +56,7 @@ def _route_filter_hook(directory: Path) -> Mapping[str, str]:
 
 
 def test_lazy_routes_are_absent_from_the_route_table_until_first_request(gateway: Gateway, tmp_path: Path) -> None:
-    with owned_proxy_process(gateway, tmp_path, {}) as owned:
+    with owned_proxy_process(gateway, tmp_path, {}, remove_environment=(FLAG,)) as owned:
         at_boot: Final = _routed_features(owned.gateway)
         assert {name: at_boot[name] for name in TICKET_FEATURES} == {name: () for name in TICKET_FEATURES}, at_boot
         listing: Final = owned.gateway.request("GET", "/v1/mcp/server")
@@ -69,7 +70,7 @@ def test_lazy_routes_are_absent_from_the_route_table_until_first_request(gateway
 def test_disable_lazy_routes_flag_registers_every_feature_at_startup(
     gateway: Gateway, tmp_path: Path, workers: int
 ) -> None:
-    with owned_proxy_process(gateway, tmp_path, {"LITELLM_DISABLE_LAZY_ROUTES": "true"}, workers=workers) as owned:
+    with owned_proxy_process(gateway, tmp_path, {FLAG: "true"}, workers=workers) as owned:
         at_boot: Final = tuple(_routed_features(owned.gateway) for _ in range(2 * workers))
         unregistered: Final = sorted(name for name, paths in at_boot[0].items() if not paths)
         assert unregistered == [], f"features still missing from /routes at startup: {unregistered}"
@@ -80,7 +81,7 @@ def test_disable_lazy_routes_flag_registers_every_feature_at_startup(
 
 
 def test_startup_hook_cannot_remove_lazy_routes_that_register_after_it_ran(gateway: Gateway, tmp_path: Path) -> None:
-    with owned_proxy_process(gateway, tmp_path, _route_filter_hook(tmp_path)) as owned:
+    with owned_proxy_process(gateway, tmp_path, _route_filter_hook(tmp_path), remove_environment=(FLAG,)) as owned:
         assert _mcp_paths(owned.gateway) == (), "hook should have removed the routes registered before it ran"
         listing: Final = owned.gateway.request("GET", "/v1/mcp/server")
         assert listing.status_code == 200, listing.text
@@ -90,7 +91,7 @@ def test_startup_hook_cannot_remove_lazy_routes_that_register_after_it_ran(gatew
 def test_disable_lazy_routes_flag_lets_a_startup_hook_remove_optional_routes_for_good(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    overrides: Final = {**_route_filter_hook(tmp_path), "LITELLM_DISABLE_LAZY_ROUTES": "true"}
+    overrides: Final = {**_route_filter_hook(tmp_path), FLAG: "true"}
     with owned_proxy_process(gateway, tmp_path, overrides) as owned:
         assert _mcp_paths(owned.gateway) == (), "hook should have seen and removed every MCP route"
         listing: Final = owned.gateway.request("GET", "/v1/mcp/server")
