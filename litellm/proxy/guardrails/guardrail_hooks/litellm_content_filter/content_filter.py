@@ -29,6 +29,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.path_utils import try_safe_join
 from litellm.proxy.guardrails.content_filter_data import (
     CATEGORIES_DIR,
     DATA_DIR,
@@ -428,11 +429,6 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         allow_external: Final = os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower() == "true"
 
-        def jailed(candidate: str) -> str:
-            if not allow_external:
-                self._assert_within_data_roots(candidate, roots)
-            return candidate
-
         if os.path.isabs(file_path) or os.path.exists(file_path):
             if allow_external:
                 verbose_proxy_logger.warning(
@@ -440,18 +436,25 @@ class ContentFilterGuardrail(CustomGuardrail):
                     "skipping directory jail for category_file '%s'",
                     file_path,
                 )
-            return jailed(file_path)
+                return file_path
+            self._assert_within_data_roots(file_path, roots)
+            return file_path
 
         parts: Final = file_path.split("/")
         suffixes: Final = tuple(os.path.join(*parts[i:]) for i in range(len(parts)))
-        candidates: Final = (os.path.join(root, suffix) for suffix, root in itertools.product(suffixes, roots))
-        found: Final = next((c for c in candidates if os.path.exists(c)), None)
+        search: Final = tuple(itertools.product(suffixes, roots))
+        if allow_external:
+            unjailed: Final = (os.path.join(root, suffix) for suffix, root in search)
+            return next((c for c in unjailed if os.path.exists(c)), file_path)
+
+        jailed: Final = (try_safe_join(root, suffix) for suffix, root in search)
+        found: Final = next((c for c in jailed if c is not None and os.path.exists(c)), None)
         if found is not None:
-            return jailed(found)
+            return found
 
         # Nothing matched: jail the data-relative path anyway so "../../etc/passwd" is
         # rejected regardless of CWD or whether the target exists.
-        jailed(os.path.join(DATA_DIR, file_path))
+        self._assert_within_data_roots(os.path.join(DATA_DIR, file_path), roots)
         return file_path
 
     def _load_categories(

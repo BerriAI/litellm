@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from litellm.proxy.common_utils.path_utils import safe_filename, safe_join
+from litellm.proxy.common_utils.path_utils import safe_filename, safe_join, try_safe_join
 
 
 class TestSafeJoin:
@@ -44,3 +44,10 @@ class TestSafeFilename:
     def test_empty_rejected(self):
         with pytest.raises(ValueError, match='Empty or unsafe filename'):
             safe_filename("")
+
+
+def test_try_safe_join_returns_none_instead_of_raising(tmp_path):
+    inside = try_safe_join(str(tmp_path), "categories", "x.yaml")
+    assert inside is not None and inside.startswith(os.path.realpath(str(tmp_path)))
+    assert try_safe_join(str(tmp_path), "..", "escaped.yaml") is None
+    assert try_safe_join(str(tmp_path), "bad\x00name") is None

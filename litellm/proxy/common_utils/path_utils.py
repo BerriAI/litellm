@@ -38,6 +38,14 @@ def safe_join(base_dir: str, *parts: str) -> str:
     return resolved
 
 
+def try_safe_join(base_dir: str, *parts: str) -> str | None:
+    """safe_join, with None instead of ValueError when the path escapes base_dir."""
+    try:
+        return safe_join(base_dir, *parts)
+    except ValueError:
+        return None
+
+
 def safe_filename(filename: str) -> str:
     """
     Extract a safe filename from a user-supplied path.

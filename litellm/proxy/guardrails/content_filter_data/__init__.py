@@ -11,6 +11,8 @@ import itertools
 import os
 from typing import Final
 
+from litellm.proxy.common_utils.path_utils import try_safe_join
+
 DATA_DIR: Final = os.path.dirname(os.path.abspath(__file__))
 CATEGORIES_DIR: Final = os.path.join(DATA_DIR, "categories")
 POLICY_TEMPLATES_DIR: Final = os.path.join(DATA_DIR, "policy_templates")
@@ -24,9 +26,12 @@ def category_dirs(roots: tuple[str, ...] = DATA_ROOTS) -> tuple[str, ...]:
 
 
 def find_category_file(category_name: str, roots: tuple[str, ...] = DATA_ROOTS) -> str | None:
-    """First ``<name>.yaml`` or ``<name>.json`` across the category folders, or None."""
+    """First ``<name>.yaml`` or ``<name>.json`` across the category folders, or None.
+
+    A name that would escape its folder (``../x``) never matches.
+    """
     candidates: Final = (
-        os.path.join(d, f"{category_name}{ext}")
+        try_safe_join(d, f"{category_name}{ext}")
         for d, ext in itertools.product(category_dirs(roots), (".yaml", ".json"))
     )
-    return next((c for c in candidates if os.path.isfile(c)), None)
+    return next((c for c in candidates if c is not None and os.path.isfile(c)), None)

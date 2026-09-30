@@ -319,6 +319,14 @@ class TestLegacyPackageRootStaysSearchable:
         from litellm.proxy.guardrails.content_filter_data import find_category_file
 
         roots = (DATA_DIR, legacy_root)
-        assert find_category_file("custom_legacy", roots) == os.path.join(legacy_root, "categories", "custom_legacy.yaml")
-        assert find_category_file("harmful_self_harm", roots) == os.path.join(CATEGORIES_DIR, "harmful_self_harm.yaml")
+        custom = find_category_file("custom_legacy", roots)
+        bundled = find_category_file("harmful_self_harm", roots)
+        assert custom is not None and os.path.samefile(custom, os.path.join(legacy_root, "categories", "custom_legacy.yaml"))
+        assert bundled is not None and os.path.samefile(bundled, os.path.join(CATEGORIES_DIR, "harmful_self_harm.yaml"))
         assert find_category_file("no_such_category_anywhere", roots) is None
+
+    def test_find_category_file_never_escapes_a_category_folder(self, legacy_root, tmp_path):
+        from litellm.proxy.guardrails.content_filter_data import find_category_file
+
+        (tmp_path / "escaped.yaml").write_text(CUSTOM_CATEGORY_YAML)
+        assert find_category_file("../../escaped", (DATA_DIR, legacy_root)) is None
