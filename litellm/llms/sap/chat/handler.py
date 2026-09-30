@@ -62,7 +62,7 @@ def normalize_choice(choice: dict[str, object]) -> dict[str, object]:
             if isinstance(item, dict)
         ]
         choice[key]["thinking_blocks"] = thinking_blocks
-        choice[key]["reasoning_content"] = ("\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None)
+        choice[key]["reasoning_content"] = "\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None
     return choice
 
 
