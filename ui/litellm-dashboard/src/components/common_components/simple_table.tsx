@@ -1,11 +1,20 @@
 import React from "react";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table";
 
 export interface SimpleTableColumn<T> {
   header: string;
   accessor?: keyof T;
   cell?: (row: T) => React.ReactNode;
   width?: string;
+  numeric?: boolean;
 }
 
 interface SimpleTableProps<T> {
@@ -34,7 +43,11 @@ export function SimpleTable<T>({
       <TableHeader>
         <TableRow>
           {columns.map((column, index) => (
-            <TableHead key={index} style={{ width: column.width }}>
+            <TableHead
+              key={index}
+              style={{ width: column.width }}
+              className={column.numeric ? NUMERIC_CELL_CLASS : undefined}
+            >
               {column.header}
             </TableHead>
           ))}
@@ -51,7 +64,7 @@ export function SimpleTable<T>({
           data.map((row, rowIndex) => (
             <TableRow key={getRowKey ? getRowKey(row, rowIndex) : rowIndex}>
               {columns.map((column, colIndex) => (
-                <TableCell key={colIndex}>
+                <TableCell key={colIndex} className={column.numeric ? NUMERIC_CELL_CLASS : undefined}>
                   {column.cell ? column.cell(row) : String(row[column.accessor as keyof T] ?? "")}
                 </TableCell>
               ))}

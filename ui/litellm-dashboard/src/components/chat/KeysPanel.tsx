@@ -10,7 +10,16 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/cva.config";
 import { toast } from "@/lib/toast";
 import { keyListCall, regenerateKeyCall } from "../networking";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -176,7 +185,9 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
             <TableHeader>
               <TableRow className="bg-muted/50">
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Key</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wide">Spend</TableHead>
+                <TableHead className={cn("text-xs font-semibold uppercase tracking-wide", NUMERIC_CELL_CLASS)}>
+                  Spend
+                </TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Expires</TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Created</TableHead>
                 {premiumUser && (
@@ -220,7 +231,9 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
             <TableHeader>
               <TableRow className="bg-muted/50">
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Key</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wide">Spend</TableHead>
+                <TableHead className={cn("text-xs font-semibold uppercase tracking-wide", NUMERIC_CELL_CLASS)}>
+                  Spend
+                </TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Expires</TableHead>
                 <TableHead className="text-xs font-semibold uppercase tracking-wide">Created</TableHead>
                 {premiumUser && (
@@ -237,7 +250,7 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
                       <span className="font-mono text-[13px]">{maskKey(record.key_name)}</span>
                       {record.key_alias && <div className="text-xs text-muted-foreground">{record.key_alias}</div>}
                     </TableCell>
-                    <TableCell className="text-[13px]">
+                    <TableCell className={cn("text-[13px]", NUMERIC_CELL_CLASS)}>
                       ${record.spend?.toFixed(2) ?? "0.00"}
                       {record.max_budget != null && record.max_budget > 0 && (
                         <span className="text-muted-foreground"> / ${record.max_budget.toFixed(2)}</span>

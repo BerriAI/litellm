@@ -50,6 +50,8 @@ describe("ProviderDiscountTable", () => {
     expect(screen.getByRole("columnheader", { name: "Provider" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Discount Percentage" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Discount Percentage" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Provider" })).not.toHaveClass("text-right");
   });
 
   it("should display provider display names in the table", () => {

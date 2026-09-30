@@ -186,6 +186,7 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "spend",
+      numeric: true,
       sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
       render: (record: Member) => <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />,
     },
@@ -199,6 +200,7 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "total_spend",
+      numeric: true,
       sortValue: (record: Member) => getUserTotalSpend(record.user_id),
       render: (record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
@@ -212,11 +214,12 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "budget",
+      numeric: true,
       sortValue: (record: Member) => getUserBudget(record.user_id),
       render: (record: Member) => {
         const source = getUserBudgetSource(record.user_id);
         return (
-          <span className="flex items-center gap-2">
+          <span className="flex items-center justify-end gap-2">
             <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
             {source !== "none" && (
               <Badge variant={source === "custom" ? "outline" : "secondary"} data-testid="member-budget-source">
