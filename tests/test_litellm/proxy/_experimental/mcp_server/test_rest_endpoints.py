@@ -1311,7 +1311,7 @@ class TestListToolsRestAPI:
         session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
         admitted_auth = UserAPIKeyAuth(user_id="grant-user", org_id="admitted-org")
 
-        async def fake_reload(user_id):
+        async def fake_reload(user_id, *, requires_fresh_policy=False):
             assert user_id == "grant-user"
             return admitted_auth
 

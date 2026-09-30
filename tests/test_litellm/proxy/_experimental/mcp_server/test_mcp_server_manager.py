@@ -211,21 +211,29 @@ def _reload_mcp_manager_module():
     manager_module = sys.modules["litellm.proxy._experimental.mcp_server.mcp_server_manager"]
     importlib.reload(utils_module)
     reloaded = importlib.reload(manager_module)
-    # After reload, server.py still holds a stale reference to the old
-    # global_mcp_server_manager. Update it so tests that exercise server.py
-    # functions (e.g. _get_tools_from_mcp_servers) use the fresh instance.
-    server_module = sys.modules.get("litellm.proxy._experimental.mcp_server.server")
-    if server_module is not None and hasattr(server_module, "global_mcp_server_manager"):
-        server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
-    operations_module = sys.modules.get("litellm.proxy._experimental.mcp_server.operations")
-    if operations_module is not None:
-        operations_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
+    for name, module in tuple(sys.modules.items()):
+        if name.startswith("litellm.proxy._experimental.mcp_server.") and hasattr(module, "global_mcp_server_manager"):
+            module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
 
 
 @pytest.fixture(autouse=True)
 def enable_eager_mcp_oauth_discovery(monkeypatch):
     monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "1")
+
+
+@pytest.fixture(autouse=True)
+def restore_mcp_manager_singleton():
+    """``_reload_mcp_manager_module`` rebinds ``global_mcp_server_manager`` in every MCP module, so
+    without this the next test file inherits a manager that has none of its servers registered."""
+    bound: Final = tuple(
+        (module, module.global_mcp_server_manager)
+        for name, module in tuple(sys.modules.items())
+        if name.startswith("litellm.proxy._experimental.mcp_server.") and hasattr(module, "global_mcp_server_manager")
+    )
+    yield
+    for module, manager in bound:
+        module.global_mcp_server_manager = manager
 
 
 class TestMCPServerManager:
@@ -5669,9 +5677,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -5738,9 +5744,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -5807,9 +5811,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -5844,9 +5846,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -6922,9 +6922,7 @@ class TestMCPServerManager:
 
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
-        user_api_key_auth = MagicMock()
-        user_api_key_auth.object_permission = None
-        user_api_key_auth.object_permission_id = None
+        user_api_key_auth: Final = UserAPIKeyAuth()
         proxy_logging_obj = MagicMock()
 
         # Mock the async methods that pre_call_tool_check calls
@@ -7007,8 +7005,7 @@ class TestMCPServerManager:
         # Mock _create_mcp_client to return our mock client
         manager._create_mcp_client = AsyncMock(return_value=mock_client)
 
-        # Real auth: the listed-tool slot identity is hashed from these fields
-        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test")
+        user_api_key_auth: Final = UserAPIKeyAuth(api_key="sk-test")
 
         # Mock proxy logging
         proxy_logging_obj = MagicMock()
@@ -11825,6 +11822,72 @@ async def test_resolve_toolset_tool_permissions_single_db_fetch_across_checks():
     list_toolsets_mock.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_resolve_toolset_tool_permissions_fresh_policy_sees_writer_revocation_past_warm_cache():
+    """A managed agent's tool grant revoked in the writer DB must be gone on the very next fresh
+    request even though the legacy cache still holds the old grant, and the fresh read must go to
+    the writer, not the replica"""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    granted = MagicMock()
+    granted.tools = [{"server_id": "server-a", "tool_name": "echo"}]
+    revoked = MagicMock()
+    revoked.tools = [{"server_id": "server-a", "tool_name": "other"}]
+    list_toolsets_mock = AsyncMock(side_effect=[[granted], [revoked]])
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            list_toolsets_mock,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+    ):
+        warm = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+        legacy_after_revoke = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+        fresh_after_revoke = await manager.resolve_toolset_tool_permissions(
+            toolset_ids=["ts-1"], requires_fresh_policy=True
+        )
+
+    assert warm == {"server-a": ["echo"]}
+    assert legacy_after_revoke == warm, "legacy callers keep the cached grant by design"
+    assert fresh_after_revoke == {"server-a": ["other"]}
+    assert list_toolsets_mock.await_count == 2
+    assert list_toolsets_mock.await_args_list[0].kwargs["use_writer"] is False
+    assert list_toolsets_mock.await_args_list[1].kwargs["use_writer"] is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_toolset_tool_permissions_fresh_policy_propagates_db_fault_instead_of_no_grants():
+    """A fresh read that fails must raise so the managed-agent boundary fails closed; the legacy
+    path keeps its swallow-to-empty behaviour"""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    list_toolsets_mock = AsyncMock(side_effect=RuntimeError("relation does not exist"))
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            list_toolsets_mock,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+    ):
+        legacy = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+        with pytest.raises(RuntimeError, match="relation does not exist"):
+            await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"], requires_fresh_policy=True)
+
+    assert legacy == {}
+
+
 class TestMaterializeAuthHeaders:
     """_materialize_auth_headers drives one step of a resolved httpx.Auth's own flow to turn it
     into a header dict for the OpenAPI egress arm, which sends plain headers and cannot carry an
@@ -12146,12 +12209,8 @@ class TestDiscoveryFailureLogging:
         assert "unresolved" in caplog.text
 
 
-def _unrestricted_auth() -> MagicMock:
-    """A caller with no object_permission, so only server-level checks apply."""
-    user_api_key_auth = MagicMock()
-    user_api_key_auth.object_permission = None
-    user_api_key_auth.object_permission_id = None
-    return user_api_key_auth
+def _unrestricted_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth()
 
 
 def _permissive_proxy_logging() -> MagicMock:

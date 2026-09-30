@@ -1,7 +1,9 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -32,6 +34,9 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
 
 
+_active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
+
+
 @dataclass(frozen=True)
 class PrefetchedUsage:
     """
@@ -50,6 +55,19 @@ class PrefetchedUsage:
         if self.values is None:
             return None
         return [self.values.get(key) for key in keys]
+
+    @staticmethod
+    @contextmanager
+    def scoped(usage: "PrefetchedUsage | None") -> Iterator[None]:
+        token: Final = _active_prefetched_usage.set(usage)
+        try:
+            yield
+        finally:
+            _active_prefetched_usage.reset(token)
+
+    @staticmethod
+    def active() -> "PrefetchedUsage | None":
+        return _active_prefetched_usage.get()
 
 
 class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
@@ -436,18 +454,15 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     def usage_counter_keys(self, healthy_deployments: list) -> tuple[list[str], list[str]]:
         """The `<id>:<model>:tpm:<HH-MM>` and `<id>:<model>:rpm:<HH-MM>` counter keys selection reads."""
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
-
-        tpm_keys: Final[list[str]] = []
-        rpm_keys: Final[list[str]] = []
-        for m in healthy_deployments:
-            if isinstance(m, dict):
-                id = m.get("model_info", {}).get(
-                    "id"
-                )  # a deployment should always have an 'id'. this is set in router.py
-                deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_keys.append(f"{id}:{deployment_name}:tpm:{current_minute}")
-                rpm_keys.append(f"{id}:{deployment_name}:rpm:{current_minute}")
-        return tpm_keys, rpm_keys
+        prefixes: Final = tuple(
+            f"{m.get('model_info', {}).get('id')}:{m.get('litellm_params', {}).get('model')}"
+            for m in healthy_deployments
+            if isinstance(m, dict)
+        )
+        return (
+            [f"{prefix}:tpm:{current_minute}" for prefix in prefixes],
+            [f"{prefix}:rpm:{current_minute}" for prefix in prefixes],
+        )
 
     async def async_get_available_deployments(
         self,
@@ -455,13 +470,13 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        prefetched_usage: PrefetchedUsage | None = None,
     ):
         """
         Async implementation of get deployments.
 
-        Reduces time to retrieve the tpm/rpm values from cache. `prefetched_usage` skips the cache
-        read when it already holds this request's counters (see `RoutingReadBatch`).
+        Reduces time to retrieve the tpm/rpm values from cache. A `PrefetchedUsage` scoped
+        to this request skips the cache read when it already holds its counters (see
+        `RoutingReadBatch`).
         """
         # get list of potential deployments
         verbose_router_logger.debug(
@@ -473,6 +488,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         tpm_keys, rpm_keys = self.usage_counter_keys(healthy_deployments)
         combined_tpm_rpm_keys: Final = tpm_keys + rpm_keys
 
+        prefetched_usage: Final = PrefetchedUsage.active()
         if prefetched_usage is not None and prefetched_usage.covers(combined_tpm_rpm_keys):
             combined_tpm_rpm_values = prefetched_usage.values_for(combined_tpm_rpm_keys)
         else:
