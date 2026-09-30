@@ -139,10 +139,10 @@ class AzureGuardrailBase:
             responses_input: Final = data.get("input")
             if not isinstance(responses_input, (str, list)):
                 return None
-            validated_input: Final = cast(ResponseInputParam, responses_input)  # cast-ok: isinstance narrowed to str | list, the ResponseInputParam shape
+            validated_input: Final = cast(ResponseInputParam, responses_input)  # cast-ok: narrowed to str | list
             return get_last_user_message(ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input))
 
         messages: Final = data.get("messages")
         if not isinstance(messages, list):
             return None
-        return get_last_user_message(cast(list[AllMessageValues], messages))  # cast-ok: isinstance narrowed to list, the message list shape
+        return get_last_user_message(cast(list[AllMessageValues], messages))  # cast-ok: narrowed to list
