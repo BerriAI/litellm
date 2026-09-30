@@ -48,6 +48,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
     _without_line_breaks,
+    Span,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -18837,3 +18838,47 @@ def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_
     assert messages == [
         "routing read prefetch not armed for gpt-4ERROR forged entry: no deployments for gpt-4ERROR forged entry"
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["simple-shuffle", "usage-based-routing-v2", "least-busy", "latency-based-routing"],
+)
+async def test_router_subclass_overriding_async_get_healthy_deployments_with_the_old_signature_still_routes(
+    routing_strategy: str,
+) -> None:
+    class OldSignatureRouter(litellm.Router):
+        async def async_get_healthy_deployments(
+            self,
+            model: str,
+            request_kwargs: dict,
+            messages: list[dict[str, str]] | None = None,
+            input: str | list | None = None,
+            specific_deployment: bool | None = False,
+            parent_otel_span: Span | None = None,
+            health_check_probe: bool = False,
+        ):
+            return await super().async_get_healthy_deployments(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+                parent_otel_span=parent_otel_span,
+                health_check_probe=health_check_probe,
+            )
+
+    router: Final = OldSignatureRouter(
+        model_list=[
+            {
+                "model_name": "m",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "x", "mock_response": "hi"},
+            }
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
+
+    assert response.choices[0].message.content == "hi"

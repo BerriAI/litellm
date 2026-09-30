@@ -1813,7 +1813,6 @@ class Router:
         messages: list[dict[str, str]] | None,
         input: str | list | None,
         request_kwargs: dict | None,
-        prefetched_usage: PrefetchedUsage | None = None,
     ) -> Any | None:
         """
         Asks the strategy selector for a deployment. Caller handles
@@ -1838,14 +1837,6 @@ class Router:
                     healthy_deployments=healthy_deployments,
                     messages=messages,
                     input=input,
-                )
-            case "usage-based-routing-v2" if isinstance(selector, LowestTPMLoggingHandler_v2):
-                return await selector.async_get_available_deployments(
-                    model_group=model,
-                    healthy_deployments=healthy_deployments,
-                    messages=messages,
-                    input=input,
-                    prefetched_usage=prefetched_usage,
                 )
             case "usage-based-routing-v2" | "cost-based-routing":
                 return await selector.async_get_available_deployments(
@@ -12958,7 +12949,6 @@ class Router:
         specific_deployment: bool | None = False,
         parent_otel_span: Span | None = None,
         health_check_probe: bool = False,
-        routing_read_batch: RoutingReadBatch | None = None,
     ) -> list[dict] | dict:
         """
         Get the healthy deployments for a model.
@@ -13011,6 +13001,7 @@ class Router:
             health_check_probe=health_check_probe,
         )
 
+        routing_read_batch: Final = RoutingReadBatch.active()
         cooldown_deployments: Final = (
             await _async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
             if routing_read_batch is None
@@ -13298,15 +13289,15 @@ class Router:
             strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
             routing_read_batch: Final = RoutingReadBatch.for_strategy(strategy, strategy_selector)
 
-            healthy_deployments: Final = await self.async_get_healthy_deployments(
-                model=model,
-                request_kwargs=request_kwargs,
-                messages=messages,
-                input=input,
-                specific_deployment=specific_deployment,
-                parent_otel_span=parent_otel_span,
-                routing_read_batch=routing_read_batch,
-            )
+            with RoutingReadBatch.scoped(routing_read_batch):
+                healthy_deployments: Final = await self.async_get_healthy_deployments(
+                    model=model,
+                    request_kwargs=request_kwargs,
+                    messages=messages,
+                    input=input,
+                    specific_deployment=specific_deployment,
+                    parent_otel_span=parent_otel_span,
+                )
             if isinstance(healthy_deployments, dict):
                 await self._async_override_selector_pre_call_check(
                     strategy, strategy_selector, healthy_deployments, parent_otel_span
@@ -13328,16 +13319,18 @@ class Router:
                     model=model,
                     request_kwargs=request_kwargs,
                 )
-            deployment: Final = await self._select_deployment_async(
-                strategy=strategy,
-                selector=strategy_selector,
-                model=model,
-                healthy_deployments=healthy_deployments,
-                messages=messages,
-                input=input,
-                request_kwargs=request_kwargs,
-                prefetched_usage=routing_read_batch.prefetched_usage if routing_read_batch is not None else None,
-            )
+            with PrefetchedUsage.scoped(
+                routing_read_batch.prefetched_usage if routing_read_batch is not None else None
+            ):
+                deployment: Final = await self._select_deployment_async(
+                    strategy=strategy,
+                    selector=strategy_selector,
+                    model=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
             if deployment is None:
                 exception: Final = await async_raise_no_deployment_exception(
                     litellm_router_instance=self,
