@@ -76,6 +76,8 @@ class TraceReceiver:
                     user=os.getenv("CLICKHOUSE_USER", "default"),
                     password=os.getenv("CLICKHOUSE_PASSWORD", ""),
                     database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
+                    reader_user=os.environ["CLICKHOUSE_READER_USER"],
+                    reader_password=os.environ["CLICKHOUSE_READER_PASSWORD"],
                 )
             )
         )

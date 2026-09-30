@@ -35,7 +35,8 @@ litellm_settings:
 ```
 
 ```bash
-CLICKHOUSE_URL=http://localhost:8123 CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=... CLICKHOUSE_DATABASE=litellm
+CLICKHOUSE_URL=http://localhost:8123 CLICKHOUSE_USER=writer CLICKHOUSE_PASSWORD=... CLICKHOUSE_DATABASE=litellm
+CLICKHOUSE_READER_USER=litellm_traces_reader CLICKHOUSE_READER_PASSWORD=...
 ```
 
 Tables are created on startup if they don't exist. Agent side (LangSmith's built-in OTEL exporter, no LangSmith account needed):
@@ -243,3 +244,14 @@ every span with an error status (a tool that raised shows up there even when the
 | `CLICKHOUSE_MAX_BUFFERED_ROWS` | 200,000 | buffer full → 429 + `Retry-After: OTLP_RETRY_AFTER_SECONDS` (2); OTLP exporters retry |
 | `CLICKHOUSE_BATCH_SIZE`, `CLICKHOUSE_FLUSH_INTERVAL_SECONDS` | 10,000 rows, 1s | spans are written in batches; `POST` never waits on ClickHouse |
 | `CLICKHOUSE_MAX_RETRIES` | 3 | after this many failed inserts a batch is dropped and logged |
+
+
+## Rust foundation
+
+Tracing requires the compiled Rust extension from the foundation PR. Rust owns the canonical SQL schema and parameterized read transport; Python handles ingestion, batching, trace response assembly and FastAPI integration in this incremental migration
+
+Configure `CLICKHOUSE_READER_USER` and `CLICKHOUSE_READER_PASSWORD` separately from the credentials used for setup and ingestion. Grant the reader SELECT on the configured database's `otel_traces`, `agent_traces` and `spend_logs`, with the locked profile in `litellm-rust/crates/traces/config/reader.xml`. Change the example database grants from `default` to `CLICKHOUSE_DATABASE`. Query settings alone do not restrict a privileged account
+
+Read requests have a 10-second query limit, a 15-second HTTP timeout, a 1,000-row result limit and a 4 MiB response cap. Exceeding these limits fails the request rather than returning a silently truncated trace
+
+Schema setup calls the Rust schema export. There is no second Python DDL definition. The initial schema creates missing objects and does not migrate incompatible existing tables

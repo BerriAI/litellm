@@ -1,24 +1,33 @@
-"""
-Minimal async ClickHouse client over the HTTP interface.
-
-Uses LiteLLM's shared httpx client — no clickhouse driver dependency.
-`AsyncHTTPHandler.post` raises on non-2xx, so callers see ClickHouse errors as exceptions.
-"""
-
 import gzip
 import json
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Final
+
+from litellm.rust_bridge.traces import query as query_traces
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
+QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
+
 
 class ClickHouseClient:
-    def __init__(self, url: str, user: str, password: str, database: str):
+    def __init__(
+        self,
+        url: str,
+        user: str,
+        password: str,
+        database: str,
+        reader_user: str | None = None,
+        reader_password: str | None = None,
+    ) -> None:
         if not url:
             raise ValueError("ClickHouse url is required")
         self.url = url.rstrip("/") + "/"
         self.database = database
+        self.reader_user = reader_user
+        self.reader_password = reader_password
         self.auth_headers = {"X-ClickHouse-User": user, "X-ClickHouse-Key": password}
         self.http = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
@@ -42,20 +51,8 @@ class ClickHouseClient:
             headers={**self.auth_headers, "Content-Encoding": "gzip"},
         )
 
-    async def query(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """Parameterized SELECT. Use `{name:Type}` placeholders in `sql`."""
-        query_params = {
-            f"param_{k}": ("[" + ",".join(f"'{x}'" for x in v) + "]" if isinstance(v, list) else str(v))
-            for k, v in (params or {}).items()
-        }
-        response = await self.http.post(
-            self.url,
-            params={
-                "default_format": "JSON",
-                "database": self.database,
-                **query_params,
-            },
-            content=sql.encode(),
-            headers=self.auth_headers,
-        )
-        return response.json()["data"]
+    async def query(self, sql: str, params: Mapping[str, object] | None = None) -> list[dict[str, JsonValue]]:
+        if self.reader_user is None or self.reader_password is None:
+            raise RuntimeError("Trace reads require separate ClickHouse reader credentials")
+        parameters: Final = QUERY_PARAMETERS.validate_python(params or {})
+        return await query_traces(self.url, self.database, self.reader_user, self.reader_password, sql, parameters)
