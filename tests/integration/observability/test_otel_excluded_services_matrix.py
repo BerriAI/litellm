@@ -24,6 +24,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 MARKER: Final = re.compile(rb"excl-[0-9a-f]{32}")
+FAILING: Final = re.compile(rb"excl-fail-[0-9a-f]{32}")
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 REPLY_TEXT: Final = "excluded ok"
 SERVER: Final = 2
@@ -112,6 +113,8 @@ def _responses_reply(identity: str, stream: bool) -> Reply:
 
 
 def _upstream(request: Request) -> Reply:
+    if FAILING.search(request.body) is not None:
+        return Reply(status=500, body=b'{"error":{"message":"scripted upstream failure","type":"server_error"}}')
     found: Final = MARKER.search(request.body)
     if found is None:
         return Reply(status=404, body=b'{"error":"no marker"}')
@@ -483,6 +486,28 @@ def test_cache_hit_twin_keeps_datastore_spans_off_the_tenant(rig: Rig, endpoint:
     )
     assert hit.text == REPLY_TEXT, hit
     _assert_tenant_mirrors(rig, _operator_trace_by_id(rig, trace_id, cursors), cursors)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("endpoint", ENDPOINTS)
+def test_failed_upstream_call_keeps_datastore_spans_off_the_tenant(rig: Rig, endpoint: Endpoint) -> None:
+    cursors: Final = rig.cursors()
+    marker: Final = "excl-fail-" + uuid.uuid4().hex
+    trace_id: Final = uuid.uuid4().hex
+    path, body = _body(rig.model, endpoint, marker, stream=False)
+    failed: Final = rig.proxy.client.post(
+        path,
+        json=body,
+        headers={"Authorization": f"Bearer {rig.key}", "traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"},
+    )
+    assert failed.status_code == 500, failed.text
+    assert rig.upstream_hits(marker) >= 1
+    operator: Final = eventually(
+        lambda: spans_for_trace(recorded_spans(rig.sinks.operator, cursors.operator)[1], trace_id),
+        lambda spans: _has_root(spans) and "redis" in _db_systems(spans),
+        seconds=40,
+    )
+    _assert_tenant_mirrors(rig, operator, cursors)
 
 
 @pytest.mark.timeout(120)
