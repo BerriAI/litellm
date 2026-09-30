@@ -1,14 +1,15 @@
 import gzip
-import json
 from collections.abc import Mapping
 from typing import Any, Final
 
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.rust_bridge.traces import encode_rows
 from litellm.rust_bridge.traces import query as query_traces
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
+INSERT_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
 
 
@@ -37,7 +38,8 @@ class ClickHouseClient:
     async def insert_json_each_row(self, table: str, rows: list[dict[str, Any]]) -> None:
         if not rows:
             return
-        body = gzip.compress("\n".join(json.dumps(r, default=str) for r in rows).encode())
+        validated_rows: Final = INSERT_ROWS.validate_python(rows)
+        body: Final = gzip.compress(encode_rows(validated_rows))
         await self.http.post(
             self.url,
             params={

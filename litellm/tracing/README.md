@@ -248,7 +248,7 @@ every span with an error status (a tool that raised shows up there even when the
 
 ## Rust foundation
 
-Tracing requires the compiled Rust extension from the foundation PR. Rust owns the canonical SQL schema and parameterized read transport; Python handles ingestion, batching, trace response assembly and FastAPI integration in this incremental migration
+Tracing requires the compiled Rust extension from the foundation PR. Rust owns the canonical SQL schema, insert row encoding and parameterized read transport; Python handles ingestion, batching, trace response assembly and FastAPI integration in this incremental migration
 
 Configure `CLICKHOUSE_READER_USER` and `CLICKHOUSE_READER_PASSWORD` separately from the credentials used for setup and ingestion. Grant the reader SELECT on the configured database's `otel_traces`, `agent_traces` and `spend_logs`, with the locked profile in `litellm-rust/crates/traces/config/reader.xml`. Change the example database grants from `default` to `CLICKHOUSE_DATABASE`. Query settings alone do not restrict a privileged account
 
