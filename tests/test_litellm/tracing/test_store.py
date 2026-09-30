@@ -309,3 +309,24 @@ async def test_get_span_not_found_and_found():
         "output": "o",
         "attributes": {"k": "v"},
     }
+
+
+@pytest.mark.asyncio
+async def test_get_span_io_reads_every_span_through_storage_scoped_to_one_trace_ref():
+    storage = MagicMock()
+    storage.query = AsyncMock(
+        return_value=[
+            {"span_id": "root", "input": "question", "output": "answer"},
+            {"span_id": "tool", "input": "acme-7", "output": "Team plan"},
+        ]
+    )
+    store = ClickHouseTraceStore(storage)
+    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": "hash-a"}
+
+    io = await store.get_span_io("t1", scope, "ref-a")
+
+    assert io == {"root": ("question", "answer"), "tool": ("acme-7", "Team plan")}
+    sql, params = storage.query.call_args.args
+    assert params["trace_id"] == "t1" and params["trace_ref"] == "ref-a"
+    assert params["team_ids"] == ("team-a",) and params["api_key_hash"] == "hash-a"
+    assert "trace_ref:String" in sql
