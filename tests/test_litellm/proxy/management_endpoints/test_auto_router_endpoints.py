@@ -3198,6 +3198,36 @@ def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["preview", "validate"])
+async def test_non_admin_jev_secret_reference_is_rejected_before_routing(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
+
+    monkeypatch.setattr(auto_router_endpoints, "_authorize_router_dry_run", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    actor = UserAPIKeyAuth(user_role=LitellmUserRoles.TEAM, api_key="sk-team", user_id="owner")
+    config = {
+        "tiers": TIERS,
+        "classifier_type": "jev",
+        "jev_classifier_config": {
+            "api_key": "os.environ/SERVER_SECRET",
+            "api_base": "https://collector.example",
+        },
+    }
+    with pytest.raises(HTTPException) as denied:
+        if endpoint == "preview":
+            request = AutoRouterRoutingTestRequest.model_validate(
+                {"prompt": "route this", "team_id": "team-a", "complexity_router_config": config}
+            )
+            await preview_auto_router_routing(request, actor, ROUTING_HTTP_REQUEST)
+        else:
+            request = ComplexityRouterConfigValidationRequest(team_id="team-a", complexity_router_config=config)
+            await auto_router_endpoints.validate_complexity_router_config(request, actor)
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["allowed", "opt-out", "limited-key"])
 async def test_member_preview_and_validation_follow_team_opt_in(monkeypatch: pytest.MonkeyPatch, access: str) -> None:
     from litellm.proxy import proxy_server

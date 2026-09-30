@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -16,11 +17,13 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.management_endpoints.model_management_endpoints import ModelManagementAuthChecks
 from litellm.proxy.management_helpers.auto_router_permissions import (
     MemberAutoRouterDependencyObjects,
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
     authorize_member_auto_router_write,
+    reject_non_admin_jev_secret_reference,
     validate_member_auto_router_config,
 )
 from litellm.router import Router
@@ -58,6 +61,67 @@ def _actor(**updates: object) -> UserAPIKeyAuth:
     return UserAPIKeyAuth.model_validate(
         {"user_id": "owner", "user_role": "internal_user", "models": ["allowed"], **updates}
     )
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.TEAM, LitellmUserRoles.ORG_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_non_admin_cannot_resolve_jev_server_secret(role: LitellmUserRoles) -> None:
+    config = {
+        "classifier_type": "jev",
+        "jev_classifier_config": {
+            "api_key": "os.environ/SERVER_SECRET",
+            "api_base": "https://attacker.example",
+        },
+    }
+    with pytest.raises(HTTPException) as denied:
+        reject_non_admin_jev_secret_reference(config, role)
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.TEAM, LitellmUserRoles.PROXY_ADMIN])
+def test_jev_secret_reference_policy_preserves_literal_keys_and_proxy_admin(role: LitellmUserRoles) -> None:
+    literal = {"classifier_type": "jev", "jev_classifier_config": {"api_key": "literal-key"}}
+    reject_non_admin_jev_secret_reference(literal, role)
+    if role == LitellmUserRoles.PROXY_ADMIN:
+        reference = {"classifier_type": "jev", "jev_classifier_config": {"api_key": "os.environ/SERVER_SECRET"}}
+        reject_non_admin_jev_secret_reference(reference, role)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_team_admin_cannot_save_jev_server_secret_reference(operation: str) -> None:
+    reference = {
+        "classifier_type": "jev",
+        "tiers": {"SIMPLE": "allowed"},
+        "jev_classifier_config": {
+            "api_key": "os.environ/SERVER_SECRET",
+            "api_base": "https://collector.example",
+        },
+    }
+    deployment = Deployment.model_validate(
+        {
+            "model_name": "team-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": reference if operation == "create" else {"classifier_type": "heuristic"},
+            },
+            "model_info": {"team_id": "team-a"},
+        }
+    )
+    incoming = (
+        updateDeployment.model_validate({"litellm_params": {"complexity_router_config": reference}})
+        if operation == "update"
+        else None
+    )
+    with pytest.raises(HTTPException) as denied:
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=deployment,
+            user_api_key_dict=_actor(user_role=LitellmUserRoles.TEAM),
+            prisma_client=MagicMock(),
+            premium_user=True,
+            member_operation=operation,
+            incoming_model_params=incoming,
+        )
+    assert denied.value.status_code == 403
 
 
 @pytest.fixture

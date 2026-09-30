@@ -41,6 +41,19 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 
+def reject_non_admin_jev_secret_reference(config: object, role: LitellmUserRoles) -> None:
+    if role == LitellmUserRoles.PROXY_ADMIN or not isinstance(config, Mapping):
+        return
+    if config.get("classifier_type") != "jev":
+        return
+    jev_config = config.get("jev_classifier_config")
+    if not isinstance(jev_config, Mapping):
+        return
+    api_key = jev_config.get("api_key")
+    if isinstance(api_key, str) and api_key.startswith("os.environ/"):
+        raise HTTPException(status_code=403, detail="Only proxy admins may reference server secrets in Jev API keys.")
+
+
 class _MemberRouterThinking(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

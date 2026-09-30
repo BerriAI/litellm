@@ -1309,7 +1309,10 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        configured_key = config.api_key
+        if configured_key and configured_key.startswith("os.environ/"):
+            configured_key = get_secret_str(configured_key)
+        api_key: Final = configured_key if config.api_key else get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
             raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
         api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
