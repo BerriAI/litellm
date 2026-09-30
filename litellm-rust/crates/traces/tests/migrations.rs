@@ -525,3 +525,49 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
     assert_eq!(evidence["data"][0]["count"], 0);
     Ok(())
 }
+
+#[rstest]
+#[tokio::test]
+async fn lens_request_sample_does_not_trust_caller_tags(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    use litellm_traces::{LensQuery, Parameter};
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
+    for (id, internal) in [("external", false), ("internal", true)] {
+        let row = serde_json::from_value(serde_json::json!({
+            "request_id": id, "team_id": "team", "start_time": timestamp, "end_time": timestamp,
+            "request_tags": ["litellm-engine"],
+            "metadata": serde_json::json!({"litellm_lens_internal": internal}).to_string()
+        }))?;
+        insert_rows(&database, "spend_logs", vec![row]).await?;
+    }
+    let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
+    let parameters = BTreeMap::from([
+        ("source".into(), Parameter::Text("requests".into())),
+        ("all_teams".into(), Parameter::Integer(1)),
+        ("team".into(), Parameter::Text(String::new())),
+        ("key_hash".into(), Parameter::Text(String::new())),
+        ("start".into(), Parameter::Integer(timestamp - 1000)),
+        ("end".into(), Parameter::Integer(timestamp + 60000)),
+        ("service".into(), Parameter::Text(String::new())),
+        ("filter_keys".into(), Parameter::Strings(vec![])),
+        ("filter_values".into(), Parameter::Strings(vec![])),
+        ("limit".into(), Parameter::Integer(10)),
+    ]);
+    let sample: serde_json::Value = serde_json::from_str(
+        &execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Sample.sql(),
+            &parameters,
+        )
+        .await?,
+    )?;
+    let rows = sample["data"].as_array().expect("sample rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["trace_id"], "external");
+    Ok(())
+}
