@@ -91,3 +91,18 @@ def test_providers_with_a_fixed_base_still_get_it(model, expected, monkeypatch):
         monkeypatch.delenv(env, raising=False)
 
     assert litellm.get_api_base(model=model, optional_params={}) == expected
+
+
+def test_base_url_alias_is_reported_as_the_api_base():
+    api_base = litellm.get_api_base(
+        model="groq/whisper-large-v3", optional_params={"base_url": "https://groq.gateway.internal/openai/v1"}
+    )
+
+    assert api_base == "https://groq.gateway.internal/openai/v1"
+    assert (
+        litellm.get_api_base(
+            model="groq/whisper-large-v3",
+            optional_params={"api_base": "https://explicit.internal/v1", "base_url": "https://alias.internal/v1"},
+        )
+        == "https://explicit.internal/v1"
+    )

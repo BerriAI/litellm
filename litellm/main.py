@@ -7928,6 +7928,7 @@ def transcription(
     timeout=600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
+    base_url: str | None = None,
     api_version: str | None = None,
     max_retries: int | None = None,
     custom_llm_provider=None,
@@ -7964,7 +7965,7 @@ def transcription(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
+        api_base=api_base or base_url,
         api_key=api_key,
     )
 
@@ -8224,6 +8225,7 @@ def speech(
     voice: str | dict | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
+    base_url: str | None = None,
     api_version: str | None = None,
     organization: str | None = None,
     project: str | None = None,
@@ -8246,7 +8248,7 @@ def speech(
     model_info: Final = kwargs.get("model_info", None)
     shared_session: Final = kwargs.get("shared_session", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base or base_url
     )
     kwargs.pop("tags", [])
 
