@@ -5500,10 +5500,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
 
     def is_user_identity_claim(self, claim_field: str, issuer: str | None) -> bool:
         issuer_config: Final = self.get_issuer_config(issuer)
-        issuer_fields: Final = (
-            () if issuer_config is None else (issuer_config.user_id_jwt_field, issuer_config.user_email_jwt_field)
+        if issuer_config is None:
+            return claim_field in (self.user_id_jwt_field, self.user_email_jwt_field)
+        return claim_field in (
+            issuer_config.user_id_jwt_field or self.user_id_jwt_field,
+            issuer_config.user_email_jwt_field or self.user_email_jwt_field,
         )
-        return claim_field in (*issuer_fields, self.user_id_jwt_field, self.user_email_jwt_field)
 
     def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
         issuer_config: Final = self.get_issuer_config(issuer)

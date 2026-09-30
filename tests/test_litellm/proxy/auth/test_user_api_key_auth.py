@@ -2328,6 +2328,52 @@ async def test_auto_register_map_existing_key_mints_when_the_claim_is_not_a_user
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("issuer_user_id_field", "expect_reuse"),
+    [("uid", False), (None, True)],
+)
+async def test_auto_register_map_existing_key_uses_the_issuers_own_user_field_over_the_global_one(
+    issuer_user_id_field, expect_reuse
+):
+    from litellm.proxy._types import JWTIssuerConfig
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+        issuers=[
+            JWTIssuerConfig(
+                issuer="https://idp.example.com", audience="litellm", user_id_jwt_field=issuer_user_id_field
+            )
+        ],
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(
+                prisma_client, user_api_key_cache, jwt_handler, jwt_issuer="https://idp.example.com"
+            )
+        )
+
+    mapped_token = prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]["token"]
+    assert mapped_token == ("existing-hash" if expect_reuse else hash_token("sk-minted-plaintext"))
+    assert generate_key.await_count == (0 if expect_reuse else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("map_existing_key", "master_key", "reused_key_models", "expect_denied"),
     [
         (True, "sk-master", ["some-other-model"], True),
