@@ -509,7 +509,7 @@ fn tag_special_characters_are_escaped_in_search_filter(
 )]
 #[case::responses_output_text(
     SemanticCacheContext { input: Some(json!({"output_text": "  result text  "})), ..Default::default() },
-    "result text"
+    "{\"output_text\":\"  result text  \"}"
 )]
 #[case::search_results(
     messages_context(vec![json!({
@@ -517,7 +517,7 @@ fn tag_special_characters_are_escaped_in_search_filter(
         "content": "question",
         "search_results": [{"source": "src", "title": "t", "content": [{"text": "found"}], "citations": {"a": 1}}],
     })]),
-    "questionsrctfound{\"a\":1}"
+    r#"{"role":"user","content":"question","search_results":[{"source":"src","title":"t","content":[{"text":"found"}],"citations":{"a":1}}]}"#
 )]
 #[case::empty_messages_fall_back_to_input(
     SemanticCacheContext { messages: Some(json!([])), input: Some(json!("fallback")), ..Default::default() },
