@@ -7,6 +7,8 @@ from litellm.rust_bridge.loader import get_native_bridge
 
 
 class NativeTraces(Protocol):
+    def trace_encode_rows(self, rows: Sequence[Mapping[str, JsonValue]]) -> str: ...
+
     def trace_schema_statements(
         self, database: str, trace_retention_days: int, spend_log_retention_days: int
     ) -> list[str]: ...
@@ -48,3 +50,7 @@ async def query(
 ) -> list[dict[str, JsonValue]]:
     result: Final = await _native().trace_query(url, database, user, password, sql, parameters)
     return QueryResponse.model_validate_json(result).data
+
+
+def encode_rows(rows: Sequence[Mapping[str, JsonValue]]) -> bytes:
+    return _native().trace_encode_rows(rows).encode("utf-8")

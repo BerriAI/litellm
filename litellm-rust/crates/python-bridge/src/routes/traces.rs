@@ -9,7 +9,9 @@ use pyo3::{
 
 fn map_error(error: Error) -> PyErr {
     match error {
-        Error::InvalidSchema | Error::EmptySql => PyValueError::new_err(error.to_string()),
+        Error::InvalidRow | Error::InvalidSchema | Error::EmptySql => {
+            PyValueError::new_err(error.to_string())
+        }
         Error::InvalidUrl
         | Error::QueryFailed(_)
         | Error::ResponseTooLarge
@@ -51,4 +53,15 @@ pub fn trace_query<'py>(
         async move { litellm_traces::execute_read(&client, &connection, &sql, &parameters).await },
         map_error,
     )
+}
+
+#[pyfunction]
+pub fn trace_encode_rows(
+    py: Python<'_>,
+    #[pyo3(from_py_with = litellm_host_python::from_py_argument)] rows: Vec<
+        BTreeMap<String, serde_json::Value>,
+    >,
+) -> PyResult<String> {
+    py.detach(|| litellm_traces::encode_rows(rows))
+        .map_err(map_error)
 }

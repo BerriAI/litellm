@@ -1,6 +1,6 @@
 # Trace storage foundation
 
-This crate owns the initial ClickHouse schema and parameterized read transport. Python adapters use `trace_schema_statements` and `trace_query` from the native bridge. HTTP endpoints, ingestion and trace response assembly belong to the integration built on this foundation
+This crate owns the initial ClickHouse schema, insert row encoding and parameterized read transport. Python adapters use `trace_schema_statements`, `trace_encode_rows` and `trace_query` from the native bridge. HTTP endpoints, ingestion and trace response assembly belong to the integration built on this foundation
 
 The SQL files under `migrations/` are the canonical definitions for `otel_traces`, `agent_traces`, its materialized view, and `spend_logs`. `schema_statements` supplies the database and retention settings. Apply the returned statements in order using migration credentials. Setup is repeatable for a new installation; these initial `CREATE IF NOT EXISTS` statements do not upgrade an existing incompatible table. Future schema changes need explicit upgrade statements
 
@@ -13,3 +13,5 @@ For self-hosted ClickHouse, install [config/reader.xml](config/reader.xml) as `/
 Keep reader, ingestion and migration credentials separate. Do not grant the reader write, backup, named-collection management or grant-option privileges, including through roles. `readonly=1` alone is insufficient for privileged accounts; see [query permissions](https://clickhouse.com/docs/concepts/features/configuration/settings/permissions-for-queries) and [settings constraints](https://clickhouse.com/docs/concepts/features/configuration/settings/constraints-on-settings)
 
 Run `cargo test -p litellm-traces -- --test-threads=2` from `litellm-rust`. Testcontainers applies the canonical schema, checks span rollups and spend joins, and exercises reader permissions, parameter binding, credentials and response limits
+
+`encode_rows` produces JSONEachRow and formats span nanoseconds and spend-log milliseconds as UTC DateTime64 strings without losing precision. The integration owns compression, batching and writes
