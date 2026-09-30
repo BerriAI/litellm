@@ -16,9 +16,7 @@ from litellm.integrations.clickhouse.schema import (
 
 
 def test_schema_statements_cover_all_tables_and_retention():
-    statements = schema_statements(
-        "litellm", trace_retention_days=7, spend_log_retention_days=45
-    )
+    statements = schema_statements("litellm", trace_retention_days=7, spend_log_retention_days=45)
     ddl = "\n".join(statements)
 
     for table in (OTEL_TRACES_TABLE, AGENT_TRACES_TABLE, SPEND_LOGS_TABLE):
@@ -30,9 +28,7 @@ def test_schema_statements_cover_all_tables_and_retention():
 
 def test_otel_traces_keeps_collector_compatible_columns():
     otel_ddl = next(
-        s
-        for s in schema_statements("litellm", 30, 90)
-        if f"TABLE IF NOT EXISTS litellm.{OTEL_TRACES_TABLE}" in s
+        s for s in schema_statements("litellm", 30, 90) if f"TABLE IF NOT EXISTS litellm.{OTEL_TRACES_TABLE}" in s
     )
     for column in (
         "Timestamp",
