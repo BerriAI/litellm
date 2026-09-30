@@ -3310,8 +3310,11 @@ async def _authorize_authenticated_request(
                 target_name,
                 store,
                 billable=request.method == "POST"
-                and request_data.get("method")
-                in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
+                and (
+                    not RouteChecks.check_route_access(route, ("/a2a/{agent_id}", "/v1/a2a/{agent_id}"))
+                    or request_data.get("method")
+                    in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage")
+                ),
             )
         await _run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,

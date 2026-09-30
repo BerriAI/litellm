@@ -5,6 +5,7 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
+from types import MappingProxyType
 from typing import Any, Final
 
 from fastapi import HTTPException
@@ -78,4 +79,13 @@ async def route_a2a_agent_request(
     data["api_base"] = agent.agent_card_params["url"]
     verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
-    return getattr(litellm, f"{route_type}")(**data)
+    invocation_pricing: Final = (
+        MappingProxyType({"cost_per_query": user_api_key_dict.agent_invocation_cost})
+        if user_api_key_dict is not None
+        and user_api_key_dict.agent_invocation_cost is not None
+        and user_api_key_dict.invoked_agent_policy is not None
+        and (user_api_key_dict.invoked_agent_policy.litellm_params or MappingProxyType({})).get("cost_per_query")
+        is not None
+        else MappingProxyType({})
+    )
+    return getattr(litellm, f"{route_type}")(**MappingProxyType({**data, **invocation_pricing}))
