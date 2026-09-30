@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 
 
 from fastapi import HTTPException
@@ -20,6 +21,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     approve_guardrail_submission,
     create_guardrail,
     delete_guardrail,
+    get_category_yaml,
     get_guardrail_info,
     get_guardrail_submission,
     get_guardrail_ui_settings,
@@ -2670,3 +2672,32 @@ async def test_test_custom_code_endpoint_reports_a_system_exit_as_an_execution_e
     assert response.error == "Execution error: SystemExit: bye"
     assert response.error_type == "execution"
     assert time.monotonic() - started < 2.0
+
+
+@pytest.mark.asyncio
+async def test_get_category_yaml_returns_bundled_category_and_its_file_type():
+    result = await get_category_yaml("harmful_self_harm")
+    assert result["category_name"] == "harmful_self_harm"
+    assert result["file_type"] == "yaml"
+    assert yaml.safe_load(result["yaml_content"])["category_name"] == "harmful_self_harm"
+
+
+@pytest.mark.asyncio
+async def test_get_category_yaml_reports_json_file_type():
+    result = await get_category_yaml("harm_toxic_abuse")
+    assert result["file_type"] == "json"
+    json.loads(result["yaml_content"])
+
+
+@pytest.mark.asyncio
+async def test_get_category_yaml_rejects_traversal_with_400():
+    with pytest.raises(HTTPException) as exc:
+        await get_category_yaml("../../etc/passwd")
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_category_yaml_unknown_category_is_404():
+    with pytest.raises(HTTPException) as exc:
+        await get_category_yaml("no_such_category_anywhere")
+    assert exc.value.status_code == 404

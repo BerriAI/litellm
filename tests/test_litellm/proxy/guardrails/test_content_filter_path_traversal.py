@@ -1,11 +1,12 @@
 import os
+import pathlib
 import re
 from unittest.mock import patch
 
 import pytest
 
 import litellm
-from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_DIR
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_DIR, LEGACY_DATA_DIR as INSTALLED_LEGACY_DATA_DIR
 
 LEGACY_DATA_DIR = "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter"
 
@@ -93,17 +94,15 @@ class TestContentFilterPathTraversal:
         )
         assert "foo/../../etc/passwd" not in guardrail.loaded_categories
 
-    def test_assert_within_categories_dir_blocks_parent_traversal(self):
+    def test_assert_within_data_roots_blocks_parent_traversal(self):
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
             ContentFilterGuardrail,
         )
 
         with pytest.raises(ValueError, match="outside the allowed categories"):
-            ContentFilterGuardrail._assert_within_categories_dir(
-                "/etc/passwd", CATEGORIES_DIR
-            )
+            ContentFilterGuardrail._assert_within_data_roots("/etc/passwd", (CATEGORIES_DIR,))
 
-    def test_assert_within_categories_dir_allows_valid_file(self, tmp_path):
+    def test_assert_within_data_roots_allows_valid_file(self, tmp_path):
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
             ContentFilterGuardrail,
         )
@@ -111,9 +110,9 @@ class TestContentFilterPathTraversal:
         categories_dir = str(tmp_path)
         valid_file = str(tmp_path / "test.yaml")
         # Should not raise
-        ContentFilterGuardrail._assert_within_categories_dir(valid_file, categories_dir)
+        ContentFilterGuardrail._assert_within_data_roots(valid_file, (categories_dir,))
 
-    def test_assert_within_categories_dir_commonpath_raises_valueerror(self, tmp_path):
+    def test_assert_within_data_roots_commonpath_raises_valueerror(self, tmp_path):
         """Cover the except-ValueError branch (Windows cross-drive paths)."""
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
             ContentFilterGuardrail,
@@ -127,9 +126,7 @@ class TestContentFilterPathTraversal:
             with pytest.raises(
                 ValueError, match="outside the allowed categories directory"
             ):
-                ContentFilterGuardrail._assert_within_categories_dir(
-                    valid_file, categories_dir
-                )
+                ContentFilterGuardrail._assert_within_data_roots(valid_file, (categories_dir,))
 
     def test_resolve_category_file_path_direct_join_hit(self):
         """Cover the first-join-attempt success branch (lines 383-384)."""
@@ -206,3 +203,122 @@ class TestContentFilterPathTraversal:
             _os.environ.pop("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", None)
             with pytest.raises(ValueError, match="outside the allowed categories"):
                 guardrail._resolve_category_file_path("/etc/passwd")
+
+
+def _fresh_guardrail():
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
+    guardrail = ContentFilterGuardrail.__new__(ContentFilterGuardrail)
+    guardrail.loaded_categories = {}
+    guardrail.severity_threshold = "medium"
+    guardrail.category_keywords = {}
+    guardrail.always_block_category_keywords = {}
+    guardrail.conditional_categories = {}
+    return guardrail
+
+
+CUSTOM_CATEGORY_YAML = """category_name: custom_legacy
+display_name: Custom Legacy
+description: copied into the old package folder by a deployment
+default_action: BLOCK
+keywords:
+  - keyword: legacycopyword
+    severity: high
+"""
+
+
+@pytest.fixture
+def legacy_root(tmp_path):
+    """A stand-in for the pre-move package dir with a deployment's own category file inside."""
+    root = tmp_path / "litellm_content_filter"
+    (root / "categories").mkdir(parents=True)
+    (root / "categories" / "custom_legacy.yaml").write_text(CUSTOM_CATEGORY_YAML)
+    return str(root)
+
+
+class TestLegacyPackageRootStaysSearchable:
+    """Files a deployment copied into the old guardrail package dir must keep working after the move."""
+
+    def test_installed_legacy_root_is_the_old_package_dir(self):
+        assert INSTALLED_LEGACY_DATA_DIR.endswith(os.path.join("guardrail_hooks", "litellm_content_filter"))
+        assert os.path.isdir(INSTALLED_LEGACY_DATA_DIR)
+
+    def test_custom_category_file_under_legacy_root_resolves(self, legacy_root):
+        roots = (DATA_DIR, legacy_root)
+        custom = os.path.join(legacy_root, "categories", "custom_legacy.yaml")
+        assert _fresh_guardrail()._resolve_category_file_path(custom, roots) == custom
+
+    def test_custom_category_file_relative_to_legacy_root_resolves(self, legacy_root, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        resolved = _fresh_guardrail()._resolve_category_file_path("categories/custom_legacy.yaml", (DATA_DIR, legacy_root))
+        assert os.path.realpath(resolved) == os.path.realpath(os.path.join(legacy_root, "categories", "custom_legacy.yaml"))
+
+    def test_bundled_root_wins_when_both_roots_hold_the_name(self, legacy_root):
+        resolved = _fresh_guardrail()._resolve_category_file_path(
+            "categories/harmful_self_harm.yaml", (DATA_DIR, legacy_root)
+        )
+        assert os.path.realpath(resolved) == os.path.realpath(os.path.join(CATEGORIES_DIR, "harmful_self_harm.yaml"))
+
+    def test_custom_category_loads_by_name_from_legacy_root(self, legacy_root):
+        guardrail = _fresh_guardrail()
+        guardrail._load_categories([{"category": "custom_legacy", "enabled": True}], (DATA_DIR, legacy_root))
+        assert "custom_legacy" in guardrail.loaded_categories
+        assert "legacycopyword" in guardrail.category_keywords
+
+    def test_custom_category_loads_via_category_file_under_legacy_root(self, legacy_root):
+        guardrail = _fresh_guardrail()
+        guardrail._load_categories(
+            [
+                {
+                    "category": "custom_legacy",
+                    "enabled": True,
+                    "category_file": os.path.join(legacy_root, "categories", "custom_legacy.yaml"),
+                }
+            ],
+            (DATA_DIR, legacy_root),
+        )
+        assert "custom_legacy" in guardrail.loaded_categories
+
+    def test_traversal_still_rejected_with_two_roots(self, legacy_root):
+        with pytest.raises(ValueError, match="outside the allowed categories"):
+            _fresh_guardrail()._resolve_category_file_path("../../../../etc/passwd", (DATA_DIR, legacy_root))
+
+    def test_file_outside_every_root_rejected(self, legacy_root, tmp_path):
+        outside = tmp_path / "elsewhere.yaml"
+        outside.write_text(CUSTOM_CATEGORY_YAML)
+        with pytest.raises(ValueError, match="outside the allowed categories"):
+            _fresh_guardrail()._resolve_category_file_path(str(outside), (DATA_DIR, legacy_root))
+
+    def test_ui_listing_includes_legacy_root_and_lists_each_name_once(self, legacy_root):
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
+            get_available_content_categories,
+        )
+
+        listed = get_available_content_categories((DATA_DIR, legacy_root))
+        names = [c["name"] for c in listed]
+        assert "custom_legacy" in names
+        assert "harmful_self_harm" in names
+        assert len(names) == len(set(names))
+        assert names == sorted(names)
+
+    def test_ui_listing_prefers_bundled_copy_on_name_clash(self, legacy_root):
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
+            get_available_content_categories,
+        )
+
+        clash = CUSTOM_CATEGORY_YAML.replace("custom_legacy", "harmful_self_harm").replace(
+            "Custom Legacy", "Shadowed Copy"
+        )
+        (pathlib.Path(legacy_root) / "categories" / "harmful_self_harm.yaml").write_text(clash)
+        listed = {c["name"]: c for c in get_available_content_categories((DATA_DIR, legacy_root))}
+        assert listed["harmful_self_harm"]["display_name"] != "Shadowed Copy"
+
+    def test_find_category_file_falls_through_to_legacy_root(self, legacy_root):
+        from litellm.proxy.guardrails.content_filter_data import find_category_file
+
+        roots = (DATA_DIR, legacy_root)
+        assert find_category_file("custom_legacy", roots) == os.path.join(legacy_root, "categories", "custom_legacy.yaml")
+        assert find_category_file("harmful_self_harm", roots) == os.path.join(CATEGORIES_DIR, "harmful_self_harm.yaml")
+        assert find_category_file("no_such_category_anywhere", roots) is None
