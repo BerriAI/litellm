@@ -225,3 +225,38 @@ async def test_closing_the_stream_runs_every_callback_cleanup_before_returning()
 
     assert first == {"choices": [{"delta": {"content": "Hello"}}]}
     assert [callback.cleaned_up for callback in callbacks] == [True, True]
+
+
+class RaisingCleanupCallback(CustomLogger):
+    """Iterator hook whose cleanup raises."""
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator[Any, None],
+        request_data: dict,
+    ) -> AsyncGenerator[Any, None]:
+        try:
+            async for chunk in response:
+                yield chunk
+        finally:
+            raise RuntimeError("cleanup failed")
+
+
+@pytest.mark.asyncio
+async def test_closing_the_stream_still_cleans_up_inner_callbacks_when_an_outer_cleanup_raises():
+    proxy_logging = ProxyLogging(user_api_key_cache=MagicMock())
+    inner = CleanupRecordingCallback()
+
+    with patch.object(litellm, "callbacks", [inner, RaisingCleanupCallback()]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        stream = proxy_logging.async_post_call_streaming_iterator_hook(
+            response=mock_streaming_response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+            request_data={"model": "gpt-4", "messages": []},
+        )
+        await stream.__anext__()
+        await stream.aclose()
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    assert inner.cleaned_up is True

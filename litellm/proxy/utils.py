@@ -4086,7 +4086,12 @@ class ProxyLogging:
     @staticmethod
     async def _close_guarded_layers(layers: Sequence[AsyncGenerator[object, None]]) -> None:
         for layer in reversed(layers):
-            await layer.aclose()
+            try:
+                await layer.aclose()
+            except Exception as e:  # noqa: BLE001  # one failing callback cleanup must not skip the inner ones
+                verbose_proxy_logger.warning(
+                    "Closing a streaming callback layer after a client disconnect raised %s", type(e).__name__
+                )
 
     @staticmethod
     def _record_served_stream_output(request_data: Mapping[str, object], served_chunks: Sequence[object]) -> None:

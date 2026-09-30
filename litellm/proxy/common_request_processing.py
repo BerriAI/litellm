@@ -271,7 +271,12 @@ async def close_guarded_stream(stream: object) -> None:
     if not isinstance(stream, AsyncGenerator):
         return
     with anyio.CancelScope(shield=True):
-        await stream.aclose()
+        try:
+            await stream.aclose()
+        except Exception as e:  # noqa: BLE001  # a failing callback cleanup must not skip the refund and finalizer
+            verbose_proxy_logger.warning(
+                "Closing the guarded stream after a client disconnect raised %s", type(e).__name__
+            )
 
 
 def resolve_litellm_call_id(client_call_id: str | None) -> str:

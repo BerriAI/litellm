@@ -26,6 +26,7 @@ from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    STREAM_SSE_KEEPALIVE_PING_BYTES,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
@@ -4283,6 +4284,39 @@ class TestStreamCloseOnDisconnect:
         await gen.aclose()
 
         assert cleanup_ran == [True]
+
+    async def test_async_streaming_data_generator_refunds_the_budget_when_closing_the_guardrail_chain_raises(
+        self,
+    ):
+        async def guarded_chain(**_kwargs):
+            try:
+                yield STREAM_SSE_KEEPALIVE_PING_BYTES
+                yield {"type": "chunk"}
+            finally:
+                raise RuntimeError("cleanup failed")
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = guarded_chain
+        reservation = object()
+        user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        user_api_key_dict.budget_reservation = reservation
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        with patch(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel",
+            new=AsyncMock(),
+        ) as release:
+            await gen.__anext__()
+            await gen.aclose()
+
+        release.assert_awaited_once_with(reservation)
 
     async def test_async_streaming_data_generator_redacts_internal_details_on_error(
         self,
