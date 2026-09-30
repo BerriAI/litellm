@@ -17,6 +17,7 @@ from litellm.llms.chatgpt.realtime import (
     realtime_headers,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client has legacy untyped optional params
     get_shared_realtime_ssl_context,
 )
@@ -84,10 +85,10 @@ class LiveTransport:
         deployment: LiveDeployment,
         inbound_headers: Mapping[str, str],
         *,
-        http_client: httpx.AsyncClient | None = None,
+        http_handler: AsyncHTTPHandler | None = None,
     ) -> None:
         self.deployment = deployment
-        self._http_client = http_client
+        self._http_handler = http_handler
         params: Final = GenericLiteLLMParams.model_validate(
             MappingProxyType(
                 {
@@ -156,20 +157,22 @@ class LiveTransport:
         ):
             raise ValueError("Invalid Live HTTP operation")
         url: Final = self._url(path, query, websocket=False)
-        client: Final = (
-            self._http_client
-            or get_async_httpx_client(
-                llm_provider=LlmProviders.CHATGPT if self.deployment.provider == "chatgpt" else LlmProviders.OPENAI
-            ).client
+        handler: Final = self._http_handler or get_async_httpx_client(
+            llm_provider=LlmProviders.CHATGPT if self.deployment.provider == "chatgpt" else LlmProviders.OPENAI,
+            params={"follow_redirects": False},
         )
-        return await client.request(
-            method,
-            url,
-            headers=MappingProxyType({**self._headers, "content-type": "application/json"}),
-            json=dict(body) if body is not None else None,  # mutable-ok: JSON encoder requires a concrete dict
-            timeout=60,
-            follow_redirects=False,
-        )
+        headers: Final = {**self._headers, "content-type": "application/json"}
+        if method == "GET":
+            return await handler.get(url, headers=headers, timeout=60, follow_redirects=False)
+        try:
+            return await handler.post(
+                url,
+                headers=headers,
+                json=dict(body) if body is not None else None,  # mutable-ok: JSON encoder requires a concrete dict
+                timeout=60,
+            )
+        except httpx.HTTPStatusError as error:
+            return error.response
 
     async def connect(self, path: str, query: LiveQuery | None = None) -> "ClientConnection":
         import websockets

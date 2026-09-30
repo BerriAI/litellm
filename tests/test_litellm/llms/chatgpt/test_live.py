@@ -1,9 +1,21 @@
 import json
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from litellm.llms.chatgpt.live import LiveDeployment, LiveTransport, live_session_path
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+
+@asynccontextmanager
+async def live_handler(respond):
+    handler = AsyncHTTPHandler(transport=httpx.MockTransport(respond), follow_redirects=False)
+    try:
+        yield handler
+    finally:
+        await handler.close()
 
 
 @pytest.mark.asyncio
@@ -32,7 +44,7 @@ async def test_live_request_preserves_payload_status_and_selected_credentials(pr
         assert not {"model", "call_id", "session_id", "api_key"}.intersection(request.url.params)
         return httpx.Response(status, json={"result": "upstream"}, headers={"x-request-id": "provider-id"})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+    async with live_handler(respond) as handler:
         transport = LiveTransport(
             LiveDeployment(
                 model="deployment-model",
@@ -43,7 +55,7 @@ async def test_live_request_preserves_payload_status_and_selected_credentials(pr
                 extra_query={"gateway": "trusted", "tag": ("a +/&", "b"), "model": "bad", "session_id": "bad"},
             ),
             {"Authorization": "Bearer proxy-key", "Cookie": "private", "OpenAI-Beta": "feature=v1"},
-            http_client=client,
+            http_handler=handler,
         )
         response = await transport.request(
             "POST",
@@ -54,26 +66,53 @@ async def test_live_request_preserves_payload_status_and_selected_credentials(pr
         assert response.status_code == status
         assert response.json() == {"result": "upstream"}
         assert response.headers["x-request-id"] == "provider-id"
-        assert not client.is_closed
+        assert not handler.client.is_closed
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["fork", "accept", "reject", "refer", "hangup", "content"])
-async def test_live_all_http_operations(operation):
+@pytest.mark.parametrize("status", [204, 404, 503])
+async def test_live_all_http_operations(operation, status):
     def respond(request):
         assert request.url.path == f"/v1/live/sessions/sess_new-ID/{operation}"
         assert request.method == ("GET" if operation == "content" else "POST")
         assert request.url.params["output_format"] == "json"
-        return httpx.Response(204)
+        return httpx.Response(status)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        transport = LiveTransport(LiveDeployment("model", provider="openai", api_key="key"), {}, http_client=client)
+    async with live_handler(respond) as handler:
+        transport = LiveTransport(LiveDeployment("model", provider="openai", api_key="key"), {}, http_handler=handler)
         response = await transport.request(
             "GET" if operation == "content" else "POST",
             live_session_path("sess_new-ID", operation),
             query={"output_format": "json"},
         )
-        assert response.status_code == 204
+        assert response.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_live_request_uses_handler_methods():
+    handler = AsyncMock(spec=AsyncHTTPHandler)
+    handler.get.return_value = httpx.Response(404)
+    handler.post.return_value = httpx.Response(503)
+    transport = LiveTransport(LiveDeployment("model", provider="openai", api_key="key"), {}, http_handler=handler)
+
+    get_response = await transport.request("GET", live_session_path("sess_1", "content"))
+    post_response = await transport.request("POST", "live/sessions", {"transport": {"type": "webrtc"}})
+
+    assert get_response.status_code == 404
+    assert post_response.status_code == 503
+    handler.get.assert_awaited_once_with(
+        "https://api.openai.com/v1/live/sessions/sess_1/content",
+        headers={"authorization": "Bearer key", "content-type": "application/json"},
+        timeout=60,
+        follow_redirects=False,
+    )
+    handler.post.assert_awaited_once_with(
+        "https://api.openai.com/v1/live/sessions",
+        headers={"authorization": "Bearer key", "content-type": "application/json"},
+        json={"transport": {"type": "webrtc"}},
+        timeout=60,
+    )
 
 
 @pytest.mark.asyncio
@@ -149,8 +188,8 @@ async def test_live_preserves_opaque_session_ids(session_id):
         assert request.url.params == httpx.QueryParams()
         return httpx.Response(200, json={"session_id": session_id})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        transport = LiveTransport(LiveDeployment("model", provider="openai", api_key="key"), {}, http_client=client)
+    async with live_handler(respond) as handler:
+        transport = LiveTransport(LiveDeployment("model", provider="openai", api_key="key"), {}, http_handler=handler)
         response = await transport.request("GET", live_session_path(session_id, "content"))
         assert response.json()["session_id"] == session_id
 
@@ -161,8 +200,8 @@ async def test_live_does_not_redirect_credentials():
         assert request.url.host == "api.openai.com"
         return httpx.Response(307, headers={"location": "https://elsewhere.example/collect"})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond), follow_redirects=True) as client:
-        transport = LiveTransport(LiveDeployment("model", provider="openai", api_key="key"), {}, http_client=client)
+    async with live_handler(respond) as handler:
+        transport = LiveTransport(LiveDeployment("model", provider="openai", api_key="key"), {}, http_handler=handler)
         response = await transport.request("POST", "live/sessions", {})
         assert response.status_code == 307
 
@@ -211,11 +250,11 @@ async def test_live_rejects_invalid_api_base_before_network(api_base):
         requests.append(request)
         return httpx.Response(200, json={})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+    async with live_handler(respond) as handler:
         transport = LiveTransport(
             LiveDeployment("deployment-model", provider="openai", api_key="deployment-key", api_base=api_base),
             {},
-            http_client=client,
+            http_handler=handler,
         )
         with pytest.raises(ValueError, match="Invalid Live API base"):
             await transport.request("POST", "live/sessions", {})
