@@ -4188,6 +4188,62 @@ def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_rout
     assert response.content == b"mp3-bytes"
 
 
+GROQ_INTERNAL_BASE: Final = "https://groq.gateway.internal/openai/v1"
+GROQ_WAV_FILE: Final = ("tone.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")
+
+
+def test_groq_transcription_honors_base_url_alias(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    response: Final = litellm.transcription(
+        model="groq/whisper-large-v3",
+        file=GROQ_WAV_FILE,
+        base_url=GROQ_INTERNAL_BASE,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.text == "hello"
+
+
+async def test_groq_atranscription_honors_base_url_alias(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": "hello"})
+    )
+
+    response: Final = await litellm.atranscription(
+        model="groq/whisper-large-v3",
+        file=GROQ_WAV_FILE,
+        base_url=GROQ_INTERNAL_BASE,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.text == "hello"
+
+
+def test_groq_speech_honors_base_url_alias(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"mp3-bytes")
+    )
+
+    response: Final = litellm.speech(
+        model="groq/playai-tts",
+        input="hello",
+        voice="Fritz-PlayAI",
+        base_url=GROQ_INTERNAL_BASE,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.content == b"mp3-bytes"
+
+
 FORWARDED_CLIENT_HEADERS: Final = {"x-forwarded-for": "10.0.0.1", "x-amzn-trace-id": "Root=1-lit7694"}
 
 
