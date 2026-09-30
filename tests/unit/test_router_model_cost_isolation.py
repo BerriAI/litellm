@@ -1829,6 +1829,34 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
         _restore_model_cost_entries(model_keys)
 
 
+def test_router_registration_keeps_ultrafast_long_context_deployment_pricing() -> None:
+    model_id: Final = "ultrafast-long-context-pricing-id"
+    backend_key: Final = "openai/gpt-6-astra"
+    rates: Final = {
+        "input_cost_per_token_above_272k_tokens_ultrafast": 0.00012,
+        "output_cost_per_token_above_272k_tokens_ultrafast": 0.00045,
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast": 1.2e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 0.00015,
+    }
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (model_id, backend_key, "gpt-6-astra")
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "ultrafast-long-context-pricing",
+                    "litellm_params": {"model": backend_key, **rates},
+                    "model_info": {"id": model_id},
+                }
+            ]
+        )
+
+        assert {key: litellm.model_cost[model_id][key] for key in rates} == rates
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+
+
 def test_reload_keeps_custom_pricing_configured_on_litellm_params_for_a_db_model():
     """
     A deployment added at runtime, which is what /model/new does, configures its
