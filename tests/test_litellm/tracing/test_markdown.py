@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
+from litellm.constants import AGENT_TRACING_MARKDOWN_MAX_FIELD_CHARS
 from litellm.tracing.markdown import trace_to_markdown
 from litellm.tracing.types import Span, Trace, TraceSummary
 
@@ -129,3 +130,83 @@ def test_span_id_exports_only_that_subtree():
     assert "grep_code" in md
     assert "ChatOpenAI" not in md
     assert "## Input" not in md
+
+
+def _trace(spans) -> Trace:
+    return Trace(summary=TRACE["summary"], agents=[], spans=spans)
+
+
+def test_partial_trace_without_a_parentless_root_still_exports_every_step():
+    spans = [
+        _span("a", "missing-parent", "lead", "agent", 0),
+        _span("t", "a", "search_docs", "tool", 1),
+    ]
+    md = trace_to_markdown(_trace(spans), {})
+    assert "_no spans_" not in md
+    assert "`search_docs`" in md
+
+
+def test_several_roots_all_render_instead_of_only_the_first():
+    spans = [
+        _span("r1", None, "first_run", "agent", 0),
+        _span("t1", "r1", "get_plan", "tool", 1),
+        _span("r2", None, "second_run", "agent", 5),
+        _span("t2", "r2", "search_docs", "tool", 6),
+    ]
+    md = trace_to_markdown(_trace(spans), {})
+    for name in ("first_run", "get_plan", "second_run", "search_docs"):
+        assert f"`{name}`" in md
+
+
+def test_subtree_of_a_framework_span_keeps_its_lifted_children():
+    md = trace_to_markdown(TRACE, IO, span_id="mw")
+    assert "## Subtree of `FilesystemMiddleware.wrap_model_call`" in md
+    assert "`ChatOpenAI`" in md
+
+
+def test_traceback_first_error_renders_instead_of_crashing():
+    spans = [
+        _span("root", None, "lead", "agent", 0),
+        _span(
+            "t",
+            "root",
+            "grep",
+            "tool",
+            1,
+            status="error",
+            error="Traceback (most recent call last):\n  File x\nKeyError: 'q'",
+        ),
+    ]
+    md = trace_to_markdown(_trace(spans), {})
+    assert "**FAILED**" in md
+    assert "error: `Traceback (most recent call last):`" in md
+
+
+def test_unknown_span_id_is_none_so_the_endpoint_can_404():
+    assert trace_to_markdown(TRACE, IO, span_id="no-such-span") is None
+
+
+def test_large_tool_call_arguments_are_clipped():
+    big_args = {"query": "x" * (AGENT_TRACING_MARKDOWN_MAX_FIELD_CHARS * 3)}
+    io = {
+        "llm": (
+            "",
+            json.dumps({"role": "assistant", "content": "", "tool_calls": [{"name": "grep", "args": big_args}]}),
+        )
+    }
+    md = trace_to_markdown(TRACE, io)
+    assert "chars truncated]" in md
+    assert "x" * (AGENT_TRACING_MARKDOWN_MAX_FIELD_CHARS + 1) not in md
+
+
+def test_cyclic_parents_terminate_and_render_each_span_once():
+    spans = [
+        _span("loop", "loop", "x.wrap_model_call", "framework", 0),
+        _span("tool", "loop", "grep", "tool", 1),
+        _span("a", "b", "left", "agent", 2),
+        _span("b", "a", "right", "agent", 3),
+    ]
+    md = trace_to_markdown(_trace(spans), {})
+    for name in ("grep", "left", "right"):
+        assert md.count(f"`{name}`") == 1
+    assert trace_to_markdown(_trace(spans), {}, span_id="loop") is not None
