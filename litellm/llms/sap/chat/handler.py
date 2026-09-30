@@ -44,7 +44,7 @@ def normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  #
     }
 
 
-def normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic dict from raw JSON
+def normalize_choice(choice: dict[str, object]) -> dict[str, object]:
     for key in ("message", "delta"):
         carrier = choice.get(key)
         if not isinstance(carrier, dict):
@@ -52,8 +52,8 @@ def normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable
         rc = carrier.get("reasoning_content")
         if not isinstance(rc, list):
             continue
-        thinking_blocks = [  # mutable-ok: local accumulator built once and assigned
-            {  # mutable-ok: each block dict constructed fresh per item
+        thinking_blocks = [
+            {
                 "type": "thinking",
                 "thinking": item.get("content") or "",
                 "signature": item.get("signature"),
@@ -61,14 +61,8 @@ def normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable
             for item in rc
             if isinstance(item, dict)
         ]
-        return {  # mutable-ok: one-shot return value, caller owns it
-            **choice,
-            key: {  # mutable-ok: nested one-shot dict, built and returned immediately
-                **carrier,
-                "thinking_blocks": thinking_blocks,
-                "reasoning_content": ("\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None),
-            },
-        }
+        choice[key]["thinking_blocks"] = thinking_blocks
+        choice[key]["reasoning_content"] = ("\n".join(b["thinking"] for b in thinking_blocks if b["thinking"]) or None)
     return choice
 
 
