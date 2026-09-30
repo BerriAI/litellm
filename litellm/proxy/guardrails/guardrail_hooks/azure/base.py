@@ -12,6 +12,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues, ResponseInputParam
+from litellm.types.utils import CallTypes, CallTypesLiteral
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
@@ -22,6 +23,8 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
+
+_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
 
 
 def resolve_content_safety_api_version(configured: str | None) -> str:
@@ -131,15 +134,15 @@ class AzureGuardrailBase:
 
         return chunks
 
-    def get_user_prompt_from_request(self, data: Mapping[str, object]) -> str | None:
+    def get_user_prompt_from_request(self, data: Mapping[str, object], call_type: CallTypesLiteral) -> str | None:
+        if call_type in _RESPONSES_API_CALL_TYPES:
+            responses_input: Final = data.get("input")
+            if not isinstance(responses_input, (str, list)):
+                return None
+            validated_input: Final = cast(ResponseInputParam, responses_input)
+            return get_last_user_message(ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input))
+
         messages: Final = data.get("messages")
-        if isinstance(messages, list):
-            return get_last_user_message(cast(list[AllMessageValues], messages))
-
-        responses_input: Final = data.get("input")
-        if not isinstance(responses_input, (str, list)):
+        if not isinstance(messages, list):
             return None
-
-        validated_input: Final = cast(ResponseInputParam, responses_input)
-        chat_messages: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input)
-        return get_last_user_message(chat_messages)
+        return get_last_user_message(cast(list[AllMessageValues], messages))

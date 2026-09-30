@@ -406,6 +406,49 @@ async def test_responses_input_is_scanned_and_billing_is_logged(responses_input:
 
 
 @pytest.mark.asyncio
+async def test_empty_messages_stub_does_not_hide_responses_input() -> None:
+    """Cursor sends /v1/responses bodies with an empty messages list plus the real
+    input; a messages-first selector would scan nothing and let the prompt through."""
+    guardrail: Final = _priced_shield_guardrail(cost_tier="paid", price_per_1000_text_records=0.38)
+    prompt: Final = "summarize the thread"
+    data: Final[dict[str, object]] = {"messages": [], "input": prompt}
+
+    with patch.object(guardrail.async_handler, "post", return_value=_shield_response(False)) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="k"),
+            cache=None,
+            data=data,
+            call_type="aresponses",
+        )
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["json"]["userPrompt"] == prompt
+    entry: Final = _recorded_guardrail_info(data)
+    assert entry["guardrail_usage"] == {"requests": 1, "input_characters": len(prompt), "text_records": 1}
+    assert entry["guardrail_cost"] == pytest.approx(0.00038)
+
+
+@pytest.mark.asyncio
+async def test_chat_call_type_scans_messages_not_input() -> None:
+    guardrail: Final = _shield_guardrail()
+    data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "chat prompt"}],
+        "input": "unrelated responses input",
+    }
+
+    with patch.object(guardrail.async_handler, "post", return_value=_shield_response(False)) as mock_post:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="k"),
+            cache=None,
+            data=data,
+            call_type="acompletion",
+        )
+
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["json"]["userPrompt"] == "chat prompt"
+
+
+@pytest.mark.asyncio
 async def test_responses_input_attack_detected_raises_http_exception() -> None:
     guardrail: Final = _priced_shield_guardrail(cost_tier="paid", price_per_1000_text_records=0.38)
 

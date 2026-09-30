@@ -231,7 +231,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
-        user_prompt: Final = self.get_user_prompt_from_request(data)
+        user_prompt: Final = self.get_user_prompt_from_request(data, call_type)
 
         if user_prompt:
             verbose_proxy_logger.info("Azure Text Moderation: User prompt: %s", user_prompt)
