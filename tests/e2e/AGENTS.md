@@ -133,11 +133,42 @@ The harness is fully typed with no error budget: `make lint-e2e-basedpyright` mu
 
 ## Recorded test steps
 
-`@step("POST /chat/completions")` from `e2e_metadata.py` goes on HARNESS helpers - client methods and poll loops - never on a test, and appends its label to the running test's `user_properties` in call order. The list IS the test's user story, and because the label is recorded BEFORE the wrapped call, a failing test's LAST step is where it died. Nothing about steps is hand-written: the call sequence cannot drift from what the test actually did. Steps are rolling out one harness at a time: `ProxyClient` and the rate-limit suite's `QuotaClient` carry them today. In a harness that has them, a new public method that performs an action (an HTTP call, a poll, a login, a CLI run) gets a `@step`; pure builders, parsers and `_private` helpers do not. Labels are one beat of the story in plain English, written for a reader who never opens the code. A label may name the helper's own parameters as `{placeholders}`, filled from each call: `@step('Send a /chat/completions request to {model} with the prompt "{content}"')`. A request model reads as the fields the test set ("models: claude-haiku-4-5 and rpm limit: 3"), and a dotted placeholder reads one field of it (`{body.litellm_params.model}`). A field marked `Field(repr=False)` is never shown, so mark any secret that way. Only what a label names reaches the report, so never name a key, token or credential. A placeholder the helper does not take fails at import, and a literal brace is written `{{id}}`
+`@step` from `e2e_metadata.py` goes on harness helpers (client methods and poll loops), never on a test. Each call adds one plain-English sentence to the running test's list of steps, in call order, so the list reads as what the test did. The step is recorded before the helper runs, so when a test fails, its last step is where it failed. Nobody writes steps by hand. They come from the calls the test actually made, so they can't drift from what happened
 
-Only the outermost step records. Harness layers call each other - `ProxyClient.create_model` goes through `register_model`, a domain client wraps the shared `ProxyClient` - so every layer carries its own label and the story still reads at the level the test called in at, one beat per action. On a `@contextmanager` helper `@step` goes ABOVE `@contextmanager`: the setup and cleanup around its `yield` count as part of the step, while the `with` body - the test's own code - records as usual, so cleanup never lands behind the step a test died on. A bare generator function is refused at import, since its body interleaves with the caller's. A decorated helper that warns about its caller uses `stacklevel=2 + STEP_FRAMES`, because the wrapper is a frame too. Nesting is tracked per thread, so a helper that fans work out to worker threads still records their steps. Consecutive duplicates collapse, so a poll loop is one beat rather than fifty, and the log keeps the latest 50 steps behind a line counting the ones it dropped: the cap drops from the front because the last step is where a failing test died. The log is emptied first thing in every test's setup phase and attached after setup and again after call, so a test that errors in a fixture keeps the steps recorded before the crash. Teardown steps are left out on purpose: they are cleanup, and listing them would put a finalizer's step after the one a failing test died on
+Steps are being added one harness at a time, and today `ProxyClient` and the rate-limit suite's `QuotaClient` have them. In a harness that has steps, every new public method that does something (an HTTP call, a poll, a login, a CLI run) gets a `@step`. Pure builders, parsers and `_private` helpers don't
 
-Steps ride out as repeated JUnit `<property name="step">` entries (`junit_properties.py`), one per step rather than one delimiter-joined value, since a free-text label has no separator that can be reserved. The results JSON downstream regroups them into a `steps` array. The harness tests for it sit outside the suite, in `tests/code_coverage_tests/test_e2e_metadata.py` and `test_e2e_junit_report.py`; the latter runs real pytest with `--junitxml` through this conftest, in-process and under `-n 2`, and pins what reaches the XML
+### Writing a label
+
+Write the label for someone who will never open the code, and fill it in from the helper's own parameters:
+
+```python
+@step("Generate a virtual key with {body}")
+def generate_key(self, body: KeyGenerateBody) -> str: ...
+
+@step('Send a /chat/completions request to {model} with the prompt "{content}"')
+def chat(self, key: str, model: str, content: str, *, max_tokens: int = 16) -> StreamingResponse: ...
+```
+
+A test that generates a key with an RPM limit and then sends one request shows:
+
+```
+Generate a virtual key with models: claude-haiku-4-5 and rpm limit: 3
+Send a /chat/completions request to claude-haiku-4-5 with the prompt "reply with one word d3940a1c4288"
+```
+
+A request model prints only the fields the test set, and a dotted placeholder like `{body.litellm_params.model}` prints just one field. A field marked `Field(repr=False)` never prints, so mark every secret field that way, and never put a key, token or credential in a label. A placeholder that isn't one of the helper's parameters fails at import, and a literal brace is written `{{id}}`. A filled-in label is squashed onto one line and cut at 200 characters
+
+### Nesting and the step log
+
+Only the outermost step records. `ProxyClient.create_model` calls `register_model`, and domain clients call into `ProxyClient`, so each layer can carry its own label and the test still shows one step per action, worded at the level the test called
+
+On a `@contextmanager` helper, put `@step` above `@contextmanager`. The setup and cleanup around the `yield` count as that one step, and the test's own code inside the `with` records its steps as usual. A plain generator function is rejected at import because its body runs interleaved with the caller's. A decorated helper that warns about its caller uses `stacklevel=2 + STEP_FRAMES`, since the wrapper adds a frame. Nesting is tracked per thread, so a helper that hands work to worker threads still records their steps
+
+Back-to-back identical steps collapse into one, so a poll loop shows up once. The log keeps the latest 50 steps and notes how many earlier ones it dropped, since the end is where a failure happened. It is cleared when each test starts and saved after setup and again after the test body, so a test that errors in a fixture keeps what it recorded. Teardown steps are left out so cleanup never shows up after the step a test failed on
+
+### Where steps end up
+
+Each step is its own `<property name="step">` in the JUnit XML (`junit_properties.py`), because free text has no separator that is safe to join on. project-releaser gathers them into a `steps` array in the results JSON. The tests for all of this sit outside the suite, in `tests/code_coverage_tests/test_e2e_metadata.py` and `test_e2e_junit_report.py`. The second one runs real pytest with `--junitxml` under `-n 2` and checks what lands in the XML
 
 ## Coverage registry
 
