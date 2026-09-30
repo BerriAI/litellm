@@ -909,7 +909,7 @@ class LiteLLMCompletionResponsesConfig:
             return None
         # Empty trailing assistant turns (tool-only Responses replays) must not
         # be wrapped as {"type":"text","text":""} when merged onto prior text.
-        if new_content in ("", []):
+        if new_content == "":
             return cast(  # cast-ok: trailing assistant unchanged
                 ChatCompletionAssistantMessage, last_message
             )
@@ -1812,7 +1812,9 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(item)
         if item_type == "input_image":
             image_block = _STR_KEY_DICT_ADAPTER.validate_python(
-                dict(LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item))
+                dict(  # mutable-ok: adapter needs a plain dict for cache_control mutation
+                    LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item)
+                )
             )
             if "cache_control" in item:
                 image_block["cache_control"] = item["cache_control"]
@@ -1825,7 +1827,7 @@ class LiteLLMCompletionResponsesConfig:
         text_value = item.get("text")
         if text_value is None or text_value == "":
             return None
-        content_block: dict[str, object] = {
+        content_block: dict[str, object] = {  # mutable-ok: outbound chat content part
             "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(item_type or "text"),
             "text": text_value,
         }
@@ -1851,7 +1853,7 @@ class LiteLLMCompletionResponsesConfig:
             return content
         if not isinstance(content, list):
             raise ValueError(f"Invalid content type: {type(content)}")
-        content_list: Final[list[str | dict[str, object]]] = []
+        content_list: Final[list[str | dict[str, object]]] = []  # mutable-ok: accumulator
         for item in content:
             if isinstance(item, str):
                 if item != "":
