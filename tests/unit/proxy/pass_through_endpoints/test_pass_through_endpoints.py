@@ -6934,14 +6934,17 @@ def test_passthrough_carries_the_per_model_budgets():
     key_budget = {"claude-opus-4-8": {"budget_limit": 1.0, "time_period": "18h"}}
     user_budget = {"claude-opus-4-8": {"budget_limit": 2.0, "time_period": "1mo"}}
     end_user_budget = {"claude-opus-4-8": {"budget_limit": 3.0, "time_period": "1d"}}
+    team_member_budget = {"claude-opus-4-8": {"budget_limit": 4.0, "time_period": "1d"}}
 
     kwargs = _passthrough_kwargs_for_reservation(
         UserAPIKeyAuth(
             token="hash",
             user_id="u-1",
+            team_id="team-1",
             model_max_budget=key_budget,
             user_model_max_budget=user_budget,
             end_user_model_max_budget=end_user_budget,
+            team_member_model_max_budget=team_member_budget,
         )
     )
 
@@ -6949,6 +6952,7 @@ def test_passthrough_carries_the_per_model_budgets():
     assert metadata["user_api_key_model_max_budget"] == key_budget
     assert metadata["user_api_key_user_model_max_budget"] == user_budget
     assert metadata["user_api_key_end_user_model_max_budget"] == end_user_budget
+    assert metadata["user_api_key_team_member_model_max_budget"] == team_member_budget
 
 
 def test_passthrough_budget_metadata_cannot_be_forged_by_the_request_body():
@@ -7046,6 +7050,7 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
     assert metadata.keys().isdisjoint({
         "user_api_key_model_max_budget", "user_api_key_team_model_max_budget",
         "user_api_key_user_model_max_budget", "user_api_key_end_user_model_max_budget",
+        "user_api_key_team_member_model_max_budget",
     })
 
 

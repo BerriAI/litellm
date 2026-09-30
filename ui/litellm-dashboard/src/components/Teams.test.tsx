@@ -1568,6 +1568,28 @@ describe("Teams - the exact bytes the create call sends", () => {
     expect(payload.model_max_budget).toStrictEqual({ "gpt-4": { budget_limit: 3, time_period: "30d" } });
   });
 
+  it("sends a configured default member per-model budget", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openCreateModal({ premiumUser: true });
+    await openSection("Additional Settings", /Team Member Key Duration/);
+
+    const addBudgetButtons = screen.getAllByRole("button", { name: /Add Model Budget/i });
+    await user.click(addBudgetButtons[1]);
+    const modelSelectors = screen.getAllByPlaceholderText("Select model");
+    await chooseSelectOption(user, modelSelectors[0], "gpt-4");
+    fireEvent.change(screen.getAllByPlaceholderText("Max spend ($)")[0], { target: { value: "4" } });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    const payload = await submit();
+
+    expect(payload.team_member_model_max_budget).toStrictEqual({
+      "gpt-4": { budget_limit: 4, time_period: "30d" },
+    });
+    expect(wireBody(payload).team_member_model_max_budget).toStrictEqual({
+      "gpt-4": { budget_limit: 4, time_period: "30d" },
+    });
+  });
+
   it("leaves model_max_budget out when a started row is removed again", async () => {
     const user = userEvent.setup({ delay: null });
     await openCreateModal({ premiumUser: true });

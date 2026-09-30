@@ -219,14 +219,15 @@ export function ModelMaxBudgetEditor({
 
 interface ModelMaxBudgetFieldProps extends ModelMaxBudgetEditorProps {
   hint: string;
+  label?: string;
 }
 
 /** The editor with its label, so every form that offers it presents it the same way. */
-export function ModelMaxBudgetField({ hint, ...editorProps }: ModelMaxBudgetFieldProps) {
+export function ModelMaxBudgetField({ hint, label = "Per-Model Budgets", ...editorProps }: ModelMaxBudgetFieldProps) {
   return (
     <Field>
       <FieldLabel>
-        <span title={hint}>Per-Model Budgets</span>
+        <span title={hint}>{label}</span>
       </FieldLabel>
       <ModelMaxBudgetEditor {...editorProps} />
     </Field>
