@@ -5,7 +5,7 @@ Built on `CustomBatchLogger`: rows accumulate in `log_queue` and are flushed as 
 gzip JSONEachRow insert, either every `CLICKHOUSE_FLUSH_INTERVAL_SECONDS` or as soon as
 `batch_size` rows are queued. Subclasses only pick the table and build rows:
 
-- `ClickHouseSpendLogger`  -> spend_logs   (LiteLLM requests, via the `clickhouse` callback)
+- `ClickHouseSpendLogger`  -> spend_logs   (LiteLLM requests when tracing is enabled)
 """
 
 import asyncio
@@ -43,13 +43,11 @@ class ClickHouseBatchLogger(CustomBatchLogger):
             batch_size=CLICKHOUSE_BATCH_SIZE,
             flush_interval=CLICKHOUSE_FLUSH_INTERVAL_SECONDS,
         )
-        try:
-            asyncio.get_running_loop().create_task(self.periodic_flush())
-        except RuntimeError:  # no loop yet (e.g. sync config load); proxy startup calls start()
-            pass
+        self._flush_task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
-        asyncio.get_running_loop().create_task(self.periodic_flush())
+        if self._flush_task is None or self._flush_task.done():
+            self._flush_task = asyncio.get_running_loop().create_task(self.periodic_flush())
 
     def is_full(self) -> bool:
         """Backpressure signal: producers should reject (429) instead of enqueueing."""
@@ -57,6 +55,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
 
     def enqueue(self, rows: list[dict[str, Any]]) -> None:
         """Never awaits ClickHouse. Kicks off an early flush once a full batch is queued."""
+        self.start()
         self.log_queue.extend(rows)
         if len(self.log_queue) >= self.batch_size:
             asyncio.get_running_loop().create_task(self.flush_queue())

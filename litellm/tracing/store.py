@@ -5,12 +5,15 @@ import binascii
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+
+from litellm._logging import verbose_logger
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
 from litellm.integrations.clickhouse.schema import (
-    AGENT_TRACES_BY_KEY_TABLE,
     OTEL_TRACES_TABLE,
 )
 from litellm.rust_bridge.traces import TraceStorage
@@ -27,58 +30,39 @@ from litellm.tracing.types import (
 )
 
 NANOS_PER_MS: Final = 1_000_000
+SPEND_WINDOW_MS: Final = 30 * 60 * 1000
 _STATUS: Final = MappingProxyType({"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"})
 
-_SCOPE_OTEL: Final = (
-    "(empty({team_ids:Array(String)}) OR TeamId IN {team_ids:Array(String)})"
-    " AND ({api_key_hash:String} = '' OR ApiKeyHash = {api_key_hash:String})"
-)
-_TRACE_REF_SQL: Final = "hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId)))"
-LIST_TRACES_SQL: Final = f"""
-SELECT TraceId AS trace_id, {_TRACE_REF_SQL} AS trace_ref,
-       ifNull(any(RootName), '') AS name, any(ServiceName) AS service,
-       ifNull(any(RootInput), '') AS input_preview, ifNull(any(RootStatus), '') AS status,
-       toUnixTimestamp64Milli(min(StartTs)) AS start_ms,
-       dateDiff('millisecond', min(StartTs), max(EndTs)) AS duration_ms,
-       sum(SpanCount) AS span_count, length(groupUniqArrayArray(AgentNames)) AS agent_count,
-       sum(AgentCount) AS agent_invocations,
-       sum(LlmCount) AS llm_calls, sum(ToolCount) AS tool_calls,
-       sum(InputTokens) AS input_tokens, sum(OutputTokens) AS output_tokens,
-       groupUniqArrayArray(Models) AS models, sum(ErrorCount) AS error_count
-FROM {AGENT_TRACES_BY_KEY_TABLE}
-WHERE (empty({{team_ids:Array(String)}}) OR TeamId IN {{team_ids:Array(String)}})
-  AND ({{api_key_hash:String}} = '' OR ApiKeyHash = {{api_key_hash:String}})
-GROUP BY TeamId, ApiKeyHash, TraceId
-HAVING min(StartTs) >= fromUnixTimestamp64Milli({{start_ms:Int64}})
-   AND min(StartTs) < fromUnixTimestamp64Milli({{end_ms:Int64}})
-   AND ({{cursor_ms:Int64}} = 0 OR (toUnixTimestamp64Milli(min(StartTs)), trace_ref)
-        < ({{cursor_ms:Int64}}, {{cursor_trace_id:String}}))
-ORDER BY start_ms DESC, trace_ref DESC
-LIMIT {{limit:UInt32}}
-"""
 
-TRACE_SPANS_SQL: Final = f"""
-SELECT o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
-       o.ObservationType AS type, o.AgentName AS agent, o.StatusCode AS status,
-       o.StatusMessage AS status_message,
-       toUnixTimestamp64Nano(o.Timestamp) AS start_ns, o.Duration AS duration_ns,
-       o.ServiceName AS service, o.InputPreview AS input_preview, o.Model AS model,
-       o.InputTokens AS input_tokens, o.OutputTokens AS output_tokens,
-       o.LiteLLMRequestId AS litellm_request_id
-FROM {OTEL_TRACES_TABLE} AS o
-WHERE o.TraceId = {{trace_id:String}} AND {_SCOPE_OTEL}
-  AND ({{trace_ref:String}} = '' OR {_TRACE_REF_SQL} = {{trace_ref:String}})
-ORDER BY o.Timestamp
-LIMIT 1 BY o.SpanId
-"""
+class _SpendRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-SPAN_DETAIL_SQL: Final = f"""
-SELECT SpanId AS span_id, Input AS input, Output AS output, SpanAttributes AS attributes
-FROM {OTEL_TRACES_TABLE}
-WHERE TraceId = {{trace_id:String}} AND SpanId = {{span_id:String}} AND {_SCOPE_OTEL}
-  AND ({{trace_ref:String}} = '' OR {_TRACE_REF_SQL} = {{trace_ref:String}})
-LIMIT 1
-"""
+    request_id: str
+    response_id: str
+    team_id: str
+    api_key: str
+    spend: float
+    start_ms: int
+
+
+_SPEND_ROWS: Final = TypeAdapter(tuple[_SpendRow, ...])
+
+
+def _spend_for(request_id: str, team_id: str, api_key_hash: str, rows: Sequence[_SpendRow]) -> float | None:
+    matches: Final = tuple(
+        row for row in rows if row.response_id == request_id and row.team_id == team_id and row.api_key == api_key_hash
+    )
+    return matches[0].spend if len(matches) == 1 else None
+
+
+def _trace_spend(
+    request_ids: Sequence[str], team_id: str, api_key_hash: str, rows: Sequence[_SpendRow]
+) -> float | None:
+    ids: Final = frozenset(request_id for request_id in request_ids if request_id)
+    costs: Final = tuple(_spend_for(request_id, team_id, api_key_hash, rows) for request_id in ids)
+    return (
+        sum(cost for cost in costs if cost is not None) if costs and all(cost is not None for cost in costs) else None
+    )
 
 
 def encode_cursor(start_ms: int, trace_id: str) -> str:
@@ -113,7 +97,7 @@ def _status(code: str) -> SpanStatus:
     return _STATUS.get(code, "unset")
 
 
-def trace_summary_from_row(row: dict[str, Any]) -> TraceSummary:
+def trace_summary_from_row(row: dict[str, Any], spend_rows: Sequence[_SpendRow] = ()) -> TraceSummary:
     return TraceSummary(
         trace_id=row["trace_id"],
         trace_ref=row.get("trace_ref", ""),
@@ -132,10 +116,13 @@ def trace_summary_from_row(row: dict[str, Any]) -> TraceSummary:
         input_tokens=int(row["input_tokens"]),
         output_tokens=int(row["output_tokens"]),
         models=tuple(row["models"]),
+        spend=_trace_spend(
+            row.get("request_ids") or (), row.get("team_id") or "", row.get("api_key_hash") or "", spend_rows
+        ),
     )
 
 
-def span_from_row(row: dict[str, Any], trace_start_ns: int) -> Span:
+def span_from_row(row: dict[str, Any], trace_start_ns: int, spend_rows: Sequence[_SpendRow] = ()) -> Span:
     return Span(
         span_id=row["span_id"],
         parent_span_id=row["parent_span_id"] or None,
@@ -151,6 +138,11 @@ def span_from_row(row: dict[str, Any], trace_start_ns: int) -> Span:
         input_tokens=int(row["input_tokens"]),
         output_tokens=int(row["output_tokens"]),
         litellm_request_id=row["litellm_request_id"] or None,
+        spend=(
+            _spend_for(row["litellm_request_id"], row.get("team_id") or "", row.get("api_key_hash") or "", spend_rows)
+            if row["litellm_request_id"]
+            else None
+        ),
     )
 
 
@@ -182,6 +174,7 @@ def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
                 llm_calls=0,
                 tool_calls=0,
                 duration_ms=0.0,
+                spend=None,
             ),
         )
         node["invocations"] += 1
@@ -194,15 +187,41 @@ def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
             owner["llm_calls"] += 1
         elif span["type"] == "tool":
             owner["tool_calls"] += 1
-    return tuple(agents.values())
+    return tuple(
+        AgentNode(
+            name=agent["name"],
+            parent_agent=agent["parent_agent"],
+            invocations=agent["invocations"],
+            llm_calls=agent["llm_calls"],
+            tool_calls=agent["tool_calls"],
+            duration_ms=agent["duration_ms"],
+            spend=_agent_spend(spans, agent["name"]),
+        )
+        for agent in agents.values()
+    )
 
 
-def trace_from_rows(trace_id: str, rows: list[dict[str, Any]], trace_ref: str = "") -> Trace | None:
+def _agent_spend(spans: Sequence[Span], agent_name: str) -> float | None:
+    by_request: Final = {
+        span["litellm_request_id"]: span["spend"]
+        for span in spans
+        if span["type"] == "llm" and span["agent"] == agent_name and span["litellm_request_id"]
+    }
+    return (
+        sum(cost for cost in by_request.values() if cost is not None)
+        if by_request and all(cost is not None for cost in by_request.values())
+        else None
+    )
+
+
+def trace_from_rows(
+    trace_id: str, rows: list[dict[str, Any]], trace_ref: str = "", spend_rows: Sequence[_SpendRow] = ()
+) -> Trace | None:
     if not rows:
         return None
     trace_start_ns: Final = min(int(r["start_ns"]) for r in rows)
     trace_end_ns: Final = max(int(r["start_ns"]) + int(r["duration_ns"]) for r in rows)
-    spans: Final = tuple(span_from_row(r, trace_start_ns) for r in rows)
+    spans: Final = tuple(span_from_row(r, trace_start_ns, spend_rows) for r in rows)
     root: Final = next((s for s in spans if s["parent_span_id"] is None), spans[0])
     agents: Final = agent_nodes(spans)
     llm_spans: Final = tuple(s for s in spans if s["type"] == "llm")
@@ -225,6 +244,12 @@ def trace_from_rows(trace_id: str, rows: list[dict[str, Any]], trace_ref: str = 
             input_tokens=sum(s["input_tokens"] for s in spans),
             output_tokens=sum(s["output_tokens"] for s in spans),
             models=tuple(sorted(frozenset(s["model"] for s in llm_spans if s["model"]))),
+            spend=_trace_spend(
+                tuple(row["litellm_request_id"] for row in rows),
+                rows[0].get("team_id") or "",
+                rows[0].get("api_key_hash") or "",
+                spend_rows,
+            ),
         ),
         agents=agents,
         spans=spans,
@@ -240,6 +265,29 @@ class ClickHouseTraceStore:
     async def insert_spans(self, rows: Sequence[SpanRow]) -> None:
         await self.storage.insert_rows(OTEL_TRACES_TABLE, tuple(rows))
 
+    async def _spend_rows(
+        self, scope: TraceScope, request_ids: Sequence[str], start_ms: int, end_ms: int
+    ) -> tuple[_SpendRow, ...]:
+        ids: Final = tuple(sorted(frozenset(request_id for request_id in request_ids if request_id)))
+        if not ids:
+            return ()
+        try:
+            rows: Final = await self.storage.query(
+                "spend_by_response_ids",
+                MappingProxyType(
+                    {
+                        **scope,
+                        "response_ids": ids,
+                        "start_ms": start_ms - SPEND_WINDOW_MS,
+                        "end_ms": end_ms + SPEND_WINDOW_MS,
+                    }
+                ),
+            )
+        except RuntimeError as error:
+            verbose_logger.warning("Trace spend lookup unavailable: %s", error)
+            return ()
+        return _SPEND_ROWS.validate_python(rows)
+
     async def list_traces(
         self,
         scope: TraceScope,
@@ -250,7 +298,7 @@ class ClickHouseTraceStore:
     ) -> TracePage:
         cursor_ms, cursor_trace_id = decode_cursor(cursor)
         rows = await self.storage.query(
-            LIST_TRACES_SQL,
+            "list_traces",
             MappingProxyType(
                 {
                     **scope,
@@ -262,18 +310,30 @@ class ClickHouseTraceStore:
                 }
             ),
         )
+        spend_rows: Final = await self._spend_rows(
+            scope,
+            tuple(chain.from_iterable(row.get("request_ids") or () for row in rows)),
+            min((int(row["start_ms"]) for row in rows), default=start_ms),
+            max((int(row["start_ms"]) + int(row["duration_ms"]) for row in rows), default=end_ms),
+        )
         next_cursor = encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_ref"]) if len(rows) == limit else None
-        return TracePage(data=tuple(trace_summary_from_row(r) for r in rows), next_cursor=next_cursor)
+        return TracePage(data=tuple(trace_summary_from_row(r, spend_rows) for r in rows), next_cursor=next_cursor)
 
     async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
         rows = await self.storage.query(
-            TRACE_SPANS_SQL, MappingProxyType({**scope, "trace_id": trace_id, "trace_ref": trace_ref})
+            "trace_spans", MappingProxyType({**scope, "trace_id": trace_id, "trace_ref": trace_ref})
         )
-        return trace_from_rows(trace_id, rows, trace_ref)
+        spend_rows: Final = await self._spend_rows(
+            scope,
+            tuple(row["litellm_request_id"] for row in rows),
+            min((int(row["start_ns"]) // NANOS_PER_MS for row in rows), default=0),
+            max(((int(row["start_ns"]) + int(row["duration_ns"])) // NANOS_PER_MS for row in rows), default=0),
+        )
+        return trace_from_rows(trace_id, rows, trace_ref, spend_rows)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         rows = await self.storage.query(
-            SPAN_DETAIL_SQL,
+            "span_detail",
             MappingProxyType({**scope, "trace_id": trace_id, "span_id": span_id, "trace_ref": trace_ref}),
         )
         if not rows:

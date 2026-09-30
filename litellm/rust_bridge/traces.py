@@ -1,6 +1,6 @@
 from collections.abc import Awaitable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, Protocol, TypedDict, cast
+from typing import Final, Literal, Protocol, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
@@ -31,6 +31,9 @@ class DecodedSpan(TypedDict):
     events: ReadOnly[list[DecodedEvent]]
 
 
+ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "spend_by_response_ids"]
+
+
 class NativeStore(Protocol):
     def __init__(self, database: str, url: str, reader_url: str | None = None) -> None: ...
 
@@ -38,7 +41,7 @@ class NativeStore(Protocol):
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, JsonValue]]) -> Awaitable[None]: ...
 
-    def query(self, sql: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
+    def query(self, name: ReadQueryName, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
 
 class NativeTraces(Protocol):
@@ -85,8 +88,10 @@ class TraceStorage:
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, INSERT_ROWS.validate_python(rows))
 
-    async def query(self, sql: str, parameters: Mapping[str, object] | None = None) -> list[dict[str, JsonValue]]:
+    async def query(
+        self, name: ReadQueryName, parameters: Mapping[str, object] | None = None
+    ) -> list[dict[str, JsonValue]]:
         result: Final = await self._native.query(
-            sql, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
+            name, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
         )
         return QueryResponse.model_validate_json(result).data

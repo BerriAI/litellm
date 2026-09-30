@@ -11321,25 +11321,42 @@ class ProxyStartupEvent:
             return connected_client
 
     @classmethod
-    async def init_tracing(cls, general_settings: dict) -> None:
+    async def init_tracing(cls, general_settings: dict, receiver: TraceReceiver | None = None) -> None:
         """
         Enable agent tracing (`POST/GET /v1/traces`) when configured:
 
             general_settings:
               tracing:
-                store: clickhouse       # CLICKHOUSE_URL / _USER / _PASSWORD / _DATABASE
+                store: clickhouse
         """
+        from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+
+        manager: Final = litellm.logging_callback_manager
+        for callbacks in (
+            litellm.callbacks,
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        ):
+            manager.remove_callbacks_by_type(callbacks, ClickHouseSpendLogger)
+        tracing_endpoints.receiver = None
         settings: Final = general_settings.get("tracing")
         if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
             return
         try:
-            tracing: Final = TraceReceiver.from_env()
+            tracing: Final = receiver if receiver is not None else TraceReceiver.from_env()
             await tracing.start()
         except (KeyError, OSError, RuntimeError, ValueError) as error:
-            tracing_endpoints.receiver = None
             verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
             return
         tracing_endpoints.receiver = tracing
+        spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
+        manager.add_litellm_callback(spend_logger)
+        manager.add_litellm_success_callback(spend_logger)
+        manager.add_litellm_failure_callback(spend_logger)
+        manager.add_litellm_async_success_callback(spend_logger)
+        manager.add_litellm_async_failure_callback(spend_logger)
         verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
 
     @classmethod
