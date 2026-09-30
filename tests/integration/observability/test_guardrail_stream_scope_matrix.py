@@ -321,6 +321,7 @@ def _rail_names() -> Mapping[str, str]:
             "g1_failure": "g1-failure",
             "g2_block": "g2-block",
             "g3_provider": "g3-provider",
+            "z_logging_only_barrier": "z_logging_only_barrier",
         }
     )
 
@@ -359,6 +360,7 @@ def _configured_rails(names: Mapping[str, str], sink: Wire) -> tuple[dict[str, J
         _rail(names["g1_failure"], sink, mode="pre_call", scope="streaming"),
         _rail(names["g2_block"], sink, mode="pre_call", scope="streaming"),
         _rail(names["g3_provider"], sink, mode="pre_call", scope="both"),
+        _rail(names["z_logging_only_barrier"], sink, mode="logging_only"),
     )
 
 
@@ -576,6 +578,36 @@ def _rail_scans(rows: Sequence[Request], rail_name: str, marker: str) -> tuple[R
     )
 
 
+@dataclass(slots=True)
+class _SinkRowsAccumulator:
+    sink: Wire
+    rows: tuple[Request, ...] = ()
+
+    def drain(self) -> tuple[Request, ...]:
+        self.rows = (*self.rows, *self.sink.drain())
+        return self.rows
+
+
+def _logging_only_scans(
+    sink: Wire,
+    marker: str,
+    rail: str,
+    barrier: str,
+    expected_scans: int,
+) -> tuple[Request, ...]:
+    accumulator: Final = _SinkRowsAccumulator(sink)
+    eventually(
+        accumulator.drain,
+        lambda rows: (
+            len(_rail_scans(rows, rail, marker)) >= expected_scans
+            if expected_scans
+            else bool(_rail_scans(rows, barrier, marker))
+        ),
+        seconds=70,
+    )
+    return _rail_scans(accumulator.rows, rail, marker)
+
+
 def _scope_scan_count(scope: MatrixScope, streamed: bool) -> int:
     if scope is None or scope == "both":
         return 1
@@ -612,12 +644,14 @@ def _cell_rows(
     _spend_row_for_call(call_id, response.content)
     expected_scans: Final = _scope_scan_count(scope, streamed)
     sink_rows: Final = (
-        eventually(
-            lambda: _rail_scans(rig.sink.drain(), rail, marker),
-            lambda values: len(values) >= expected_scans,
-            seconds=70,
+        _logging_only_scans(
+            rig.sink,
+            marker,
+            rail,
+            rig.rails["z_logging_only_barrier"],
+            expected_scans,
         )
-        if mode == "logging_only" and expected_scans
+        if mode == "logging_only"
         else _rail_scans(rig.sink.drain(), rail, marker)
     )
     return provider_rows, sink_rows
@@ -646,7 +680,7 @@ def _run_matrix_cell(
     assert len(provider_rows) == 1, (marker, provider_rows, response.text)
     expected_scans: Final = _scope_scan_count(scope, streamed)
     if mode == "logging_only":
-        assert not expected_scans or sink_rows, (marker, sink_rows, response.text)
+        assert bool(sink_rows) == bool(expected_scans), (marker, sink_rows, response.text)
     else:
         assert len(sink_rows) == expected_scans, (marker, sink_rows, response.text)
 
