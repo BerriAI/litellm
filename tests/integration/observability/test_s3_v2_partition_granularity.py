@@ -16,6 +16,7 @@ import httpx
 import openai
 import psutil
 import pytest
+import yaml
 from _s3_v2_support import (
     BUCKET,
     PREFIX,
@@ -127,8 +128,12 @@ def _s3_proxy(
     settings: Mapping[str, JsonValue] | None = None,
     environment: Mapping[str, str] | None = None,
     workers: int = 2,
+    models: tuple[Mapping[str, JsonValue], ...] = (),
 ) -> Iterator[OwnedProxy]:
     config: Final = s3_config(tmp_path, sink_url, extra, settings)
+    if models:
+        declared: Final = yaml.safe_load(config.read_text())
+        config.write_text(yaml.safe_dump({**declared, "model_list": [*declared["model_list"], *models]}))
     with owned_proxy_process(
         gateway, tmp_path, {**FLUSH, **(environment or {})}, config=config, workers=workers
     ) as owned:
@@ -141,6 +146,13 @@ def _models(scenario: Scenario, provider_url: str, **key_fields: JsonValue) -> t
         model=ANTHROPIC_MODEL, api_base=provider_url, api_key="synthetic-provider-key"
     )
     return openai_model, anthropic_model, scenario.key(models=[openai_model, anthropic_model], **key_fields)
+
+
+def _config_model(name: str, model: str, api_base: str) -> Mapping[str, JsonValue]:
+    return {
+        "model_name": name,
+        "litellm_params": {"model": model, "api_base": api_base, "api_key": "synthetic-provider-key"},
+    }
 
 
 def _sdk_chats(candidate: Gateway, model: str, key: str, prompts: tuple[str, ...]) -> tuple[str, ...]:
@@ -938,9 +950,11 @@ def test_s3_v2_hour_postgres_outage_mid_mixed_burst_lands_every_id_exactly_once_
     upstream: Final = CountingUpstream()
     sink: Final = RecordingS3Sink(delay_seconds=0.05)
     sent: Final = _surface_prompts(marker, 5)
+    openai_model: Final = f"{marker}openai"
+    anthropic_model: Final = f"{marker}anthropic"
     with (
         scratch_database() as database_url,
-        database_relay(database_url, b'"LiteLLM_SpendLogs"') as (relay, relayed_url),
+        database_relay(database_url, f"{marker}-".encode()) as (relay, relayed_url),
         wire_server(upstream.respond) as provider,
         wire_server(sink.respond) as bucket,
         _s3_proxy(
@@ -950,10 +964,14 @@ def test_s3_v2_hour_postgres_outage_mid_mixed_burst_lands_every_id_exactly_once_
             HOUR,
             {"cold_storage_custom_logger": "s3_v2"},
             environment={"DATABASE_URL": relayed_url},
+            models=(
+                _config_model(openai_model, "openai/gpt-4o-mini", provider.url + "/v1"),
+                _config_model(anthropic_model, ANTHROPIC_MODEL, provider.url),
+            ),
         ) as owned,
         owned.gateway.scenario() as scenario,
     ):
-        openai_model, anthropic_model, key = _models(scenario, provider.url)
+        key: Final = scenario.key(models=[openai_model, anthropic_model])
         warm: Final = mixed_burst(owned.gateway, openai_model, anthropic_model, key, f"{marker}warm", per_surface=2)
         eventually(
             lambda: frozenset(_prompt(payload) for payload in sink.payloads()),
