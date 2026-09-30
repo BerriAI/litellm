@@ -531,7 +531,7 @@ def test_redis_semantic_cache_get_cache_uses_responses_string_input():
     )
 
 
-def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
+def test_redis_semantic_cache_set_cache_embeds_every_part_of_structured_responses_input():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
     redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
@@ -561,7 +561,7 @@ def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
     )
 
     redis_semantic_cache.llmcache.store.assert_called_once_with(
-        "What is the capital of France?\nAnswer briefly.",
+        'What is the capital of France?\nAnswer briefly.\n{"type":"input_image","image_url":"https://example.com/paris.png"}',
         "{'content': 'Paris'}",
         vector=[0.1, 0.2, 0.3],
         filters={RedisSemanticCache.CACHE_KEY_FIELD_NAME: "test_key"},
@@ -593,10 +593,11 @@ def test_redis_semantic_cache_prompt_extraction_keeps_tool_turns_distinct():
         ]
 
     assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("ls")) == (
-        'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}{"result_of_call":1,"output":"ok"}'
+        'fix the failing test{"type":"tool_use","id":1,"name":"Bash","input":{"cmd":"ls"}}'
+        '{"type":"tool_result","tool_use_id":1,"content":"ok"}'
     )
-    assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("pwd")) == (
-        'fix the failing test{"name":"Bash","arguments":{"cmd":"pwd"}}{"result_of_call":1,"output":"ok"}'
+    assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("ls")) != (
+        RedisSemanticCache._get_prompt_from_kwargs(messages=turn("pwd"))
     )
 
 
@@ -612,7 +613,8 @@ def test_redis_semantic_cache_prompt_extraction_keeps_responses_function_calls()
     )
 
     assert prompt == (
-        'update the config\n{"name":"write_file","arguments":"{\\"path\\":\\"a.yaml\\"}"}\n{"result_of_call":1,"output":"ok"}'
+        'update the config\n{"type":"function_call","call_id":1,"name":"write_file","arguments":"{\\"path\\":\\"a.yaml\\"}"}'
+        '\n{"type":"function_call_output","call_id":1,"output":"ok"}'
     )
 
 
@@ -632,28 +634,11 @@ def test_redis_semantic_cache_prompt_extraction_keeps_structured_function_call_o
             ]
         )
 
-    expected_call = '{"name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}"}'
-    assert (
-        prompt_for("wrote 5 bytes") == f'write hello\n{expected_call}\n{{"result_of_call":1,"output":"wrote 5 bytes"}}'
+    assert prompt_for("wrote 5 bytes") == (
+        'write hello\n{"type":"function_call","call_id":1,"name":"write_file","arguments":"{\\"path\\":\\"a.txt\\"}"}\n'
+        '{"type":"function_call_output","call_id":1,"output":[{"type":"input_text","text":"wrote 5 bytes"}]}'
     )
     assert prompt_for("wrote 5 bytes") != prompt_for("PermissionError")
-
-
-def test_redis_semantic_cache_prompt_extraction_joins_multi_part_function_call_output_lines():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    prompt = RedisSemanticCache._get_prompt_from_kwargs(
-        input=[
-            {"type": "function_call", "call_id": "c1", "name": "run", "arguments": "{}"},
-            {
-                "type": "function_call_output",
-                "call_id": "c1",
-                "output": [{"type": "input_text", "text": " line one "}, {"type": "input_text", "text": "line two"}],
-            },
-        ]
-    )
-
-    assert prompt == '{"name":"run","arguments":"{}"}\n{"result_of_call":1,"output":"line one\\nline two"}'
 
 
 def test_redis_semantic_cache_prompt_extraction_tells_apart_parallel_outputs_answering_different_calls():
@@ -670,80 +655,63 @@ def test_redis_semantic_cache_prompt_extraction_tells_apart_parallel_outputs_ans
         )
 
     assert prompt_for("c2", "c1") == (
-        '{"name":"read","arguments":"a"}\n{"name":"read","arguments":"b"}\n'
-        '{"result_of_call":2,"output":"empty"}\n{"result_of_call":1,"output":"secret"}'
+        '{"type":"function_call","call_id":1,"name":"read","arguments":"a"}\n'
+        '{"type":"function_call","call_id":2,"name":"read","arguments":"b"}\n'
+        '{"type":"function_call_output","call_id":2,"output":"empty"}\n'
+        '{"type":"function_call_output","call_id":1,"output":"secret"}'
     )
     assert prompt_for("c1", "c2") != prompt_for("c2", "c1")
 
 
-def test_redis_semantic_cache_prompt_extraction_handles_model_objects():
+def test_redis_semantic_cache_prompt_extraction_replaces_encrypted_reasoning_with_a_digest():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
-    class ModelDumpInput:
-        def model_dump(self):
-            return {"content": [{"text": "model dump prompt"}]}
+    def prompt_for(encrypted_content: str) -> str | None:
+        return RedisSemanticCache._get_prompt_from_kwargs(
+            input=[{"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": encrypted_content}]
+        )
 
-    class DictInput:
-        def dict(self):
-            return {"content": [{"output_text": "dict prompt"}]}
+    blob = "gAAAAB" * 100
+    prompt = prompt_for(blob)
+    assert prompt is not None
+    assert blob not in prompt
+    assert prompt.startswith('{"type":"reasoning","id":1,"encrypted_content":"sha256:')
+    assert prompt != prompt_for(blob + "x")
+
+
+def test_redis_semantic_cache_prompt_extraction_handles_model_objects():
+    from pydantic import BaseModel
+
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    class ResponseInputMessage(BaseModel):
+        content: list[dict[str, str]]
 
     prompt = RedisSemanticCache._get_prompt_from_kwargs(
         input=[
-            ModelDumpInput(),
-            DictInput(),
-            {"content": [{"input_text": "inline prompt"}]},
-            {"content": [{"type": "input_image", "image_url": "https://example.com"}]},
+            ResponseInputMessage(content=[{"type": "input_text", "text": "model dump prompt"}]),
+            {"content": [{"type": "output_text", "text": "inline prompt", "annotations": []}]},
         ]
     )
 
-    assert prompt == "model dump prompt\ndict prompt\ninline prompt"
+    assert prompt == "model dump prompt\ninline prompt"
 
 
-def test_redis_semantic_cache_prompt_extraction_returns_none_without_text():
+def test_redis_semantic_cache_prompt_extraction_keeps_image_only_input():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    assert RedisSemanticCache._get_prompt_from_kwargs(
+        input=[{"type": "input_image", "image_url": "https://example.com/a.png"}]
+    ) == '{"type":"input_image","image_url":"https://example.com/a.png"}'
+
+
+def test_redis_semantic_cache_prompt_extraction_returns_none_without_input():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
     assert RedisSemanticCache._get_prompt_from_kwargs() is None
     assert RedisSemanticCache._get_prompt_from_kwargs(input=None) is None
     assert RedisSemanticCache._get_prompt_from_kwargs(input="   ") is None
-    assert (
-        RedisSemanticCache._get_prompt_from_kwargs(
-            input=[{"type": "input_image", "image_url": "https://example.com"}]
-        )
-        is None
-    )
-
-
-def test_redis_semantic_cache_prompt_extraction_skips_blank_dict_text_keys():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    prompt = RedisSemanticCache._get_prompt_from_kwargs(
-        input={"text": "   ", "input_text": "fallback prompt"}
-    )
-
-    assert prompt == "fallback prompt"
-
-
-def test_redis_semantic_cache_prompt_extraction_skips_blank_object_text_keys():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    class ResponseInput:
-        text = "   "
-        input_text = "fallback prompt"
-
-    prompt = RedisSemanticCache._get_prompt_from_kwargs(input=ResponseInput())
-
-    assert prompt == "fallback prompt"
-
-
-def test_redis_semantic_cache_prompt_extraction_handles_object_content():
-    from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-    class ResponseInput:
-        content = [{"text": "object content prompt"}]
-
-    prompt = RedisSemanticCache._get_prompt_from_kwargs(input=ResponseInput())
-
-    assert prompt == "object content prompt"
+    assert RedisSemanticCache._get_prompt_from_kwargs(input=[{"type": "input_text", "text": "  "}]) is None
 
 
 def test_redis_semantic_cache_set_cache_skips_blank_responses_input():

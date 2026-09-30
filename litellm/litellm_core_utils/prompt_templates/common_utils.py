@@ -2,6 +2,7 @@
 Common utility functions used for translating messages across providers
 """
 
+import hashlib
 import io
 import json
 import mimetypes
@@ -195,93 +196,148 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     return text
 
 
+_PLAIN_TYPES: Final = frozenset({"text", "input_text", "output_text", "message"})
+_PLAIN_KEYS: Final = frozenset({"role", "type", "text", "content", "status"})
+_TOOL_ROLES: Final = frozenset({"tool", "function"})
+_IGNORED_KEYS: Final = frozenset({"cache_control"})
+_CALL_ID_KEYS: Final = frozenset({"id", "call_id", "tool_use_id", "tool_call_id"})
+_OPAQUE_KEYS: Final = frozenset({"data", "file_data", "signature", "encrypted_content"})
+
+
 def get_str_from_messages_with_tools(messages: object) -> str:
     """
-    ``get_str_from_messages`` that also keeps each conversation's tool calls and tool results, so agent turns
-    that differ only in their tool exchange (Anthropic ``tool_use`` / ``tool_result``, OpenAI ``tool_calls``)
-    produce different text. Each result is encoded with the position of the call it answers, since call ids are
-    random per session
+    Semantic-cache prompt for chat-style ``messages``. Plain text parts stay plain text so text-only prompts embed
+    as they always have. Every other part (tool calls and results, images, unknown block types, extra fields) is kept
+    as compact JSON, so a new request shape changes the prompt instead of silently vanishing from it
     """
     message_mappings: Final = tuple(_str_mappings(messages))
-    call_ordinals: Final = tool_call_ordinals(_message_tool_call_ids(message_mappings))
-    return "".join(_message_str_with_tools(message, call_ordinals) for message in message_mappings)
+    call_ordinals: Final = _call_id_ordinals(message_mappings)
+    return "".join(_message_prompt(message, call_ordinals) for message in message_mappings)
 
 
-def tool_call_str(name: object, arguments: object) -> str:
-    return f'{{"name":{_compact_json(name)},"arguments":{_compact_json(arguments)}}}'
+def get_str_from_responses_input(responses_input: object) -> str | None:
+    """``get_str_from_messages_with_tools`` for Responses API ``input``, one stripped line per part"""
+    call_ordinals: Final = _call_id_ordinals(responses_input)
+    prompt: Final = "\n".join(_responses_input_parts(responses_input, call_ordinals)).strip()
+    return prompt or None
 
 
-def tool_result_str(call_id: object, call_ordinals: Mapping[str, int], output: str) -> str:
-    ordinal: Final = call_ordinals.get(call_id) if isinstance(call_id, str) else None
-    return f'{{"result_of_call":{_compact_json(ordinal)},"output":{_compact_json(output)}}}'
+def _message_prompt(message: Mapping[str, object], call_ordinals: Mapping[str, int]) -> str:
+    role: Final = message.get("role")
+    if (isinstance(role, str) and role in _TOOL_ROLES) or not _is_plain(message):
+        return _compact_json(_normalized(message, call_ordinals))
+    return _plain_prompt(message, call_ordinals)
 
 
-def tool_call_ordinals(call_ids: Iterable[object]) -> Mapping[str, int]:
-    string_ids: Final = (call_id for call_id in call_ids if isinstance(call_id, str))
-    return MappingProxyType({call_id: ordinal for ordinal, call_id in enumerate(dict.fromkeys(string_ids), start=1)})
+def _plain_prompt(value: Mapping[str, object], call_ordinals: Mapping[str, int]) -> str:
+    text: Final = value.get("text")
+    return (text if isinstance(text, str) else "") + _content_prompt(value.get("content"), call_ordinals)
 
 
-def _compact_json(value: object) -> str:
-    return json.dumps(value, separators=(",", ":"), default=str)
+def _content_prompt(content: object, call_ordinals: Mapping[str, int]) -> str:
+    value: Final = _plain_value(content)
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "".join(_content_prompt(item, call_ordinals) for item in value)
+    if _is_str_mapping(value) and _is_plain(value):
+        return _plain_prompt(value, call_ordinals)
+    return _compact_json(_normalized(value, call_ordinals))
 
 
-def _message_tool_call_ids(messages: Iterable[Mapping[str, object]]) -> Iterator[object]:
-    for message in messages:
-        yield from (
-            block.get("id") for block in _str_mappings(message.get("content")) if block.get("type") == "tool_use"
-        )
-        yield from (tool_call.get("id") for tool_call in _str_mappings(message.get("tool_calls")))
+def _responses_input_parts(value: object, call_ordinals: Mapping[str, int]) -> Iterator[str]:
+    item: Final = _plain_value(value)
+    if item is None:
+        return
+    if isinstance(item, str):
+        yield from _stripped(item)
+    elif isinstance(item, (list, tuple)):
+        for child in item:
+            yield from _responses_input_parts(child, call_ordinals)
+    elif _is_str_mapping(item) and _is_plain(item):
+        text: Final = item.get("text")
+        yield from _stripped(text if isinstance(text, str) else "")
+        yield from _responses_input_parts(item.get("content"), call_ordinals)
+    else:
+        yield _compact_json(_normalized(item, call_ordinals))
 
 
-def _message_str_with_tools(message: Mapping[str, object], call_ordinals: Mapping[str, int]) -> str:
-    content: Final = _content_str_with_tools(message.get("content"), call_ordinals)
+def _stripped(text: str) -> Iterator[str]:
+    stripped: Final = text.strip()
+    if stripped:
+        yield stripped
+
+
+def _is_plain(value: Mapping[str, object]) -> bool:
+    value_type: Final = value.get("type")
+    text: Final = value.get("text")
     return (
-        (
-            tool_result_str(message.get("tool_call_id"), call_ordinals, content)
-            if message.get("role") == "tool"
-            else content
-        )
-        + "".join(_openai_tool_call_str(tool_call) for tool_call in _str_mappings(message.get("tool_calls")))
-        + extract_search_results_text(message.get("search_results"))
+        (value_type is None or (isinstance(value_type, str) and value_type in _PLAIN_TYPES))
+        and (text is None or isinstance(text, str))
+        and all(key in _PLAIN_KEYS or key in _CALL_ID_KEYS for key in _kept_keys(value))
     )
 
 
-def _content_str_with_tools(content: object, call_ordinals: Mapping[str, int]) -> str:
-    if isinstance(content, str):
-        return content
-    return "".join(_block_str_with_tools(block, call_ordinals) for block in _str_mappings(content))
+def _kept_keys(value: Mapping[str, object]) -> Iterator[str]:
+    return (key for key, item in value.items() if key not in _IGNORED_KEYS and not _is_empty(item))
 
 
-def _block_str_with_tools(block: Mapping[str, object], call_ordinals: Mapping[str, int]) -> str:
-    block_type: Final = block.get("type")
-    if block_type == "tool_use":
-        return tool_call_str(block.get("name"), block.get("input"))
-    if block_type == "tool_result":
-        return tool_result_str(
-            block.get("tool_use_id"), call_ordinals, _content_str_with_tools(block.get("content"), call_ordinals)
-        )
-    text: Final = block.get("text")
-    return text if isinstance(text, str) else ""
+def _normalized(value: object, call_ordinals: Mapping[str, int], key: str | None = None) -> object:
+    item: Final = _plain_value(value)
+    if _is_str_mapping(item):
+        return MappingProxyType({kept: _normalized(item[kept], call_ordinals, kept) for kept in _kept_keys(item)})
+    if isinstance(item, (list, tuple)):
+        return tuple(_normalized(child, call_ordinals) for child in item)
+    if not isinstance(item, str):
+        return item
+    if key in _CALL_ID_KEYS:
+        return call_ordinals.get(item, item)
+    if key in _OPAQUE_KEYS or item.startswith("data:"):
+        return f"sha256:{hashlib.sha256(item.encode('utf-8', 'surrogatepass')).hexdigest()[:16]}"
+    return item
 
 
-def _openai_tool_call_str(tool_call: Mapping[str, object]) -> str:
-    function: Final = _as_str_mapping(tool_call.get("function"))
-    if function is None:
-        return tool_call_str(None, None)
-    return tool_call_str(function.get("name"), function.get("arguments"))
+def _call_id_ordinals(value: object) -> Mapping[str, int]:
+    return MappingProxyType(
+        {call_id: ordinal for ordinal, call_id in enumerate(dict.fromkeys(_call_ids(value)), start=1)}
+    )
+
+
+def _call_ids(value: object, key: str | None = None) -> Iterator[str]:
+    item: Final = _plain_value(value)
+    if isinstance(item, str):
+        if key in _CALL_ID_KEYS:
+            yield item
+    elif _is_str_mapping(item):
+        for child_key, child in item.items():
+            if child_key not in _IGNORED_KEYS:
+                yield from _call_ids(child, child_key)
+    elif isinstance(item, (list, tuple)):
+        for child in item:
+            yield from _call_ids(child)
+
+
+def _is_empty(value: object) -> bool:
+    return value is None or (isinstance(value, (str, list, tuple, Mapping)) and not value)
+
+
+def _compact_json(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"), default=_json_default)
+
+
+def _json_default(value: object) -> object:
+    return dict(value) if isinstance(value, MappingProxyType) else str(value)
+
+
+def _plain_value(value: object) -> object:
+    return value.model_dump() if isinstance(value, BaseModel) else value
 
 
 def _str_mappings(values: object) -> Iterator[Mapping[str, object]]:
     items: Final = values if isinstance(values, (list, tuple)) else ()
-    return (mapping for item in items if (mapping := _as_str_mapping(item)) is not None)
-
-
-def _as_str_mapping(value: object) -> Mapping[str, object] | None:
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    if _is_str_mapping(value):
-        return value
-    return None
+    return (mapping for item in items if _is_str_mapping(mapping := _plain_value(item)))
 
 
 def _is_str_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: message and block keys are str
