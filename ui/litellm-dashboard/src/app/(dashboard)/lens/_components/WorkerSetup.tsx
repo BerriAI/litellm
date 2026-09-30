@@ -21,7 +21,7 @@ export function workerSetupCommand(address: string, token: string): string {
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
   return [
     "docker run -d --restart unless-stopped --read-only --cap-drop ALL",
-    "  --security-opt no-new-privileges --platform linux/amd64",
+    "  --security-opt no-new-privileges --platform linux/amd64 --add-host host.docker.internal:host-gateway",
     `  -e ${quote("LITELLM_URL=" + address)}`,
     `  -e ${quote("LENS_WORKER_TOKEN=" + token)}`,
     `  ${LENS_WORKER_IMAGE}`,

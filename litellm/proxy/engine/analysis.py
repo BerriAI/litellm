@@ -191,8 +191,11 @@ async def investigate(
 ) -> Investigation:
     relevant: Final = tuple(item for item in examined if item.execution.id in candidate.execution_ids)
     selected: Final = tuple(chain.from_iterable(item.parts for item in relevant))
-    unique: Final = MappingProxyType({(p.execution_id, p.span_id): p for p in (*selected, *additional)})
-    prioritized: Final = tuple(sorted(unique.values(), key=lambda p: (p.kind == "llm", bool(p.parent_span_id))))
+    unique: Final = MappingProxyType({(p.execution_id, p.span_id, p.content): p for p in (*selected, *additional)})
+    recent: Final = navigation.parts if navigation else ()
+    prioritized: Final = tuple(
+        sorted(unique.values(), key=lambda p: (p not in recent, p.kind == "llm", bool(p.parent_span_id)))
+    )
     bounded: Final = partition_content(prioritized, 40000)
     evidence: Final = bounded[0] if bounded else ()
     catalog: Final = (*relevant, *(item for item in examined if item not in relevant))[:30]
@@ -245,7 +248,11 @@ async def investigate(
         valid_existing: Final = finding.existing_finding_id is None or (
             existing is not None and existing.check_id == finding.check_id
         )
-        if finding.check_id in known and valid_existing and all(evidence_valid(e, evidence) for e in finding.evidence):
+        if (
+            finding.check_id in known
+            and valid_existing
+            and all(evidence_valid(e, tuple(unique.values())) for e in finding.evidence)
+        ):
             return Investigation(finding=finding, parts=evidence)
     if decision.action == "read" and steps > 1 and any(e.execution.id == decision.execution_id for e in examined):
         page: Final = await read(decision.execution_id or "", decision.cursor, decision.offset)
@@ -256,7 +263,7 @@ async def investigate(
             read,
             model,
             steps - 1,
-            (*additional[-8:], *page.parts),
+            (*additional, *page.parts),
             page,
             (*reads, decision),
         )

@@ -219,3 +219,40 @@ async def test_grouping_consolidates_prior_batches_and_reports_real_progress() -
     assert len(result.candidates) == 1
     assert result.candidates[0].execution_ids == ("run1", "run2")
     assert next(stages, None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("later_span", ("later", "0"))
+async def test_investigator_can_cite_a_later_page_or_offset(later_span: str) -> None:
+    execution: Final = Execution(
+        id="run1", source="traces", trace_id="t", team_id="alpha", name="review", start_time="", span_count=7
+    )
+    initial: Final = tuple(
+        TracePart(execution_id="run1", span_id=str(i), name="agent", kind="agent", content="x" * 8000) for i in range(6)
+    )
+    later: Final = TracePart(execution_id="run1", span_id=later_span, name="tool", kind="tool", content="timeout")
+    examined: Final = Examined(execution=execution, observations=(), parts=initial, partial=True, cannot_assess=False)
+    draft: Final = finding("run1").model_copy(
+        update={"evidence": (Evidence(execution_id="run1", span_id=later_span, quote="timeout"),)}
+    )
+    decisions: Final = iter(("read", "submit"))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if next(decisions) == "read":
+            return ModelResult(content='{"action":"read","execution_id":"run1","offset":8000}', cost=0)
+        assert '"content": "timeout"' in request.prompt
+        return ModelResult(content='{"action":"submit","finding":' + draft.model_dump_json() + "}", cost=0)
+
+    async def read(execution_id: str, _cursor: str, offset: int) -> ExecutionContent:
+        assert execution_id == "run1" and offset == 8000
+        return ExecutionContent(execution=execution, parts=(later,))
+
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    result: Final = await investigate(
+        claim,
+        Candidate(check_id="retries", title="Retries", hypothesis="Unrecovered", execution_ids=("run1",)),
+        (examined,),
+        read,
+        model,
+    )
+    assert result.finding == draft

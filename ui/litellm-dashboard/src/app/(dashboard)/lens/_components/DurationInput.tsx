@@ -30,7 +30,6 @@ export function DurationInput({
         ];
   const [scale, setScale] = useState(() => [...units].reverse().find((unit) => value % unit.scale === 0)?.scale ?? 1);
   function changeUnit(next: number) {
-    onChange((value / scale) * next);
     setScale(next);
   }
   return (
