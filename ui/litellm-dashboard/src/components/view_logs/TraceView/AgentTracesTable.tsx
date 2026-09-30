@@ -14,7 +14,7 @@ interface AgentTracesTableProps {
   error: Error | null;
   hasMore: boolean;
   onLoadMore: () => void;
-  onOpenTrace: (traceId: string) => void;
+  onOpenTrace: (trace: TraceSummary) => void;
 }
 
 /** Spend is only on summaries once the spend-enrichment PR lands; show Cost when it's there. */
@@ -82,9 +82,9 @@ export function AgentTracesTable({
         <tbody>
           {traces.map((run) => (
             <tr
-              key={run.trace_id}
+              key={run.trace_ref || run.trace_id}
               data-testid="agent-trace-row"
-              onClick={() => onOpenTrace(run.trace_id)}
+              onClick={() => onOpenTrace(run)}
               className="h-9 cursor-pointer border-b border-border/60 text-[12px] hover:bg-accent/50"
             >
               <td

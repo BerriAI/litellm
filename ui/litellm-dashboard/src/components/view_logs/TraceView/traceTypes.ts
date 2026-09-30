@@ -39,6 +39,7 @@ export interface AgentNode {
 
 export interface TraceSummary {
   trace_id: string;
+  trace_ref?: string;
   name: string;
   service: string;
   input_preview: string;

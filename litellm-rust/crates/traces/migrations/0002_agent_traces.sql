@@ -1,6 +1,7 @@
-CREATE TABLE IF NOT EXISTS {database}.agent_traces
+CREATE TABLE IF NOT EXISTS {database}.agent_traces_by_key
 (
     TeamId        LowCardinality(String),
+    ApiKeyHash    String,
     TraceId       String,
     StartTs       SimpleAggregateFunction(min, DateTime64(9)),
     EndTs         SimpleAggregateFunction(max, DateTime64(9)),
@@ -20,4 +21,5 @@ CREATE TABLE IF NOT EXISTS {database}.agent_traces
     RequestIds    SimpleAggregateFunction(groupArrayArray, Array(String))
 )
 ENGINE = AggregatingMergeTree
-ORDER BY (TeamId, TraceId)
+ORDER BY (TeamId, ApiKeyHash, TraceId)
+SETTINGS non_replicated_deduplication_window = 1000

@@ -79,7 +79,9 @@ jobs:
 
           - shard: integrations
             artifact-name: integrations
-            test-path: ""
+            test-path: >-
+              tests/test_litellm/integrations
+              tests/test_litellm/tracing
             unit-flag: integrations
             workers: 2
             reruns: 3
