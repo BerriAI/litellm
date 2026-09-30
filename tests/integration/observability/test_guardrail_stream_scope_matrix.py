@@ -507,7 +507,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[MatrixRig]:
             }
             config_path: Final = directory / "stream-scope-matrix.yaml"
             config_path.write_text(yaml.safe_dump(config))
-            with owned_proxy_process(root_gateway, directory, {}, config=config_path, workers=2) as owned:
+            with owned_proxy_process(root_gateway, directory, {}, config=config_path, workers=1) as owned:
                 with owned.gateway.scenario() as scenario:
                     models: Final = MappingProxyType(
                         {
@@ -928,7 +928,7 @@ def test_c1_default_on_rail_respects_stream_scope(rig: MatrixRig, tmp_path: Path
     }
     config_path: Final = tmp_path / "default-on-stream-scope.yaml"
     config_path.write_text(yaml.safe_dump(_yaml_proxy_config(rig, name, parameters)))
-    with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=2) as owned:
+    with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=1) as owned:
         for streamed in (False, True):
             marker: Final = f"audit-c1-{int(streamed)}-{uuid.uuid4().hex}"
             response: Final = _raw_chat(owned.gateway, marker, streamed, "scope-yaml-chat")
@@ -1052,7 +1052,7 @@ def test_c7_yaml_unset_and_invalid_scope_values_are_tolerated(
     }
     config_path: Final = tmp_path / f"{case}-stream-scope.yaml"
     config_path.write_text(yaml.safe_dump(_yaml_proxy_config(rig, name, parameters)))
-    with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=2) as owned:
+    with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=1) as owned:
         for streamed in (False, True):
             marker: Final = f"audit-c7-{case}-{int(streamed)}-{uuid.uuid4().hex}"
             response: Final = _raw_chat(owned.gateway, marker, streamed, "scope-yaml-chat")

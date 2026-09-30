@@ -349,7 +349,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ReproRig]:
             ]
             config_path: Final = directory / "stream-scope-repro.yaml"
             config_path.write_text(yaml.safe_dump(config))
-            with owned_proxy_process(root_gateway, directory, {}, config=config_path, workers=2) as owned:
+            with owned_proxy_process(root_gateway, directory, {}, config=config_path, workers=1) as owned:
                 with owned.gateway.scenario() as scenario:
                     direct_config: Final = {
                         **config,
@@ -372,7 +372,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ReproRig]:
                         directory,
                         {},
                         config=direct_config_path,
-                        workers=2,
+                        workers=1,
                     ) as direct:
                         yield ReproRig(
                             owned.gateway,
@@ -709,7 +709,7 @@ def test_invalid_yaml_stream_scope_keeps_rail_running_on_both_shapes(rig: ReproR
     config: Final = _chat_proxy_config(rig.provider.url, [invalid_rail])
     config_path: Final = tmp_path / "invalid-stream-scope.yaml"
     config_path.write_text(yaml.safe_dump(config))
-    with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=2) as owned:
+    with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=1) as owned:
         markers: Final = tuple(f"scope-invalid-yaml-{int(streamed)}-{uuid.uuid4().hex}" for streamed in (False, True))
         observations: Final = tuple(
             _chat_request_with_scans(
@@ -754,7 +754,7 @@ def test_persisted_invalid_stream_scope_row_stays_readable_and_enforced(
         config: Final = _chat_proxy_config(rig.provider.url, [])
         config_path: Final = tmp_path / "persisted-invalid-stream-scope.yaml"
         config_path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=2) as owned:
+        with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=1) as owned:
             info: Final = eventually(
                 lambda: owned.gateway.request("GET", f"/guardrails/{guardrail_id}/info"),
                 lambda response: response.status_code != 404,

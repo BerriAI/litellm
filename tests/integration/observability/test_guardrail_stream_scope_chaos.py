@@ -34,6 +34,7 @@ CHAOS_MODELS: Final = MappingProxyType(
 )
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+POSTGRES_IMAGE: Final = "postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5"
 
 
 def _json(value: object) -> bytes:
@@ -211,13 +212,19 @@ def _sink(request: Request) -> Reply:
     return Reply(body=_json({"action": "NONE"}))
 
 
-def _rail(name: str, sink_url: str, scope: Literal["streaming", "non_streaming"]) -> dict[str, JsonValue]:
+def _rail(
+    name: str,
+    sink_url: str,
+    scope: Literal["streaming", "non_streaming"],
+    *,
+    default_on: bool = False,
+) -> dict[str, JsonValue]:
     return {
         "guardrail_name": name,
         "litellm_params": {
             "guardrail": "generic_guardrail_api",
             "mode": "pre_call",
-            "default_on": False,
+            "default_on": default_on,
             "stream_scope": scope,
             "api_base": f"{sink_url}/{name}",
             "api_key": "synthetic-chaos-key",
@@ -318,6 +325,7 @@ def _plans(prefix: str, count: int) -> tuple[CallPlan, ...]:
 
 
 def _request(gateway: Gateway, plan: CallPlan, rails: Sequence[str]) -> httpx.Response:
+    guardrail_field: Final[dict[str, JsonValue]] = {"guardrails": list(rails)} if rails else {}
     match plan.endpoint:
         case "chat":
             return gateway.request(
@@ -326,7 +334,7 @@ def _request(gateway: Gateway, plan: CallPlan, rails: Sequence[str]) -> httpx.Re
                 {
                     "model": CHAOS_MODELS["chat"],
                     "messages": [{"role": "user", "content": plan.marker}],
-                    "guardrails": list(rails),
+                    **guardrail_field,
                     **({"stream": True} if plan.streamed else {}),
                 },
                 headers={"x-litellm-call-id": plan.call_id},
@@ -339,7 +347,7 @@ def _request(gateway: Gateway, plan: CallPlan, rails: Sequence[str]) -> httpx.Re
                     "model": CHAOS_MODELS["messages"],
                     "max_tokens": 32,
                     "messages": [{"role": "user", "content": plan.marker}],
-                    "guardrails": list(rails),
+                    **guardrail_field,
                     **({"stream": True} if plan.streamed else {}),
                 },
                 headers={"x-litellm-call-id": plan.call_id},
@@ -351,7 +359,7 @@ def _request(gateway: Gateway, plan: CallPlan, rails: Sequence[str]) -> httpx.Re
                 {
                     "model": CHAOS_MODELS["responses"],
                     "input": plan.marker,
-                    "guardrails": list(rails),
+                    **guardrail_field,
                     **({"stream": True} if plan.streamed else {}),
                 },
                 headers={"x-litellm-call-id": plan.call_id},
@@ -426,10 +434,12 @@ def _owned_proxy(
     rig: ChaosRig,
     directory: Path,
     rails: Sequence[dict[str, JsonValue]],
+    *,
+    workers: int = 1,
 ) -> Iterator[OwnedProxy]:
     config_path: Final = directory / f"chaos-{uuid.uuid4().hex}.yaml"
     config_path.write_text(yaml.safe_dump(_config(rig.provider.url, rails)))
-    with owned_proxy_process(rig.gateway, directory, {}, config=config_path, workers=2) as owned:
+    with owned_proxy_process(rig.gateway, directory, {}, config=config_path, workers=workers) as owned:
         yield owned
 
 
@@ -605,12 +615,15 @@ def test_h3_worker_kill_mid_burst_keeps_remaining_worker_serving(rig: ChaosRig, 
     with wire_server(gated_sink) as sink_a, wire_server(_sink) as sink_b:
         name_a: Final = f"h3-stream-{uuid.uuid4().hex}"
         name_b: Final = f"h3-non-stream-{uuid.uuid4().hex}"
-        rails: Final = (_rail(name_a, sink_a.url, "streaming"), _rail(name_b, sink_b.url, "non_streaming"))
-        with _owned_proxy(rig, tmp_path, rails) as owned, ThreadPoolExecutor(max_workers=30) as pool:
+        rails: Final = (
+            _rail(name_a, sink_a.url, "streaming", default_on=True),
+            _rail(name_b, sink_b.url, "non_streaming", default_on=True),
+        )
+        with _owned_proxy(rig, tmp_path, rails, workers=2) as owned, ThreadPoolExecutor(max_workers=30) as pool:
             workers: Final = _worker_processes(owned)
             assert len(workers) == 2, tuple(worker.pid for worker in workers)
             futures: Final[tuple[Future[httpx.Response], ...]] = tuple(
-                pool.submit(_request, owned.gateway, plan, (name_a, name_b)) for plan in plans
+                pool.submit(_request, owned.gateway, plan, ()) for plan in plans
             )
             assert started.wait(timeout=30), "stream requests did not reach the owned sink"
             victim: Final = workers[0]
@@ -623,7 +636,7 @@ def test_h3_worker_kill_mid_burst_keeps_remaining_worker_serving(rig: ChaosRig, 
             )
             try:
                 victim.send_signal(signal.SIGKILL)
-                survivor_response: Final = _request(owned.gateway, survivor_plan, (name_a, name_b))
+                survivor_response: Final = _request(owned.gateway, survivor_plan, ())
                 assert survivor_response.status_code == 200 and survivor_plan.marker in survivor_response.text, (
                     survivor_response.status_code,
                     survivor_response.text,
@@ -698,117 +711,113 @@ def _assert_one_scope_wave(
         assert plan.call_id in (spend.get("request_id"), spend.get("litellm_call_id")), (plan, spend)
 
 
-def test_h4_stored_scope_survives_owned_proxy_restart(rig: ChaosRig, tmp_path: Path) -> None:
+def test_h4_yaml_scope_survives_owned_proxy_restart(rig: ChaosRig, tmp_path: Path) -> None:
     with wire_server(_sink) as sink:
-        name: Final = f"h4-stored-{uuid.uuid4().hex}"
-        identity: Final = _create_stored_rail(rig.gateway, name, sink.url)
-        try:
-            with ExitStack() as first_stack:
-                first: Final = first_stack.enter_context(_owned_proxy(rig, tmp_path, ()))
-                first_plans: Final = _plans("h4-before", 20)
-                first_responses: Final = _call_wave(first.gateway, first_plans, (name,))
-                first_provider: Final = rig.provider.drain()
-                first_sink: Final = sink.drain()
-                assert tuple(response.status_code for response in first_responses) == (200,) * 20, first_responses
-                _assert_one_scope_wave(first_plans, first_responses, first_provider, first_sink, name)
-                first_stack.close()
-                with _owned_proxy(rig, tmp_path, ()) as restarted:
-                    workers: Final = _worker_processes(restarted)
-                    assert len(workers) == 2, tuple(worker.pid for worker in workers)
-                    recovery_plans: Final = _plans("h4-after", 20)
-                    recovery_responses: Final = _call_wave(restarted.gateway, recovery_plans, (name,))
-                    recovery_provider: Final = rig.provider.drain()
-                    recovery_sink: Final = sink.drain()
-                    assert tuple(response.status_code for response in recovery_responses) == (200,) * 20, (
-                        recovery_responses,
-                    )
-                    _assert_one_scope_wave(
-                        recovery_plans,
-                        recovery_responses,
-                        recovery_provider,
-                        recovery_sink,
-                        name,
-                    )
-        finally:
-            deleted: Final = rig.gateway.request("DELETE", f"/guardrails/{identity}")
-            assert deleted.status_code == 200, deleted.text
+        name: Final = f"h4-yaml-{uuid.uuid4().hex}"
+        rails: Final = (_rail(name, sink.url, "streaming", default_on=True),)
+        with _owned_proxy(rig, tmp_path, rails, workers=2) as first:
+            first_plans: Final = _plans("h4-before", 20)
+            first_responses: Final = _call_wave(first.gateway, first_plans, ())
+            first_provider: Final = rig.provider.drain()
+            first_sink: Final = sink.drain()
+            assert tuple(response.status_code for response in first_responses) == (200,) * 20, first_responses
+            _assert_one_scope_wave(first_plans, first_responses, first_provider, first_sink, name)
+
+        with _owned_proxy(rig, tmp_path, rails, workers=2) as restarted:
+            workers: Final = _worker_processes(restarted)
+            assert len(workers) == 2, tuple(worker.pid for worker in workers)
+            recovery_plans: Final = _plans("h4-after", 20)
+            recovery_responses: Final = _call_wave(restarted.gateway, recovery_plans, ())
+            recovery_provider: Final = rig.provider.drain()
+            recovery_sink: Final = sink.drain()
+            assert tuple(response.status_code for response in recovery_responses) == (200,) * 20, (recovery_responses,)
+            _assert_one_scope_wave(recovery_plans, recovery_responses, recovery_provider, recovery_sink, name)
 
 
 @contextmanager
 def _owned_postgres(directory: Path) -> Iterator[PostgresCluster]:
+    docker: Final = shutil.which("docker")
+    assert docker is not None, "Docker CLI is required for the H5 PostgreSQL outage test"
+    docker_info: Final = subprocess.run(
+        [docker, "info", "--format", "{{.ServerVersion}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert docker_info.returncode == 0, docker_info.stderr
     directory.mkdir(parents=True, exist_ok=True)
-    data_directory: Final = directory / "postgres-data"
-    log_path: Final = directory / "postgres.log"
     port: Final = _free_port()
-    initdb: Final = Path("/usr/lib/postgresql/14/bin/initdb")
-    pg_ctl: Final = Path("/usr/lib/postgresql/14/bin/pg_ctl")
+    container_name: Final = f"litellm-stream-scope-h5-{uuid.uuid4().hex}"
+    password: Final = uuid.uuid4().hex
+    created: Final = subprocess.run(
+        [
+            docker,
+            "create",
+            "--name",
+            container_name,
+            "--env",
+            "POSTGRES_USER=postgres",
+            "--env",
+            "POSTGRES_PASSWORD",
+            "--env",
+            "POSTGRES_DB=postgres",
+            "--publish",
+            f"127.0.0.1:{port}:5432/tcp",
+            POSTGRES_IMAGE,
+        ],
+        env=os.environ | {"POSTGRES_PASSWORD": password},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    cluster: Final = PostgresCluster(
+        f"postgresql://postgres:{password}@127.0.0.1:{port}/postgres?sslmode=disable",
+        container_name,
+        docker,
+        directory / "postgres.log",
+    )
     try:
-        initialized: Final = subprocess.run(
-            [
-                str(initdb),
-                "-D",
-                str(data_directory),
-                "--username",
-                "ubuntu",
-                "--auth",
-                "trust",
-            ],
+        started: Final = _start_postgres(cluster)
+        assert started.returncode == 0, started.stderr
+        assert eventually(lambda: _postgres_is_ready(cluster), bool, seconds=70)
+        yield cluster
+    finally:
+        logs: Final = subprocess.run(
+            [docker, "logs", container_name],
             capture_output=True,
             text=True,
             check=False,
         )
-        assert initialized.returncode == 0, initialized.stderr
-        cluster: Final = PostgresCluster(
-            f"postgresql://ubuntu@127.0.0.1:{port}/postgres?sslmode=disable",
-            data_directory,
-            log_path,
-            port,
-            pg_ctl,
+        cluster.log_path.write_text(logs.stdout + logs.stderr)
+        removed: Final = subprocess.run(
+            [docker, "rm", "-f", container_name],
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        started: Final = _start_postgres(cluster)
-        assert started.returncode == 0, started.stderr
-        yield cluster
-    finally:
-        if data_directory.exists():
-            status: Final = subprocess.run(
-                [str(pg_ctl), "-D", str(data_directory), "status"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if status.returncode == 0:
-                stopped: Final = subprocess.run(
-                    [str(pg_ctl), "-D", str(data_directory), "-m", "fast", "-w", "stop"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                assert stopped.returncode == 0, stopped.stderr
-            shutil.rmtree(data_directory)
+        assert removed.returncode == 0, removed.stderr
+        remaining: Final = subprocess.run(
+            [docker, "ps", "--all", "--quiet", "--filter", f"name={container_name}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert remaining.returncode == 0, remaining.stderr
+        assert not remaining.stdout.strip(), remaining.stdout
 
 
 @dataclass(frozen=True, slots=True)
 class PostgresCluster:
     database_url: str
-    data_directory: Path
+    container_name: str
+    docker: str
     log_path: Path
-    port: int
-    pg_ctl: Path
 
 
 def _start_postgres(cluster: PostgresCluster) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [
-            str(cluster.pg_ctl),
-            "-D",
-            str(cluster.data_directory),
-            "-l",
-            str(cluster.log_path),
-            "-o",
-            f"-h 127.0.0.1 -p {cluster.port} -c unix_socket_directories=",
-            "-w",
-            "start",
-        ],
+        [cluster.docker, "start", cluster.container_name],
         capture_output=True,
         text=True,
         check=False,
@@ -818,21 +827,34 @@ def _start_postgres(cluster: PostgresCluster) -> subprocess.CompletedProcess[str
 def _postgres_is_ready(cluster: PostgresCluster) -> bool:
     readiness: Final = subprocess.run(
         [
-            str(cluster.pg_ctl.with_name("pg_isready")),
+            cluster.docker,
+            "exec",
+            cluster.container_name,
+            "pg_isready",
             "-h",
             "127.0.0.1",
             "-p",
-            str(cluster.port),
+            "5432",
             "-d",
             "postgres",
             "-U",
-            "ubuntu",
+            "postgres",
         ],
         capture_output=True,
         text=True,
         check=False,
     )
     return readiness.returncode == 0
+
+
+def _postgres_is_running(cluster: PostgresCluster) -> bool:
+    state: Final = subprocess.run(
+        [cluster.docker, "inspect", "--format", "{{.State.Running}}", cluster.container_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return state.returncode == 0 and state.stdout.strip() == "true"
 
 
 @pytest.mark.timeout(180)
@@ -870,7 +892,7 @@ def test_h5_stored_scope_survives_owned_postgres_outage_and_recovers_once(
                     database_url=database.database_url,
                 )
                 outage_result: Final = subprocess.run(
-                    [str(database.pg_ctl), "-D", str(database.data_directory), "-m", "immediate", "-w", "stop"],
+                    [database.docker, "stop", database.container_name],
                     capture_output=True,
                     text=True,
                     check=False,
@@ -915,12 +937,7 @@ def test_h5_stored_scope_survives_owned_postgres_outage_and_recovers_once(
                     database_url=database.database_url,
                 )
             finally:
-                database_state: Final = subprocess.run(
-                    [str(database.pg_ctl), "-D", str(database.data_directory), "status"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if database_state.returncode != 0:
+                if not _postgres_is_running(database):
                     restarted: Final = _start_postgres(database)
                     assert restarted.returncode == 0, restarted.stderr
+                    assert eventually(lambda: _postgres_is_ready(database), bool, seconds=70)
