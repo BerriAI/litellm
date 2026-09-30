@@ -143,6 +143,20 @@ def _chat_provider(message: dict[str, JsonValue]):
     return _serving_model_probe(respond)
 
 
+def _normalized_generic_body(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    headers: Final = body.get("request_headers")
+    normalized_headers: Final = (
+        {**headers, "host": "<host>", "content-length": "<length>"} if isinstance(headers, dict) else headers
+    )
+    return {
+        **body,
+        "litellm_call_id": "<call-id>",
+        "litellm_trace_id": "<trace-id>",
+        "litellm_version": "<version>",
+        "request_headers": normalized_headers,
+    }
+
+
 def _monitor_bodies(vendor: Wire, expected: int = 1, seconds: float = 30) -> tuple[dict[str, JsonValue], ...]:
     collected: tuple[dict[str, JsonValue], ...] = ()
 
@@ -1092,25 +1106,21 @@ def test_post_call_generic_guardrail_inputs_unchanged(gateway: Gateway, tmp_path
         assert request.target == "/beta/litellm_basic_guardrail_api", request.target
         return Reply(body=json.dumps({"action": "NONE"}).encode())
 
-    generic_entry: Final = {
-        "guardrail_name": generic_name,
-        "litellm_params": {
-            "guardrail": "generic_guardrail_api",
-            "mode": "post_call",
-            "default_on": True,
-            "api_base": None,
-            "api_key": "synthetic-guardrail-key",
-        },
-    }
-
     with (
         wire_server(_vendor()) as vendor,
         wire_server(generic_policy) as policy,
         wire_server(_chat_provider({"role": "assistant", "content": response_text})) as upstream,
     ):
-        generic_entry["litellm_params"]["api_base"] = (
-            policy.url
-        )  # writable-ok: wire port only exists inside the context
+        generic_entry: Final = {
+            "guardrail_name": generic_name,
+            "litellm_params": {
+                "guardrail": "generic_guardrail_api",
+                "mode": "post_call",
+                "default_on": True,
+                "api_base": policy.url,
+                "api_key": "synthetic-guardrail-key",
+            },
+        }
         config_path: Final = _grayswan_config(
             tmp_path, identity, vendor.url, "post_call", extra_guardrails=(generic_entry,)
         )
@@ -1138,7 +1148,32 @@ def test_post_call_generic_guardrail_inputs_unchanged(gateway: Gateway, tmp_path
                 seconds=30,
             )
             generic_body: Final = generic_bodies[0]
-            assert generic_body["texts"] == [response_text], generic_body
+            assert _normalized_generic_body(generic_body) == {
+                "additional_provider_specific_params": {},
+                "images": None,
+                "input_type": "response",
+                "litellm_call_id": "<call-id>",
+                "litellm_trace_id": "<trace-id>",
+                "litellm_version": "<version>",
+                "model": "gpt-4o-mini",
+                "request_data": {
+                    "user_api_key_hash": "litellm_proxy_master_key",
+                    "user_api_key_user_id": "default_user_id",
+                },
+                "request_headers": {
+                    "accept": "*/*",
+                    "accept-encoding": "gzip, deflate, br",
+                    "connection": "keep-alive",
+                    "content-length": "<length>",
+                    "content-type": "application/json",
+                    "host": "<host>",
+                    "user-agent": "python-httpx/0.28.1",
+                },
+                "structured_messages": None,
+                "texts": [response_text],
+                "tool_calls": None,
+                "tools": None,
+            }, generic_body
             assert grayswan_body["messages"][:-1] == [dict(message) for message in _REQUEST_MESSAGES], grayswan_body
 
 
