@@ -91,7 +91,7 @@ tests:
             app.kubernetes.io/name: litellm
             app.kubernetes.io/instance: RELEASE-NAME
             app.kubernetes.io/managed-by: Helm
-            helm.sh/chart: litellm-0.1.0
+            helm.sh/chart: litellm-1.0.0
             app.kubernetes.io/component: migrations
 
   - it: renders pod-level and container-level securityContext in their own scopes
