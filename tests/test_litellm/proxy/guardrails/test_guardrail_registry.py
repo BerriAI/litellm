@@ -1156,7 +1156,7 @@ class TestLoggingOnlyScopeValidation:
         callback_lists: Final = _all_callback_lists()
         callback_snapshots: Final = [list(callback_list) for callback_list in callback_lists]
 
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="logging_only_scope"):
             handler.initialize_guardrail(
                 guardrail=_invalid_scope_content_filter_guardrail(),
                 source="config",

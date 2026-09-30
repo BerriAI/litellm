@@ -530,7 +530,7 @@ def test_logging_only_monitor_counts_only_the_observed_direction(
                     today: Final = datetime.now(timezone.utc).date().isoformat()
                     for identity in (input_identity, output_identity):
                         detail: Final = eventually(
-                            lambda: candidate.request(
+                            lambda identity=identity: candidate.request(
                                 "GET",
                                 f"/guardrails/usage/detail/{guardrail_ids[identity]}",
                                 params={"start_date": today, "end_date": today},
@@ -966,7 +966,7 @@ def test_X1_missing_null_and_both_scope_have_identical_scans(gateway: Gateway, t
                     expected_directions: Final = _directions_for_audit_leg(("request", "response"), scope)
                     eventually(
                         lambda: edge.received.qsize(),
-                        lambda count: count == len(expected_directions),
+                        lambda count, expected_directions=expected_directions: count == len(expected_directions),
                         seconds=20,
                     )
                     payloads: Final = tuple(JSON_OBJECT.validate_json(call.body) for call in edge.drain())
