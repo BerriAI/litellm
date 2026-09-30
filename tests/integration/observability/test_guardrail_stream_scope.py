@@ -4,7 +4,7 @@ import base64
 import json
 import os
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -15,7 +15,7 @@ import httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, Scenario, eventually
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import (
     _aws_event_frame,  # pyright: ignore[reportPrivateUsage]  # project Bedrock event-stream encoder
@@ -139,6 +139,32 @@ def _provider(request: Request) -> Reply:
     if target.endswith("/converse") or target.endswith("/invoke"):
         return Reply(body=_json({"output": f"scripted Bedrock reply {marker}"}))
     if target == "/v1/chat/completions":
+        if body.get("stream") is True:
+            chunk: Final = {
+                "id": f"chatcmpl-{marker}",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": f"scripted chat reply {marker}"},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            final_chunk: Final = {
+                **chunk,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+            return Reply(
+                content_type="text/event-stream",
+                chunks=(
+                    b"data: " + _json(chunk) + b"\n\n",
+                    b"data: " + _json(final_chunk) + b"\n\n",
+                    b"data: [DONE]\n\n",
+                ),
+            )
         return Reply(
             body=_json(
                 {
@@ -177,6 +203,24 @@ def _rail(name: str, sink: Wire, scope: EndpointScope) -> dict[str, JsonValue]:
             "api_base": f"{sink.url}/{name}",
             "api_key": "synthetic-guardrail-key",
         },
+    }
+
+
+def _chat_proxy_config(provider_url: str, guardrails: list[dict[str, JsonValue]]) -> dict[str, object]:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    return {
+        **config,
+        "guardrails": guardrails,
+        "model_list": [
+            {
+                "model_name": "scope-invalid-config-chat",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": f"{provider_url}/v1",
+                    "api_key": "synthetic-provider-key",
+                },
+            }
+        ],
     }
 
 
@@ -338,6 +382,27 @@ def _bedrock_request(
 
 def _matching_requests(wire: Wire, marker: str) -> tuple[Request, ...]:
     return tuple(request for request in wire.drain() if marker.encode() in request.body)
+
+
+def _chat_request_with_scans(
+    gateway: Gateway,
+    sink: Wire,
+    model: str,
+    marker: str,
+    streamed: bool,
+    guardrails: Sequence[str],
+) -> tuple[httpx.Response, tuple[Request, ...]]:
+    response: Final = gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": marker}],
+            "stream": streamed,
+            "guardrails": list(guardrails),
+        },
+    )
+    return response, _matching_requests(sink, marker)
 
 
 def _spend_row_for_call(call_id: str, content: bytes) -> dict[str, JsonValue]:
@@ -540,3 +605,155 @@ def test_passthrough_scope_follows_proxy_stream_decision(rig: ReproRig, streamed
     )
     assert len(streaming_rows) == int(streamed), (marker, streamed, sink_rows, response.text)
     assert len(non_streaming_rows) == int(not streamed), (marker, streamed, sink_rows, response.text)
+
+
+def test_invalid_yaml_stream_scope_keeps_rail_running_on_both_shapes(rig: ReproRig, tmp_path: Path) -> None:
+    name: Final = f"scope-invalid-yaml-{uuid.uuid4().hex}"
+    invalid_rail: Final = {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "default_on": False,
+            "stream_scope": "sometimes",
+            "api_base": f"{rig.sink.url}/{name}",
+            "api_key": "synthetic-guardrail-key",
+        },
+    }
+    config: Final = _chat_proxy_config(rig.provider.url, [invalid_rail])
+    config_path: Final = tmp_path / "invalid-stream-scope.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=2) as owned:
+        markers: Final = tuple(f"scope-invalid-yaml-{int(streamed)}-{uuid.uuid4().hex}" for streamed in (False, True))
+        observations: Final = tuple(
+            _chat_request_with_scans(
+                owned.gateway,
+                rig.sink,
+                "scope-invalid-config-chat",
+                marker,
+                streamed,
+                (name,),
+            )
+            for streamed, marker in zip((False, True), markers)
+        )
+        assert tuple(response.status_code for response, _ in observations) == (200, 200), tuple(
+            response.text for response, _ in observations
+        )
+        assert tuple(len(sink_rows) for _, sink_rows in observations) == (1, 1), (markers, observations)
+
+
+def test_persisted_invalid_stream_scope_row_stays_readable_and_enforced(
+    rig: ReproRig,
+    tmp_path: Path,
+) -> None:
+    guardrail_id: Final = str(uuid.uuid4())
+    guardrail_name: Final = f"scope-invalid-persisted-{uuid.uuid4().hex}"
+    params: Final = {
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "default_on": False,
+        "api_base": f"{rig.sink.url}/{guardrail_name}",
+        "api_key": "synthetic-guardrail-key",
+        "stream_scope": "sometimes",
+    }
+    database_url: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL") or os.environ["DATABASE_URL"]
+    write_rows(
+        'INSERT INTO "LiteLLM_GuardrailsTable" '
+        '("guardrail_id", "guardrail_name", "litellm_params", "created_at", "updated_at") '
+        "VALUES (%s, %s, %s::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        (guardrail_id, guardrail_name, json.dumps(params)),
+        database_url=database_url,
+    )
+    try:
+        config: Final = _chat_proxy_config(rig.provider.url, [])
+        config_path: Final = tmp_path / "persisted-invalid-stream-scope.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(rig.candidate, tmp_path, {}, config=config_path, workers=2) as owned:
+            info: Final = eventually(
+                lambda: owned.gateway.request("GET", f"/guardrails/{guardrail_id}/info"),
+                lambda response: response.status_code != 404,
+                seconds=20,
+            )
+            listed: Final = owned.gateway.request("GET", "/v2/guardrails/list")
+            list_payload: Final = JSON_OBJECT.validate_json(listed.content) if listed.status_code == 200 else {}
+            listed_guardrails: Final = list_payload.get("guardrails")
+            includes_row: Final = isinstance(listed_guardrails, list) and any(
+                isinstance(row, dict) and row.get("guardrail_id") == guardrail_id for row in listed_guardrails
+            )
+            markers: Final = (
+                f"scope-invalid-persisted-0-{uuid.uuid4().hex}",
+                f"scope-invalid-persisted-1-{uuid.uuid4().hex}",
+            )
+            observations: Final = tuple(
+                _chat_request_with_scans(
+                    owned.gateway,
+                    rig.sink,
+                    "scope-invalid-config-chat",
+                    marker,
+                    streamed,
+                    (guardrail_name,),
+                )
+                for streamed, marker in zip((False, True), markers)
+            )
+            assert (
+                info.status_code == 200
+                and listed.status_code == 200
+                and includes_row
+                and tuple(response.status_code for response, _ in observations) == (200, 200)
+                and tuple(len(sink_rows) for _, sink_rows in observations) == (1, 1)
+            ), {
+                "info": (info.status_code, info.text),
+                "list": (listed.status_code, listed.text),
+                "includes_row": includes_row,
+                "responses": tuple((response.status_code, response.text) for response, _ in observations),
+                "scan_counts": tuple(len(sink_rows) for _, sink_rows in observations),
+            }
+    finally:
+        write_rows(
+            'DELETE FROM "LiteLLM_GuardrailsTable" WHERE guardrail_id=%s',
+            (guardrail_id,),
+            database_url=database_url,
+        )
+
+
+def test_management_rejects_invalid_stream_scope(rig: ReproRig) -> None:
+    name: Final = f"scope-invalid-management-{uuid.uuid4().hex}"
+    invalid_params: Final = {
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "default_on": False,
+        "api_base": f"{rig.sink.url}/{name}",
+        "api_key": "synthetic-guardrail-key",
+        "stream_scope": "sometimes",
+    }
+    created_invalid: Final = rig.candidate.request(
+        "POST",
+        "/guardrails",
+        {"guardrail": {"guardrail_name": name, "litellm_params": invalid_params}},
+    )
+    assert created_invalid.status_code == 422, created_invalid.text
+
+    valid_params: Final = {**invalid_params, "stream_scope": "both"}
+    created: Final = rig.candidate.request(
+        "POST",
+        "/guardrails",
+        {"guardrail": {"guardrail_name": name, "litellm_params": valid_params}},
+    )
+    assert created.status_code == 200, created.text
+    guardrail_id: Final = str(created.json()["guardrail_id"])
+    try:
+        put_response: Final = rig.candidate.request(
+            "PUT",
+            f"/guardrails/{guardrail_id}",
+            {"guardrail": {"guardrail_name": name, "litellm_params": invalid_params}},
+        )
+        patch_response: Final = rig.candidate.request(
+            "PATCH",
+            f"/guardrails/{guardrail_id}",
+            {"litellm_params": {"stream_scope": "sometimes"}},
+        )
+        assert put_response.status_code == 422, put_response.text
+        assert patch_response.status_code == 422, patch_response.text
+    finally:
+        deleted: Final = rig.candidate.request("DELETE", f"/guardrails/{guardrail_id}")
+        assert deleted.status_code == 200, deleted.text
