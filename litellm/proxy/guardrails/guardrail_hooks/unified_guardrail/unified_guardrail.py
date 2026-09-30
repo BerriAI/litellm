@@ -18,9 +18,11 @@ from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.api_route_to_call_types import get_primary_call_type_for_route
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation, StreamingScanKey
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     MCP_GUARDRAIL_CALL_TYPES,
@@ -35,10 +37,6 @@ if TYPE_CHECKING:
     # Imported lazily at runtime (inside the streaming hook) to avoid a
     # module-level cyclic import with litellm.integrations.custom_guardrail.
     from litellm.integrations.custom_guardrail import ModifyResponseException
-    from litellm.llms.base_llm.guardrail_translation.base_translation import (
-        BaseTranslation,
-        StreamingScanKey,
-    )
 
 # Call types that stream JSON-RPC events (A2A); guardrail HTTPException is emitted as in-stream error
 A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
@@ -57,7 +55,7 @@ class _EndpointTranslation(Protocol):
     def process_output_streaming_response(self) -> "Callable[..., Awaitable[object]]": ...
 
     @property
-    def get_streaming_scan_key(self) -> "Callable[[Sequence[object]], StreamingScanKey | None]": ...
+    def get_streaming_scan_key(self) -> Callable[[Sequence[object]], StreamingScanKey | None]: ...
 
     @property
     def build_block_sse_chunks(self) -> "Callable[..., Sequence[bytes] | None]": ...
@@ -72,19 +70,17 @@ def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTran
 
 def resolve_endpoint_translation(
     user_api_key_dict: UserAPIKeyAuth, first_response_item: object | None
-) -> "tuple[str, BaseTranslation] | None":
+) -> tuple[str, BaseTranslation] | None:
     """
     Resolve the endpoint guardrail translation for a streamed response: the
     request route wins, falling back to inferring the call type from the first
     response chunk (the same resolution order the streaming iterator hook uses).
     Returns None when the call type is unresolvable or has no translation.
     """
-    route_call_types: Final = (
-        get_call_types_for_route(user_api_key_dict.request_route) if user_api_key_dict.request_route else None
-    )
+    route_call_type: Final = get_primary_call_type_for_route(user_api_key_dict.request_route)
     call_type: Final = (
-        route_call_types[0].value
-        if route_call_types
+        route_call_type.value
+        if route_call_type is not None
         else (
             _infer_call_type(call_type=None, completion_response=first_response_item)
             if first_response_item is not None
@@ -109,7 +105,7 @@ def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
     return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
 
 
-def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
+def _is_redundant_scan(scan_key: StreamingScanKey | None, last_scan_key: StreamingScanKey | None) -> bool:
     if scan_key is None:
         return False
     return scan_key == last_scan_key or scan_key.has_nothing_to_scan
@@ -156,16 +152,20 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     }
 
 
-def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
-    if "litellm_metadata" not in data:
-        from litellm.llms.base_llm.guardrail_translation.base_translation import (
-            BaseTranslation,
-        )
+_PROXY_ENRICHED_IDENTITY_FIELDS: Final = frozenset({"user_api_key_auth_metadata"})
 
-        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            data["litellm_metadata"] = user_metadata
+
+def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Overwrite the identity fields of data['litellm_metadata'] from the authenticated key, in place."""
+    existing: Final = data.get("litellm_metadata")
+    if isinstance(existing, dict):
+        identity: Final = LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)
+        existing.update({key: value for key, value in identity.items() if key not in _PROXY_ENRICHED_IDENTITY_FIELDS})
+        existing.pop("user_api_key_token", None)
+        return
+    user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+    if user_metadata:
+        data["litellm_metadata"] = user_metadata
 
 
 class UnifiedLLMGuardrails(CustomLogger):
@@ -312,11 +312,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         verbose_proxy_logger.debug("async_post_call_success_hook response: %s", response)
 
-        call_type: CallTypesLiteral | None = None
-        if user_api_key_dict.request_route is not None:
-            call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
-            if call_types is not None and len(call_types) > 0:
-                call_type = call_types[0]
+        call_type: CallTypesLiteral | None = get_primary_call_type_for_route(user_api_key_dict.request_route)
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)
 
@@ -406,7 +402,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     @staticmethod
     def _resolve_transform_call_type(
         user_api_key_dict: UserAPIKeyAuth,
-        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+        mappings: Mapping[CallTypes, type[BaseTranslation]],
     ) -> str | None:
         """Resolve the call type for the incremental_diff path, or None if the
         route is unresolvable / unsupported.
@@ -420,20 +416,13 @@ class UnifiedLLMGuardrails(CustomLogger):
             OpenAIChatCompletionsHandler,
         )
 
-        if user_api_key_dict.request_route is None:
+        route_call_type: Final = get_primary_call_type_for_route(user_api_key_dict.request_route)
+        if route_call_type is None:
             return None
-        call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
-        if not call_types:
-            return None
-        call_type: Final = call_types[0].value
-        try:
-            mapped: Final = CallTypes(call_type)
-        except ValueError:
-            return None
-        handler_cls: Final = mappings.get(mapped)
+        handler_cls: Final = mappings.get(route_call_type)
         if handler_cls is None or not issubclass(handler_cls, OpenAIChatCompletionsHandler):
             return None
-        return call_type
+        return route_call_type.value
 
     async def emit_streaming_http_error(
         self,
@@ -669,7 +658,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type: str,
         sampling_rate: int,
         end_of_stream_only: bool,
-        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+        mappings: Mapping[CallTypes, type[BaseTranslation]],
     ) -> AsyncGenerator[object, None]:
         """Emit guardrail text transformations as new deltas on the stream.
 
@@ -1080,8 +1069,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                 getattr(guardrail_to_apply, "guardrail_name", None),
             )
 
-        # Infer call type from first chunk
-        call_type = None
+        route_call_type: Final = get_primary_call_type_for_route(user_api_key_dict.request_route)
+        call_type = route_call_type.value if route_call_type is not None else None
         chunk_counter = 0
         responses_so_far: Final[list[object]] = []
         responses_yielded: Final[list[object]] = []
@@ -1097,12 +1086,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         async for item in response:
             chunk_counter += 1
             responses_so_far.append(item)
-
-            # Infer call type from first chunk if not already done
-            if call_type is None and user_api_key_dict.request_route is not None:
-                call_types = get_call_types_for_route(user_api_key_dict.request_route)
-                if call_types is not None:
-                    call_type = call_types[0].value
 
             if call_type is None:
                 call_type = _infer_call_type(call_type=None, completion_response=item)

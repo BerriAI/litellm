@@ -1798,16 +1798,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     call_id,
                     _mcp_tool,
                 )
-            elif not request_data and logging_obj is None and input_type == "request":
-                # Direct /apply_guardrail endpoint — empty request_data, no
-                # logging_obj. Existing behavior: synthesize UUID.
-                call_id = str(uuid.uuid4())
-                request_data["litellm_call_id"] = call_id
-                verbose_proxy_logger.warning(
-                    "PANW Prisma AIRS: litellm_call_id missing from empty "
-                    "request_data, synthesized %s (direct /apply_guardrail?)",
-                    call_id,
-                )
             else:
                 call_id = str(uuid.uuid4())
                 request_data["litellm_call_id"] = call_id

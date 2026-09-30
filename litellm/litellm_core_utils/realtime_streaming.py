@@ -12,7 +12,9 @@ import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
@@ -121,6 +123,10 @@ DefaultLoggedRealTimeEventTypes: Final = [
     "conversation.item.added",  # GA
     "conversation.item.done",  # GA
 ]
+
+
+def _as_user_api_key_auth(user_api_key_dict: object) -> UserAPIKeyAuth | None:
+    return user_api_key_dict if isinstance(user_api_key_dict, UserAPIKeyAuth) else None
 
 
 class RealTimeStreaming:
@@ -852,7 +858,12 @@ class RealTimeStreaming:
             try:
                 await callback.apply_guardrail(
                     inputs={"texts": [transcript], "images": []},
-                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    request_data={
+                        "user_api_key_dict": self.user_api_key_dict,
+                        "litellm_metadata": BaseTranslation.transform_user_api_key_dict_to_metadata(
+                            _as_user_api_key_auth(self.user_api_key_dict)
+                        ),
+                    },
                     input_type="request",
                 )
             except Exception as e:

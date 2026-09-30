@@ -496,6 +496,40 @@ def _strip_untrusted_request_header_controls(
             headers.pop(header_name, None)
 
 
+def is_untrusted_caller_metadata_key(key: str) -> bool:
+    return key.startswith("user_api_key_") or key in _UNTRUSTED_METADATA_CONTROL_FIELDS
+
+
+def strip_untrusted_caller_metadata(
+    data: MutableMapping[str, object], *, allow_client_message_redaction_opt_out: bool
+) -> None:
+    """Remove, in place, the proxy-owned slots a caller put in either metadata bucket of a request body."""
+    for user_meta in (data.get("metadata"), data.get("litellm_metadata")):
+        if not isinstance(user_meta, dict):
+            continue
+        _strip_untrusted_request_header_controls(
+            user_meta.get("headers"),
+            allow_client_message_redaction_opt_out=allow_client_message_redaction_opt_out,
+        )
+        for untrusted_key in tuple(key for key in user_meta if is_untrusted_caller_metadata_key(key)):
+            user_meta.pop(untrusted_key, None)
+
+
+_GUARDRAIL_UNTRUSTED_CALLER_METADATA_KEYS: Final = frozenset({"user_api_key", "headers"})
+
+
+def caller_metadata_with_authenticated_identity(
+    caller_metadata: Mapping[str, object] | None, user_api_key_dict: UserAPIKeyAuth
+) -> dict[str, object]:
+    """Caller metadata minus proxy-owned slots, bare user_api_key and headers, with the key's identity on top."""
+    caller_fields: Final = {
+        key: value
+        for key, value in (caller_metadata or {}).items()
+        if not (is_untrusted_caller_metadata_key(key) or key in _GUARDRAIL_UNTRUSTED_CALLER_METADATA_KEYS)
+    }
+    return {**caller_fields, **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)}
+
+
 def _is_false_like(value: object) -> bool:
     if isinstance(value, bool):
         return value is False
@@ -523,7 +557,7 @@ def _key_or_team_allows_client_mock_response(
     )
 
 
-def _key_or_team_allows_client_message_redaction_opt_out(
+def key_or_team_allows_client_message_redaction_opt_out(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> bool:
     return _key_or_team_metadata_flag_is_true(
@@ -1646,6 +1680,24 @@ class LiteLLMProxyRequestSetup:
         return user_api_key_logged_metadata
 
     @staticmethod
+    def get_key_scoped_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+        return {
+            "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
+            "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+            "user_api_key_object_permission_id": user_api_key_dict.object_permission_id,
+            "user_api_key_team_object_permission_id": user_api_key_dict.team_object_permission_id,
+        }
+
+    @staticmethod
+    def get_authenticated_identity_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+        """Identity fields derived from the authenticated key alone, for paths that skip the chat-path build."""
+        return {
+            **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
+            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
+            **LiteLLMProxyRequestSetup.get_key_scoped_metadata(user_api_key_dict),
+        }
+
+    @staticmethod
     def add_user_api_key_auth_to_request_metadata(
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2006,7 +2058,7 @@ async def add_litellm_data_to_request(
     # These keys are injected by the proxy itself below — user-supplied values
     # must not be trusted.
     _allow_client_mock_response: Final = _key_or_team_allows_client_mock_response(user_api_key_dict)
-    _allow_client_message_redaction_opt_out = _key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
+    _allow_client_message_redaction_opt_out = key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
     for _internal_key in _UNTRUSTED_ROOT_CONTROL_FIELDS:
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
@@ -2188,31 +2240,12 @@ async def add_litellm_data_to_request(
     # profile_id) don't see attacker-injected admin slots preserved in
     # the deepcopy.
 
-    # Strip internal pipeline state and admin-injection slots from user input.
     # Runs AFTER the string-to-dict parse above so JSON-string metadata (sent
     # via multipart/form-data or extra_body) cannot smuggle admin fields past
     # the isinstance(dict) guard.
-    #
-    # The proxy populates a family of ``user_api_key_*`` fields below
-    # (user_api_key_metadata, user_api_key_user_id, user_api_key_alias,
-    # user_api_key_spend, user_api_key_team_metadata, …) into
-    # data[_metadata_variable_name]. Because the proxy only writes to ONE of
-    # the two metadata dicts, a caller pre-populating any of these keys on
-    # the OTHER metadata dict would have their forged values surface in
-    # guardrails, spend tracking, audit logs, and identity resolution. Strip
-    # by prefix so new ``user_api_key_*`` fields added in the future are
-    # covered without per-key maintenance.
-    for _meta_key in ("metadata", "litellm_metadata"):
-        _user_meta = data.get(_meta_key)
-        if isinstance(_user_meta, dict):
-            _strip_untrusted_request_header_controls(
-                _user_meta.get("headers"),
-                allow_client_message_redaction_opt_out=(_allow_client_message_redaction_opt_out),
-            )
-            for _k in [
-                k for k in _user_meta if k.startswith("user_api_key_") or k in _UNTRUSTED_METADATA_CONTROL_FIELDS
-            ]:
-                _user_meta.pop(_k, None)
+    strip_untrusted_caller_metadata(
+        data, allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out
+    )
 
     # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
     # above, for the same reason as the user_api_key_* strip — JSON-string
@@ -2389,14 +2422,7 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_user_model_max_budget"] = user_model_budget  # rebind-ok: out-param
     data[_metadata_variable_name].update(carried_budget_metadata(user_api_key_dict))
 
-    data[_metadata_variable_name]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
-    data[_metadata_variable_name]["user_api_key_team_metadata"] = strip_callback_config(user_api_key_dict.team_metadata)
-    data[_metadata_variable_name]["user_api_key_object_permission_id"] = getattr(
-        user_api_key_dict, "object_permission_id", None
-    )
-    data[_metadata_variable_name]["user_api_key_team_object_permission_id"] = getattr(
-        user_api_key_dict, "team_object_permission_id", None
-    )
+    data[_metadata_variable_name].update(LiteLLMProxyRequestSetup.get_key_scoped_metadata(user_api_key_dict))
     data[_metadata_variable_name]["headers"] = _logging_safe_headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
     # Carry the proxy-receive instant via metadata (like `endpoint`) so the
