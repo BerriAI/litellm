@@ -131,6 +131,14 @@ def _team_day_endpoints(gateway: Gateway, team: str, start_date: str, end_date: 
     return object_value(object_value(object_value(days[0])["breakdown"])["endpoints"])
 
 
+def _batches_total_tokens(endpoints: dict[str, object] | None) -> int | None:
+    if endpoints is None or "/batches" not in endpoints:
+        return None
+    metrics: Final = object_value(object_value(endpoints["/batches"])["metrics"])
+    total_tokens: Final = metrics["total_tokens"]
+    return int(total_tokens) if isinstance(total_tokens, (int, float, str)) else None
+
+
 def _input_file(model: str) -> bytes:
     return (
         "\n".join(
@@ -282,7 +290,7 @@ def test_completed_batch_spend_lands_under_batches_in_team_endpoint_activity(gat
                 (today - timedelta(days=1)).strftime("%Y-%m-%d"),
                 (today + timedelta(days=1)).strftime("%Y-%m-%d"),
             ),
-            lambda value: value is not None and "/batches" in value,
+            lambda value: _batches_total_tokens(value) == BATCH_PROMPT_TOKENS + BATCH_COMPLETION_TOKENS,
             seconds=70,
             return_last_on_timeout=True,
         )
