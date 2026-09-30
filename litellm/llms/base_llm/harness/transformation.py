@@ -18,13 +18,17 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
 from litellm.harness.errors import HarnessError, OptionsMismatch
 from litellm.harness.types import Capabilities, Event, Harness
 
 if TYPE_CHECKING:
     from litellm.harness.context import SessionContext
+
+# A config's typed options (ClaudeCodeOptions, CodexOptions, ...) and its per-turn parser state.
+OptionsT = TypeVar("OptionsT")
+StreamStateT = TypeVar("StreamStateT")
 
 
 class HarnessTurnError(HarnessError):
@@ -67,16 +71,16 @@ class HarnessTurnResponse:
     output_json: str | None = None
 
 
-class BaseHarnessConfig(ABC):
+class BaseHarnessConfig(ABC, Generic[OptionsT]):
     """Declares what a harness is and validates a session before anything starts."""
 
     harness: ClassVar[Harness]
-    options_type: ClassVar[type]
+    options_type: type[OptionsT]
     capabilities: ClassVar[Capabilities]
     # CLI runtimes call a per-session model endpoint; in-process ones call LiteLLM directly.
     uses_model_endpoint: ClassVar[bool] = True
 
-    def get_options(self, ctx: SessionContext) -> Any:
+    def get_options(self, ctx: SessionContext) -> OptionsT:
         """ctx.options, or this harness's default options."""
         options = ctx.options
         if options is None:
@@ -93,7 +97,7 @@ class BaseHarnessConfig(ABC):
         self.get_options(ctx)
 
 
-class BaseCLIHarnessConfig(BaseHarnessConfig):
+class BaseCLIHarnessConfig(BaseHarnessConfig[OptionsT], Generic[OptionsT, StreamStateT]):
     """A runtime driven as a subprocess that prints one JSON event per line."""
 
     @abstractmethod
@@ -120,22 +124,22 @@ class BaseCLIHarnessConfig(BaseHarnessConfig):
         """argv / env / stdin for one turn. native_session_id is set after the first turn."""
 
     @abstractmethod
-    def create_stream_state(self) -> Any:
+    def create_stream_state(self) -> StreamStateT:
         """Fresh per-turn parser state."""
 
     @abstractmethod
-    def transform_stream_line(self, line: Mapping[str, Any], state: Any) -> list[Event]:
+    def transform_stream_line(self, line: Mapping[str, Any], state: StreamStateT) -> list[Event]:
         """One decoded JSON line from stdout to zero or more events. Pure."""
 
     @abstractmethod
-    def get_native_session_id(self, state: Any) -> str | None:
+    def get_native_session_id(self, state: StreamStateT) -> str | None:
         """The runtime's own session / thread id, once the stream has reported it."""
 
     @abstractmethod
     def transform_turn_response(
         self,
         ctx: SessionContext,
-        state: Any,
+        state: StreamStateT,
         exit_code: int,
         stderr_tail: Sequence[str],
     ) -> HarnessTurnResponse:
