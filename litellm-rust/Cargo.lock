@@ -4075,6 +4075,7 @@ dependencies = [
  "litellm-secrets-aws",
  "litellm-secrets-types",
  "litellm-token-counter",
+ "litellm-traces",
  "litellm-tracing",
  "pyo3",
  "pyo3-async-runtimes",
@@ -4349,6 +4350,21 @@ dependencies = [
  "rustc-hash",
  "thiserror 2.0.19",
  "tiktoken-rs",
+]
+
+[[package]]
+name = "litellm-traces"
+version = "0.1.0"
+dependencies = [
+ "litellm-http",
+ "rstest",
+ "serde",
+ "serde_json",
+ "testcontainers-modules",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -5704,6 +5720,7 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "encoding_rs",
  "futures-core",
  "futures-util",
  "h2 0.4.15",
@@ -5715,6 +5732,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -6945,6 +6963,7 @@ dependencies = [
  "memchr",
  "parse-display",
  "pin-project-lite",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "serde_with",

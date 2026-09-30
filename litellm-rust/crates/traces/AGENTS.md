@@ -1,0 +1,6 @@
+- Rust owns OTLP wire decoding, ClickHouse schema, row encoding, named reads, connection validation and transport
+- Keep this crate independent of Python; PyO3 conversion and public Python exceptions belong in `python-bridge`
+- Keep the SQL migrations here as the only ClickHouse schema definition
+- Use typed query parameters and a dedicated SELECT-only reader with server-side limits
+- Bound insert time and encoded bytes; make retry deduplication behavior explicit for supported ClickHouse versions
+- Test storage behavior through the crate's public API against ClickHouse

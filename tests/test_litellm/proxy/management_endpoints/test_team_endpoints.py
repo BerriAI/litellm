@@ -4355,7 +4355,7 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
     prisma_client.db.litellm_teamtable.count = AsyncMock(side_effect=count)
     prisma_client.db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+    prisma_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(
             user_id="org_admin_user",
             teams=["team_in_org_A", "team_in_org_B"],
@@ -4394,11 +4394,11 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     assert await list_teams(None) == own_view
     assert await list_teams("org_admin_user", search="team_in_org_B") == ["team_in_org_B"]
     assert await list_teams("other_user") == ["other_team_in_org_A"]
-    prisma_client.db.litellm_usertable.find_unique.assert_awaited_with(
+    prisma_client.writer_db.litellm_usertable.find_unique.assert_awaited_with(
         where={"user_id": "org_admin_user"}, include={"organization_memberships": True}
     )
 
-    prisma_client.db.litellm_usertable.find_unique.side_effect = RuntimeError("db down")
+    prisma_client.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("db down")
     with pytest.raises(ValueError, match="db down"):
         await list_teams("org_admin_user")
 
@@ -8869,10 +8869,6 @@ async def test_delete_team_persists_deleted_teams(
         "litellm.proxy.proxy_server.litellm_proxy_admin_name",
         "admin",
     )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.team_endpoints._team_member_delete",
-        AsyncMock(return_value=(team1, (), ())),
-    )
 
     data = DeleteTeamRequest(team_ids=["team-1"])
 
@@ -9013,6 +9009,113 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
     # Eviction must run AFTER the rows are gone: both writers of these keys hydrate from the db,
     # so evicting first lets a concurrent auth lookup re-cache the still-present team.
     assert cache_state_when_rows_deleted["doomed_still_cached"] is True
+
+
+def test_delete_team_request_collapses_repeated_ids_in_order():
+    """`[T, T, U]` deletes T once and U once: one tombstone, one audit row and one eviction per team."""
+    from litellm.proxy._types import DeleteTeamRequest
+
+    assert DeleteTeamRequest(team_ids=["team-a", "team-b", "team-a", "team-b", "team-c"]).team_ids == [
+        "team-a",
+        "team-b",
+        "team-c",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_delete_team_evicts_member_caches_with_one_transaction(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    """
+    Regression pin for LIT-8533: `delete_team` used to fan out one
+    `_team_member_delete` per roster entry via `asyncio.gather`, and each opened
+    its own `prisma_client.tx()` and queued on the team's advisory lock, so a
+    team larger than the Prisma pool exhausted it and the late transactions died
+    on P2028. Every member-side db effect is already covered by the key delete
+    and the locked sweep, so the only work left is evicting each member's cache
+    entries, which needs no transaction at all.
+    """
+    from litellm.proxy._types import DeleteTeamRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    member_user_ids = tuple(f"member-{i}" for i in range(3))
+    team = LiteLLM_TeamTable(
+        team_id="team-doomed",
+        team_alias="doomed-team",
+        members_with_roles=[Member(user_id=user_id, role="user") for user_id in member_user_ids]
+        + [
+            Member(user_id=None, user_email="invitee@example.com", role="user"),
+            Member(user_id=None, user_email="Second.Invitee@Example.com", role="user"),
+        ],
+        metadata={},
+        model_max_budget={},
+        model_spend={},
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_keys": 0})
+    mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.execute_raw = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[
+            LiteLLM_UserTable(user_id="invited-user", user_email="invitee@example.com"),
+            LiteLLM_UserTable(user_id="second-invited-user", user_email="second.invitee@example.com"),
+        ]
+    )
+
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
+
+    fresh_cache = UserApiKeyCache()
+    for user_id in member_user_ids:
+        fresh_cache.set_cache(key=user_id, value=UserAPIKeyAuth(user_id=user_id))
+    fresh_cache.set_cache(key="invited-user", value=UserAPIKeyAuth(user_id="invited-user"))
+    fresh_cache.set_cache(key="second-invited-user", value=UserAPIKeyAuth(user_id="second-invited-user"))
+    fresh_cache.set_cache(key="bystander-user", value=UserAPIKeyAuth(user_id="bystander-user"))
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", fresh_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.create_audit_log_for_update", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_team(
+        data=DeleteTeamRequest(team_ids=["team-doomed"]),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user",
+            api_key="sk-admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN.value,
+        ),
+        litellm_changed_by="admin-user",
+    )
+
+    assert mock_prisma_client.tx.call_count == 1, (
+        f"delete_team must run a single locked transaction for the whole delete, not one per member; "
+        f"prisma_client.tx() was entered {mock_prisma_client.tx.call_count} times for "
+        f"{len(member_user_ids)} members"
+    )
+    for user_id in member_user_ids:
+        assert fresh_cache.get_cache(key=user_id) is None, (
+            f"member {user_id}'s cached user object survived the team delete"
+        )
+    for user_id in ("invited-user", "second-invited-user"):
+        assert fresh_cache.get_cache(key=user_id) is None, (
+            f"the email-only roster entry resolving to {user_id} must have its cached user object evicted too"
+        )
+    assert fresh_cache.get_cache(key="bystander-user") is not None
+    assert mock_prisma_client.db.litellm_usertable.find_many.await_count == 1, (
+        "email-only roster entries must resolve in one lookup, not one query per email"
+    )
 
 
 @pytest.mark.asyncio
@@ -14146,12 +14249,6 @@ async def test_delete_team_emits_only_the_deleted_audit_event(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
 
-    removals = [(team, members, members[1:]), (team, members[1:], ())]
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.team_endpoints._team_member_delete",
-        AsyncMock(side_effect=lambda **_kwargs: removals.pop(0)),
-    )
-
     await delete_team(
         data=DeleteTeamRequest(team_ids=["team-gone"]),
         http_request=MagicMock(),
@@ -15813,7 +15910,7 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
     mock_db_client.db.query_raw = AsyncMock(return_value=[])
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("alice", ["team-alpha"])
     )
 
@@ -15835,7 +15932,7 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_db_client.db.query_raw = AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
     )
 
@@ -15856,7 +15953,7 @@ async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_clie
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
     mock_db_client.db.query_raw = AsyncMock(return_value=[])
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
     )
 

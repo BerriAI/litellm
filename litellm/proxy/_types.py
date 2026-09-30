@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
@@ -15,6 +15,7 @@ from pydantic import (
     Json,
     JsonValue,
     PositiveInt,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
@@ -2242,6 +2243,12 @@ class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
 class DeleteTeamRequest(LiteLLMPydanticObjectBase):
     team_ids: list[str]  # required
 
+    @field_validator("team_ids")
+    @classmethod
+    def distinct_team_ids(cls, team_ids: Sequence[str]) -> list[str]:
+        """One delete per team: a repeated id would otherwise write its tombstone and audit row twice."""
+        return list(dict.fromkeys(team_ids))
+
 
 class BlockTeamRequest(LiteLLMPydanticObjectBase):
     team_id: str  # required
@@ -3321,6 +3328,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # single-owner so its meaning stays trustworthy.
     mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
+    authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -3336,6 +3344,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     invoked_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     agent_invocation_cost: float | None = Field(default=None, exclude=True)
     billing_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
+    _managed_delegation_verified: bool = PrivateAttr(default=False)
     managed_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     managed_agent_context: ManagedAgentContext | None = Field(default=None, exclude=True)
     agent_caller: AgentCaller | None = Field(
@@ -3382,6 +3391,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_session_resource_server_id", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
+        values.pop("authenticated_by_custom_auth", None)
         values.pop("agent_caller", None)
         values.pop("managed_agent_context", None)
         values.pop("managed_agent_policy", None)
