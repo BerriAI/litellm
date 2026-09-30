@@ -9,8 +9,6 @@ ClickHouse DDL for agent tracing.
 Join: otel_traces.LiteLLMRequestId = spend_logs.response_id
 """
 
-from typing import List
-
 from litellm.integrations.clickhouse.clickhouse_client import ClickHouseClient
 
 OTEL_TRACES_TABLE = "otel_traces"
@@ -20,9 +18,7 @@ SPEND_LOGS_TABLE = "spend_logs"
 _ATTR_MAP = "Map(LowCardinality(String), String)"
 
 
-def schema_statements(
-    database: str, trace_retention_days: int, spend_log_retention_days: int
-) -> List[str]:
+def schema_statements(database: str, trace_retention_days: int, spend_log_retention_days: int) -> list[str]:
     db = database
     return [
         f"CREATE DATABASE IF NOT EXISTS {db}",
@@ -172,10 +168,6 @@ TTL toDateTime(start_time) + INTERVAL {spend_log_retention_days} DAY
     ]
 
 
-async def ensure_schema(
-    client: ClickHouseClient, trace_retention_days: int, spend_log_retention_days: int
-) -> None:
-    for statement in schema_statements(
-        client.database, trace_retention_days, spend_log_retention_days
-    ):
+async def ensure_schema(client: ClickHouseClient, trace_retention_days: int, spend_log_retention_days: int) -> None:
+    for statement in schema_statements(client.database, trace_retention_days, spend_log_retention_days):
         await client.execute(statement)
