@@ -17,10 +17,10 @@ async def test_trace_reader_projects_connection_and_parameters(recording_server:
     recording_server.enqueue(ResponseSpec(body={"data": [{"trace_id": "trace-1"}]}))
     reader_url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
     storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, reader_url + "?database=wrong")
-    rows: Final = json.loads(await storage.query("SELECT {trace_id:String} AS trace_id", {"trace_id": "trace-1"}))
+    response: Final = json.loads(await storage.query("SELECT {trace_id:String} AS trace_id", {"trace_id": "trace-1"}))
     request: Final = recording_server.requests[0]
     parameters: Final = parse_qs(urlsplit(request.path).query)
-    assert rows == [{"trace_id": "trace-1"}]
+    assert response["data"] == [{"trace_id": "trace-1"}]
     assert request.raw_body == b"SELECT {trace_id:String} AS trace_id"
     assert parameters["database"] == ["trace_test"]
     assert parameters["param_trace_id"] == ["trace-1"]

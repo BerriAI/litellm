@@ -365,6 +365,9 @@ async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytes
         ("/v1/realtime", "GET", True),
         ("/v1/realtime", "POST", False),
         ("/v1/realtime/client_secrets", "POST", False),
+        ("/live", "POST", False),
+        ("/v1/live", "POST", False),
+        ("/live/sessions/session/accept", "POST", False),
         ("/mcp/tools/call", "POST", True),
         ("/a2a/target/message/send", "POST", True),
         ("/v1/a2a/target/message/send", "POST", True),
@@ -573,7 +576,7 @@ def test_registered_inference_routes_have_an_explicit_managed_access_decision(ro
         "/videos", "/batches", "/files", "/fine_tuning", "/assistants", "/threads", "/utils/",
         "/vector_stores", "/vector_store/", "/search", "/containers", "/skills", "/claude-code/",
         "/interactions", "/agents", "/responses/{", "/responses/input_tokens",
-        "/realtime/client_secrets", "/realtime/calls", "/realtime/transcription_sessions",
+        "/realtime/client_secrets", "/realtime/calls", "/realtime/transcription_sessions", "/live",
     )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
     concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")
     assert managed_agent_route_allowed(concrete, None) is not unsupported, route
