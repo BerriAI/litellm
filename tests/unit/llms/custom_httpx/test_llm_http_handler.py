@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import inspect
 import json
 import logging
 import threading
@@ -4425,6 +4426,11 @@ def _call_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncH
             )
 
 
+async def _run_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncHTTPHandler) -> object:
+    result: Final = _call_lookup_handler(name, is_async, client)
+    return await result if inspect.isawaitable(result) else result
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "name",
@@ -4445,9 +4451,7 @@ async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_asy
     )
 
     with pytest.raises(BaseLLMException) as error:
-        result: Final = _call_lookup_handler(name, is_async, async_client if is_async else sync_client)
-        if is_async:
-            await result
+        await _run_lookup_handler(name, is_async, async_client if is_async else sync_client)
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
