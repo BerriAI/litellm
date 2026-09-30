@@ -7632,11 +7632,6 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
 
 @pytest.mark.asyncio
 async def test_pass_through_request_strips_caller_identity_before_guardrail_hooks():
-    """
-    Regression: a pass-through body skips add_litellm_data_to_request, so forged user_api_key_* fields, guardrail
-    control fields and inbound headers reached pre_call_hook guardrails as the caller's identity. The upstream body
-    is unchanged because these keys never reach it.
-    """
     upstream_bodies = []
 
     def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
@@ -7731,10 +7726,48 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
 
 
 @pytest.mark.asyncio
-async def test_pass_through_post_call_guardrails_receive_real_inbound_headers():
-    """Post-call guardrails run on a copy of the body the litellm-param pop already stripped, so without an explicit
-    re-attach an operator's extra_headers allowlist forwarded nothing on the response side."""
+async def test_pass_through_pre_call_block_logs_cleaned_inbound_headers():
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=HTTPException(status_code=400, detail="blocked"))
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers(
+        {
+            "content-type": "application/json",
+            "x-tenant": "tenant-real",
+            "authorization": "Bearer sk-real-caller-key",
+            "cookie": "session=secret",
+        }
+    )
+    mock_request.query_params = QueryParams({})
+    forged_headers = {"x-tenant": "forged"}
+    mock_request.body = AsyncMock(
+        return_value=json.dumps(
+            {"prompt": "hello", "headers": forged_headers, "proxy_server_request": {"headers": forged_headers}}
+        ).encode()
+    )
 
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),  # test-quality-ok: read at call time
+        pytest.raises(ProxyException),
+    ):
+        await pass_through_request(
+            request=mock_request,
+            target="https://upstream.test/v1/generate",
+            custom_headers={},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app"),
+        )
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    logged_request = mock_proxy_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+    assert logged_request["proxy_server_request"] == {
+        "headers": {"content-type": "application/json", "x-tenant": "tenant-real", "cookie": _REDACTED_HEADER_VALUE}
+    }
+
+
+@pytest.mark.asyncio
+async def test_pass_through_post_call_guardrails_receive_real_inbound_headers():
     def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"completion": "hi"})
 
@@ -7786,7 +7819,7 @@ async def test_pass_through_post_call_guardrails_receive_real_inbound_headers():
     assert len(post_call_data) == 1, "the post-call guardrail hook did not run"
     assert post_call_data[0]["proxy_server_request"] == {
         "headers": {"content-type": "application/json", "x-tenant": "tenant-real"}
-    }
+    }, "the post-call body copy is already stripped, so the headers must be re-attached"
     vendor_headers = _extract_inbound_headers(
         request_data=post_call_data[0], logging_obj=None, extra_allowlist={"x-tenant"}
     )

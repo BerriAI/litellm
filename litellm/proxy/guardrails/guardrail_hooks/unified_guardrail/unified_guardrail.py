@@ -156,8 +156,7 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
 _PROXY_ENRICHED_IDENTITY_FIELDS: Final = frozenset({"user_api_key_auth_metadata"})
 
 
-def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Overwrite the identity fields of data['litellm_metadata'] from the authenticated key, in place."""
+def _apply_authenticated_identity_to_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
     existing: Final = data.get("litellm_metadata")
     if isinstance(existing, dict):
         identity: Final = LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)
@@ -228,7 +227,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
-        _ensure_litellm_metadata(data, user_api_key_dict)
+        _apply_authenticated_identity_to_litellm_metadata(data, user_api_key_dict)
 
         data = await endpoint_translation.process_input_messages(
             data=data,
@@ -274,7 +273,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
-        _ensure_litellm_metadata(data, user_api_key_dict)
+        _apply_authenticated_identity_to_litellm_metadata(data, user_api_key_dict)
 
         return await endpoint_translation.process_input_messages(
             data=data,

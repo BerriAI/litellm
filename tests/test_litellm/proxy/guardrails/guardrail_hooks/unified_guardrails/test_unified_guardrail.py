@@ -2434,8 +2434,6 @@ def _cli_session_key(route: str) -> UserAPIKeyAuth:
 
 
 class TestGuardrailsSeeAuthenticatedIdentity:
-    """A request body cannot make a guardrail vendor see another key's identity, and the real one reaches it."""
-
     @staticmethod
     def _generic_guardrail(vendor_payloads: list[dict[str, object]]) -> CustomGuardrail:
         def vendor(request: httpx.Request) -> httpx.Response:
@@ -2505,7 +2503,6 @@ class TestGuardrailsSeeAuthenticatedIdentity:
 
     @pytest.mark.asyncio
     async def test_pass_through_body_cannot_forge_request_route(self, monkeypatch) -> None:
-        """Guardrails and call-type lookups key on user_api_key_request_route, so it must be the key's own route."""
         _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
         key = UserAPIKeyAuth(api_key="sk-real-caller-key", request_route="/openai/v1/chat/completions")
         data = {
@@ -2528,8 +2525,6 @@ class TestGuardrailsSeeAuthenticatedIdentity:
     async def test_chat_path_request_keeps_proxy_metadata_and_sends_stable_hash(
         self, monkeypatch, route: str, make_key: Callable[[str], UserAPIKeyAuth]
     ) -> None:
-        """After the chat-path metadata build, the guardrail hook leaves the proxy's bucket as it was (team metadata
-        in user_api_key_auth_metadata included) and the vendor gets the logged key, never a raw CLI session token."""
         _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
         request = MagicMock(spec=Request)
         request.url = MagicMock()
@@ -2599,8 +2594,6 @@ class TestGuardrailsSeeAuthenticatedIdentity:
 
     @pytest.mark.asyncio
     async def test_token_only_key_drops_forged_token_already_in_proxy_bucket(self, monkeypatch) -> None:
-        """A key with no api_key logs no hash, so a user_api_key_token left in litellm_metadata would become the
-        vendor's hash if the hook kept it."""
         _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
         vendor_payloads: list[dict[str, object]] = []
         key = UserAPIKeyAuth(token="abc123hashed", key_alias="prod-app")
@@ -2616,4 +2609,4 @@ class TestGuardrailsSeeAuthenticatedIdentity:
 
         assert len(vendor_payloads) == 1
         assert "user_api_key_token" not in data["litellm_metadata"]
-        assert vendor_payloads[0]["request_data"].get("user_api_key_hash") is None
+        assert vendor_payloads[0]["request_data"].get("user_api_key_hash") is None, "a kept token becomes the hash"

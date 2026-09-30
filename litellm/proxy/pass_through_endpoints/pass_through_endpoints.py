@@ -1148,7 +1148,7 @@ async def pass_through_request(
             general_settings_view,
         )
 
-        # Guardrails forward these to vendors as the inbound request headers; all are popped before the upstream send.
+        # Only the proxy's own view of the inbound headers may reach guardrail vendors
         _parsed_body.pop("proxy_server_request", None)
         _parsed_body.pop("headers", None)
         for _caller_bucket in (_parsed_body.get("metadata"), _parsed_body.get("litellm_metadata")):

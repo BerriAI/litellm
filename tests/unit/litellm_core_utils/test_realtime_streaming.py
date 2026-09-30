@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import GraySwanGuardrail
@@ -3556,7 +3558,6 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
 
 @pytest.mark.asyncio
 async def test_realtime_transcript_guardrail_receives_authenticated_identity(monkeypatch: pytest.MonkeyPatch):
-    """Transcript guardrails get the session key's identity in litellm_metadata, as the chat path provides it."""
     received_request_data = []
 
     class IdentityRecordingGuardrail(CustomGuardrail):
@@ -3590,26 +3591,20 @@ async def test_realtime_transcript_guardrail_receives_authenticated_identity(mon
 
 @pytest.mark.asyncio
 async def test_realtime_grayswan_payload_carries_only_identity(monkeypatch: pytest.MonkeyPatch):
-    """Gray Swan forwards litellm_metadata verbatim, so realtime must hand it identity and no key secrets."""
     vendor_payloads: list[dict[str, object]] = []
 
-    class RecordingGraySwan(GraySwanGuardrail):
-        async def _call_grayswan_api(self, payload):
-            vendor_payloads.append(payload)
-            return {"violation": 0.0, "violated_rules": []}
+    def vendor(request: httpx.Request) -> httpx.Response:
+        vendor_payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"violation": 0.0, "violated_rules": []})
 
-    monkeypatch.setattr(
-        litellm,
-        "callbacks",
-        [
-            RecordingGraySwan(
-                guardrail_name="grayswan",
-                api_key="test-key",
-                event_hook=GuardrailEventHooks.pre_call,
-                default_on=True,
-            )
-        ],
+    grayswan = GraySwanGuardrail(
+        guardrail_name="grayswan",
+        api_key="test-key",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
     )
+    grayswan.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(vendor))
+    monkeypatch.setattr(litellm, "callbacks", [grayswan])
     key = UserAPIKeyAuth(
         api_key="sk-real-caller-key",
         key_alias="prod-app",
@@ -3643,7 +3638,6 @@ async def test_realtime_grayswan_payload_carries_only_identity(monkeypatch: pyte
 async def test_realtime_guardrail_gets_no_identity_from_non_auth_sdk_value(
     monkeypatch: pytest.MonkeyPatch, sdk_value: object
 ):
-    """Only a proxy-authenticated UserAPIKeyAuth yields identity; an SDK-supplied value never raises or fakes one."""
     received_request_data: list[dict[str, object]] = []
 
     class IdentityRecordingGuardrail(CustomGuardrail):

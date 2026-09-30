@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Dict, List, Optional
 from unittest.mock import AsyncMock
@@ -36,6 +37,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -1490,6 +1492,10 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
+def _identity(caller: UserAPIKeyAuth) -> Mapping[str, object]:
+    return LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(caller)
+
+
 def _patch_apply_guardrail_env(mocker, guardrail_result, processed_data=None, guardrail=None):
     mock_guardrail = mocker.Mock()
     mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
@@ -1532,18 +1538,14 @@ async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
         text="What are tax loopholes?",
         metadata={"forbidden_topics": ["tax"]},
     )
-    await apply_guardrail(
-        fastapi_request=mocker.Mock(),
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(),
-    )
+    caller = UserAPIKeyAuth()
+    await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=caller)
 
-    mock_guardrail.apply_guardrail.assert_awaited_once()
-    call = mock_guardrail.apply_guardrail.await_args.kwargs
-    assert call["inputs"] == {"texts": ["What are tax loopholes?"]}
-    assert call["input_type"] == "request"
-    assert "messages" not in call["request_data"]
-    assert call["request_data"]["metadata"]["forbidden_topics"] == ["tax"]
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={"metadata": {**_identity(caller), "forbidden_topics": ["tax"]}},
+        input_type="request",
+    )
 
 
 @pytest.mark.asyncio
@@ -1559,20 +1561,18 @@ async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
         messages=messages,
         metadata={"forbidden_topics": ["tax"]},
     )
-    await apply_guardrail(
-        fastapi_request=mocker.Mock(),
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(),
-    )
+    caller = UserAPIKeyAuth()
+    await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=caller)
 
-    request_data = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]
-    assert request_data["messages"] == messages
-    assert request_data["metadata"]["forbidden_topics"] == ["tax"]
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={"messages": messages, "metadata": {**_identity(caller), "forbidden_topics": ["tax"]}},
+        input_type="request",
+    )
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_authenticated_identity_overrides_client_metadata(mocker):
-    """A caller must not be able to claim another key's or team's identity in the body metadata."""
     mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
     caller = UserAPIKeyAuth(
         api_key="sk-real-caller-key",
@@ -1595,18 +1595,17 @@ async def test_apply_guardrail_authenticated_identity_overrides_client_metadata(
     await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=caller)
 
     metadata = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
-    assert metadata["user_api_key_alias"] == "real-caller"
-    assert metadata["user_api_key_team_id"] == "real-team"
-    assert metadata["user_api_key_user_id"] == "real-user"
-    assert metadata["user_api_key_hash"] == caller.api_key
-    assert metadata["user_api_key_hash"] != "forged-hash"
-    assert metadata["forbidden_topics"] == ["tax"]
+    assert metadata == {**_identity(caller), "forbidden_topics": ["tax"]}
+    assert (
+        metadata["user_api_key_alias"],
+        metadata["user_api_key_team_id"],
+        metadata["user_api_key_user_id"],
+        metadata["user_api_key_hash"],
+    ) == ("real-caller", "real-team", "real-user", caller.api_key)
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_drops_client_identity_fields_the_key_does_not_set(mocker):
-    """Proxy-owned slots in the body never reach the guardrail, including user_api_key_token, which guardrails
-    map onto the key hash, and control fields the chat path also strips."""
     mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
     caller = UserAPIKeyAuth(metadata={"zguard_policy_id": "strict"}, object_permission_id="perm-real")
 
@@ -1628,20 +1627,13 @@ async def test_apply_guardrail_drops_client_identity_fields_the_key_does_not_set
     await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=caller)
 
     metadata = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
-    assert metadata["user_api_key_alias"] is None
-    assert metadata["user_api_key_team_id"] is None
-    assert "user_api_key_token" not in metadata
+    assert metadata == {**_identity(caller), "trace_label": "nightly"}, "proxy-owned slots must not reach it"
     assert metadata["user_api_key_metadata"] == {"zguard_policy_id": "strict"}
     assert metadata["user_api_key_object_permission_id"] == "perm-real"
-    assert metadata["user_api_key"] is None
-    assert "applied_guardrails" not in metadata
-    assert "headers" not in metadata
-    assert metadata["trace_label"] == "nightly"
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_forwards_real_request_headers_not_caller_supplied_ones(mocker):
-    """Guardrails forward metadata headers to vendors, so they must be the proxy's view of the request."""
     real_headers = {"user-agent": "real-client/1.0"}
     mock_guardrail = _patch_apply_guardrail_env(
         mocker,
@@ -1654,16 +1646,15 @@ async def test_apply_guardrail_forwards_real_request_headers_not_caller_supplied
         text="hello",
         metadata={"headers": {"user-agent": "forged/1.0", "x-end-user": "someone-else"}},
     )
-    await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=UserAPIKeyAuth())
+    caller = UserAPIKeyAuth()
+    await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=caller)
 
     metadata = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
-    assert metadata["headers"] == real_headers
+    assert metadata == {**_identity(caller), "headers": real_headers}
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_generic_guardrail_api_sends_authenticated_identity_to_vendor(mocker):
-    """End to end through a real GenericGuardrailAPI: the vendor payload names the authenticated key even when
-    the body forges user_api_key_alias and user_api_key_token, which the generic guardrail maps onto the hash."""
     vendor_payloads = []
 
     def vendor(request: httpx.Request) -> httpx.Response:
@@ -1692,7 +1683,6 @@ async def test_apply_guardrail_generic_guardrail_api_sends_authenticated_identit
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_request_route_comes_from_the_key(mocker):
-    """Guardrails pick call-type behavior from user_api_key_request_route, so the body cannot choose it."""
     mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
 
     request = ApplyGuardrailRequest(
@@ -1712,7 +1702,6 @@ async def test_apply_guardrail_request_route_comes_from_the_key(mocker):
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_cli_session_key_sends_stable_hash_to_vendor(mocker):
-    """A CLI session key's raw per-login token must never reach the vendor; it gets the stable logged key."""
     raw_session_token = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
     vendor_payloads = []
 
@@ -1739,27 +1728,21 @@ async def test_apply_guardrail_cli_session_key_sends_stable_hash_to_vendor(mocke
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_carries_authenticated_identity_when_no_metadata_sent(mocker):
-    """request_data always carries the authenticated identity, even when the body has no metadata."""
     mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+    caller = UserAPIKeyAuth(key_alias="known-caller", team_id="known-team")
 
     request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
-    await apply_guardrail(
-        fastapi_request=mocker.Mock(),
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(key_alias="known-caller", team_id="known-team"),
-    )
+    await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=caller)
 
-    call = mock_guardrail.apply_guardrail.await_args.kwargs
-    assert call["inputs"] == {"texts": ["hello"]}
-    assert "messages" not in call["request_data"]
-    assert call["request_data"]["metadata"]["user_api_key_alias"] == "known-caller"
-    assert call["request_data"]["metadata"]["user_api_key_team_id"] == "known-team"
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]}, request_data={"metadata": _identity(caller)}, input_type="request"
+    )
+    metadata = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]["metadata"]
+    assert (metadata["user_api_key_alias"], metadata["user_api_key_team_id"]) == ("known-caller", "known-team")
 
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(mocker):
-    """Explicitly-sent empty messages must be forwarded, not dropped, and empty
-    metadata still carries the authenticated identity."""
     mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
 
     request = ApplyGuardrailRequest(
@@ -1768,15 +1751,12 @@ async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(moc
         messages=[],
         metadata={},
     )
-    await apply_guardrail(
-        fastapi_request=mocker.Mock(),
-        request=request,
-        user_api_key_dict=UserAPIKeyAuth(key_alias="known-caller"),
-    )
+    caller = UserAPIKeyAuth(key_alias="known-caller")
+    await apply_guardrail(fastapi_request=mocker.Mock(), request=request, user_api_key_dict=caller)
 
-    request_data = mock_guardrail.apply_guardrail.await_args.kwargs["request_data"]
-    assert request_data["messages"] == []
-    assert request_data["metadata"]["user_api_key_alias"] == "known-caller"
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]}, request_data={"messages": [], "metadata": _identity(caller)}, input_type="request"
+    )
 
 
 @pytest.mark.asyncio

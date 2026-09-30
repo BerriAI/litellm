@@ -500,7 +500,6 @@ def is_untrusted_caller_metadata_key(key: str) -> bool:
 def strip_untrusted_caller_metadata(
     data: MutableMapping[str, object], *, allow_client_message_redaction_opt_out: bool
 ) -> None:
-    """Remove, in place, the proxy-owned slots a caller put in either metadata bucket of a request body."""
     for user_meta in (data.get("metadata"), data.get("litellm_metadata")):
         if not isinstance(user_meta, dict):
             continue
@@ -512,17 +511,13 @@ def strip_untrusted_caller_metadata(
             user_meta.pop(untrusted_key, None)
 
 
-_GUARDRAIL_UNTRUSTED_CALLER_METADATA_KEYS: Final = frozenset({"user_api_key", "headers"})
-
-
 def caller_metadata_with_authenticated_identity(
     caller_metadata: Mapping[str, object] | None, user_api_key_dict: UserAPIKeyAuth
-) -> dict[str, object]:
-    """Caller metadata minus proxy-owned slots, bare user_api_key and headers, with the key's identity on top."""
+) -> Mapping[str, object]:
     caller_fields: Final = {
         key: value
         for key, value in (caller_metadata or {}).items()
-        if not (is_untrusted_caller_metadata_key(key) or key in _GUARDRAIL_UNTRUSTED_CALLER_METADATA_KEYS)
+        if not (is_untrusted_caller_metadata_key(key) or key == "headers")
     }
     return {**caller_fields, **LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)}
 
@@ -1677,7 +1672,7 @@ class LiteLLMProxyRequestSetup:
         return user_api_key_logged_metadata
 
     @staticmethod
-    def get_key_scoped_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
+    def get_key_scoped_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
         return {
             "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
             "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
@@ -1686,8 +1681,7 @@ class LiteLLMProxyRequestSetup:
         }
 
     @staticmethod
-    def get_authenticated_identity_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
-        """Identity fields derived from the authenticated key alone, for paths that skip the chat-path build."""
+    def get_authenticated_identity_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object]:
         return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
@@ -2053,7 +2047,9 @@ async def add_litellm_data_to_request(
     # These keys are injected by the proxy itself below — user-supplied values
     # must not be trusted.
     _allow_client_mock_response: Final = _key_or_team_allows_client_mock_response(user_api_key_dict)
-    _allow_client_message_redaction_opt_out = key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
+    _allow_client_message_redaction_opt_out: Final = key_or_team_allows_client_message_redaction_opt_out(
+        user_api_key_dict
+    )
     for _internal_key in _UNTRUSTED_ROOT_CONTROL_FIELDS:
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
