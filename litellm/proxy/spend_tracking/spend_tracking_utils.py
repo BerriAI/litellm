@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -1083,6 +1084,11 @@ def _get_messages_for_spend_logs_payload(
 
 
 _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
+_REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
+
+
+def _is_request_body_credential(key: str, value: object) -> bool:
+    return isinstance(value, str) and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
 
 
 def _sanitize_request_body_for_spend_logs_payload(
@@ -1094,8 +1100,9 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
 
-    Also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields
-    which contains raw HTTP headers including Authorization tokens).
+    At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
+    which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
+    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1152,7 +1159,11 @@ def _sanitize_request_body_for_spend_logs_payload(
             return value
         return value
 
-    return {k: _sanitize_value(v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
+    return {
+        k: REDACTED_BY_LITELM_STRING if _is_request_body_credential(k, v) else _sanitize_value(v)
+        for k, v in request_body.items()
+        if k not in _SENSITIVE_REQUEST_BODY_KEYS
+    }
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by
