@@ -29,7 +29,7 @@ from redis.commands.search.query import Query
 
 from litellm._logging import print_verbose
 from litellm._uuid import uuid
-from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
+from litellm.llms.valkey.common_utils import VALKEY_LIB_NAME, build_valkey_url, pack_vector
 
 from ._embedding_router import resolve_embedding_timeout
 from .redis_semantic_cache import RedisSemanticCache
@@ -93,8 +93,14 @@ class ValkeySemanticCache(RedisSemanticCache):
             self.async_client = async_client
         else:
             resolved_url: Final = redis_url or self._build_valkey_url(host, port, password, ssl)
-            self.sync_client = sync_client if sync_client is not None else Redis.from_url(resolved_url)
-            self.async_client = async_client if async_client is not None else AsyncRedis.from_url(resolved_url)
+            self.sync_client = (
+                sync_client if sync_client is not None else Redis.from_url(resolved_url, lib_name=VALKEY_LIB_NAME)
+            )
+            self.async_client = (
+                async_client
+                if async_client is not None
+                else AsyncRedis.from_url(resolved_url, lib_name=VALKEY_LIB_NAME)
+            )
 
         print_verbose(f"Valkey semantic-cache initializing index - {self.index_name}")
 

@@ -19,7 +19,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
-from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
+from litellm.llms.valkey.common_utils import VALKEY_LIB_NAME, build_valkey_url, pack_vector
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
@@ -250,6 +250,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             params.connection_url(),
             socket_connect_timeout=connect_timeout,
             socket_timeout=op_timeout,
+            lib_name=VALKEY_LIB_NAME,
         )
         try:
             raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
@@ -300,6 +301,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             params.connection_url(),
             socket_connect_timeout=connect_timeout,
             socket_timeout=op_timeout,
+            lib_name=VALKEY_LIB_NAME,
         )
         try:
             raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
