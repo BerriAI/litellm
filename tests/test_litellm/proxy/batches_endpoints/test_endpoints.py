@@ -42,6 +42,7 @@ import httpx
 import pytest
 import respx
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from starlette.types import Message
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -1026,20 +1027,23 @@ async def test_create__missing_required_param_is_400(harness, body, missing_para
     harness.router_acreate.assert_not_called()
 
 
-def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
-    """A request that reaches the real pre-call logic, which the `harness` fixture
-    mocks out. Metadata validation lives there, so it cannot be seen through the seam."""
-    request = MagicMock(spec=Request)
-    request.url = MagicMock()
-    request.url.__str__.return_value = "http://localhost/v1/batches"
-    request.url.path = "/v1/batches"
-    request.method = "POST"
-    request.query_params = {}
-    request.headers = {"Content-Type": "application/json"}
-    request.client = MagicMock()
-    request.client.host = "127.0.0.1"
-    request.body = AsyncMock(return_value=json.dumps(body).encode())
-    return request
+def _raw_batches_request(body: dict[str, str]) -> Request:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/v1/batches",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 50000),
+            "server": ("localhost", 80),
+        },
+        receive,
+    )
 
 
 @pytest.mark.asyncio
