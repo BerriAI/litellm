@@ -1425,8 +1425,6 @@ class TestUpdateModel:
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
             mock_clear_cache.assert_awaited_once_with()
             stored = json.loads(mock_prisma.db.litellm_proxymodeltable.update.call_args.kwargs["data"]["litellm_params"])
-            # The endpoint encrypts every incoming litellm_param, so the stored reasoning field is
-            # read back through the real decrypt path instead of a stubbed encryption helper.
             assert decrypt_value_helper(stored["reasoning_content_field"], key="reasoning_content_field") == (reasoning_field or "reasoning")
             if reasoning_field is None:
                 assert stored["reasoning_content_field"] == existing_row.litellm_params["reasoning_content_field"]
