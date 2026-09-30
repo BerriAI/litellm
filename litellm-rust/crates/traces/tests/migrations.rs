@@ -2,7 +2,8 @@ use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
 use litellm_traces::{
-    Connection, Error, InsertTable, encode_rows, ensure_schema, execute_read, schema_statements,
+    Connection, Error, InsertTable, Parameter, ReadQuery, encode_rows, ensure_schema,
+    execute_named_read, execute_read, schema_statements,
 };
 use rstest::{fixture, rstest};
 use testcontainers_modules::{
@@ -124,6 +125,61 @@ async fn schema_supports_span_rollups_and_spend_joins(
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let list_parameters = BTreeMap::from([
+        ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        (
+            "start_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 - 1000),
+        ),
+        (
+            "end_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 + 1000),
+        ),
+        ("cursor_ms".into(), Parameter::Integer(0)),
+        ("cursor_trace_id".into(), Parameter::Text(String::new())),
+        ("limit".into(), Parameter::Integer(10)),
+    ]);
+    let listed: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &reader,
+            ReadQuery::ListTraces,
+            &list_parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        listed["data"][0]["request_ids"],
+        serde_json::json!(["response-1"])
+    );
+    let spend_parameters = BTreeMap::from([
+        (
+            "response_ids".into(),
+            Parameter::Strings(vec!["response-1".into()]),
+        ),
+        ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        (
+            "start_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 - 1000),
+        ),
+        (
+            "end_ms".into(),
+            Parameter::Integer(timestamp / 1_000_000 + 1000),
+        ),
+    ]);
+    let matched: serde_json::Value = serde_json::from_str(
+        &execute_named_read(
+            &database.client,
+            &reader,
+            ReadQuery::SpendByResponseIds,
+            &spend_parameters,
+        )
+        .await?,
+    )?;
+    assert_eq!(matched["data"][0]["spend"], 0.125);
     let body = read_json(
         &database,
         "SELECT o.TeamId, o.ApiKeyHash, o.ObservationType, o.InputPreview, s.spend, \
@@ -151,6 +207,43 @@ async fn schema_supports_span_rollups_and_spend_joins(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
     );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn insert_rejects_unknown_columns_even_if_url_requests_skipping_them(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&format!(
+        "{}?input_format_skip_unknown_fields=1",
+        database.url
+    ))?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let row = BTreeMap::from([
+        (
+            "Timestamp".to_owned(),
+            serde_json::json!(1_700_000_000_000_000_000_i64),
+        ),
+        (
+            "unexpected".to_owned(),
+            serde_json::json!("dropped silently"),
+        ),
+    ]);
+
+    assert!(matches!(
+        litellm_traces::insert_rows(
+            &database.client,
+            &writer,
+            "trace_test",
+            InsertTable::OtelTraces,
+            vec![row]
+        )
+        .await,
+        Err(Error::InsertFailed(_))
+    ));
+    assert_eq!(table_rows(&database, "otel_traces").await?, 0);
     Ok(())
 }
 

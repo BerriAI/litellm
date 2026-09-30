@@ -112,7 +112,7 @@ class SourceReader:
                     metadata=tuple(
                         MetadataFilter(key=k, value=v)
                         for k, v in row.attributes
-                        if 0 < len(k) <= 200 and 0 < len(v) <= 500
+                        if k != "litellm.api_key_hash" and 0 < len(k) <= 200 and 0 < len(v) <= 500
                     ),
                 )
                 for row in rows

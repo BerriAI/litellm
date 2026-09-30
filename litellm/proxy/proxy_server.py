@@ -1555,6 +1555,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         if not model_info_scheduler.running:
             model_info_scheduler.start()
 
+    if scheduler is not None and prisma_client is not None:
+        from litellm.proxy.management_endpoints.roi_calculator_endpoints import register_scheduled_sync
+
+        register_scheduled_sync(scheduler)
+
     # End of startup event
     yield
 
@@ -11317,25 +11322,36 @@ class ProxyStartupEvent:
             return connected_client
 
     @classmethod
-    async def init_tracing(cls, general_settings: dict) -> None:
+    async def init_tracing(cls, general_settings: dict, receiver: TraceReceiver | None = None) -> None:
         """
         Enable agent tracing (`POST/GET /v1/traces`) when configured:
 
             general_settings:
               tracing:
-                store: clickhouse       # CLICKHOUSE_URL / _USER / _PASSWORD / _DATABASE
+                store: clickhouse
         """
+        from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+
+        manager: Final = litellm.logging_callback_manager
+        for callback in manager.get_custom_loggers_for_type(ClickHouseSpendLogger):
+            manager.remove_callback_from_all_lists(callback)
+        tracing_endpoints.receiver = None
         settings: Final = general_settings.get("tracing")
         if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
             return
         try:
-            tracing: Final = TraceReceiver.from_env()
+            tracing: Final = receiver if receiver is not None else TraceReceiver.from_env()
             await tracing.start()
         except (KeyError, OSError, RuntimeError, ValueError) as error:
-            tracing_endpoints.receiver = None
             verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
             return
         tracing_endpoints.receiver = tracing
+        spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
+        manager.add_litellm_callback(spend_logger)
+        manager.add_litellm_success_callback(spend_logger)
+        manager.add_litellm_failure_callback(spend_logger)
+        manager.add_litellm_async_success_callback(spend_logger)
+        manager.add_litellm_async_failure_callback(spend_logger)
         verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
 
     @classmethod
@@ -17536,13 +17552,17 @@ def _serve_custom_ui_logo(candidate: str) -> Response | None:
 
 
 @app.get("/get_image", include_in_schema=False)
-async def get_image(theme: Literal["light", "dark"] | None = None):
+async def get_image(
+    theme: Literal["light", "dark"] | None = None,
+    variant: Literal["full", "monogram"] = "full",
+):
     """Get logo to show on admin UI"""
 
     # get current_dir
     current_dir: Final = os.path.dirname(os.path.abspath(__file__))
-    bundled_light_logo: Final = os.path.join(current_dir, "logo.jpg")
-    bundled_dark_logo: Final = os.path.join(current_dir, "logo_dark.png")
+    bundled_logo_stem: Final = "logo_monogram" if variant == "monogram" else "logo"
+    bundled_light_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}.png")
+    bundled_dark_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}_dark.png")
     default_site_logo: Final = (
         bundled_dark_logo if theme == "dark" and os.path.isfile(bundled_dark_logo) else bundled_light_logo
     )
@@ -17603,7 +17623,7 @@ async def get_image(theme: Literal["light", "dark"] | None = None):
     if safe_logo is not None:
         safe_logo_path, media_type = safe_logo
         return FileResponse(safe_logo_path, media_type=media_type)
-    return FileResponse(bundled_light_logo, media_type="image/jpeg")
+    return FileResponse(bundled_light_logo, media_type="image/png")
 
 
 @app.get("/get_favicon", include_in_schema=False)

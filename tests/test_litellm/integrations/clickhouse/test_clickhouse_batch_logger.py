@@ -2,13 +2,13 @@
 Tests for the CustomBatchLogger-based ClickHouse base logger.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from litellm.integrations.clickhouse import clickhouse_batch_logger as module
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
-from litellm.integrations.custom_batch_logger import CustomBatchLogger
 
 
 class _TestLogger(ClickHouseBatchLogger):
@@ -19,10 +19,6 @@ def _logger(insert: AsyncMock) -> _TestLogger:
     storage = MagicMock()
     storage.insert_rows = insert
     return _TestLogger(storage=storage)
-
-
-def test_is_a_custom_batch_logger():
-    assert issubclass(ClickHouseBatchLogger, CustomBatchLogger)
 
 
 @pytest.mark.asyncio
@@ -38,6 +34,24 @@ async def test_flush_splits_into_batches_and_empties_queue():
     assert all(c.args[0] == "test_table" for c in insert.await_args_list)
     assert logger.log_queue == []
     assert logger.rows_written == 5
+
+
+@pytest.mark.asyncio
+async def test_first_enqueued_row_flushes_after_synchronous_construction():
+    flushed = asyncio.Event()
+
+    async def insert_rows(table: str, rows: list[dict[str, int]]) -> None:
+        assert table == "test_table"
+        assert rows == [{"i": 1}]
+        flushed.set()
+
+    logger = _logger(AsyncMock(side_effect=insert_rows))
+    logger.flush_interval = 0.01
+
+    logger.enqueue([{"i": 1}])
+    await asyncio.wait_for(flushed.wait(), timeout=1)
+    if logger._flush_task is not None:
+        logger._flush_task.cancel()
 
 
 @pytest.mark.asyncio

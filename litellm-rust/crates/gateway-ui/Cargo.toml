@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axum = { workspace = true, features = ["json", "original-uri"] }
+axum = { workspace = true, features = ["json", "original-uri", "query"] }
 axum-login.workspace = true
 base64.workspace = true
 governor = { version = "0.10.4", default-features = false, features = ["std"] }
@@ -16,6 +16,7 @@ rand.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tower = { version = "0.5", features = ["util"] }
 tower-cookies = "0.11.0"
 tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
 tower-sessions.workspace = true
