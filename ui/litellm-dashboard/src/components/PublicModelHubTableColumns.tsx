@@ -83,6 +83,11 @@ const formatCapabilityName = (key: string) =>
 
 const formatCost = (cost: number) => `$${(cost * 1_000_000).toFixed(4)}`;
 
+const tokenCostLabel = (model: ModelGroupInfo, cost: number | null | undefined): string => {
+  if (model.pass_through_path) return "n/a";
+  return cost ? formatCost(cost) : "Free";
+};
+
 const formatTokens = (tokens: number | undefined) => {
   if (!tokens) return "N/A";
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(0)}K`;
@@ -233,9 +238,7 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
       header: ({ column }) => <DataTableSortHeader column={column} title="Input $/1M" />,
       size: 110,
       cell: ({ row }) => (
-        <span className="text-sm">
-          {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
-        </span>
+        <span className="text-sm">{tokenCostLabel(row.original, row.original.input_cost_per_token)}</span>
       ),
     },
     {
@@ -245,9 +248,7 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
       header: ({ column }) => <DataTableSortHeader column={column} title="Output $/1M" />,
       size: 110,
       cell: ({ row }) => (
-        <span className="text-sm">
-          {row.original.output_cost_per_token ? formatCost(row.original.output_cost_per_token) : "Free"}
-        </span>
+        <span className="text-sm">{tokenCostLabel(row.original, row.original.output_cost_per_token)}</span>
       ),
     },
     {

@@ -73,6 +73,8 @@ const BODY_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH"]);
 const passThroughExampleMethod = (methods: string[] | null | undefined): string =>
   !methods?.length || methods.includes("POST") ? "POST" : methods[0];
 
+const shellDoubleQuoted = (value: string): string => value.replace(/[\\"$`]/g, "\\$&");
+
 const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
   const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
@@ -273,7 +275,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const usageSnippet = (model: ModelGroupInfo): string => {
     if (model.pass_through_path) {
       const method = passThroughExampleMethod(model.pass_through_methods);
-      const url = `${getProxyBaseUrl()}${model.pass_through_path}`;
+      const url = shellDoubleQuoted(`${getProxyBaseUrl()}${model.pass_through_path}`);
       return BODY_METHODS.has(method)
         ? [
             `curl -X ${method} "${url}" \\`,

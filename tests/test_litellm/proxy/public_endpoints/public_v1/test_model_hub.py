@@ -564,6 +564,23 @@ def test_a_pass_through_endpoint_is_listed_even_when_no_model_group_is_published
     assert response.json()["data"] == [_pass_through_row("Clinical NER", "/clinical-ner")]
 
 
+def test_a_pass_through_named_like_a_model_does_not_borrow_its_health(monkeypatch):
+    prisma_client, read = _recording_prisma([_health_check("gpt-4o", status="unhealthy")])
+    prisma_client.get_all_latest_health_checks = AsyncMock(return_value=[_health_check("gpt-4o", status="unhealthy")])
+    _publish(monkeypatch, (_info("gpt-4o"),), prisma_client=prisma_client)
+    _configure_pass_throughs(monkeypatch, {"path": "/gpt-4o", "display_name": "gpt-4o", "show_in_model_hub": True})
+
+    rows = _get().json()["data"]
+    legacy_rows = client.get(LEGACY_MODEL_HUB_PATH).json()
+
+    assert [(row["pass_through_path"], row["health_status"]) for row in rows] == [(None, "unhealthy"), ("/gpt-4o", None)]
+    assert _asked_about(read) == ["gpt-4o"]
+    assert [(row["pass_through_path"], row["health_status"]) for row in legacy_rows] == [
+        (None, "unhealthy"),
+        ("/gpt-4o", None),
+    ]
+
+
 def test_a_pass_through_only_proxy_without_a_router_still_publishes_its_endpoints(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)

@@ -94,8 +94,10 @@ class HealthEnricher:
     lookup: HealthSnapshotLookup
 
     async def __call__(self, rows: Sequence[ModelGroupInfoProxy]) -> Sequence[ModelGroupInfoProxy]:
-        health: Final = await self.lookup.latest_for(tuple(row.model_group for row in rows))
-        return tuple(_with_health(row, health.get(row.model_group)) for row in rows)
+        health: Final = await self.lookup.latest_for(
+            tuple(row.model_group for row in rows if row.pass_through_path is None)
+        )
+        return tuple(_with_health(row, None if row.pass_through_path else health.get(row.model_group)) for row in rows)
 
 
 FEATURE_PREFIX: Final = "supports_"

@@ -369,6 +369,8 @@ describe("PublicModelHub", () => {
 
     const row = (await screen.findByRole("button", { name: "Clinical NER" })).closest("tr");
     expect(row).toHaveTextContent("passthrough");
+    expect(row).toHaveTextContent("n/a");
+    expect(row).not.toHaveTextContent("Free");
 
     fireEvent.click(screen.getByRole("button", { name: "Clinical NER" }));
 
@@ -376,6 +378,18 @@ describe("PublicModelHub", () => {
     expect(within(dialog).getByText("/clinical-ner")).toBeInTheDocument();
     expect(within(dialog).getByText(/curl -X POST "http:\/\/localhost:3000\/clinical-ner"/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Token & Cost Information")).not.toBeInTheDocument();
+  });
+
+  it("escapes shell characters in the pass-through route of the usage example", async () => {
+    respondWith([
+      model({ model_group: "Tenant", providers: [], mode: "passthrough", pass_through_path: "/tenant/$acct" }),
+    ]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Tenant" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/curl -X POST "http:\/\/localhost:3000\/tenant\/\\\$acct"/)).toBeInTheDocument();
   });
 
   it("writes the usage example with a method the pass-through route accepts", async () => {

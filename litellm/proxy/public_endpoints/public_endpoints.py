@@ -259,7 +259,7 @@ async def public_model_hub():
             pass
 
     for model_group in model_groups:
-        health_info = health_checks_map.get(model_group.model_group)
+        health_info = None if model_group.pass_through_path else health_checks_map.get(model_group.model_group)
         if health_info:
             model_group.health_status = health_info.get("status")
             model_group.health_response_time = health_info.get("response_time_ms")
