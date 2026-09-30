@@ -3,7 +3,7 @@
 
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -54,6 +54,7 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
+    ManagedFileIdResolver,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     decode_model_from_file_id,
@@ -144,6 +145,7 @@ def _parse_managed_file_object(raw_file_object: object, unified_file_id: str) ->
 class _ManagedFileRow(Protocol):
     unified_file_id: str
     file_object: OpenAIFileObject
+    flat_model_file_ids: Sequence[str]
     storage_backend: Optional[str]
     storage_url: Optional[str]
     created_by: Optional[str]
@@ -199,6 +201,16 @@ class _CursorPageArgs(TypedDict, total=False):
 
 def _managed_file_table(prisma_client: PrismaClient) -> _ManagedFileTableActions:
     return prisma_client.db.litellm_managedfiletable
+
+
+def _iter_provider_file_id_pairs(
+    rows: Sequence[_ManagedFileRow],
+    requested_provider_file_ids: frozenset[str],
+) -> Iterator[tuple[str, str]]:
+    for row in rows:
+        for provider_file_id in row.flat_model_file_ids:
+            if provider_file_id in requested_provider_file_ids:
+                yield provider_file_id, row.unified_file_id
 
 
 def _managed_object_table(prisma_client: PrismaClient) -> _ManagedObjectTableActions:
@@ -709,6 +721,39 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             verbose_logger.warning(f"Failed to resolve managed file ids for batch {row.unified_object_id}: {e}")
             return None
         return batch_obj
+
+    async def get_unified_file_ids_for_provider_file_ids(
+        self,
+        provider_file_ids: Sequence[str],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Mapping[str, str]:
+        if not provider_file_ids:
+            return MappingProxyType({})
+
+        unique_provider_file_ids: Final = tuple(dict.fromkeys(provider_file_ids))
+        owner_filter: Final = build_owner_filter(user_api_key_dict)
+        if owner_filter is None:
+            return MappingProxyType({})
+
+        provider_file_ids_list: Final = [  # mutable-ok: Prisma hasSome requires a list
+            provider_file_id for provider_file_id in unique_provider_file_ids
+        ]
+        rows: Final = await _managed_file_table(self.prisma_client).find_many(
+            where={  # mutable-ok: Prisma requires a plain dictionary for where
+                **owner_filter,
+                "flat_model_file_ids": {  # mutable-ok: Prisma requires a plain filter dictionary
+                    "hasSome": provider_file_ids_list,
+                },
+            }
+        )
+        return MappingProxyType(
+            dict(
+                _iter_provider_file_id_pairs(
+                    rows,
+                    frozenset(unique_provider_file_ids),
+                )
+            )
+        )
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]

@@ -10,9 +10,11 @@ is attached to a vector store or read back under shared provider credentials.
 """
 
 import base64
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal
-from unittest.mock import MagicMock, patch
+from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,8 +25,15 @@ import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_managed_file_id,
+    _with_managed_file_list_ids,
+    _with_provider_file_id_cursors,
 )
 from litellm.types.utils import SpecialEnums
+from litellm.types.vector_store_files import (
+    VectorStoreFileListResponse,
+    VectorStoreFileObject,
+    VectorStoreFileStatus,
+)
 
 RAW_FILE_ID = "file-victim-abc123"
 CALLER = UserAPIKeyAuth(api_key="sk-test", user_id="attacker-user", team_id="team-b")
@@ -51,11 +60,40 @@ class ManagedResourceAccessCheckerStub:
         return False
 
 
+@dataclass(frozen=True)
+class ManagedFileIdResolverStub:
+    resolver: AsyncMock
+
+    async def get_unified_file_ids_for_provider_file_ids(
+        self,
+        provider_file_ids: Sequence[str],
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Mapping[str, str]:
+        return await self.resolver(
+            provider_file_ids=provider_file_ids,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+
 def _unified_file_id() -> str:
     unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
         "application/json", "victim-unified-id", "gpt-4o-mini", RAW_FILE_ID, "gpt-4o-mini-id"
     )
     return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
+
+
+def _vector_store_file_row(file_id: str) -> VectorStoreFileObject:
+    return {
+        "id": file_id,
+        "object": "vector_store.file",
+        "created_at": 1700000000,
+        "usage_bytes": 100,
+        "vector_store_id": "vs-test",
+        "status": VectorStoreFileStatus.COMPLETED,
+        "last_error": None,
+        "chunking_strategy": {"type": "auto"},
+        "attributes": {"source": "test"},
+    }
 
 
 async def _resolve(
@@ -70,6 +108,73 @@ async def _resolve(
         managed_files_obj=ManagedResourceAccessCheckerStub(file_access=file_access),
         llm_router=None,
     )
+
+
+@pytest.mark.parametrize(
+    "provider_ids",
+    [
+        (RAW_FILE_ID, "file-unmanaged-123"),
+        ("file-unmanaged-123", RAW_FILE_ID),
+    ],
+)
+@pytest.mark.asyncio
+async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
+    provider_ids: tuple[str, str],
+) -> None:
+    managed_file_id: Final = _unified_file_id()
+    expected_provider_ids: Final = tuple(
+        managed_file_id if provider_file_id == RAW_FILE_ID else provider_file_id
+        for provider_file_id in provider_ids
+    )
+    provider_response: Final[VectorStoreFileListResponse] = {
+        "object": "list",
+        "data": [
+            _vector_store_file_row(provider_file_id)
+            for provider_file_id in provider_ids
+        ],
+        "first_id": provider_ids[0],
+        "last_id": provider_ids[1],
+        "has_more": True,
+    }
+    original_response: Final = deepcopy(provider_response)
+    resolver: Final = AsyncMock(return_value={RAW_FILE_ID: managed_file_id})
+    managed_files_obj: Final = ManagedFileIdResolverStub(resolver=resolver)
+
+    response: Final = await _with_managed_file_list_ids(
+        response=provider_response,
+        managed_files_obj=managed_files_obj,
+        user_api_key_dict=CALLER,
+    )
+
+    expected_response: Final[VectorStoreFileListResponse] = {
+        "object": "list",
+        "data": [
+            _vector_store_file_row(provider_file_id)
+            for provider_file_id in expected_provider_ids
+        ],
+        "first_id": expected_provider_ids[0],
+        "last_id": expected_provider_ids[1],
+        "has_more": True,
+    }
+    assert response == expected_response
+    assert provider_response == original_response
+    resolver.assert_awaited_once_with(
+        provider_file_ids=tuple(dict.fromkeys(provider_ids)),
+        user_api_key_dict=CALLER,
+    )
+
+
+def test_vector_store_file_list_translates_managed_cursors_and_preserves_raw_after() -> (
+    None
+):
+    managed_file_id: Final = _unified_file_id()
+
+    assert _with_provider_file_id_cursors(
+        {"after": managed_file_id, "before": managed_file_id}
+    ) == {"after": RAW_FILE_ID, "before": RAW_FILE_ID}
+    assert _with_provider_file_id_cursors({"after": RAW_FILE_ID}) == {
+        "after": RAW_FILE_ID
+    }
 
 
 @pytest.mark.asyncio

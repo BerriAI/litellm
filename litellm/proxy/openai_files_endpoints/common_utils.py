@@ -1,7 +1,7 @@
 import base64
 import mimetypes
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
@@ -93,6 +93,15 @@ class ManagedResourceAccessChecker(Protocol):
         unified_object_id: str,
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> bool: ...
+
+
+@runtime_checkable
+class ManagedFileIdResolver(Protocol):
+    async def get_unified_file_ids_for_provider_file_ids(
+        self,
+        provider_file_ids: Sequence[str],
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> Mapping[str, str]: ...
 
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
