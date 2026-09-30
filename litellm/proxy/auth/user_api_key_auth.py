@@ -73,7 +73,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
-from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects
+from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects, prefetch_identity_keys
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
@@ -120,6 +120,9 @@ from litellm.proxy.common_utils.model_listing_utils import claude_code_requested
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
+    model_access_group_registry_cache_key,
     team_membership_auth_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
@@ -1892,6 +1895,11 @@ async def _user_api_key_auth_builder(
             proxy_logging_obj=proxy_logging_obj,
             route=route,
         )
+        if prisma_client is not None:
+            await prefetch_identity_keys(
+                _identity_cache_keys(api_key, end_user_id=end_user_id, key_is_resolved=valid_token is not None),
+                user_api_key_cache=user_api_key_cache,
+            )
         if end_user_id:
             try:
                 end_user_params["end_user_id"] = end_user_id
@@ -3246,6 +3254,21 @@ def _spend_counter_redis_cache() -> RedisCache | None:
     from litellm.proxy.proxy_server import spend_counter_cache
 
     return spend_counter_cache.redis_cache
+
+
+def _identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[str, ...]:
+    """Cache keys auth reads before it knows the key's owners, all known from the request alone. A key object is
+    cached under the hash of the bearer, so the bearer itself never reaches Redis."""
+    return tuple(
+        key
+        for key in (
+            None if key_is_resolved else hash_token(api_key),
+            None if not end_user_id else end_user_cache_key(end_user_id),
+            None if not end_user_id else end_user_restricted_registry_cache_key(),
+            model_access_group_registry_cache_key(),
+        )
+        if key is not None
+    )
 
 
 async def _prefetch_referenced_auth_objects(

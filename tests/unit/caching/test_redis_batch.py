@@ -58,6 +58,10 @@ class FakePipeline:
         self.commands.append(("SET", name, value, None if ex is None else int(ex.total_seconds())))
         return self
 
+    def delete(self, *names: str) -> FakePipeline:
+        self.commands.append(("DEL", *names))
+        return self
+
     async def execute(self, raise_on_error: bool = True) -> list[Any]:
         assert raise_on_error is False
         self.executed = True
@@ -101,6 +105,14 @@ class FakeRedisCache(RedisCache):
         self.store[key] = float(self.store.get(key, 0.0)) + value
         return self.store[key]
 
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # fake, no server
+        self.alone.append(("SET", key, value))
+        self.store[key] = value
+
+    async def async_delete_cache(self, key: str) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # records the direct delete
+        self.alone.append(("DEL", key))
+        self.store.pop(key, None)
+
     async def async_set_cache_pipeline_with_ttls(self, cache_list: Sequence[tuple[str, object, float | None]]) -> None:
         self.alone.append(("SET_PIPELINE", tuple(cache_list)))
         for key, value, _ttl in cache_list:
@@ -124,6 +136,8 @@ def replies(command: tuple[Any, ...]) -> Any:
             return 1
         case "SET":
             return True
+        case "DEL":
+            return 1
     raise AssertionError(command)
 
 
@@ -297,3 +311,51 @@ def test_request_scope_hands_out_one_batch_per_backend_and_nests() -> None:
         assert active_request_redis_batch(cache_a) is first
         assert len(batches.batches) == 2
     assert active_request_redis_batch(cache_a) is None
+
+
+@pytest.mark.asyncio
+async def test_a_key_an_mget_read_as_absent_stays_known_missing_until_something_sets_it() -> None:
+    cache, client = make()
+    batch = RedisBatch(cache)
+    values = await batch.mget(["a-hit", "b-miss"])
+    assert values == {"a-hit": {"k": "a-hit"}, "b-miss": None}
+    assert batch.read_as_missing("b-miss") is True
+    assert batch.read_as_missing("a-hit") is False
+    assert batch.read_as_missing("never-read") is False
+    batch.set("b-miss", "now-present")
+    assert batch.read_as_missing("b-miss") is False
+
+
+@pytest.mark.asyncio
+async def test_a_delete_rides_the_pipeline_under_the_namespace_and_reads_as_missing_afterwards() -> None:
+    cache, client = make(namespace="ns")
+    batch = RedisBatch(cache)
+    gone = batch.delete("team_alias:x")
+    got = batch.mget(["a-hit"])
+    assert await gone is None
+    assert await got == {"a-hit": {"k": "ns:a-hit"}}
+    assert len(client.pipelines) == 1
+    assert client.pipelines[0].commands[0] == ("DEL", "ns:team_alias:x")
+    assert batch.read_as_missing("team_alias:x") is True
+    assert cache.alone == []
+
+
+@pytest.mark.asyncio
+async def test_a_delete_on_a_cluster_cache_runs_as_its_own_del() -> None:
+    client = FakeClient(replies)
+    cache = FakeClusterCache(client)
+    cache.store["team_alias:x"] = "stale"
+    batch = RedisBatch(cache)
+    assert await batch.delete("team_alias:x") is None
+    assert cache.alone == [("DEL", "team_alias:x")]
+    assert "team_alias:x" not in cache.store
+    assert client.pipelines == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_mget_marks_nothing_as_missing() -> None:
+    cache, client = make(fail=ConnectionError("down"))
+    batch = RedisBatch(cache)
+    with pytest.raises(ConnectionError):
+        await batch.mget(["b-miss"])
+    assert batch.read_as_missing("b-miss") is False

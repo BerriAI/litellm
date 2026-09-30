@@ -15,7 +15,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
+from litellm.constants import DEFAULT_IN_MEMORY_TTL, REGISTRY_ERROR_NEGATIVE_CACHE_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -324,3 +324,35 @@ async def prefetch_auth_objects(
         await _fill_from_db(refs, _missing_in_memory(missing, memory), user_api_key_cache, prisma_client)
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters enforce and fail closed on their own
         verbose_proxy_logger.warning("auth prefetch skipped, falling back to per-object lookups: %s", e)
+
+
+def _identity_memory_ttl(value: object, management_ttl: float) -> float:
+    """A registry stored as a string is a sentinel, written with the shorter of the two registry TTLs."""
+    return min(REGISTRY_ERROR_NEGATIVE_CACHE_TTL, management_ttl) if isinstance(value, str) else management_ttl
+
+
+async def prefetch_identity_keys(cache_keys: Sequence[str], user_api_key_cache: UserApiKeyCache) -> None:
+    """Warm the entries auth reads before it knows the key's owners (the key object, the end user and the two
+    registries) in one MGET on the request pipeline. Keys the MGET finds absent stay noted on the pipeline, so the
+    per-key getters that follow go to the database without a GET of their own. Best effort, like the
+    owner prefetch: the getters read and enforce on their own."""
+    try:
+        redis_cache: Final = user_api_key_cache.redis_cache
+        if redis_cache is None:
+            return
+        missing: Final = tuple(
+            key
+            for key in dict.fromkeys(cache_keys)
+            if user_api_key_cache.in_memory_cache_for(key).get_cache(key=key) is None
+        )
+        if not missing:
+            return
+        found: Final = _RowValues.validate_python(await _read_redis_rows(sorted(missing), redis_cache))
+        management_ttl: Final = get_management_object_ttl(user_api_key_cache)
+    except Exception as e:  # noqa: BLE001  # warm-up only; the getters read Redis and the database on their own
+        verbose_proxy_logger.warning("auth identity prefetch skipped, falling back to per-key lookups: %s", e)
+        return
+    for key, value in ((key, found.get(key)) for key in missing):
+        if value is not None:
+            memory: _InMemoryCache = user_api_key_cache.in_memory_cache_for(key)
+            _set_in_memory(memory, key, value, _identity_memory_ttl(value, management_ttl))

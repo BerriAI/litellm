@@ -5621,7 +5621,8 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     team_table = LiteLLM_TeamTableCachedObj(**base_team_row)
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
-    cache.delete_cache = MagicMock()
+    cache.async_delete_cache = AsyncMock()
+    cache.async_delete_cache_pre_call = AsyncMock(return_value=None)  # no request pipeline open
     logging_obj = MagicMock()
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -5642,9 +5643,9 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     written_value = cache.async_set_cache.await_args.kwargs.get("value") or cache.async_set_cache.await_args.args[1]
     assert written_value is team_table
 
-    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache
-    # and the Redis dual cache (mirrors _delete_cache_key_object pattern).
-    cache.delete_cache.assert_called_once_with(key="team_alias:H-Capacity")
+    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache and the Redis dual cache, on the
+    # async path: a Redis DEL must never run synchronously on the event loop.
+    cache.async_delete_cache.assert_awaited_once_with(key="team_alias:H-Capacity")
 
     # (4) internal usage cache: team_id entry deleted BEFORE the fresh
     # write, alias entry deleted as before.
@@ -5658,7 +5659,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     aliasless = LiteLLM_TeamTableCachedObj(**{**base_team_row, "team_alias": None})
     cache2 = MagicMock()
     cache2.async_set_cache = AsyncMock()
-    cache2.delete_cache = MagicMock()
+    cache2.async_delete_cache = AsyncMock()
     logging_obj2 = MagicMock()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -5669,7 +5670,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
         proxy_logging_obj=logging_obj2,
     )
 
-    cache2.delete_cache.assert_not_called()
+    cache2.async_delete_cache.assert_not_awaited()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
         key="team_id:team-no-alias"
     )
