@@ -2,13 +2,13 @@ import base64
 import json
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
 import yaml
 from integration._support.client import Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows, write_rows
+from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -24,6 +24,7 @@ PROMPTS_PATH: Final = "/api/public/v2/prompts/"
 STOCK_CONFIG: Final = Path("tests/integration/proxy_config.yaml")
 CONFIG_SECTIONS: Final = ("litellm_settings", "environment_variables")
 LANGFUSE_ENVIRONMENT: Final = ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+INHERITED_ENVIRONMENT: Final = (*LANGFUSE_ENVIRONMENT, "DATABASE_URL_READ_REPLICA")
 _PROXY_CONFIG: Final = TypeAdapter(dict[str, object])
 _SETTINGS: Final = TypeAdapter(dict[str, object])
 
@@ -88,30 +89,12 @@ def _langfuse_environment(langfuse: Wire) -> dict[str, str]:
     }
 
 
-def _config_rows() -> list[dict[str, JsonValue]]:
+def _config_rows(database_url: str) -> list[dict[str, JsonValue]]:
     return read_rows(
         'SELECT param_name, param_value FROM "LiteLLM_Config" WHERE param_name IN (%s, %s) ORDER BY param_name',
         CONFIG_SECTIONS,
+        database_url=database_url,
     )
-
-
-def _restore_config_rows(snapshot: Sequence[Mapping[str, JsonValue]]) -> None:
-    saved: Final = {string_value(row["param_name"]): row["param_value"] for row in snapshot}
-    for section in CONFIG_SECTIONS:
-        if section not in saved:
-            write_rows('DELETE FROM "LiteLLM_Config" WHERE param_name = %s', (section,))
-        elif saved[section] is None:
-            write_rows(
-                'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, NULL) '
-                "ON CONFLICT (param_name) DO UPDATE SET param_value = NULL",
-                (section,),
-            )
-        else:
-            write_rows(
-                'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, %s::jsonb) '
-                "ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value",
-                (section, json.dumps(saved[section])),
-            )
 
 
 def _attribute(entries: Sequence[KeyValue], key: str) -> str | list[str] | None:
@@ -227,7 +210,12 @@ def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_g
     provider_secret: Final = "synthetic-provider-secret-" + marker
     public_key: Final = "pk-lf-db-" + marker
     secret_key: Final = "sk-lf-db-" + marker
-    assert "langfuse" not in STOCK_CONFIG.read_text()
+    stock_settings: Final = _SETTINGS.validate_python(
+        _PROXY_CONFIG.validate_python(yaml.safe_load(STOCK_CONFIG.read_text()))["litellm_settings"]
+    )
+    assert "langfuse" not in json.dumps(
+        [stock_settings.get(key) for key in ("callbacks", "success_callback", "failure_callback")]
+    )
 
     def upstream(request: Request) -> Reply:
         assert request.headers["authorization"] == f"Bearer {provider_secret}"
@@ -238,73 +226,69 @@ def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_g
             return _projects()
         return Reply(body=b"", content_type="application/x-protobuf")
 
-    snapshot: Final = _config_rows()
-    try:
-        with (
-            wire_server(upstream) as provider,
-            wire_server(langfuse) as destination,
-            owned_proxy(
-                gateway,
-                tmp_path,
-                {"LANGFUSE_FLUSH_INTERVAL": "1"},
-                remove_environment=LANGFUSE_ENVIRONMENT,
-            ) as candidate,
-            candidate.scenario() as scenario,
-        ):
-            candidate.post(
-                "/config/update",
-                {
-                    "litellm_settings": {"success_callback": ["langfuse"]},
-                    "environment_variables": {
-                        "LANGFUSE_HOST": destination.url,
-                        "LANGFUSE_PUBLIC_KEY": public_key,
-                        "LANGFUSE_SECRET_KEY": secret_key,
-                    },
+    with (
+        scratch_database() as scratch_url,
+        wire_server(upstream) as provider,
+        wire_server(langfuse) as destination,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": scratch_url, "LANGFUSE_FLUSH_INTERVAL": "1"},
+            remove_environment=INHERITED_ENVIRONMENT,
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        candidate.post(
+            "/config/update",
+            {
+                "litellm_settings": {"success_callback": ["langfuse"]},
+                "environment_variables": {
+                    "LANGFUSE_HOST": destination.url,
+                    "LANGFUSE_PUBLIC_KEY": public_key,
+                    "LANGFUSE_SECRET_KEY": secret_key,
                 },
-            )
-            model: Final = scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
-            body: Final = candidate.post(
-                "/v1/chat/completions",
-                {
-                    "model": model,
-                    "messages": [{"role": "user", "content": marker + "-question"}],
-                    "metadata": {"generation_name": marker},
-                    "cache": {"no-cache": True},
-                },
-            )
-            received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+            },
+        )
+        model: Final = scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
+        body: Final = candidate.post(
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": marker + "-question"}],
+                "metadata": {"generation_name": marker},
+                "cache": {"no-cache": True},
+            },
+        )
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
 
-            def exported() -> tuple[Span, ...]:
-                received.extend(destination.drain())
-                return tuple(span for span in _spans(received) if span.name == marker)
+        def exported() -> tuple[Span, ...]:
+            received.extend(destination.drain())
+            return tuple(span for span in _spans(received) if span.name == marker)
 
-            spans: Final = eventually(exported, lambda values: len(values) == 1, seconds=20)
-            posts: Final = tuple(request for request in received if request.method == "POST")
-            assert {request.target for request in posts} == {TRACES_PATH}, [request.target for request in received]
-            basic: Final = "Basic " + base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
-            for request in posts:
-                assert request.headers["authorization"] == basic
-                assert request.headers["content-type"] == "application/x-protobuf"
-                assert request.headers["x-langfuse-ingestion-version"] == "4"
-                assert provider_secret.encode() not in request.body
-                assert candidate.key.encode() not in request.body
+        spans: Final = eventually(exported, lambda values: len(values) == 1, seconds=20)
+        posts: Final = tuple(request for request in received if request.method == "POST")
+        assert {request.target for request in posts} == {TRACES_PATH}, [request.target for request in received]
+        basic: Final = "Basic " + base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+        for request in posts:
+            assert request.headers["authorization"] == basic
+            assert request.headers["content-type"] == "application/x-protobuf"
+            assert request.headers["x-langfuse-ingestion-version"] == "4"
+            assert provider_secret.encode() not in request.body
+            assert candidate.key.encode() not in request.body
 
-            attributes: Final = spans[0].attributes
-            assert _attribute(attributes, "langfuse.observation.type") == "generation"
-            assert _attribute(attributes, "langfuse.observation.metadata.response_id") == string_value(body["id"])
-            assert marker + "-question" in str(_attribute(attributes, "langfuse.observation.input"))
-            assert marker + "-answer" in str(_attribute(attributes, "langfuse.observation.output"))
+        attributes: Final = spans[0].attributes
+        assert _attribute(attributes, "langfuse.observation.type") == "generation"
+        assert _attribute(attributes, "langfuse.observation.metadata.response_id") == string_value(body["id"])
+        assert marker + "-question" in str(_attribute(attributes, "langfuse.observation.input"))
+        assert marker + "-answer" in str(_attribute(attributes, "langfuse.observation.output"))
 
-            stored: Final = {string_value(row["param_name"]): row["param_value"] for row in _config_rows()}
-            callbacks: Final = TypeAdapter(list[str]).validate_python(
-                object_value(stored["litellm_settings"]).get("success_callback") or []
-            )
-            assert "langfuse" in callbacks, stored
-            assert set(object_value(stored["environment_variables"])) >= set(LANGFUSE_ENVIRONMENT), stored
-            assert secret_key not in json.dumps(stored["environment_variables"]), stored
-    finally:
-        _restore_config_rows(snapshot)
-    assert _config_rows() == snapshot
+        stored: Final = {string_value(row["param_name"]): row["param_value"] for row in _config_rows(scratch_url)}
+        callbacks: Final = TypeAdapter(list[str]).validate_python(
+            object_value(stored["litellm_settings"]).get("success_callback") or []
+        )
+        assert "langfuse" in callbacks, stored
+        assert set(object_value(stored["environment_variables"])) >= set(LANGFUSE_ENVIRONMENT), stored
+        assert secret_key not in json.dumps(stored["environment_variables"]), stored
 
 
 def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_headers_off_the_client(

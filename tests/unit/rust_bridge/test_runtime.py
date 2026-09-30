@@ -10,9 +10,10 @@ from litellm.exceptions import APIError
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, configuration, runtime
-from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, RouteRule
+from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.lifecycle import Complete, Open, Stream, SyncStream, Yield
+from litellm.rust_bridge.lifecycle import Complete, Open, Yield
+from litellm.rust_bridge.streams import Stream, SyncStream
 
 
 class RustBridgeDeclined(Exception):
@@ -162,14 +163,10 @@ def test_context_outside_rule_stays_on_python() -> None:
         RouteContext(Route.TRANSCRIPTION, provider="openai"),
     ),
 )
-@pytest.mark.parametrize("delivery", tuple(Delivery))
-async def test_shipped_python_routes_never_load_native(
-    monkeypatch: pytest.MonkeyPatch, context: RouteContext, delivery: Delivery
-) -> None:
+async def test_shipped_python_routes_never_load_native(monkeypatch: pytest.MonkeyPatch, context: RouteContext) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
     configuration.rust(True)
     calls: Final = recorder()
-    request: Final = RouteContext(context.route, provider=context.provider, delivery=delivery)
 
     def reject_load(value: object) -> NativeFn | None:
         pytest.fail("Python-only dispatch must not load a native binding")
@@ -182,8 +179,8 @@ async def test_shipped_python_routes_never_load_native(
     async def python() -> str:
         return calls.python()
 
-    assert runtime.run(request, binding=bound, native=lambda fn: fn(), python=calls.python) == PYTHON
-    assert await runtime.arun(request, binding=bound, native=native, python=python) == PYTHON
+    assert runtime.run(context, binding=bound, native=lambda fn: fn(), python=calls.python) == PYTHON
+    assert await runtime.arun(context, binding=bound, native=native, python=python) == PYTHON
     assert calls.calls == (PYTHON, PYTHON)
 
 
@@ -232,8 +229,15 @@ async def test_python_fallback_does_not_claim_rust_execution(missing: bool) -> N
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shape", ("model", "dict"))
 @pytest.mark.parametrize("asynchronous", (False, True))
-async def test_native_response_marker_reaches_caller_with_existing_metadata(shape: str, asynchronous: bool) -> None:
-    hidden: Final = {"additional_headers": {"x-request-id": "upstream"}, "response_cost": 0.01}
+@pytest.mark.parametrize("cache_key", (None, "test-cache-key"))
+async def test_native_response_marker_reaches_caller_with_existing_metadata(
+    shape: str, asynchronous: bool, cache_key: str | None
+) -> None:
+    hidden: Final = {
+        "additional_headers": {"x-request-id": "upstream"},
+        "response_cost": 0.01,
+        **({"cache_key": cache_key} if cache_key is not None else {}),
+    }
     response: Final[OCRResponse | dict[str, object]] = (
         OCRResponse(pages=[], model="native") if shape == "model" else {"content": "native", "_hidden_params": hidden}
     )
@@ -261,7 +265,12 @@ async def test_native_response_marker_reaches_caller_with_existing_metadata(shap
     assert result is response
     assert get_hidden_params_dict(result) == {
         "response_cost": 0.01,
-        "additional_headers": {"x-request-id": "upstream", "x-litellm-rust": "true"},
+        "additional_headers": {
+            "x-request-id": "upstream",
+            "x-litellm-rust": "true",
+            **({"x-litellm-cache-key": cache_key} if cache_key is not None else {}),
+        },
+        **({"cache_key": cache_key} if cache_key is not None else {}),
     }
 
 

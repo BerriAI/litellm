@@ -1,59 +1,65 @@
+use std::time::Duration;
+
+use litellm_auth::SecretValue;
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
-    get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
-    get_provider_specific_headers::get_provider_specific_headers,
-    settings::Lookup,
+    get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
-use litellm_llms::{
-    anthropic::messages::handler::shape_anthropic_messages_request,
-    base_llm::{
-        anthropic_messages::transformation::MessagesTransformContext,
-        auth::{ValidatedEnvironment, with_default_headers},
-    },
+use litellm_http::request::with_default_headers;
+use litellm_llms::base_llm::{
+    auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use litellm_llms_types::formats::messages::MessagesRequest;
+use litellm_secrets::source::SecretSource;
 
 use super::{
-    Error,
-    common_utils::{MessagesProvider, string_headers},
-    route::MessagesCall,
-    types::ProviderMessagesRequest,
+    Error, MessagesCall,
+    common_utils::{MessagesProvider, messages_provider, string_headers},
+    types::invalid_request,
 };
+use crate::provider::resolve_llm_provider;
 
-pub(super) struct ResolvedProvider {
-    pub(super) model: String,
-    pub(super) provider: MessagesProvider,
+struct ResolvedProvider {
+    model: String,
+    provider: MessagesProvider,
 }
 
-pub(super) fn resolve_provider(
+pub(super) struct ProviderMessagesRequest {
+    pub(super) provider: MessagesProvider,
+    pub(super) url: String,
+    pub(super) body: MessagesRequest,
+    pub(super) environment: ValidatedEnvironment,
+    pub(super) timeout: Option<Duration>,
+    /// The caller's own credential, reported to the host beside the wire request.
+    pub(super) api_key: Option<SecretValue>,
+}
+
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
+pub(super) async fn prepare(
+    call: MessagesCall,
+    secrets: &dyn SecretSource,
+) -> Result<ProviderMessagesRequest, Error> {
+    let resolved = resolve_provider(&call.body.model, call.custom_llm_provider.as_deref())?;
+    let secrets = secrets
+        .resolve(resolved.provider.config().secret_names())
+        .await?;
+    prepare_provider_request(call, resolved, secrets.as_ref())
+}
+
+fn resolve_provider(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<ResolvedProvider, Error> {
-    let CustomLlmProvider {
-        model,
-        custom_llm_provider: provider,
-    } = get_custom_llm_provider(model, custom_llm_provider)
-        .or_else(|| {
-            custom_llm_provider.map(|provider| CustomLlmProvider {
-                model,
-                custom_llm_provider: provider,
-            })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for messages request".to_string(),
-            )
-        })?;
-    let provider = provider
-        .parse()
-        .map_err(|_| Error::InvalidProvider(provider.to_string()))?;
+    let resolved = resolve_llm_provider(model, custom_llm_provider, "messages")?;
+    let provider = messages_provider(resolved.provider)
+        .ok_or_else(|| Error::InvalidProvider(<&str>::from(resolved.provider).to_string()))?;
     Ok(ResolvedProvider {
-        model: model.to_string(),
+        model: resolved.model.to_string(),
         provider,
     })
 }
 
-pub(super) fn prepare_provider_request(
+fn prepare_provider_request(
     call: MessagesCall,
     resolved: ResolvedProvider,
     secrets: &dyn Lookup,
@@ -72,8 +78,8 @@ pub(super) fn prepare_provider_request(
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
-    let sanitized = shape_anthropic_messages_request(
-        AnthropicMessagesRequest { model, ..body },
+    let sanitized = config.shape_request(
+        MessagesRequest { model, ..body },
         shaping.reasoning_auto_summary,
     )?;
     let trimmed = without_additional_drop_params(sanitized, &shaping.additional_drop_params)?;
@@ -113,17 +119,14 @@ pub(super) fn prepare_provider_request(
         body: transformed,
         environment,
         timeout,
+        api_key: api_key.map(SecretValue::new),
     })
 }
 
-pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
-}
-
 fn without_additional_drop_params(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     paths: &[String],
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     if paths.is_empty() {
         return Ok(request);
     }
@@ -131,7 +134,7 @@ fn without_additional_drop_params(
     let trimmed = paths
         .iter()
         .fold(params, |params, path| delete_nested_value(params, path));
-    Ok(AnthropicMessagesRequest {
+    Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
     })
@@ -140,19 +143,19 @@ fn without_additional_drop_params(
 #[cfg(test)]
 mod tests {
     use litellm_llms::base_llm::auth::resolve_auth;
-    use litellm_types::utils::ProviderSpecificHeaders;
+    use litellm_llms_types::headers::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
 
     use super::*;
-    use crate::messages::types::MessagesShaping;
+    use crate::messages::MessagesShaping;
 
     #[fixture]
     fn shaping() -> MessagesShaping {
         MessagesShaping::default()
     }
 
-    fn body(value: Value) -> AnthropicMessagesRequest {
+    fn body(value: Value) -> MessagesRequest {
         serde_json::from_value(value).unwrap()
     }
 
@@ -447,7 +450,11 @@ mod tests {
                 shaping,
             ),
             Err(Error::InvalidRequest(
-                "metadata.user_id must be a string, got 123".to_string()
+                litellm_llms::ErrorDetail::InvalidValue {
+                    field: "metadata.user_id",
+                    expected: "a string",
+                    actual: json!(123),
+                }
             ))
         );
     }

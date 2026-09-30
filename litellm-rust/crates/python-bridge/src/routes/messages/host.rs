@@ -1,14 +1,14 @@
-use std::convert::Infallible;
+use crate::cache::{CacheCall, Cached, PythonCache, Selection};
+use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_core::messages::{
-    Error,
-    route::{Messages, MessagesCall, MessagesOutput, MessagesStreamHead, messages_body},
-    types::MessagesShaping,
+    Error, MessagesCall, MessagesShaping, messages_body,
+    route::{Messages, MessagesStreamHead},
 };
-use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
-use litellm_types::utils::ProviderSpecificHeaders;
+use litellm_llms_types::headers::ProviderSpecificHeaders;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},
@@ -72,7 +72,12 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
             Ok(error)
         }
         Error::InvalidRequest(message) => {
-            let error = PyValueError::new_err(message);
+            let error = PyValueError::new_err(message.to_string());
+            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
+            Ok(error)
+        }
+        Error::MissingField(field) => {
+            let error = PyValueError::new_err(format!("missing required field: {field}"));
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
@@ -84,11 +89,15 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
     request: Py<PyAny>,
+    cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(request: Py<PyAny>) -> Self {
-        Self { request }
+    pub(super) fn new(request: Py<PyAny>, asynchronous: bool) -> Self {
+        Self {
+            request,
+            cache: PythonCache::new(asynchronous),
+        }
     }
 
     fn projection(
@@ -217,47 +226,51 @@ impl MessagesPythonHost {
     }
 }
 
-impl ProtocolHost for MessagesPythonHost {
-    type Protocol = Messages;
+impl PythonBinding for MessagesPythonHost {
+    type Protocol = Cached<Messages>;
     type Failure = PyErr;
 
-    fn project(
+    fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<MessagesCall, InvokeError<Error>> {
+    ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
+        let selection =
+            crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
+                .map_err(InvokeError::Python)?;
         self.projection(py, arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
+            .map(|request| (request, selection))
     }
 
-    fn invoke(&mut self, _: Python<'_>, op: Infallible) -> Result<(), InvokeError<Error>> {
-        match op {}
+    fn encode_response(
+        &mut self,
+        py: Python<'_>,
+        response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
+    ) -> PyResult<Py<PyAny>> {
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("response")?
+            .call1((to_py(py, response.as_ref())?,))
+            .map(Bound::unbind)
     }
 
-    fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Py<PyAny>> {
-        match response {
-            MessagesOutput::Message(message) => py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("response")?
-                .call1((to_py(py, message.as_ref())?,))
-                .map(Bound::unbind),
-            MessagesOutput::Streamed => Ok(py.None()),
-        }
-    }
-
-    fn head(&mut self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
+    fn encode_stream_head(
+        &mut self,
+        py: Python<'_>,
+        head: MessagesStreamHead,
+    ) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
             .call1((to_py(py, &head.headers)?,))
             .map(Bound::unbind)
     }
 
-    fn chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
+    fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
         Ok(PyBytes::new(py, &chunk).into_any().unbind())
     }
 
-    fn classify(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+    fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         if let Error::Secret(source) = &error
             && let Some(original) = crate::secrets::python_error(py, source.source_error())
         {
@@ -267,13 +280,46 @@ impl ProtocolHost for MessagesPythonHost {
     }
 
     fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string())
+        Error::InvalidRequest(error.to_string().into())
+    }
+}
+
+impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
+    fn handle_host_call(
+        &mut self,
+        py: Python<'_>,
+        op: CacheCall,
+    ) -> Result<(), InvokeError<Error>> {
+        self.cache
+            .begin(py, op)
+            .map(|_| ())
+            .map_err(InvokeError::Python)
     }
 
-    fn close(&mut self, _: Python<'_>) {}
+    fn begin_host_call(
+        &mut self,
+        py: Python<'_>,
+        op: CacheCall,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.cache.begin(py, op).map_err(InvokeError::Python)
+    }
 
+    fn resume_host_call(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.cache.resume(py, result).map_err(InvokeError::Python)
+    }
+}
+
+impl PythonOwned for MessagesPythonHost {
+    fn close(&mut self, _: Python<'_>) {
+        self.cache.close();
+    }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.request)
+        visit.call(&self.request)?;
+        self.cache.traverse(visit)
     }
 }
 
@@ -314,6 +360,7 @@ mod tests {
 
     #[rstest]
     #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
+    #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
         Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),

@@ -1,8 +1,10 @@
 import httpx
 import openai
 import pytest
+from fastapi import HTTPException
 
 import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -1278,7 +1280,7 @@ def test_bedrock_500_preserves_provider_response_headers():
             "bedrock",
             400,
             '{"message":"Could not process image"}',
-            litellm.InternalServerError,
+            litellm.BadRequestError,
         ),
     ],
 )
@@ -1309,6 +1311,41 @@ def test_bedrock_classified_errors_preserve_provider_response_headers(
         )
 
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-classified"
+
+
+@pytest.mark.parametrize(
+    "status_code, expected_exception",
+    [
+        (400, litellm.BadRequestError),
+        (503, litellm.ServiceUnavailableError),
+        (500, litellm.InternalServerError),
+    ],
+)
+def test_bedrock_unprocessable_image_keeps_provider_status_code(status_code, expected_exception):
+    """An unprocessable image maps to the status Bedrock sent, so the 400 it returns stays a client error."""
+    provider_message = '{"message":"The model returned the following errors: Could not process image"}'
+    provider_response = httpx.Response(
+        status_code=status_code,
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(expected_exception) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.status_code == status_code
 
 
 @pytest.mark.parametrize(
@@ -1500,3 +1537,39 @@ def test_litellm_proxy_repeated_response_header_keeps_each_value():
         )
 
     assert exc_info.value.response.headers.multi_items() == repeated
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        HTTPException(status_code=400, detail={"error": "Violated guardrail policy"}),
+        HTTPException(status_code=422, detail={"error": "Violated guardrail policy"}),
+        GuardrailRaisedException(guardrail_name="prompt-shield", message="Violated guardrail policy"),
+    ],
+    ids=["http_400", "http_422", "guardrail_raised"],
+)
+def test_guardrail_block_raised_inside_an_llm_call_is_returned_unmapped(block: Exception):
+    returned = exception_type(
+        model="gpt-5.6",
+        original_exception=block,
+        custom_llm_provider="openai",
+        completion_kwargs={},
+        extra_kwargs={},
+    )
+
+    assert returned is block
+
+
+def test_guardrail_provider_failure_status_is_still_mapped():
+    upstream_failure = HTTPException(status_code=401, detail={"error": "guardrail provider rejected the key"})
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=upstream_failure,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value is not upstream_failure

@@ -713,7 +713,7 @@ def test_sagemaker_embeddings():
         response = litellm.embedding(
             model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
             input=["good morning from litellm", "this is another item"],
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
         print(f"response: {response}")
         cost = completion_cost(completion_response=response)
@@ -731,7 +731,7 @@ async def test_sagemaker_aembeddings():
         response = await litellm.aembedding(
             model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
             input=["good morning from litellm", "this is another item"],
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
         print(f"response: {response}")
         cost = completion_cost(completion_response=response)

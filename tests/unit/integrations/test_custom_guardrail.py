@@ -65,11 +65,14 @@ class TestCustomGuardrailDeploymentHook:
             "messages": original_messages,
             "model": "gpt-3.5-turbo",
             "guardrails": ["some_guardrail"],
-            "user_api_key_user_id": "test_user",
-            "user_api_key_team_id": "test_team",
-            "user_api_key_end_user_id": "test_end_user",
-            "user_api_key_hash": "test_hash",
-            "user_api_key_request_route": "test_route",
+            "user_api_key_team_id": "team-typed-into-the-request-body",
+            "metadata": {
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+                "user_api_key_end_user_id": "test_end_user",
+                "user_api_key_hash": "test_hash",
+                "user_api_key_request_route": "test_route",
+            },
         }
 
         result = await custom_guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.completion)
