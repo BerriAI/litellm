@@ -42,6 +42,7 @@ from litellm.constants import (
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
+from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
@@ -879,6 +880,10 @@ BEDROCK_ENDPOINT_ACTIONS: Final = {
 BEDROCK_STREAMING_ACTIONS: Final = {"invoke-with-response-stream", "converse-stream"}
 
 
+def _is_bedrock_streaming_endpoint(endpoint: str) -> bool:
+    return any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
+
+
 def is_bedrock_count_tokens_endpoint(endpoint: str) -> bool:
     return "count_tokens" in endpoint or "count-tokens" in endpoint
 
@@ -1004,7 +1009,7 @@ async def handle_bedrock_passthrough_router_model(
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
     # Detect streaming based on endpoint
-    is_streaming: Final = any(action in endpoint for action in BEDROCK_STREAMING_ACTIONS)
+    is_streaming: Final = _is_bedrock_streaming_endpoint(endpoint)
 
     verbose_proxy_logger.debug(
         "Bedrock router passthrough: model='%s', endpoint='%s', streaming=%s", model, endpoint, is_streaming
@@ -1012,14 +1017,19 @@ async def handle_bedrock_passthrough_router_model(
 
     # Use the common processing path (same as non-router models)
     # This ensures all metadata, hooks, and logging are properly initialized
-    data: Final[dict[str, object]] = {}
+    data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
+        MappingProxyType(
+            {
+                "model": model,
+                "method": request.method,
+                "endpoint": endpoint,
+                "data": request_body,
+                "custom_llm_provider": "bedrock",
+            }
+        ),
+        is_streaming=is_streaming,
+    )
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-
-    data["model"] = model
-    data["method"] = request.method
-    data["endpoint"] = endpoint
-    data["data"] = request_body
-    data["custom_llm_provider"] = "bedrock"
 
     # Use the common passthrough processing to handle metadata and hooks
     # This also handles all response formatting (streaming/non-streaming) and exceptions
@@ -1212,13 +1222,19 @@ async def bedrock_llm_proxy_route(
         "Bedrock passthrough: Using direct Bedrock model '%s' for endpoint '%s'", model, endpoint
     )
 
-    data: Final[dict[str, object]] = {}
+    is_streaming: Final = _is_bedrock_streaming_endpoint(endpoint)
+    data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
+        MappingProxyType(
+            {
+                "method": request.method,
+                "endpoint": endpoint,
+                "data": request_body,
+                "custom_llm_provider": "bedrock",
+            }
+        ),
+        is_streaming=is_streaming,
+    )
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-
-    data["method"] = request.method
-    data["endpoint"] = endpoint
-    data["data"] = request_body
-    data["custom_llm_provider"] = "bedrock"
 
     try:
         result: Final = await base_llm_response_processor.base_passthrough_process_llm_request(

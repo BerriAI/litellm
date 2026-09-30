@@ -171,7 +171,7 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
 
 
 _REALTIME_STREAMING_HOOKS: Final = frozenset({GuardrailEventHooks.realtime_input_transcription})
-_SERVER_STREAMING_CLASSIFICATION_KEY: Final = "is_streaming_request"
+_SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
 
 
 class _ServerStreamingClassification(Enum):
@@ -181,18 +181,24 @@ class _ServerStreamingClassification(Enum):
 _SERVER_STREAMING_CLASSIFICATION_MARKER: Final = _ServerStreamingClassification.MARKER
 
 
+def without_server_streaming_classification(data: Mapping[str, object]) -> dict[str, object]:
+    return {  # mutable-ok: return a standalone mutable dict required by guardrail hooks
+        key: value
+        for key, value in data.items()
+        if key != _SERVER_STREAMING_CLASSIFICATION_KEY or value is not _SERVER_STREAMING_CLASSIFICATION_MARKER
+    }
+
+
 def guardrail_request_data_with_streaming(
     data: Mapping[str, object],
     *,
     is_streaming: bool,
 ) -> dict[str, object]:
-    data_without_client_classification: Final = {
-        key: value for key, value in data.items() if key != _SERVER_STREAMING_CLASSIFICATION_KEY
-    }
+    data_without_server_classification: Final = without_server_streaming_classification(data)
     if not is_streaming:
-        return data_without_client_classification
+        return data_without_server_classification
     return {
-        **data_without_client_classification,
+        **data_without_server_classification,
         _SERVER_STREAMING_CLASSIFICATION_KEY: _SERVER_STREAMING_CLASSIFICATION_MARKER,
     }
 

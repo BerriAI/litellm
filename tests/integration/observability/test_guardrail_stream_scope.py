@@ -40,6 +40,11 @@ STREAMING_ACTIONS: Final[tuple[StreamingAction, ...]] = (
 )
 NON_STREAMING_ACTIONS: Final[tuple[NonStreamingAction, ...]] = ("converse", "invoke")
 SCOPES: Final[tuple[EndpointScope, ...]] = ("streaming", "non_streaming")
+HOSTILE_CLASSIFICATION_CASES: Final = (
+    pytest.param("is_streaming_request", True, id="boolean-marker"),
+    pytest.param("is_streaming_request", "litellm-server-streaming", id="server-marker-string"),
+    pytest.param("litellm_server_streaming_classification", True, id="classification-field"),
+)
 WORKTREE: Final = Path(__file__).resolve().parents[3]
 LITELLM_PATH: Final = Path(litellm.__file__).resolve()
 assert LITELLM_PATH.is_relative_to(WORKTREE), (LITELLM_PATH, WORKTREE)
@@ -516,14 +521,7 @@ def test_configured_passthrough_forwards_caller_is_streaming_request_field(
     assert response_body == {"received": body}, response.text
 
 
-@pytest.mark.parametrize(
-    ("hostile_field", "hostile_value"),
-    (
-        pytest.param("is_streaming_request", True, id="boolean-marker"),
-        pytest.param("is_streaming_request", "litellm-server-streaming", id="server-marker-string"),
-        pytest.param("litellm_server_streaming_classification", True, id="classification-field"),
-    ),
-)
+@pytest.mark.parametrize(("hostile_field", "hostile_value"), HOSTILE_CLASSIFICATION_CASES)
 def test_client_cannot_spoof_server_stream_classification(
     rig: ReproRig,
     hostile_field: str,
@@ -551,6 +549,11 @@ def test_client_cannot_spoof_server_stream_classification(
     )
     assert chat_response.status_code == 200, chat_response.text
     assert len(chat_provider_rows) == 1, (chat_marker, chat_provider_rows, chat_response.text)
+    assert JSON_OBJECT.validate_json(chat_provider_rows[0].body) == {
+        "messages": [{"role": "user", "content": chat_marker}],
+        "model": "gpt-4o-mini",
+        hostile_field: hostile_value,
+    }, (hostile_field, hostile_value, chat_upstream_body)
     assert len(_matching_requests(rig.sink, chat_marker)) == 0, (
         chat_marker,
         hostile_field,
@@ -558,6 +561,13 @@ def test_client_cannot_spoof_server_stream_classification(
         chat_response.text,
     )
 
+
+@pytest.mark.parametrize(("hostile_field", "hostile_value"), HOSTILE_CLASSIFICATION_CASES)
+def test_configured_passthrough_cannot_spoof_server_stream_classification(
+    rig: ReproRig,
+    hostile_field: str,
+    hostile_value: JsonValue,
+) -> None:
     passthrough_marker: Final = f"scope-passthrough-spoof-{uuid.uuid4().hex}"
     passthrough_body: Final = {
         "marker": passthrough_marker,

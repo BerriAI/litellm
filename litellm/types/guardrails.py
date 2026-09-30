@@ -7,6 +7,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365GuardrailConfigModel,
@@ -951,6 +952,23 @@ def coerce_stream_scope(value: object) -> GuardrailStreamScope | dict[str, Guard
     if isinstance(value, Mapping):
         return {_validated_stream_scope_hook(key): _as_guardrail_stream_scope(scope) for key, scope in value.items()}
     raise ValueError(f"stream_scope must be a string or mapping, got {type(value).__name__}")
+
+
+def stored_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    try:
+        return coerce_stream_scope(value)
+    except ValueError:
+        verbose_logger.warning("Ignoring invalid stored stream_scope value %r", value)
+        return None
+
+
+def with_tolerated_stream_scope(params: Mapping[str, object]) -> dict[str, object]:
+    if "stream_scope" not in params:
+        return dict(params)  # mutable-ok: Pydantic kwargs need a copy of stored params
+    return {  # mutable-ok: Pydantic kwargs need a copy with the normalized scope
+        **params,
+        "stream_scope": stored_stream_scope(params["stream_scope"]),
+    }
 
 
 def runtime_stream_scope(

@@ -48,6 +48,7 @@ from litellm.types.guardrails import (
     LakeraCategoryThresholds,
     LitellmParams,
     SupportedGuardrailIntegrations,
+    with_tolerated_stream_scope,
 )
 
 from .guardrail_hooks.llm_as_a_judge import (
@@ -518,7 +519,7 @@ class InMemoryGuardrailHandler:
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
-            litellm_params = LitellmParams(**litellm_params_data)
+            litellm_params = LitellmParams(**with_tolerated_stream_scope(litellm_params_data))
         else:
             litellm_params = litellm_params_data
 
@@ -764,7 +765,7 @@ class InMemoryGuardrailHandler:
             return params.model_dump()
         if isinstance(params, dict):
             try:
-                return LitellmParams(**params).model_dump()
+                return LitellmParams(**with_tolerated_stream_scope(params)).model_dump()
             except ValidationError as e:
                 verbose_proxy_logger.warning(
                     "Could not normalize guardrail litellm_params for comparison; treating the guardrail as changed. Error: %s",

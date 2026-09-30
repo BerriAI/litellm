@@ -49,6 +49,7 @@ from litellm.constants import (
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     guardrail_request_data_with_streaming,
+    without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -587,7 +588,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         Filter out litellm params from the request body
         """
         _parsed_body = _parsed_body or {}
-        _parsed_body.pop("is_streaming_request", None)
+        server_marker_free_body: Final = without_server_streaming_classification(_parsed_body)
+        _parsed_body.clear()
+        _parsed_body.update(server_marker_free_body)
 
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}

@@ -57,6 +57,7 @@ from litellm.types.guardrails import (
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
+    with_tolerated_stream_scope,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
     HideSecretsGuardrailConfigModel,
@@ -265,7 +266,9 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_litellm_params = (
-                BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+                BaseLitellmParams(**with_tolerated_stream_scope(masked_litellm_params_dict))
+                if masked_litellm_params_dict
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -306,7 +309,9 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_in_memory_litellm_params_typed = (
-                BaseLitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
+                BaseLitellmParams(**with_tolerated_stream_scope(masked_in_memory_litellm_params))
+                if masked_in_memory_litellm_params
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -1205,14 +1210,14 @@ async def patch_guardrail(
 
         # Update litellm_params if default_on is provided or pii_entities_config is provided
         existing_litellm_params: Final = _as_str_object_mapping(dict(existing_guardrail.get("litellm_params", {})))
-        litellm_params = LitellmParams(**existing_litellm_params)
+        litellm_params = LitellmParams(**with_tolerated_stream_scope(existing_litellm_params))
         if request.litellm_params is not None:
             requested_litellm_params: Final = request.litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict.update(requested_litellm_params)
             merged_litellm_params: Final = _as_str_object_mapping(litellm_params_dict)
             try:
-                litellm_params = LitellmParams(**merged_litellm_params)
+                litellm_params = LitellmParams(**with_tolerated_stream_scope(merged_litellm_params))
             except ValidationError as validation_error:
                 raise HTTPException(
                     status_code=422,
@@ -1262,7 +1267,7 @@ async def patch_guardrail(
                 guardrail=Guardrail(
                     guardrail_id=guardrail_id,
                     guardrail_name=existing_guardrail.get("guardrail_name") or "",
-                    litellm_params=LitellmParams(**existing_litellm_params),
+                    litellm_params=LitellmParams(**with_tolerated_stream_scope(existing_litellm_params)),
                     guardrail_info=existing_guardrail.get(
                         "guardrail_info",
                         {},  # mutable-ok: Guardrail's own constructor takes a plain dict
@@ -1368,7 +1373,11 @@ async def get_guardrail_info(guardrail_id: str):
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+        masked_litellm_params = (
+            BaseLitellmParams(**with_tolerated_stream_scope(masked_litellm_params_dict))
+            if masked_litellm_params_dict
+            else None
+        )
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),

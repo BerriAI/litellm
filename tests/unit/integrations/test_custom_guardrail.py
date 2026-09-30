@@ -10,6 +10,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     guardrail_request_data_with_streaming,
     log_guardrail_information,
+    without_server_streaming_classification,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
@@ -666,6 +667,20 @@ class TestCustomGuardrailStreamScope:
             )
             is False
         )
+        assert (
+            streaming_only.should_run_guardrail(
+                {**generate_content_body, "is_streaming_request": "litellm-server-streaming"},
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
+        assert (
+            streaming_only.should_run_guardrail(
+                {**generate_content_body, "litellm_server_streaming_classification": True},
+                GuardrailEventHooks.pre_call,
+            )
+            is False
+        )
         server_streaming_data: Final = guardrail_request_data_with_streaming(
             generate_content_body,
             is_streaming=True,
@@ -689,6 +704,25 @@ class TestCustomGuardrailStreamScope:
                 GuardrailEventHooks.pre_call,
             )
             is False
+        )
+
+    def test_streaming_classification_preserves_caller_fields_and_removes_only_server_marker(self):
+        caller_data: Final = {
+            "contents": [{"parts": [{"text": "hi"}]}],
+            "is_streaming_request": "caller-value",
+            "litellm_server_streaming_classification": True,
+        }
+        non_streaming_data: Final = guardrail_request_data_with_streaming(caller_data, is_streaming=False)
+        server_streaming_data: Final = guardrail_request_data_with_streaming(caller_data, is_streaming=True)
+
+        assert non_streaming_data is not caller_data
+        assert server_streaming_data is not caller_data
+        assert non_streaming_data == caller_data
+        assert server_streaming_data["is_streaming_request"] == "caller-value"
+        assert server_streaming_data["litellm_server_streaming_classification"] is not True
+        assert without_server_streaming_classification(caller_data) == caller_data
+        assert "litellm_server_streaming_classification" not in without_server_streaming_classification(
+            server_streaming_data
         )
 
     def test_server_streaming_classification_survives_scan_raw_request_snapshot(self):
@@ -3123,9 +3157,7 @@ async def test_native_lifecycle_guardrail_logging_only_scans_assembled_response(
     from litellm.types.utils import Choices, Message, ModelResponse
 
     guardrail = _NativeLifecycleLoggingGuardrail()
-    assembled = ModelResponse(
-        choices=[Choices(message=Message(role="assistant", content="assembled stream text"))]
-    )
+    assembled = ModelResponse(choices=[Choices(message=Message(role="assistant", content="assembled stream text"))])
     sentinel_result = object()
     kwargs = {
         "model": "gpt-5.4-mini",

@@ -1,7 +1,7 @@
 import json
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -409,12 +409,30 @@ async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
     """Test getting guardrail info from DB"""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    response = await get_guardrail_info("test-db-guardrail")
+    response: Final = await get_guardrail_info("test-db-guardrail")
 
     assert response.guardrail_id == "test-db-guardrail"
     assert response.guardrail_name == "Test DB Guardrail"
     assert isinstance(response.litellm_params, BaseLitellmParams)
     assert response.guardrail_info == {"description": "Test guardrail from DB"}
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_tolerates_invalid_stored_stream_scope(mocker, mock_prisma_client):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
+        return_value={
+            **MOCK_DB_GUARDRAIL,
+            "litellm_params": {
+                **MOCK_DB_GUARDRAIL["litellm_params"],
+                "stream_scope": "sometimes",
+            },
+        }
+    )
+
+    response = await get_guardrail_info("test-db-guardrail")
+
+    assert response.litellm_params.stream_scope is None
 
 
 @pytest.mark.asyncio

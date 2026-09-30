@@ -1596,7 +1596,8 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_stamps_path_defined_streaming_for_guardrails():
+@pytest.mark.parametrize("body_stream", [None, True], ids=["stream-absent", "stream-true"])
+async def test_pass_through_request_preserves_caller_streaming_request_field(body_stream):
     captured_hook_data: dict[str, object] = {}
 
     async def capture_pre_call(user_api_key_dict, data, call_type):
@@ -1633,9 +1634,12 @@ async def test_pass_through_request_stamps_path_defined_streaming_for_guardrails
                 mock_request = MagicMock(spec=Request)
                 mock_request.method = "POST"
                 mock_request.url = "http://test-proxy.com/gemini/v1beta/models/gemini-pro:streamGenerateContent"
-                mock_request.body = AsyncMock(
-                    return_value=b'{"contents":[{"parts":[{"text":"hi"}]}],"is_streaming_request":false}'
-                )
+                request_body: Final = {
+                    "contents": [{"parts": [{"text": "hi"}]}],
+                    "is_streaming_request": "caller-value",
+                    **({"stream": True} if body_stream is True else {}),
+                }
+                mock_request.body = AsyncMock(return_value=json.dumps(request_body).encode())
                 mock_request.headers = Headers({"content-type": "application/json"})
                 mock_request.query_params = QueryParams({})
 
@@ -1647,12 +1651,13 @@ async def test_pass_through_request_stamps_path_defined_streaming_for_guardrails
                     stream=True,
                 )
 
-                assert captured_hook_data.get("is_streaming_request") not in (True, False)
-                assert captured_hook_data.get("stream") is not True
+                assert captured_hook_data.get("is_streaming_request") == "caller-value"
+                assert captured_hook_data.get("stream") is body_stream
 
                 upstream_json = async_client.build_request.call_args.kwargs["json"]
-                assert "is_streaming_request" not in upstream_json
-                assert "contents" in upstream_json
+                assert upstream_json["is_streaming_request"] == "caller-value"
+                assert "litellm_server_streaming_classification" not in upstream_json
+                assert upstream_json["contents"] == request_body["contents"]
 
 
 @pytest.mark.asyncio

@@ -2,12 +2,19 @@
 Test case normalization in LitellmParams for all guardrail types
 """
 
-from typing import Literal
+import logging
+from typing import Final, Literal
 
 import pytest
 from pydantic import ValidationError
 
-from litellm.types.guardrails import BaseLitellmParams, LitellmParams, runtime_stream_scope
+from litellm.types.guardrails import (
+    BaseLitellmParams,
+    LitellmParams,
+    runtime_stream_scope,
+    stored_stream_scope,
+    with_tolerated_stream_scope,
+)
 
 
 class TestLitellmParamsCaseNormalization:
@@ -219,3 +226,44 @@ class TestStreamScopeValidation:
     def test_runtime_stream_scope_rejects_invalid_direct_input(self):
         with pytest.raises(ValueError, match="stream_scope must be one of"):
             runtime_stream_scope("chunks")
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("streaming", "streaming"),
+            ("non_streaming", "non_streaming"),
+            ("both", "both"),
+            ({"pre_call": "streaming"}, {"pre_call": "streaming"}),
+            ("sometimes", None),
+            ({"pre_call": "sometimes"}, None),
+        ],
+    )
+    def test_stored_stream_scope_tolerates_invalid_values(
+        self,
+        value: object,
+        expected: object,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.WARNING)
+
+        result: Final = stored_stream_scope(value)
+
+        assert result == expected
+        if value == "sometimes":
+            assert "sometimes" in caplog.text
+
+    def test_tolerated_stream_scope_rewrites_only_the_scope_field(self) -> None:
+        params: Final = {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "stream_scope": "sometimes",
+        }
+
+        tolerated: Final = with_tolerated_stream_scope(params)
+
+        assert tolerated == {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "stream_scope": None,
+        }
+        assert params["stream_scope"] == "sometimes"

@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -153,6 +154,43 @@ def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
         assert len(handler.IN_MEMORY_GUARDRAILS) == 2
     finally:
         registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
+
+
+def test_initialize_guardrail_treats_invalid_stored_scope_as_both():
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    guardrail_type: Final = "invalid_stored_scope_test"
+
+    def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks(litellm_params.mode),
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+    try:
+        handler: Final = InMemoryGuardrailHandler()
+        guardrail: Final = Guardrail(
+            guardrail_id="invalid-stored-scope",
+            guardrail_name="invalid-stored-scope",
+            litellm_params={
+                "guardrail": guardrail_type,
+                "mode": "pre_call",
+                "default_on": True,
+                "stream_scope": "sometimes",
+            },
+        )
+
+        parsed_guardrail: Final = handler.initialize_guardrail(guardrail=guardrail, source="db")
+        callback: Final = handler.guardrail_id_to_custom_guardrail["invalid-stored-scope"]
+
+        assert parsed_guardrail["litellm_params"].stream_scope is None
+        assert callback is not None
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+        assert callback.should_run_guardrail(data={"stream": True}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        registry_module.guardrail_initializer_registry.pop(guardrail_type, None)
 
 
 def _register_mode_following_initializer(guardrail_type: str):
