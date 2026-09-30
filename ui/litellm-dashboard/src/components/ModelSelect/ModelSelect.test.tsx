@@ -758,6 +758,23 @@ describe("ModelSelect", () => {
     expectNotOffered("Unavailable");
   });
 
+  it("should list selections outside the organization's model ceiling as Unavailable", async () => {
+    const user = userEvent.setup();
+    mockUseOrganization.mockReturnValue({
+      data: createMockOrganization(["other-model"]),
+      isLoading: false,
+    } as unknown as ReturnType<typeof useOrganization>);
+
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} value={["gpt-4", "claude-3"]} context="team" organizationID="org-1" />,
+    );
+
+    await openModelList(user);
+    await user.click(screen.getByRole("option", { name: "claude-3" }));
+
+    expect(mockOnChange).toHaveBeenCalledWith(["gpt-4"]);
+  });
+
   it("should not show an Unavailable group when every selection is offered", async () => {
     const user = userEvent.setup();
     renderWithProviders(

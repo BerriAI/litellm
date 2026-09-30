@@ -129,9 +129,9 @@ const filterModels = (
 const unavailableGroups = (
   selectedOptions: ModelOption[],
   offeredByValue: Map<string, ModelOption>,
-  hasLiveModels: boolean,
+  isModelListLoaded: boolean,
 ): ModelOptionGroup[] => {
-  if (!hasLiveModels) return [];
+  if (!isModelListLoaded) return [];
   const items = selectedOptions.filter((option) => !offeredByValue.has(option.value));
   if (items.length === 0) return [];
   return [{ label: "Unavailable", items }];
@@ -242,7 +242,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const offeredByValue = new Map(offeredGroups.flatMap((group) => group.items).map((option) => [option.value, option]));
   const selectedOptions = value.map((v) => offeredByValue.get(v) ?? { label: v, value: v });
   const groups: ModelOptionGroup[] = [
-    ...unavailableGroups(selectedOptions, offeredByValue, filteredModels.length > 0),
+    ...unavailableGroups(selectedOptions, offeredByValue, allProxyModels !== undefined),
     ...offeredGroups,
   ];
   const overflowOptions = selectedOptions.slice(MAX_VISIBLE_MODEL_CHIPS);
