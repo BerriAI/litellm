@@ -90,6 +90,11 @@ MANAGED_ENV_KEYS: Final = frozenset(
     }
 )
 
+# Claude Code settings.json keys LiteLLM manages (or that could reroute model calls or credentials).
+MANAGED_CONFIG_KEYS: Final = frozenset(
+    {"env", "apiKeyHelper", "model", "permissions", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod"}
+)
+
 STATIC_ENV: Final[Mapping[str, str]] = {
     "DISABLE_TELEMETRY": "1",
     "DISABLE_ERROR_REPORTING": "1",
@@ -122,7 +127,7 @@ class ClaudeCodeStreamState:
         return "".join(self.text_parts)
 
 
-def stringify_tool_output(content: Any) -> str:
+def stringify_tool_output(content: object) -> str:
     """tool_result content is a string or a list of content blocks."""
     if content is None:
         return ""
@@ -133,7 +138,7 @@ def stringify_tool_output(content: Any) -> str:
     return json.dumps(content, ensure_ascii=False)
 
 
-def _stringify_block(block: Any) -> str:
+def _stringify_block(block: object) -> str:
     if isinstance(block, dict) and block.get("type") == "text":
         return str(block.get("text", ""))
     if isinstance(block, str):
@@ -262,6 +267,12 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
         clashing = sorted(MANAGED_ENV_KEYS.intersection(options.env))
         if clashing:
             raise OptionsMismatch(f"ClaudeCodeOptions.env may not set {', '.join(clashing)}; LiteLLM manages it")
+        managed = sorted(MANAGED_CONFIG_KEYS.intersection(options.config))
+        if managed:
+            raise OptionsMismatch(
+                f"ClaudeCodeOptions.config may not set {', '.join(managed)}; "
+                "use the matching agent() argument (model=, permissions=) instead"
+            )
 
     def transform_session_setup(self, ctx: SessionContext, private_dir: str) -> HarnessSessionSetup:
         if ctx.endpoint is None or not ctx.endpoint.token:
@@ -277,9 +288,9 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
             "CLAUDE_CONFIG_DIR": private_dir,
         }
         if model:
+            # Background calls (titles, summaries) use the same model group, like OpenCode.
             env["ANTHROPIC_MODEL"] = model
-        if options.small_model or model:
-            env["ANTHROPIC_SMALL_FAST_MODEL"] = options.small_model or model or ""
+            env["ANTHROPIC_SMALL_FAST_MODEL"] = model
         return HarnessSessionSetup(
             persisted_dirs=[("projects", "claude_code/projects")],
             skills_dir="skills",
@@ -301,11 +312,13 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
             argv += ["--model", ctx.model]
         # Only read settings from the private CLAUDE_CONFIG_DIR, never the repo's .claude/.
         argv += ["--setting-sources", "user"]
+        if options.config:
+            argv += ["--settings", json.dumps(dict(options.config))]
         system_prompt = build_system_prompt(ctx.instructions, schema)
         if system_prompt:
             argv += ["--append-system-prompt", system_prompt]
-        if options.max_turns is not None:
-            argv += ["--max-turns", str(options.max_turns)]
+        if ctx.max_turns is not None:
+            argv += ["--max-turns", str(ctx.max_turns)]
         disallowed = native_tool_names(ctx.disable_tools, NORMALIZED_TO_NATIVE)
         if disallowed:
             argv += ["--disallowedTools", ",".join(disallowed)]
