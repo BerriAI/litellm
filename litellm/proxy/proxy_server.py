@@ -1554,6 +1554,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         if not model_info_scheduler.running:
             model_info_scheduler.start()
 
+    if scheduler is not None and prisma_client is not None:
+        from litellm.proxy.management_endpoints.roi_calculator_endpoints import register_scheduled_sync
+
+        register_scheduled_sync(scheduler)
+
     # End of startup event
     yield
 
