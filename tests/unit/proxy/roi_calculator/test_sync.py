@@ -75,12 +75,15 @@ class _Parameter:
 class _ReportRepository:
     def __init__(self) -> None:
         self.values: Mapping[str, object] = MappingProxyType({})
+        self.pull_writes: int = 0
 
     async def get_param(self, param_name: str) -> _Parameter | None:
         value: Final = self.values.get(param_name)
         return _Parameter(value) if value is not None else None
 
     async def set_param(self, param_name: str, param_value: object) -> object:
+        if param_name.startswith("roi_calculator_pull_"):
+            self.pull_writes += 1
         _assert_json_round_trip(param_value)
         self.values = MappingProxyType({**self.values, param_name: param_value})
         return self.values[param_name]
@@ -589,6 +592,7 @@ async def test_reused_profile_preserves_email_only_when_lookup_fails(profile_sta
     subsequent: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
     assert subsequent["pulls"][0]["profile_email"] == expected
     assert subsequent["pulls"][0]["emails"] == ((expected,) if expected else ())
+    assert repository.pull_writes == (2 if profile_status == 200 else 1)
 
 
 @pytest.mark.asyncio

@@ -313,8 +313,15 @@ def _processed_records(processed: tuple[_ProcessedPull, ...]) -> Mapping[int, RO
     return MappingProxyType({item.position: item.record for item in processed})
 
 
-async def _cache_estimated_pull(repository: _ReportRepository, key: str | None, record: ROIPullRecord) -> None:
+async def _cache_estimated_pull(
+    repository: _ReportRepository, key: str | None, record: ROIPullRecord, previous: ROIPullRecord | None = None
+) -> None:
     if key is None or record["estimate"]["status"] != "estimated":
+        return
+    if previous is not None and (record.get("profile_email"), record["emails"]) == (
+        previous.get("profile_email"),
+        previous["emails"],
+    ):
         return
     await repository.set_param(
         "roi_calculator_pull_" + key,
@@ -506,7 +513,9 @@ class SyncManager:
                             }
                         )
                     )
-                    await _cache_estimated_pull(repository, key, cached_record)
+                    await _cache_estimated_pull(
+                        repository, key, cached_record, cached_pull if saved is not None else None
+                    )
                     self._update_estimate_progress(cached_record["estimate"])
                     return _ProcessedPull(index, cached_record)
                 try:
