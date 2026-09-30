@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
@@ -556,7 +556,11 @@ class ResponsesAPIRequestUtils:
         return request_input
 
     @staticmethod
-    def strip_encrypted_reasoning_from_input(request_input: object) -> None:
+    def strip_encrypted_reasoning_from_input(
+        request_input: object,
+        *,
+        should_strip: Callable[[Mapping[str, object]], bool] | None = None,
+    ) -> None:
         """Drop reasoning items the routed deployment cannot decrypt, keeping their readable summary.
 
         Mutates ``request_input`` in place: the router's fallback snapshot shares this
@@ -565,7 +569,12 @@ class ResponsesAPIRequestUtils:
         if not isinstance(request_input, list):
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
-        stripped: Final = tuple(ResponsesAPIRequestUtils._without_encrypted_reasoning(item) for item in items)
+        stripped: Final = tuple(
+            ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
+            if should_strip is None or (isinstance(item, Mapping) and should_strip(cast(Mapping[str, object], item)))
+            else item
+            for item in items
+        )
         items[:] = (item for item in stripped if item is not None)
 
     @staticmethod

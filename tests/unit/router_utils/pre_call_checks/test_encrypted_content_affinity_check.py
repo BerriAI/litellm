@@ -1961,6 +1961,315 @@ class TestStripEncryptedReasoningFromInput:
         ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
         assert request_input == before
 
+    def test_strips_only_items_selected_by_predicate(self):
+        wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")
+        request_input = [
+            {"type": "reasoning", "id": "keep", "encrypted_content": wrapped, "summary": "keep"},
+            {"type": "reasoning", "id": "strip", "encrypted_content": wrapped, "summary": "strip"},
+        ]
+
+        ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(
+            request_input, should_strip=lambda item: item.get("id") == "strip"
+        )
+
+        assert request_input == [
+            {"type": "reasoning", "id": "keep", "encrypted_content": wrapped, "summary": "keep"},
+            {"type": "reasoning", "summary": "strip"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_origin():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-openai",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "key-openai",
+                },
+                "model_info": {"id": "dep-openai"},
+            },
+            {
+                "model_name": "gpt-azure",
+                "litellm_params": {
+                    "model": "azure/gpt-5.1-codex",
+                    "api_base": "https://res-b.openai.azure.com/",
+                    "api_key": "key-azure",
+                    "api_version": "2025-04-01-preview",
+                },
+                "model_info": {"id": "dep-azure"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    openai_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-openai", "rs-openai")
+    azure_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-azure", "rs-azure")
+    openai_wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
+    azure_wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-azure", "dep-azure")
+    request_input = [
+        {"type": "message", "role": "user", "content": "first question"},
+        {
+            "type": "reasoning",
+            "id": openai_item_id,
+            "encrypted_content": openai_wrapped,
+            "summary": [{"type": "summary_text", "text": "openai summary"}],
+        },
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+        {"type": "message", "role": "user", "content": "second question"},
+        {
+            "type": "reasoning",
+            "id": azure_item_id,
+            "encrypted_content": azure_wrapped,
+            "summary": [{"type": "summary_text", "text": "azure summary"}],
+        },
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "second answer"}]},
+        {"type": "message", "role": "user", "content": "third question"},
+    ]
+
+    request_kwargs = {"input": request_input, "store": False}
+    try:
+        deployment = await router.async_get_available_deployment(
+            model="gpt-openai", request_kwargs=request_kwargs, input=request_kwargs["input"]
+        )
+
+        assert deployment["model_info"]["id"] == "dep-openai"
+        assert deployment["litellm_params"]["model"] == "openai/gpt-5.1-codex"
+        assert deployment["litellm_params"]["api_base"] == "https://api.openai.com/v1"
+        assert request_kwargs["input"] == [
+            {"type": "message", "role": "user", "content": "first question"},
+            {
+                "type": "reasoning",
+                "id": openai_item_id,
+                "encrypted_content": openai_wrapped,
+                "summary": [{"type": "summary_text", "text": "openai summary"}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+            {"type": "message", "role": "user", "content": "second question"},
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "azure summary"}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "second answer"}]},
+            {"type": "message", "role": "user", "content": "third question"},
+        ]
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    shared_api_base = "https://account-a.openai.azure.com/"
+    shared_api_key = "shared-key"
+    origin_d2 = _make_originating_mock(shared_api_base, shared_api_key)
+    mock_router = _make_router_mock_with_cooldown(origin_d2, cooldown_entries=[], routed_group_model_ids=["d1", "d2"])
+    deployment_d1 = {
+        "model_info": {"id": "d1"},
+        "litellm_params": {"api_base": shared_api_base, "api_key": shared_api_key},
+    }
+    deployment_d2 = {
+        "model_info": {"id": "d2"},
+        "litellm_params": {"api_base": shared_api_base, "api_key": shared_api_key},
+    }
+    d2_item = {
+        "type": "reasoning",
+        "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-d2", "d2"),
+        "summary": [{"type": "summary_text", "text": "second origin"}],
+    }
+    request_kwargs = {
+        "input": [
+            {
+                "type": "reasoning",
+                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-d1", "d1"),
+                "summary": [{"type": "summary_text", "text": "first origin"}],
+            },
+            d2_item.copy(),
+        ]
+    }
+    mock_router.get_deployment.side_effect = lambda model_id: origin_d2 if model_id == "d2" else None
+    check = EncryptedContentAffinityCheck(router=mock_router)
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=[deployment_d1, deployment_d2],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result == [deployment_d1]
+    assert request_kwargs["input"][1] == d2_item
+
+
+@pytest.mark.asyncio
+async def test_boundary_pin_strips_reasoning_from_a_different_origin():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    origin_a = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
+    origin_b = _make_originating_mock("https://account-b.openai.azure.com/", "key-b")
+    mock_router = _make_router_mock_with_cooldown(origin_a, cooldown_entries=[], routed_group_model_ids=["peer-a"])
+    mock_router.get_deployment.side_effect = lambda model_id: {"origin-a": origin_a, "origin-b": origin_b}.get(model_id)
+    peer_a = {
+        "model_info": {"id": "peer-a"},
+        "litellm_params": {"api_base": "https://account-a.openai.azure.com/", "api_key": "key-a"},
+    }
+    request_kwargs = {
+        "input": [
+            {
+                "type": "reasoning",
+                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                    "blob-origin-a", "origin-a"
+                ),
+                "summary": [{"type": "summary_text", "text": "origin A summary"}],
+            },
+            {
+                "type": "reasoning",
+                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                    "blob-origin-b", "origin-b"
+                ),
+                "summary": [{"type": "summary_text", "text": "origin B summary"}],
+            },
+        ]
+    }
+    check = EncryptedContentAffinityCheck(router=mock_router)
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=[peer_a],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result == [peer_a]
+    assert request_kwargs["input"] == [
+        {
+            "type": "reasoning",
+            "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                "blob-origin-a", "origin-a"
+            ),
+            "summary": [{"type": "summary_text", "text": "origin A summary"}],
+        },
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "origin B summary"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_affinity_keeps_only_anthropic_reasoning_from_the_pinned_origin():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    origin_a = _make_originating_mock("https://account-a.openai.azure.com/", "key-a")
+    origin_b = _make_originating_mock("https://account-b.openai.azure.com/", "key-b")
+    mock_router = _make_router_mock_with_cooldown(origin_b, cooldown_entries=[], routed_group_model_ids=["origin-a"])
+    mock_router.get_deployment.side_effect = lambda model_id: {"origin-a": origin_a, "origin-b": origin_b}.get(model_id)
+    deployment_a = {
+        "model_info": {"id": "origin-a"},
+        "litellm_params": {"api_base": "https://account-a.openai.azure.com/", "api_key": "key-a"},
+    }
+    deployment_b = {
+        "model_info": {"id": "origin-b"},
+        "litellm_params": {"api_base": "https://account-b.openai.azure.com/", "api_key": "key-b"},
+    }
+    messages = _bridge_replayed_anthropic_messages(minted_by="origin-a")
+    foreign_messages = _bridge_replayed_anthropic_messages(minted_by="origin-b")
+    assistant_content = messages[1]["content"]
+    assistant_content.insert(3, foreign_messages[1]["content"][1])
+    check = EncryptedContentAffinityCheck(router=mock_router)
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=[deployment_a, deployment_b],
+        messages=messages,
+        request_kwargs={"model": "gpt-5.4"},
+    )
+
+    assert result == [deployment_a]
+    assert messages[1]["content"] is assistant_content
+    assert assistant_content == [
+        {"type": "thinking", "thinking": "Anthropic minted this one", "signature": "ErcCCpIBCBEYAipA"},
+        {
+            "type": "redacted_thinking",
+            "data": (
+                "litellm_encrypted_reasoning:"
+                f"{ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id('gAAAAA_turn_one', 'origin-a')}"
+            ),
+        },
+        {
+            "type": "thinking",
+            "thinking": "The bridge packed this one",
+            "signature": (
+                "litellm_encrypted_reasoning:"
+                f"{ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id('gAAAAA_turn_one', 'origin-a')}"
+            ),
+        },
+        {"type": "text", "text": "The zebra owner lives in the green house."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_content():
+    from unittest.mock import MagicMock
+
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = None
+    deployment_a = {
+        "model_info": {"id": "origin-a"},
+        "litellm_params": {"api_base": "https://account-a.openai.azure.com/", "api_key": "key-a"},
+    }
+    openai_item = {
+        "type": "reasoning",
+        "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("blob-a", "origin-a"),
+        "summary": [{"type": "summary_text", "text": "origin A"}],
+    }
+    request_kwargs = {
+        "input": [
+            openai_item.copy(),
+            {
+                "type": "reasoning",
+                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                    "blob-removed", "origin-removed"
+                ),
+                "summary": [{"type": "summary_text", "text": "removed origin"}],
+            },
+            {
+                "type": "reasoning",
+                "encrypted_content": "raw-encrypted-content",
+                "summary": [{"type": "summary_text", "text": "unmarked content"}],
+            },
+        ]
+    }
+    check = EncryptedContentAffinityCheck(router=mock_router)
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=[deployment_a],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result == [deployment_a]
+    assert request_kwargs["input"] == [
+        openai_item,
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "removed origin"}]},
+        {
+            "type": "reasoning",
+            "encrypted_content": "raw-encrypted-content",
+            "summary": [{"type": "summary_text", "text": "unmarked content"}],
+        },
+    ]
+
 
 def _cross_group_request_kwargs():
     wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "deployment-a")

@@ -2015,7 +2015,11 @@ def is_unsignable_thinking_block(block: object) -> bool:
     return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
 
 
-def strip_encrypted_reasoning_from_messages(messages: object) -> None:
+def strip_encrypted_reasoning_from_messages(
+    messages: object,
+    *,
+    should_strip: Callable[[Mapping[str, object]], bool] | None = None,
+) -> None:
     """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
     Anthropic-shaped history.
 
@@ -2030,7 +2034,7 @@ def strip_encrypted_reasoning_from_messages(messages: object) -> None:
     if not isinstance(messages, list):
         return
     for content in anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
-        _strip_encrypted_reasoning_from_blocks(content)
+        _strip_encrypted_reasoning_from_blocks(content, should_strip=should_strip)
 
 
 def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
@@ -2043,9 +2047,18 @@ def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
     )
 
 
-def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
+def _strip_encrypted_reasoning_from_blocks(
+    content: object,
+    *,
+    should_strip: Callable[[Mapping[str, object]], bool] | None = None,
+) -> None:
     blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
-    kept: Final = tuple(block for block in blocks if not is_encrypted_reasoning_block(block))
+    kept: Final = tuple(
+        block
+        for block in blocks
+        if not is_encrypted_reasoning_block(block)
+        or (should_strip is not None and not should_strip(cast(Mapping[str, object], block)))
+    )
     blocks[:] = kept
 
 
