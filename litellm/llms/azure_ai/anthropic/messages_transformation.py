@@ -2,13 +2,17 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.router import GenericLiteLLMParams
+
+DANGEROUS_TOOL_USE_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
 
 
 class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -71,7 +75,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             messages=messages,
         )
 
-        return headers, api_base
+        return _with_dangerous_tool_use_beta_for_safeguards(headers, optional_params), api_base
 
     def get_complete_url(
         self,
@@ -164,3 +168,14 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request
+
+
+def _with_dangerous_tool_use_beta_for_safeguards(
+    headers: Mapping[str, str], optional_params: Mapping[str, object]
+) -> dict[str, str]:
+    if optional_params.get("safeguards") is None:
+        return dict(headers)
+    existing: Final = ",".join(value for key, value in headers.items() if key.lower() == "anthropic-beta")
+    betas: Final = {piece.strip() for piece in existing.split(",") if piece.strip()}
+    others: Final = {key: value for key, value in headers.items() if key.lower() != "anthropic-beta"}
+    return {**others, "anthropic-beta": ",".join(sorted(betas | {DANGEROUS_TOOL_USE_BETA}))}

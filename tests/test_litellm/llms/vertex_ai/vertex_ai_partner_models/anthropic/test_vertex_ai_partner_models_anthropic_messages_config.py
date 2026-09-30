@@ -3,6 +3,8 @@ import json
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
@@ -65,6 +67,63 @@ def test_web_search_header_added_for_messages_endpoint():
         assert updated_headers["anthropic-beta"] == "web-search-2025-03-05", (
             f"anthropic-beta should be 'web-search-2025-03-05', got: {updated_headers['anthropic-beta']}"
         )
+
+
+@pytest.mark.parametrize(
+    "client_headers",
+    [{"anthropic-beta": "dangerous-tool-use-2026-09-03"}, {}],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+def test_safeguards_add_dangerous_tool_use_beta_header(client_headers):
+    """Vertex rejects `safeguards` without the dangerous-tool-use beta, so the beta rides along with the field the way the web search and context management betas do."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "global",
+        "vertex_credentials": "{}",
+    }
+    optional_params = {
+        "safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    }
+
+    with (
+        patch.object(config, "_ensure_access_token", return_value=("token", "test-project")),
+        patch.object(config, "get_complete_vertex_url", return_value="https://mock-url"),
+    ):
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers=client_headers,
+            model="claude-sonnet-5",
+            messages=[],
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_base=None,
+        )
+
+    assert updated_headers["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
+
+
+def test_no_safeguards_leaves_dangerous_tool_use_beta_header_out():
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "global",
+        "vertex_credentials": "{}",
+    }
+
+    with (
+        patch.object(config, "_ensure_access_token", return_value=("token", "test-project")),
+        patch.object(config, "get_complete_vertex_url", return_value="https://mock-url"),
+    ):
+        updated_headers, _ = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-5",
+            messages=[],
+            optional_params={"max_tokens": 64},
+            litellm_params=litellm_params,
+            api_base=None,
+        )
+
+    assert "dangerous-tool-use-2026-09-03" not in updated_headers.get("anthropic-beta", "")
 
 
 def test_web_search_header_not_added_without_tool():
