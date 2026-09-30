@@ -38,9 +38,15 @@ import {
   guardrail_provider_map,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
+  streamScopeByModeFromConfig,
+  streamScopeForUpdate,
+  toModeArray,
   type SkipSystemMessageChoice,
   type SkipToolMessageChoice,
+  type GuardrailStreamScope,
 } from "./guardrail_info_helpers";
+import { GuardrailReadOnlyDetails } from "./GuardrailReadOnlyDetails";
+import { GuardrailStreamScopeCaption, StreamScopeFormField } from "./StreamScopeFields";
 import GuardrailOptionalParams from "./guardrail_optional_params";
 import GuardrailProviderFields from "./guardrail_provider_fields";
 import PiiConfiguration from "./pii_configuration";
@@ -228,6 +234,13 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       skipToolMessageToChoice(guardrailData.litellm_params?.skip_tool_message_in_guardrail),
     );
     form.setValue(
+      "stream_scope_by_mode",
+      streamScopeByModeFromConfig(
+        guardrailData.litellm_params?.stream_scope,
+        toModeArray(guardrailData.litellm_params?.mode),
+      ),
+    );
+    form.setValue(
       "guardrail_info",
       guardrailData.guardrail_info ? JSON.stringify(guardrailData.guardrail_info, null, 2) : "",
     );
@@ -293,6 +306,16 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       // Only include default_on if it has changed
       if (values.default_on !== guardrailData.litellm_params?.default_on) {
         updateData.litellm_params.default_on = values.default_on;
+      }
+
+      const modes = toModeArray(guardrailData.litellm_params?.mode);
+      const nextStreamScope = streamScopeForUpdate(
+        modes,
+        (values.stream_scope_by_mode as Record<string, GuardrailStreamScope> | undefined) ?? {},
+        guardrailData.litellm_params?.stream_scope,
+      );
+      if (nextStreamScope !== undefined) {
+        updateData.litellm_params.stream_scope = nextStreamScope;
       }
 
       const prevSkipChoice = skipSystemMessageToChoice(guardrailData.litellm_params?.skip_system_message_in_guardrail);
@@ -562,6 +585,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                   <h3 className="text-lg font-medium">
                     {formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}
                   </h3>
+                  <GuardrailStreamScopeCaption raw={guardrailData.litellm_params?.stream_scope} />
                   <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
                     {guardrailData.litellm_params?.default_on ? "Default On" : "Default Off"}
                   </Badge>
@@ -724,6 +748,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                           )}
                         </GuardrailField>
 
+                        <StreamScopeFormField
+                          control={form.control}
+                          modes={toModeArray(guardrailData.litellm_params?.mode)}
+                        />
+
                         <GuardrailField
                           control={form.control}
                           name="skip_system_message_choice"
@@ -843,56 +872,19 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                     </form>
                   </TooltipProvider>
                 ) : (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="font-medium">Guardrail ID</p>
-                      <div className="font-mono">{guardrailData.guardrail_id}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Guardrail Name</p>
-                      <div>{guardrailData.guardrail_name || "Unnamed Guardrail"}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Provider</p>
-                      <div>{displayName}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Mode</p>
-                      <div>{formatGuardrailMode(guardrailData.litellm_params?.mode) || "-"}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Default On</p>
-                      <Badge variant={guardrailData.litellm_params?.default_on ? "secondary" : "outline"}>
-                        {guardrailData.litellm_params?.default_on ? "Yes" : "No"}
-                      </Badge>
-                    </div>
-
-                    {guardrailData.litellm_params?.pii_entities_config &&
-                      Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
-                        <div>
-                          <p className="font-medium">PII Protection</p>
-                          <div className="mt-2">
-                            <Badge variant="secondary">
-                              {Object.keys(guardrailData.litellm_params.pii_entities_config).length} PII entities
-                              configured
-                            </Badge>
-                          </div>
-                        </div>
-                      )}
-
-                    <div>
-                      <p className="font-medium">Created At</p>
-                      <div>{formatDate(guardrailData.created_at)}</div>
-                    </div>
-                    <div>
-                      <p className="font-medium">Last Updated</p>
-                      <div>{formatDate(guardrailData.updated_at)}</div>
-                    </div>
-
-                    {guardrailData.litellm_params?.guardrail === "tool_permission" && (
-                      <ToolPermissionRulesEditor value={toolPermissionConfig} disabled />
-                    )}
-                  </div>
+                  <GuardrailReadOnlyDetails
+                    guardrailId={guardrailData.guardrail_id}
+                    guardrailName={guardrailData.guardrail_name}
+                    displayName={displayName}
+                    mode={guardrailData.litellm_params?.mode}
+                    streamScope={guardrailData.litellm_params?.stream_scope}
+                    defaultOn={guardrailData.litellm_params?.default_on}
+                    piiEntityCount={Object.keys(guardrailData.litellm_params?.pii_entities_config || {}).length}
+                    createdAt={formatDate(guardrailData.created_at)}
+                    updatedAt={formatDate(guardrailData.updated_at)}
+                    showToolPermission={guardrailData.litellm_params?.guardrail === "tool_permission"}
+                    toolPermissionConfig={toolPermissionConfig}
+                  />
                 )}
               </Card>
             </TabsContent>

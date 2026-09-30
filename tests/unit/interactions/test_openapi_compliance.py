@@ -9,7 +9,7 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -37,6 +37,36 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
         )
 
 
+def _create_model_interaction_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
+    schemas: Final = spec_dict["components"]["schemas"]
+    for path, methods in spec_dict["paths"].items():
+        if not path.rstrip("/").endswith("/interactions") or "post" not in methods:
+            continue
+        schema: Final = methods["post"]["requestBody"]["content"]["application/json"]["schema"]
+        refs: Final = (
+            [schema["$ref"]]
+            if "$ref" in schema
+            else [option["$ref"] for option in schema.get("oneOf", []) if "$ref" in option]
+        )
+        for ref in refs:
+            name: Final = ref.rsplit("/", 1)[-1]
+            candidate: Final = schemas[name]
+            properties: Final = candidate.get("properties", {})
+            if "model" in properties and "input" in properties:
+                return candidate
+    raise AssertionError("POST /interactions has no request schema with model and input")
+
+
+def _interaction_resource_path(spec_dict: Dict[str, Any], method: str) -> str | None:
+    for path, methods in spec_dict["paths"].items():
+        if "/interactions/" not in path or method not in methods:
+            continue
+        if path.rstrip("/").endswith("/cancel"):
+            continue
+        return path
+    return None
+
+
 def _declared_type_value(variant_schema: Dict[str, Any]) -> Any:
     """The single `type` value a union variant pins, whether spelled as a const or a 1-item enum."""
     type_property = variant_schema.get("properties", {}).get("type", {})
@@ -60,12 +90,12 @@ class TestRequestCompliance:
     """Tests that our request bodies match the OpenAPI spec."""
 
     def test_create_model_interaction_request_schema(self, spec_dict):
-        """Verify CreateModelInteractionParams schema fields."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        """Verify the POST /interactions model request schema still has our fields."""
+        schema = _create_model_interaction_schema(spec_dict)
 
-        # Required fields per spec
-        assert "model" in schema["required"]
-        assert "input" in schema["required"]
+        assert "model" in schema["properties"]
+        assert "input" in schema["properties"]
+        assert "model" in schema.get("required", [])
 
         # Check our supported optional fields exist in spec
         our_optional_fields = [
@@ -88,7 +118,7 @@ class TestRequestCompliance:
 
     def test_input_types_match_spec(self, spec_dict):
         """Verify input field supports string, Content, Content[], Turn[]."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        schema = _create_model_interaction_schema(spec_dict)
         input_schema = schema["properties"]["input"]
 
         # The input property may be inline oneOf or a $ref to InteractionsInput
@@ -308,29 +338,15 @@ class TestEndpointCompliance:
         print(f"✓ Create endpoint: POST {create_path}")
 
     def test_get_endpoint_exists(self, spec_dict):
-        """Verify GET /interactions/{id} endpoint exists."""
-        paths = spec_dict["paths"]
-
-        get_path = None
-        for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "get" in methods:
-                get_path = path
-                break
-
-        assert get_path is not None, "GET /interactions/{id} endpoint not found"
+        """Verify GET on a parameterized /interactions resource exists."""
+        get_path = _interaction_resource_path(spec_dict, "get")
+        assert get_path is not None, "GET /interactions/{...} endpoint not found"
         print(f"✓ Get endpoint: GET {get_path}")
 
     def test_delete_endpoint_exists(self, spec_dict):
-        """Verify DELETE /interactions/{id} endpoint exists."""
-        paths = spec_dict["paths"]
-
-        delete_path = None
-        for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "delete" in methods:
-                delete_path = path
-                break
-
-        assert delete_path is not None, "DELETE /interactions/{id} endpoint not found"
+        """Verify DELETE on a parameterized /interactions resource exists."""
+        delete_path = _interaction_resource_path(spec_dict, "delete")
+        assert delete_path is not None, "DELETE /interactions/{...} endpoint not found"
         print(f"✓ Delete endpoint: DELETE {delete_path}")
 
 

@@ -775,7 +775,7 @@ class RealTimeStreaming:
             isinstance(cb, CustomGuardrail)
             and any(
                 cb.should_run_guardrail(
-                    data=self.request_data,
+                    data={**self.request_data, "stream": True},
                     event_type=et,
                 )
                 for et in event_hooks
@@ -836,7 +836,7 @@ class RealTimeStreaming:
         if event_hooks is None:
             event_hooks = [GuardrailEventHooks.realtime_input_transcription]
         _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript}
+        _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
         _already_run: Final[set] = set()
 
         for callback in litellm.callbacks:
