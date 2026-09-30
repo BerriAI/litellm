@@ -107,7 +107,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
 # ---------------------------------------------------------------- normalize
 
 
-def _loads(value: str) -> Any:
+def _loads(value: str) -> object:
     try:
         return json.loads(value)
     except (ValueError, TypeError):
@@ -132,7 +132,7 @@ def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
     name = row["SpanName"]
     if not row["ParentSpanId"] or name == attributes.get("langsmith.metadata.lc_agent_name"):
         return "agent"
-    if kind == "llm" or kind == "tool":
+    if kind in {"llm", "tool"}:
         return kind
     if name.endswith(_FRAMEWORK_SUFFIXES):
         return "framework"
@@ -142,8 +142,9 @@ def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
 def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
     prompt = _loads(attributes.get("gen_ai.prompt", ""))
     completion = _loads(attributes.get("gen_ai.completion", ""))
+    prompt_payload = prompt if isinstance(prompt, dict) else {}
     if row["ObservationType"] == "llm" and isinstance(completion, dict):
-        messages = (prompt or {}).get("messages") or [[]]
+        messages = prompt_payload.get("messages") or [[]]
         batch = messages[0] if messages and isinstance(messages[0], list) else messages
         row["Input"] = json.dumps([_lc_message(m) for m in batch])
         generation = completion["generations"][0][0]["message"]["kwargs"]

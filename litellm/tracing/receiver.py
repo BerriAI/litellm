@@ -42,7 +42,7 @@ class TracingPayloadTooLargeError(Exception):
 class Tenant:
     """Who sent the spans. Always taken from auth, never from span attributes."""
 
-    def __init__(self, team_id: str, api_key_hash: str, org_id: str = ""):
+    def __init__(self, team_id: str, api_key_hash: str, org_id: str = "") -> None:
         self.team_id = team_id
         self.api_key_hash = api_key_hash
         self.org_id = org_id
@@ -60,7 +60,7 @@ class Tenant:
 
 
 class TraceReceiver:
-    def __init__(self, store: ClickHouseTraceStore):
+    def __init__(self, store: ClickHouseTraceStore) -> None:
         self.store = store
 
     @classmethod

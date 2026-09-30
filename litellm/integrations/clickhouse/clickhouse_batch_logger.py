@@ -33,7 +33,7 @@ def clickhouse_storage_from_env() -> TraceStorage:
 class ClickHouseBatchLogger(CustomBatchLogger):
     table: ClassVar[str]
 
-    def __init__(self, storage: TraceStorage | None = None, **kwargs: Any) -> None:
+    def __init__(self, storage: TraceStorage | None = None) -> None:
         self.storage = storage or clickhouse_storage_from_env()
         self.rows_written = 0
         self.rows_dropped = 0
@@ -42,7 +42,6 @@ class ClickHouseBatchLogger(CustomBatchLogger):
             flush_lock=asyncio.Lock(),
             batch_size=CLICKHOUSE_BATCH_SIZE,
             flush_interval=CLICKHOUSE_FLUSH_INTERVAL_SECONDS,
-            **kwargs,
         )
         try:
             asyncio.get_running_loop().create_task(self.periodic_flush())
@@ -73,7 +72,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
                 if not await self._insert(batch):
                     break
 
-    async def async_send_batch(self, *args: Any, **kwargs: Any) -> None:
+    async def async_send_batch(self) -> None:
         await self.flush_queue()
 
     async def _insert(self, batch: list[dict[str, Any]]) -> bool:

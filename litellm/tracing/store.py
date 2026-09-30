@@ -222,7 +222,7 @@ def trace_from_rows(trace_id: str, rows: list[dict[str, Any]]) -> Trace | None:
 class ClickHouseTraceStore:
     """Stores spans and runs scoped trace reads."""
 
-    def __init__(self, storage: TraceStorage):
+    def __init__(self, storage: TraceStorage) -> None:
         self.storage = storage
 
     async def insert_spans(self, rows: list[SpanRow]) -> None:

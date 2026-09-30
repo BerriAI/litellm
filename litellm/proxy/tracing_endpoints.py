@@ -8,7 +8,7 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
 
 import time
-from typing import Final
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
@@ -71,7 +71,7 @@ async def _read_otlp_body(request: Request) -> bytes:
 @router.post("/v1/traces", include_in_schema=False)
 async def ingest_otlp_traces(
     request: Request,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> Response:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
         raise HTTPException(status_code=403, detail="Not allowed to ingest agent traces")
@@ -94,10 +94,10 @@ async def ingest_otlp_traces(
 
 @router.get("/v1/traces", response_model=None)
 async def list_agent_traces(
-    start_ms: int | None = Query(None, description="Window start, unix ms. Default: 24h ago"),
-    end_ms: int | None = Query(None, description="Window end, unix ms. Default: now"),
-    cursor: str | None = Query(None),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
+    end_ms: Annotated[int | None, Query(description="Window end, unix ms. Default: now")] = None,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> TracePage:
     now_ms: Final = int(time.time() * 1000)
     return await get_receiver().list_traces(
@@ -111,7 +111,7 @@ async def list_agent_traces(
 @router.get("/v1/traces/{trace_id}", response_model=None)
 async def get_agent_trace(
     trace_id: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> Trace:
     trace: Final = await get_receiver().get_trace(trace_id, scope_for(user_api_key_dict))
     if trace is None:
@@ -123,7 +123,7 @@ async def get_agent_trace(
 async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> SpanDetail:
     span: Final = await get_receiver().get_span(trace_id, span_id, scope_for(user_api_key_dict))
     if span is None:
