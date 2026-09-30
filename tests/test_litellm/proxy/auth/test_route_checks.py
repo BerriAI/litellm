@@ -510,6 +510,23 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
 
 
 @pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/traces",
+        "/v1/traces/f78f6df35480060fafadac887e234241",
+        "/v1/traces/f78f6df35480060fafadac887e234241/spans/9022a0db0e709ebb",
+    ],
+)
+def test_agent_trace_routes_are_llm_api_routes(route):
+    # virtual keys ingest OTLP spans and read their own traces (scoped by team/key in the handler)
+    assert RouteChecks.is_llm_api_route(route=route) is True
+
+
+def test_native_route_placeholder_does_not_match_extra_segments():
+    assert RouteChecks.is_llm_api_route(route="/v1/traces/abc/spans/def/extra") is False
+
+
+@pytest.mark.parametrize(
     "route, method",
     [
         ("/mcp", "POST"),

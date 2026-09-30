@@ -72,6 +72,14 @@ ORDER BY o.Timestamp
 LIMIT 1 BY o.SpanId
 """
 
+TRACE_IO_SQL: Final = f"""
+SELECT SpanId AS span_id, Input AS input, Output AS output
+FROM {OTEL_TRACES_TABLE}
+WHERE TraceId = {{trace_id:String}} AND {_SCOPE_OTEL}
+  AND ({{trace_ref:String}} = '' OR {_TRACE_REF_SQL} = {{trace_ref:String}})
+LIMIT 1 BY SpanId
+"""
+
 SPAN_DETAIL_SQL: Final = f"""
 SELECT SpanId AS span_id, Input AS input, Output AS output, SpanAttributes AS attributes
 FROM {OTEL_TRACES_TABLE}
@@ -284,3 +292,10 @@ class ClickHouseTraceStore:
             output=rows[0]["output"],
             attributes=rows[0]["attributes"],
         )
+
+    async def get_span_io(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> dict[str, tuple[str, str]]:
+        """span_id -> (input, output) for every span in the trace, in one query (for exports)."""
+        rows = await self.storage.query(
+            TRACE_IO_SQL, MappingProxyType({**scope, "trace_id": trace_id, "trace_ref": trace_ref})
+        )
+        return {r["span_id"]: (r["input"], r["output"]) for r in rows}
