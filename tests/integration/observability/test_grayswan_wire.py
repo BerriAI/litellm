@@ -2,6 +2,7 @@ import json
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import yaml
@@ -143,16 +144,20 @@ def _chat_provider(message: dict[str, JsonValue]):
     return _serving_model_probe(respond)
 
 
+_VOLATILE_HEADERS: Final = MappingProxyType(
+    {
+        "host": "<host>",
+        "content-length": "<length>",
+        "user-agent": "<user-agent>",
+        "accept-encoding": "<accept-encoding>",
+    }
+)
+
+
 def _normalized_generic_body(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
     headers: Final = body.get("request_headers")
     normalized_headers: Final = (
-        {
-            **headers,
-            "host": "<host>",
-            "content-length": "<length>",
-            "user-agent": "<user-agent>",
-            "accept-encoding": "<accept-encoding>",
-        }
+        {**headers, **{name: placeholder for name, placeholder in _VOLATILE_HEADERS.items() if name in headers}}
         if isinstance(headers, dict)
         else headers
     )
