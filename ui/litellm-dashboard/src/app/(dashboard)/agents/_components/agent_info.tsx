@@ -238,9 +238,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       const updateData = appliedDiscoveredSelection
         ? overlayDiscoveredCardParams(built, appliedDiscoveredSelection.selected_card)
         : built;
+      const cardEdited =
+        Boolean(appliedDiscoveredSelection) ||
+        [AGENT_FORM_CONFIG.basic, AGENT_FORM_CONFIG.skills, AGENT_FORM_CONFIG.capabilities, AGENT_FORM_CONFIG.optional]
+          .flatMap((section) => section.fields)
+          .some((field) => form.getFieldState(field.name).isDirty);
 
       await patchAgentCall(accessToken, agentId, {
-        ...withAgentIdentity(updateData, values, agent),
+        ...withAgentIdentity(updateData, values, agent, cardEdited),
         object_permission: buildMcpObjectPermission(values),
         access_group_ids: values.access_group_ids ?? [],
       });

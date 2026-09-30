@@ -156,7 +156,11 @@ describe("AgentInfoView update payload", () => {
       .mockResolvedValue({} as never);
   });
 
-  it.each(["complete", "empty"])("preserves the Entra binding while renaming an agent with a %s card", async (card) => {
+  it.each([
+    { card: "complete", editCard: false },
+    { card: "empty", editCard: false },
+    { card: "empty", editCard: true },
+  ])("preserves identity and runtime intent with a $card card (card edits: $editCard)", async ({ card, editCard }) => {
     const user = setup();
     const identity = {
       provider: "microsoft_entra",
@@ -188,10 +192,20 @@ describe("AgentInfoView update payload", () => {
     expect(screen.getByRole("combobox", { name: "Execution Mode" })).toHaveTextContent("Autonomous");
     expect(screen.getByRole("combobox", { name: /^Execution$/ })).toHaveTextContent("Enabled");
     fireEvent.change(screen.getByLabelText("Agent Name"), { target: { value: "Renamed agent" } });
+    if (editCard) {
+      fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: "Configured runtime" } });
+      fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://runtime.example/a2a" } });
+    }
     await save(user);
     expect(patchedPayload().agent_name).toBe("Renamed agent");
     expect(patchedPayload()).not.toHaveProperty("litellm_params");
-    expect(patchedPayload().agent_card_params === undefined).toBe(card === "empty");
+    expect(patchedPayload().agent_card_params === undefined).toBe(card === "empty" && !editCard);
+    if (editCard) {
+      expect(patchedPayload().agent_card_params).toMatchObject({
+        name: "Configured runtime",
+        url: "https://runtime.example/a2a",
+      });
+    }
     expect(patchedPayload().identity).toMatchObject(identity);
     expect(patchedPayload().access_group_ids).toEqual(["ag-entra"]);
     expect(networking.patchAgentCall).toHaveBeenCalledWith(

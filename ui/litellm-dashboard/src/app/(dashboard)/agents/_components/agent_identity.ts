@@ -92,9 +92,10 @@ export const withAgentIdentity = (
   payload: AgentRequestPayload,
   values: AgentFormValues,
   existing?: Partial<AgentIdentityState>,
+  cardEdited = false,
 ): AgentRequestPayload => {
   const { agent_card_params, ...settings } = payload;
-  const hasCard = !existing || Object.keys(existing.agent_card_params ?? {}).length > 0;
+  const hasCard = !existing || cardEdited || Object.keys(existing.agent_card_params ?? {}).length > 0;
   const identityFields = buildIdentityParams(values, existing?.identity);
   const managed = values.identity_provider === "microsoft_entra" || Boolean(readAgentIdentity(existing?.identity));
   return {
