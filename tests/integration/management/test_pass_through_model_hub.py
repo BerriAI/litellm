@@ -210,6 +210,18 @@ def test_an_async_client_reads_the_same_pass_through_rows(gateway: Gateway) -> N
         assert rows == hub_rows(gateway)
 
 
+def single_row_page_names(gateway: Gateway, page: httpx.Response) -> Generator[str, None, None]:
+    page_rows: Final = rows_of(page)
+    assert len(page_rows) == 1, page.text
+    yield from names_of(page_rows)
+    following: Final = object_value(object_value(page.json())["links"])["next"]
+    if following is None:
+        return
+    following_page: Final = gateway.request("GET", string_value(following))
+    assert following_page.status_code == 200, following_page.text
+    yield from single_row_page_names(gateway, following_page)
+
+
 def test_pass_through_rows_paginate_one_per_page(gateway: Gateway) -> None:
     suffix: Final = uuid.uuid4().hex[:6]
     with (
@@ -223,17 +235,7 @@ def test_pass_through_rows_paginate_one_per_page(gateway: Gateway) -> None:
         meta: Final = object_value(object_value(first.json())["meta"])
         assert meta["page_size"] == 1, meta
         assert meta["total_count"] == meta["total_pages"], meta
-        seen: list[str] = []
-        page = first
-        while True:
-            page_rows = rows_of(page)
-            assert len(page_rows) == 1, page.text
-            seen.extend(names_of(page_rows))
-            following = object_value(object_value(page.json())["links"])["next"]
-            if following is None:
-                break
-            page = gateway.request("GET", string_value(following))
-            assert page.status_code == 200, page.text
+        seen: Final = tuple(single_row_page_names(gateway, first))
         assert len(seen) == meta["total_count"], seen
         assert {f"Pager A {suffix}", f"Pager B {suffix}"} <= set(seen), seen
 
