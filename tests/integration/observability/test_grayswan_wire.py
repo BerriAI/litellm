@@ -146,7 +146,13 @@ def _chat_provider(message: dict[str, JsonValue]):
 def _normalized_generic_body(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
     headers: Final = body.get("request_headers")
     normalized_headers: Final = (
-        {**headers, "host": "<host>", "content-length": "<length>", "user-agent": "<user-agent>"}
+        {
+            **headers,
+            "host": "<host>",
+            "content-length": "<length>",
+            "user-agent": "<user-agent>",
+            "accept-encoding": "<accept-encoding>",
+        }
         if isinstance(headers, dict)
         else headers
     )
@@ -1164,7 +1170,7 @@ def test_post_call_generic_guardrail_inputs_unchanged(gateway: Gateway, tmp_path
                 },
                 "request_headers": {
                     "accept": "*/*",
-                    "accept-encoding": "gzip, deflate, br",
+                    "accept-encoding": "<accept-encoding>",
                     "connection": "keep-alive",
                     "content-length": "<length>",
                     "content-type": "application/json",
