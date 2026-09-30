@@ -479,3 +479,37 @@ def test_document_images_inside_a_tool_result_follow_the_tool_scope():
 
     assert list(scanned.images) == [_png_item()]
     assert skipped.images == ()
+
+
+def test_document_title_and_context_are_scanned_as_text():
+    text_doc = {
+        "type": "document",
+        "title": "record",
+        "context": "SSN 123-45-6789",
+        "source": {"type": "text", "media_type": "text/plain", "data": "body"},
+    }
+    pdf = {
+        "type": "document",
+        "context": "note",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": PDF_B64},
+    }
+
+    found = find_request_attachments(_chat(text_doc, pdf), CallTypes.anthropic_messages.value, False, False)
+
+    assert found.document_texts == ("record\nSSN 123-45-6789\nbody", "note")
+    assert found.unscannable == ("document",)
+
+
+def _content_document(*inner: object) -> dict:
+    return {"type": "document", "source": {"type": "content", "content": list(inner)}}
+
+
+def test_nested_documents_are_scanned_and_deep_nesting_is_refused():
+    inner_text = {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "inner"}}
+    nested = _content_document(inner_text, _content_document({"type": "text", "text": "deeper"}))
+    too_deep = _content_document(_content_document(_content_document(_content_document(TEXT))))
+
+    found = find_request_attachments(_chat(nested, too_deep), CallTypes.anthropic_messages.value, False, False)
+
+    assert found.document_texts == ("inner", "deeper")
+    assert found.unscannable == ("document (nested too deep)",)
