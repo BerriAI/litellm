@@ -1,0 +1,59 @@
+{
+  "data": [
+    {
+      "trace_id": "e309a123963901e74c29cd2d3c86ff9e",
+      "name": "research_lead",
+      "service": "research-agent",
+      "input_preview": "[{\"role\": \"user\", \"content\": \"Should we store OTEL agent spans in ClickHouse or Postgres at 50k spans/sec?\"}]",
+      "start_time": "2026-09-30T06:43:54.291000+00:00",
+      "duration_ms": 40198.0,
+      "status": "ok",
+      "span_count": 216,
+      "agent_count": 6,
+      "llm_calls": 21,
+      "tool_calls": 25,
+      "error_count": 0,
+      "input_tokens": 69506,
+      "output_tokens": 2960,
+      "spend": 0.12833024999999998,
+      "models": ["claude-sonnet-4-5"]
+    },
+    {
+      "trace_id": "f78f6df35480060fafadac887e234241",
+      "name": "support_triage_agent",
+      "service": "research-agent",
+      "input_preview": "[{\"role\": \"user\", \"content\": \"Customer acme-404 says billing is wrong. What plan are they on?\"}]",
+      "start_time": "2026-09-30T06:43:52.928000+00:00",
+      "duration_ms": 1315.0,
+      "status": "ok",
+      "span_count": 5,
+      "agent_count": 1,
+      "llm_calls": 1,
+      "tool_calls": 1,
+      "error_count": 2,
+      "input_tokens": 659,
+      "output_tokens": 60,
+      "spend": 0.0028770000000000002,
+      "models": ["claude-sonnet-4-5"]
+    },
+    {
+      "trace_id": "71498cec128bbea430f01de04b972f36",
+      "name": "support_triage_agent",
+      "service": "research-agent",
+      "input_preview": "[{\"role\": \"user\", \"content\": \"Customer acme-42 gets 429s after upgrading. What plan are they on and what should they check?\"}]",
+      "start_time": "2026-09-30T06:43:47.373000+00:00",
+      "duration_ms": 5551.0,
+      "status": "ok",
+      "span_count": 9,
+      "agent_count": 1,
+      "llm_calls": 2,
+      "tool_calls": 2,
+      "error_count": 0,
+      "input_tokens": 1552,
+      "output_tokens": 202,
+      "spend": 0.007686,
+      "models": ["claude-sonnet-4-5"]
+    }
+  ],
+  "next_cursor": null
+}
