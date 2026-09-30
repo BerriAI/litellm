@@ -7,7 +7,14 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import Harness, sandbox
-from litellm.harness import CapabilityUnsupported, Done, FileChange, State, Text, ToolCall
+from litellm.harness import (
+    CapabilityUnsupported,
+    Done,
+    FileChange,
+    State,
+    Text,
+    ToolCall,
+)
 
 from .conftest import harness_params, model_for, requires_gateway
 
@@ -77,12 +84,19 @@ def test_agent_structured_output(harness: Harness, workspace: Path) -> None:
 
 
 @pytest.mark.parametrize("harness", harness_params())
-def test_agent_session_remembers_previous_turn(harness: Harness, workspace: Path) -> None:
+def test_agent_session_remembers_previous_turn(
+    harness: Harness, workspace: Path
+) -> None:
     with litellm.agent_session(
-        harness, sandbox=sandbox.local(workspace), model=model_for(harness), timeout=TURN_TIMEOUT
+        harness,
+        sandbox=sandbox.local(workspace),
+        model=model_for(harness),
+        timeout=TURN_TIMEOUT,
     ) as s:
         s.run("Remember this code word: PELICAN. Reply with just OK.")
-        second = s.run("What code word did I ask you to remember? Reply with just the word.")
+        second = s.run(
+            "What code word did I ask you to remember? Reply with just the word."
+        )
         assert "pelican" in second.text.lower()
         assert s.cost >= second.cost
 
@@ -90,12 +104,18 @@ def test_agent_session_remembers_previous_turn(harness: Harness, workspace: Path
 @pytest.mark.parametrize("harness", harness_params())
 def test_agent_detach_and_resume(harness: Harness, workspace: Path) -> None:
     box = sandbox.local(workspace)
-    s = litellm.agent_session(harness, sandbox=box, model=model_for(harness), timeout=TURN_TIMEOUT)
+    s = litellm.agent_session(
+        harness, sandbox=box, model=model_for(harness), timeout=TURN_TIMEOUT
+    )
     s.run("Remember this number: 4817. Reply with just OK.")
     raw = s.detach().dumps()
 
-    with litellm.agent_resume(State.loads(raw), sandbox=box, model=model_for(harness)) as resumed:
-        r = resumed.run("What number did I ask you to remember? Reply with just the number.")
+    with litellm.agent_resume(
+        State.loads(raw), sandbox=box, model=model_for(harness)
+    ) as resumed:
+        r = resumed.run(
+            "What number did I ask you to remember? Reply with just the number."
+        )
     assert "4817" in r.text
 
 
@@ -115,7 +135,7 @@ def test_agent_read_only_blocks_writes(harness: Harness, workspace: Path) -> Non
 
 
 def test_string_harness_rejected(workspace: Path) -> None:
-    with pytest.raises(TypeError, match="Harness.CODEX"):
+    with pytest.raises(TypeError, match=r"Harness\.CODEX"):
         litellm.agent("codex", "hi", sandbox=sandbox.local(workspace))  # type: ignore[arg-type]
 
 
