@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { AlertTriangle, Bot, CornerDownRight, Wrench } from "lucide-react";
 
 import { agentTraceSpanCall } from "../../networking";
@@ -20,12 +20,13 @@ const errorReason = (headline: string): string => /^([A-Za-z_][\w.]*)\(/.exec(he
 
 /** Shared lazy fetch of one span's full input / output / attributes. */
 export function useSpanDetail(accessToken: string, traceId: string, spanId: string | null) {
-  return useQuery<SpanDetail, Error>({
+  const queryOptions: UseQueryOptions<SpanDetail, Error> = {
     queryKey: ["agentTraceSpan", traceId, spanId, accessToken],
     queryFn: () => agentTraceSpanCall(accessToken, traceId, spanId as string),
     enabled: spanId !== null,
     staleTime: Infinity,
-  });
+  };
+  return useQuery(queryOptions);
 }
 
 export function SectionLabel({ children }: { children: React.ReactNode }) {
