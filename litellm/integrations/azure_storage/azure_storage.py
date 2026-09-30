@@ -2,7 +2,7 @@ import asyncio
 import os
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import cache
 from typing import Final
 from urllib.parse import unquote
@@ -28,7 +28,7 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 from litellm.types.secret_managers.get_azure_ad_token_provider import (
     AzureCredentialType,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
 _ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
@@ -159,6 +159,31 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
         except Exception as e:
             verbose_logger.exception("AzureBlobStorageLogger Layer Error - %s", e)
+
+    async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
+        now: Final = datetime.now(timezone.utc)
+        audit_log_id: Final = audit_log.get("id") or str(uuid.uuid4())
+        file_path: Final = f"audit_logs/{now.strftime('%Y-%m-%d')}/{now.strftime('%H-%M-%S')}_{audit_log_id}.json"
+        await self._upload_json_to_file_path(file_path=file_path, json_payload=safe_dumps(audit_log))
+
+    async def _upload_json_to_file_path(self, file_path: str, json_payload: str) -> None:
+        payload_bytes: Final = json_payload.encode("utf-8")
+        if self.azure_storage_account_key:
+            service_client: Final = await self.get_service_client()
+            file_client: Final = service_client.get_file_system_client(
+                file_system=self.azure_storage_file_system
+            ).get_file_client(file_path)
+            await file_client.create_file()
+            await file_client.append_data(data=payload_bytes, offset=0, length=len(payload_bytes))
+            await file_client.flush_data(position=len(payload_bytes), offset=0)
+            return
+
+        await self.set_valid_azure_ad_token()
+        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        base_url: Final = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{file_path}"
+        await self._create_file(async_client, base_url)
+        await self._append_data(async_client, base_url, json_payload)
+        await self._flush_data(async_client, base_url, len(payload_bytes))
 
     async def async_send_batch(self):
         """
