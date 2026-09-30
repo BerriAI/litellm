@@ -4354,7 +4354,6 @@ def test_map_optional_params_verbosity_merges_into_text():
     assert verbosity_only_request["text"] == {"verbosity": "low"}
 
 
-<<<<<<< HEAD
 @pytest.mark.parametrize(
     "tool_call_id,is_custom",
     [
