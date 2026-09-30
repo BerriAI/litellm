@@ -195,16 +195,22 @@ def _with_document_contents(entries: Iterable[_Block]) -> tuple[_Block, ...]:
 
 
 def _with_document_content(entry: _Block) -> tuple[_Block, ...]:
-    source: Final = _content_document_source(entry.block)
-    if source is None or entry.document_depth >= _MAX_DOCUMENT_DEPTH:
-        return (entry,)
-    return (
-        entry,
-        *chain.from_iterable(
-            _with_document_content(_Block(inner, from_tool=entry.from_tool, document_depth=entry.document_depth + 1))
-            for inner in _mappings(source.get("content"))
-        ),
-    )
+    expanded: Final[list[_Block]] = []
+    pending: Final[list[_Block]] = [entry]
+    while pending:
+        current = pending.pop()
+        expanded.append(current)
+        source = _content_document_source(current.block)
+        if source is not None and current.document_depth < _MAX_DOCUMENT_DEPTH:
+            pending.extend(
+                reversed(
+                    [
+                        _Block(inner, from_tool=current.from_tool, document_depth=current.document_depth + 1)
+                        for inner in _mappings(source.get("content"))
+                    ]
+                )
+            )
+    return tuple(expanded)
 
 
 def _content_document_source(block: Mapping[str, object]) -> Mapping[str, object] | None:
