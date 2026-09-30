@@ -36,16 +36,20 @@ class ZTDSGuardrail(CustomGuardrail):
     and reverses tokens on completion return without external network egress.
     """
 
+    TOKEN_PATTERN: ClassVar[re.Pattern] = re.compile(r"\[[A-Z_]+_TOKEN_[a-zA-Z0-9_-]+\]")
+
     # Comprehensive zero-egress regex patterns for sensitive identifiers
     PATTERNS: ClassVar[dict[str, re.Pattern]] = {
-        "EMAIL": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b"),
+        "EMAIL": re.compile(
+            r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*\.[A-Za-z]{2,24}\b"
+        ),
         "IPV4": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
         "IBAN": re.compile(r"\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16}\b"),
         "CREDIT_CARD": re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b"),
         "SSN": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
         "PHONE": re.compile(r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
         "API_SECRET": re.compile(
-            r"\b(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})\b"
+            r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b"
         ),
     }
 
@@ -90,6 +94,9 @@ class ZTDSGuardrail(CustomGuardrail):
 
         sanitized = text
         for entity_type in self.enabled_entities:
+            if entity_type == "EMAIL" and "@" not in sanitized:
+                continue
+
             pattern = self.PATTERNS.get(entity_type)
             if not pattern:
                 continue
@@ -123,7 +130,7 @@ class ZTDSGuardrail(CustomGuardrail):
 
     def restore_text(self, text: str, session_id: str) -> str:
         """
-        Restores deterministic surrogates back to original cleartext.
+        Restores deterministic surrogates back to original cleartext via single-pass token dispatch.
         Enforces provenance isolation: only restores tokens that originated from caller-visible fields.
         Hidden/system prompt secrets are never reversed in caller output.
         """
@@ -132,12 +139,13 @@ class ZTDSGuardrail(CustomGuardrail):
         if not token_map:
             return text
 
-        restored = text
-        for token in sorted(token_map.keys(), key=len, reverse=True):
-            # Only restore if token was authorized from caller-visible inputs
-            if token in caller_tokens:
-                restored = restored.replace(token, token_map[token])
-        return restored
+        def _replace_token(match: re.Match) -> str:
+            tok = match.group(0)
+            if tok in token_map and tok in caller_tokens:
+                return token_map[tok]
+            return tok
+
+        return self.TOKEN_PATTERN.sub(_replace_token, text)
 
     def zeroize_session(self, session_id: str) -> None:
         """

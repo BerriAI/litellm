@@ -222,6 +222,30 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(system_secret, caller_visible_output)
         self.assertIn("[API_SECRET_TOKEN_1]", caller_visible_output)
 
+    def test_redos_resistance(self):
+        """Verify that email pattern does not cause catastrophic backtracking on adversarial inputs."""
+        import time
+
+        session_id = "test-session-redos"
+        payload = "a." * 16000  # 32 KB adversarial payload
+        t0 = time.perf_counter()
+        sanitized, _ = self.guardrail.sanitize_text(payload, session_id)
+        elapsed = time.perf_counter() - t0
+
+        # Must execute sub-second without blocking event loop (typically < 0.02s)
+        self.assertLess(elapsed, 0.1, f"ReDoS vulnerability detected: execution took {elapsed:.4f}s")
+        self.assertEqual(sanitized, payload)
+
+    def test_modern_openai_project_keys(self):
+        """Verify detection and sanitization of modern OpenAI sk-proj- and hyphenated API tokens."""
+        session_id = "test-session-keys"
+        secret = "sk-proj-abc-123_45678901234567890"
+        raw = f"Use OpenAI project key {secret} for deployment."
+        sanitized, _ = self.guardrail.sanitize_text(raw, session_id)
+
+        self.assertNotIn(secret, sanitized)
+        self.assertIn("[API_SECRET_TOKEN_1]", sanitized)
+
     def test_token_collision_avoidance(self):
         """Literal surrogate tokens in input text must not collide with generated tokens."""
         session_id = "test-session-collision"
