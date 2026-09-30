@@ -2,7 +2,7 @@ import json
 import time
 from datetime import datetime
 from typing import Dict, List, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -869,7 +869,7 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     with (
         patch.object(guardrail_hook.async_handler, "post", AsyncMock(return_value=mock_response)),
         patch.object(guardrail_hook, "_load_credentials") as mock_load_creds,
-        patch.object(guardrail_hook, "convert_to_bedrock_format") as mock_convert,
+        patch.object(guardrail_hook, "convert_to_bedrock_format", new_callable=MagicMock) as mock_convert,
         patch.object(guardrail_hook, "get_guardrail_dynamic_request_body_params") as mock_get_params,
         patch.object(guardrail_hook, "add_standard_logging_guardrail_information_to_request_data"),
         patch("botocore.awsrequest.AWSRequest") as mock_aws_request,

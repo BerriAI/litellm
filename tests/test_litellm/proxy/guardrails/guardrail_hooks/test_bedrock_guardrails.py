@@ -2,8 +2,9 @@
 Unit tests for Bedrock Guardrails
 """
 
-import json
 import asyncio
+import base64
+import json
 from datetime import datetime, timezone
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -21,6 +22,8 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentChunkResult,
     BedrockGuardrail,
+    QualifiedTextBlock,
+    _decoded_base64_length,
     _redact_pii_matches,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -1080,6 +1083,145 @@ async def test_during_call_hook_still_scans_tool_result_turn_carrying_text():
 
 
 @pytest.mark.asyncio
+async def test_during_call_hook_refuses_attachment_in_scoped_out_message():
+    """A file in a message that latest-role scoping drops must still be refused."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-out-file",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {
+                        "type": "file",
+                        "file": {"filename": "ssn.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                    },
+                ],
+            },
+            {"role": "user", "content": "what is 2+2"},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_scoped_out_parts_without_decoding_images():
+    """The unscoped refusal pass must never pay the image decode cost.
+
+    A scoped-out message carrying a scannable png and a pdf gets refused on the
+    pdf, and ``BedrockImageProcessor.process_image_async`` is never invoked.
+    """
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-out-no-decode",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="}},
+                    {
+                        "type": "file",
+                        "file": {"filename": "ssn.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                    },
+                ],
+            },
+            {"role": "user", "content": "what is 2+2"},
+        ],
+    }
+
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("image decode reached the refusal pass"),
+        ) as mock_decode,
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_decode.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_oversized_image_in_scoped_out_message():
+    """The unscoped pass refuses an image over ApplyGuardrail's 4 MB limit without decoding it."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-out-oversized",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    oversized_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (4 * 1024 * 1024)).decode()
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{oversized_png}"}},
+                ],
+            },
+            {"role": "user", "content": "what is 2+2"},
+        ],
+    }
+
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("image decode reached the refusal pass"),
+        ) as mock_decode,
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_decode.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_make_apply_guardrail_request_skips_output_scan_without_response_text():
     """A tool-calls-only assistant response yields no OUTPUT content, so it must not be posted."""
     guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
@@ -1111,7 +1253,7 @@ async def test_make_apply_guardrail_request_skips_scan_without_credentials():
     ):
         await guardrail.make_bedrock_api_request(
             source="INPUT",
-            messages=[{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "out"}]}],
+            messages=[{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": []}]}],
         )
 
     mock_post.assert_not_called()
@@ -5496,6 +5638,860 @@ async def test_terminal_failure_logs_usage_and_cost_of_prior_passed_chunks(monke
     assert "error" in logged["guardrail_response"]
 
 
+class TestBedrockGuardrailImageInput:
+    """Image parts must reach ApplyGuardrail, not just the text sitting next to them."""
+
+    _PNG_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    _GIF_DATA_URI = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
+
+    def _guardrail(self, **kwargs) -> BedrockGuardrail:
+        return BedrockGuardrail(
+            guardrail_name="bedrock-image",
+            guardrailIdentifier="gr-image",
+            guardrailVersion="DRAFT",
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_inline_image_is_sent_for_scanning(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}},
+                ],
+            }
+        ]
+
+        request = self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert request["content"] == [
+            {"text": {"text": "what does this say?"}},
+            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_image_part_carrying_a_text_field_is_scanned_as_text_and_image(self):
+        """A part tagged image_url reaches the model as an image; its text field is
+        scanned as text like every other dict carrying `text`, and the image itself is
+        scanned as an image."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": self._PNG_DATA_URI},
+                        "text": "just a friendly note",
+                    }
+                ],
+            }
+        ]
+
+        request = self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert request["content"] == [
+            {"text": {"text": "just a friendly note"}},
+            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unscannable_image_part_carrying_a_text_field_still_blocks(self):
+        """The decoy text must not turn an unscannable image into a scanned request."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._GIF_DATA_URI}, "text": "hello"}],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_unscannable_image_blocks_the_request_by_default(self):
+        """ApplyGuardrail takes png/jpeg only, and the image reaches the model either way.
+
+        Skipping it silently would let a caller defeat an IMAGE-modality guardrail by
+        sending a gif, so the default is to reject the request.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "image_url", "image_url": {"url": self._GIF_DATA_URI}},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "Violated guardrail policy"
+
+    @pytest.mark.asyncio
+    async def test_undecodable_image_blocks_the_request_by_default(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "not-an-image"}}],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_incremental_scan_does_not_skip_a_request_carrying_an_image(self):
+        """`only_scan_new_messages` decides what to scan from `texts` alone.
+
+        With a session id and every text segment already seen, the incremental path
+        returns before the image-aware code runs, so benign text plus a violating
+        image is never scanned -- and the proxy still reports the guardrail as run.
+        Nothing caches images either, so "already seen" cannot cover them.
+        """
+        g = self._guardrail(only_scan_new_messages=True)
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        # Every text is already in the session cache: the exact state that made the
+        # incremental path return early.
+        with (
+            patch.object(g, "filter_new_texts_for_session", new=AsyncMock(return_value=[])),
+            patch.object(g, "make_bedrock_api_request", new=spy),
+        ):
+            await g.apply_guardrail(
+                inputs={"texts": ["look at this"], "images": [self._PNG_DATA_URI]},
+                request_data={"litellm_session_id": "sess-1"},
+                input_type="request",
+            )
+
+        assert sent, "image-carrying request was skipped entirely by the incremental path"
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_latest_message_only_does_not_skip_an_image_only_message(self):
+        """`experimental_use_latest_role_message_only` skips a latest message with no text.
+
+        An image-only user message is exactly that shape, so the whole request was
+        dropped from the scan.
+        """
+        g = self._guardrail(experimental_use_latest_role_message_only=True)
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={
+                    "texts": [],
+                    "images": [self._PNG_DATA_URI],
+                    "structured_messages": [
+                        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}}]}
+                    ],
+                },
+                request_data={},
+                input_type="request",
+            )
+
+        assert sent, "image-only latest message was skipped entirely"
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_twenty_inline_images_are_accepted(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}} for _ in range(20)],
+            }
+        ]
+
+        request = self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert len(request["content"]) == 20
+
+    @pytest.mark.asyncio
+    async def test_twenty_one_duplicate_images_are_rejected_before_decode(self):
+        """Repeated tiny data URIs still consume image slots and must not amplify AWS calls."""
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}} for _ in range(21)],
+            }
+        ]
+
+        with (
+            patch(  # test-quality-ok: the decoder is the thing under assertion -- the cap must reject before it is ever awaited
+                "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+                new_callable=AsyncMock,
+            ) as decode
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        decode.assert_not_awaited()
+        assert "at most 20 images" in str(exc_info.value.detail)
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(None, id="no content"),
+            pytest.param(123, id="content is not a list"),
+            pytest.param([123], id="part is not a mapping"),
+            pytest.param([{"type": "input_audio"}], id="part carries neither image nor text"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_malformed_part_never_becomes_scannable_content(self, content):
+        """Default-deny is the point of this PR, so pin it rather than trust it.
+
+        Each shape below is one a caller can put on the wire. None of them may turn
+        into a content item: an unrecognised part that fell through to the text
+        branch would be reported to the operator as scanned when it was not.
+        """
+        request = self._guardrail().convert_to_bedrock_format(
+            source="INPUT", messages=[{"role": "user", "content": content}]
+        )
+
+        assert request["content"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_bare_string_part_is_scanned_as_text(self):
+        """A content list may hold plain strings, not only typed parts."""
+        request = self._guardrail().convert_to_bedrock_format(
+            source="INPUT", messages=[{"role": "user", "content": ["just text"]}]
+        )
+
+        assert request["content"] == [{"text": {"text": "just text"}}]
+
+    @pytest.mark.asyncio
+    async def test_image_url_given_as_a_plain_string_is_accepted(self):
+        """OpenAI accepts `image_url` as a bare string as well as `{"url": ...}`.
+
+        Both reach the model as an image, so both have to reach the scan.
+        """
+        request = self._guardrail().convert_to_bedrock_format(
+            source="INPUT",
+            messages=[{"role": "user", "content": [{"type": "image_url", "image_url": self._PNG_DATA_URI}]}],
+        )
+
+        kinds = [k for item in request["content"] for k in item]
+        assert kinds == ["image"]
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognized_payload_is_rejected(self):
+        """_normalize_image_input sniffs png and jpeg out of bare base64.
+
+        Anything else is handed to the decoder as-is rather than guessed at, and the
+        guardrail rejects it instead of forwarding the image unscanned.
+        """
+        # Reached through apply_guardrail: bare base64 arrives in inputs["images"],
+        # which is the only caller that normalizes before decoding.
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().apply_guardrail(
+                inputs={"texts": [], "images": ["R0lGODlhAQABAAAAACw="]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert "could not be read" in str(exc_info.value.detail) or "not a png/jpeg" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_a_data_uri_without_a_subtype_is_refused_not_a_500(self):
+        """`data:image;base64,...` makes the processor raise IndexError, which must
+        still surface as the guardrail's 400, not a server error."""
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().apply_guardrail(
+                inputs={"texts": [], "images": ["data:image;base64,AAAA"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("https://example.com/pic.png", id="plain https url"),
+            pytest.param("http://example.com/pic.png", id="plain http url"),
+            # The rejection used to be a prefix test, which these slip past while
+            # `process_image_async` still treats them as remote and fetches them --
+            # an uncapped server-side download straight through the fail-closed path.
+            pytest.param(" https://example.com/pic.png", id="leading space"),
+            pytest.param("\thttps://example.com/pic.png", id="leading tab"),
+            pytest.param("\nhttps://example.com/pic.png", id="leading newline"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_remote_image_url_is_rejected_without_being_fetched(self, url):
+        """A remote url is named as its own rejection rather than left to the decoder.
+
+        Fetching one safely (size cap, SSRF/redirect validation) is separate work; this
+        PR only scans inline images, so a url has to fail closed rather than be ignored
+        or silently forwarded to the model unscanned. The refusal has to catch every
+        shape the decoder would fetch, not just the well-formed ones.
+        """
+        messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
+
+        with patch(  # test-quality-ok: the fetch is the thing under assertion -- it must never be reached
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new_callable=AsyncMock,
+        ) as decode:
+            with pytest.raises(HTTPException) as exc_info:
+                self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        decode.assert_not_awaited()
+        assert "remote image URLs are not supported" in str(exc_info.value.detail)
+
+    def test_the_url_helper_guards_its_own_inputs(self):
+        """Exercised directly so the guards are not dropped in a later refactor."""
+        assert BedrockGuardrail._get_image_url(item={"type": "image_url"}) is None
+        assert BedrockGuardrail._get_image_url(item={"type": "image_url", "image_url": {"url": 7}}) is None
+        assert BedrockGuardrail._get_image_url(item={"type": "image_url", "image_url": 7}) is None
+
+    @pytest.mark.asyncio
+    async def test_document_attachments_are_refused_before_any_scan(self):
+        """inputs["files"] carries attachments ApplyGuardrail has no content type for.
+
+        The provider still forwards the file to the model, so ignoring it is exactly
+        the silent pass this check exists to remove. Under the default policy the
+        request is refused without calling Bedrock.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(kwargs)
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            with pytest.raises(HTTPException) as exc_info:
+                await g.apply_guardrail(
+                    inputs={"texts": ["what does this say?"], "files": ["data:application/pdf;base64,AAAA"]},
+                    request_data={"messages": []},
+                    input_type="request",
+                )
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+        assert sent == [], "refused before any scan was attempted"
+
+    @pytest.mark.asyncio
+    async def test_a_file_backed_image_is_refused_through_the_real_translation(self):
+        """Drive the /v1/messages handler: a file-source image lands in images.
+
+        The handler now yields the file_id as the image ref, so the guardrail refuses
+        it through the same unreadable-image path as any other non-inline source.
+        """
+        from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what does this say?"},
+                        {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
+                    ],
+                }
+            ],
+        }
+
+        g = self._guardrail()
+        # The decoder is pinned to fail so the refusal is deterministic: what is being
+        # asserted is that the file_id reaches the image path at all, not that decoding
+        # of a non-image string happens to fail.
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new=AsyncMock(side_effect=ValueError("not an image")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=g)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_a_file_backed_image_inside_a_tool_result_is_refused(self):
+        """A file source nested in tool_result content is extracted and refused."""
+        from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what does this say?"},
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        g = self._guardrail()
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new=AsyncMock(side_effect=ValueError("not an image")),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=g)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_an_openai_file_part_is_refused(self):
+        """An OpenAI `type: file` part has no scannable content type in ApplyGuardrail."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {"type": "file", "file": {"filename": "a.pdf", "file_data": "data:application/pdf;base64,AAAA"}},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_an_anthropic_document_block_is_refused(self):
+        """A raw Anthropic document block has no scannable content type either."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                    },
+                    {"type": "text", "text": "summarize this"},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_an_anthropic_base64_image_block_builds_an_image_item(self):
+        """The /v1/messages during_call path hands raw image blocks to the builder."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": self._PNG_DATA_URI.split(",")[1],
+                        },
+                    },
+                ],
+            }
+        ]
+
+        request = self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert request["content"] == [
+            {"text": {"text": "what does this say?"}},
+            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_anthropic_url_image_is_refused(self):
+        """A url image source is not inline data, so it fails closed like a remote url."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_a_scannable_image_inside_a_tool_result_is_not_refused(self):
+        """Descending into tool_result must not start refusing what can be scanned."""
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(kwargs["messages"])
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": ["hello"], "images": [self._PNG_DATA_URI]},
+                request_data={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "hello"},
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "tu_1",
+                                    "content": [{"type": "image", "source": {"type": "base64", "data": "AAAA"}}],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                input_type="request",
+            )
+
+        assert sent, "a scannable nested image still has to be scanned, not refused"
+
+    @pytest.mark.asyncio
+    async def test_latest_message_only_does_not_scan_the_same_image_twice(self):
+        """The selected message carries its own image parts into the scan payload.
+
+        `inputs["images"]` holds that same url, so appending it again would fetch and
+        bill the image twice.
+        """
+        url = self._PNG_DATA_URI
+        g = self._guardrail(experimental_use_latest_role_message_only=True)
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={
+                    "texts": ["hello"],
+                    "images": [url],
+                    "structured_messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "hello"},
+                                {"type": "image_url", "image_url": {"url": url}},
+                            ],
+                        }
+                    ],
+                },
+                request_data={},
+                input_type="request",
+            )
+
+        images = [item for item in sent[0]["content"] if "image" in item]
+        assert len(images) == 1, f"the image was sent {len(images)} times"
+
+    @pytest.mark.asyncio
+    async def test_the_scannable_source_shapes_are_not_refused(self):
+        """The refusal has to be specific to the shape that cannot be read.
+
+        structured_messages is already narrowed by the skip and scope flags, so a
+        count mismatch against inputs["images"] is not evidence of a dropped image.
+        Blocking a legitimate request would be worse than the gap being closed.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": ["hello"], "images": [self._PNG_DATA_URI]},
+                request_data={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "hello"},
+                                {"type": "image", "source": {"type": "base64", "data": "AAAA"}},
+                                {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                            ],
+                        }
+                    ]
+                },
+                input_type="request",
+            )
+
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds
+
+    @pytest.mark.asyncio
+    async def test_files_on_the_response_side_are_not_refused(self):
+        """Attachments are a request-side concern; an OUTPUT scan takes generated text."""
+        g = self._guardrail()
+
+        async def spy(**kwargs):
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            result = await g.apply_guardrail(
+                inputs={
+                    "texts": ["the model said this"],
+                    "files": ["data:application/pdf;base64,AAAA"],
+                    "structured_messages": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
+                        }
+                    ],
+                },
+                request_data={},
+                input_type="response",
+            )
+
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_a_document_nested_inside_a_tool_result_is_refused(self):
+        """A tool_result wrapper is transparent to the refusal walk: the model reads the
+        nested document, so the guardrail refuses it exactly like a top-level one."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "summarize this"},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [
+                            {
+                                "type": "document",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "application/pdf",
+                                    "data": "AAAA",
+                                },
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail()._refuse_unscannable_leaf_parts(messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_a_tool_result_nested_base64_image_is_scanned_and_counted(self):
+        g = self._guardrail()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe the output"},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": self._PNG_DATA_URI.split(",")[1],
+                                },
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        request = g.convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        kinds = [key for item in request["content"] for key in item]
+        assert "image" in kinds
+        assert "text" in kinds
+        assert BedrockGuardrail._image_count_in(messages) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_image_url_part_with_only_a_file_id_is_refused(self):
+        """A file-backed image is not an inline png/jpeg, so it is refused like any
+        other attachment the guardrail cannot read."""
+        messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"file_id": "file_abc"}}]}]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "Violated guardrail policy" in str(exc_info.value.detail)
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            pytest.param({"type": "image_url", "image_url": {}}, id="empty image_url"),
+            pytest.param({"type": "image_url"}, id="no image_url field"),
+            pytest.param({"type": "image_url", "image_url": 123}, id="url is not a string or mapping"),
+            pytest.param({"type": "image_url", "image_url": {"url": 123}}, id="url value is not a string"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_an_image_url_part_with_no_inline_url_is_refused(self, part):
+        """An image part carrying no readable reference is refused instead of being
+        silently dropped past the scan."""
+        messages = [{"role": "user", "content": [part]}]
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "image part carries no inline url" in str(exc_info.value.detail)
+
+    def test_decoded_base64_length_lands_on_both_sides_of_the_4_mib_cap(self):
+        """The estimate must use the exact decoded length so an image that is exactly
+        the ApplyGuardrail limit passes and one byte over is refused."""
+        limit: int = 4 * 1024 * 1024
+
+        assert _decoded_base64_length(base64.b64encode(b"\x00" * limit).decode()) == limit
+        assert _decoded_base64_length(base64.b64encode(b"\x00" * (limit + 1)).decode()) == limit + 1
+        assert _decoded_base64_length("QUJD") == 3
+        assert _decoded_base64_length("QUE=") == 2
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_scans_images_from_inputs(self):
+        """The proxy reaches BedrockGuardrail through `apply_guardrail`, not the native hook.
+
+        ProxyLogging._execute_guardrail_hook routes any guardrail that defines
+        `apply_guardrail` through unified_guardrail, so a fix that only touches
+        async_pre_call_hook never runs on a real request. The endpoint translations
+        already put images in inputs["images"]; this asserts they reach the payload.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": ["what does this say?"], "images": [self._PNG_DATA_URI]},
+                request_data={},
+                input_type="request",
+            )
+
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_scans_bare_base64_images(self):
+        """Anthropic's translation drops media_type and passes bare base64.
+
+        `_image_sources` returns source["data"] only, so the entry is not a data URI.
+        Without sniffing the format back it would be rejected as unreadable and turn
+        a legitimate /v1/messages call into a 400.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        bare_base64 = self._PNG_DATA_URI.split(",")[1]
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": [], "images": [bare_base64]},
+                request_data={},
+                input_type="request",
+            )
+
+        kinds = [k for item in sent[0]["content"] for k in item]
+        assert "image" in kinds, f"bare base64 image never reached the payload: {kinds}"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_ignores_images_on_the_response_side(self):
+        """ApplyGuardrail's OUTPUT source scans model-generated text, not input images."""
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(kwargs)
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": ["some model output"], "images": [self._PNG_DATA_URI]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert sent and sent[0]["source"] == "OUTPUT"
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_source_yields_an_empty_request(self):
+        """The dispatch went from seed-then-assign to early returns when INPUT became
+        async. The trailing fallback preserves what the seeded request used to return
+        for a source that is neither INPUT nor OUTPUT, so nothing starts scanning an
+        unrecognized source as if it were input.
+        """
+        from typing import Literal, cast
+
+        # cast-ok: pins the runtime fallback the Literal forbids at type-check time
+        source = cast(Literal["INPUT", "OUTPUT"], "SOMETHING_ELSE")
+        request = self._guardrail().convert_to_bedrock_format(
+            source=source,
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+        assert request == {"source": "SOMETHING_ELSE"}
+
+    @pytest.mark.asyncio
+    async def test_oversized_image_is_rejected_before_sending(self):
+        """ApplyGuardrail caps images at 4 MB; AWS's rejection is not worth a round trip.
+
+        Built as a real data URI rather than a patched decoder so the size check runs
+        against what the decoder actually produces.
+        """
+        oversized_png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * (5 * 1024 * 1024)).decode()
+
+        with pytest.raises(HTTPException) as exc_info:
+            self._guardrail().convert_to_bedrock_format(
+                source="INPUT",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{oversized_png}"}}
+                        ],
+                    }
+                ],
+            )
+
+        assert "4 MB limit" in str(exc_info.value.detail)
+
+
 def test_load_credentials_assumes_role_with_external_id():
     """A trust policy requiring sts:ExternalId must be satisfied by the guardrail's aws_external_id."""
     import datetime
@@ -5791,7 +6787,7 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         UnifiedLLMGuardrails,
     )
-    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.types.utils import ModelResponseStream, StreamingChoices
 
     guardrail = BedrockGuardrail(
         guardrailIdentifier="test-guardrail",
@@ -6063,7 +7059,9 @@ async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
     mock_response.json.return_value = {"action": "NONE", "assessments": []}
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
-        response = await guardrail.make_bedrock_api_request(source="INPUT", messages=[{"role": "user", "content": "hello"}])
+        response = await guardrail.make_bedrock_api_request(
+            source="INPUT", messages=[{"role": "user", "content": "hello"}]
+        )
 
     assert response["action"] == "NONE"
     assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
@@ -6100,3 +7098,1147 @@ async def test_apply_guardrail_signs_off_the_event_loop(monkeypatch):
 
     assert response["action"] == "NONE"
     assert probe.served_during_refresh is True
+
+
+def test_bedrock_guardrail_opts_into_attachment_scanning() -> None:
+    """Translation handlers scope attachment extraction by this flag; Bedrock must keep it set."""
+    assert BedrockGuardrail.scans_attachments is True
+
+
+def test_apply_masking_to_messages_drops_tool_result_and_image_blocks_like_base() -> None:
+    guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "record SSN 123-45-6789"},
+                {"type": "text", "text": "please summarise"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo"}},
+            ],
+        }
+    ]
+
+    result = guardrail._apply_masking_to_messages(messages=messages, masked_texts=["please summarise"])
+
+    assert result[0]["content"] == [{"type": "text", "text": "please summarise"}]
+
+
+def test_apply_masking_to_messages_leaves_tool_result_inner_items_unmasked() -> None:
+    guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [
+                        {"type": "text", "text": "inner ssn 123-45-6789"},
+                        {"type": "image", "source": {"data": "abc"}},
+                    ],
+                }
+            ],
+        }
+    ]
+
+    result = guardrail._apply_masking_to_messages(messages=messages, masked_texts=["inner ssn {SSN}"])
+
+    assert result[0]["content"] == []
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_serialized_tool_output_attachment():
+    """A tool message's JSON-serialized output list can hide an attachment part that
+    never becomes a leaf; on the Responses bridge the unscoped pass refuses it."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-file",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "input": [
+            {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
+            {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": [
+                    {
+                        "type": "input_file",
+                        "filename": "a.pdf",
+                        "file_data": "data:application/pdf;base64,JVBERi0=",
+                    }
+                ],
+            },
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.aresponses.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_chat_tool_output_attachment_scans_as_text():
+    """On a plain chat call a serialized tool output reaches the model as text, so the
+    serialized pass must not refuse it even when a member carries attachment bytes."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-chat-tool-string",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    tool_output = json.dumps(
+        [{"type": "input_file", "filename": "a.pdf", "file_data": "data:application/pdf;base64,JVBERi0="}]
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "tool", "tool_call_id": "c1", "content": tool_output},
+            {"role": "user", "content": "hi"},
+        ],
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_serialized_tool_output_attachment_unknown_shape_falls_through():
+    """Non-attachment members of the serialized tool output are left to the normal scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-text",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": json.dumps([{"type": "output_text", "text": "memo"}]),
+            },
+            {"role": "user", "content": "hi"},
+        ],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    assert "output_text" in data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "media_part",
+    [
+        {"type": "video_url", "video_url": {"url": "https://synthetic.example/clip.mp4"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+    ],
+)
+async def test_during_call_hook_refuses_scoped_out_media_attachment(media_part):
+    """Media payloads in a message latest-role scoping drops are refused, not evaded."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-scoped-media",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        experimental_use_latest_role_message_only=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "watch this"}, media_part]},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "next"},
+        ],
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_drops_bare_attachment_shells():
+    """A payload-less shell carries nothing the guardrail can refuse; scoping keeps it out."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-shells",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hello"}, {"type": "file"}, {"type": "input_audio"}],
+            }
+        ],
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    assert data["messages"][0]["content"][1] == {"type": "file"}
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_refuses_non_string_image_reference():
+    """A non-string entry in inputs["images"] must refuse cleanly, not crash on startswith."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-int-image-ref",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["look"], "images": [5]}, request_data={}, input_type="request"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "cannot be scanned" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_tool_output_file_id_and_scoped_media():
+    """file_id-only members and video/audio payloads in serialized tool output are refused."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-payloads",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    for member in (
+        {"type": "input_file", "file_id": "file-abc"},
+        {"type": "video_url", "video_url": {"url": "https://x/clip.mp4"}},
+        {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+    ):
+        data = {
+            "input": [
+                {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "c1", "output": [member]},
+                {"role": "user", "content": [{"type": "input_text", "text": "summarize"}]},
+            ]
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type=CallTypes.aresponses.value,
+            )
+        assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_tool_output_payloadless_shell_falls_through():
+    """A type-only member inside serialized tool output carries nothing to leak; it is dropped."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-shell",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "messages": [
+            {
+                "role": "tool",
+                "content": json.dumps(
+                    [{"type": "input_file"}, {"type": "output_text", "file_id": "f-1", "text": "done"}]
+                ),
+            },
+            {"role": "user", "content": "summarize"},
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    assert "input_file" in data["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_stray_file_id_on_text_part_is_not_refused():
+    """A text part carrying a stray file_id is still text; only attachment types refuse."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-stray-file-id",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi", "file_id": "f1"}],
+            }
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    assert data["messages"][0]["content"][0]["text"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_input_file_part_with_file_id_only():
+    """An input_file part whose only payload is file_id is still an unscannable attachment."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-file-id-refusal",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hi"}, {"type": "input_file", "file_id": "f1"}],
+            }
+        ]
+    }
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_tool_output_metadata_only_parts_scan_as_text():
+    """Serialized tool output whose parts carry only metadata keys is not an attachment;
+    it reaches ApplyGuardrail as plain text like the rest of the tool message."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-output-metadata",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    tool_output = json.dumps(
+        [
+            {"type": "file", "name": "README.md", "path": "README.md", "size": 1200},
+            {"type": "dir", "name": "src", "path": "src"},
+        ]
+    )
+    data = {
+        "messages": [
+            {"role": "tool", "tool_call_id": "t1", "content": tool_output},
+            {"role": "user", "content": "summarize"},
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"type": "file", "name": "README.md", "path": "README.md", "size": 1200},
+        {"type": "file", "name": "README.md", "url": "https://api.github.com/repos/o/r/contents/README.md"},
+        {"type": "image", "title": "Golden Gate", "source": "wikimedia.org"},
+        {"type": "document", "id": "kb-17", "source": "confluence", "text": "Refund policy"},
+    ],
+)
+async def test_during_call_hook_chat_tool_output_metadata_members_scan_as_text(member):
+    """Metadata-shaped members in a chat tool string are plain text to the scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-chat-tool-metadata",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "messages": [
+            {"role": "tool", "tool_call_id": "t1", "content": json.dumps([member])},
+            {"role": "user", "content": "summarize"},
+        ]
+    }
+
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert json.dumps([member]) in sent_texts
+
+
+async def _run_responses_during_call(guardrail, output):
+    """Drive async_moderation_hook on a Responses input with one function_call_output."""
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+    data = {
+        "input": [
+            {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "c1", "output": output},
+            {"role": "user", "content": [{"type": "input_text", "text": "summarize"}]},
+        ]
+    }
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.aresponses.value,
+        )
+    return mock_post
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_responses_tool_output_client_string_scans_as_text():
+    """A client-sent string output is never re-parsed: it is scanned as text, so a
+    file_id hiding inside client JSON is left to the model's own serialization."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-string",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    tool_output = json.dumps([{"type": "file", "name": "q3.pdf", "file_id": "file-abc"}])
+
+    mock_post = await _run_responses_during_call(guardrail, tool_output)
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_responses_tool_output_input_text_string_scans_as_text():
+    """The same client string wrapped in an input_text part scans as text too."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-wrapped",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    tool_output = json.dumps([{"type": "file", "name": "q3.pdf", "file_id": "file-abc"}])
+
+    mock_post = await _run_responses_during_call(guardrail, [{"type": "input_text", "text": tool_output}])
+
+    mock_post.assert_called_once()
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    sent_texts = [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+    assert tool_output in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_responses_tool_output_input_file_member_refused():
+    """A real input_file member of the output list is refused before any scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-file",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _run_responses_during_call(
+            guardrail,
+            [
+                {"type": "input_text", "text": "see file"},
+                {
+                    "type": "input_file",
+                    "filename": "ssn.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+            ],
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_responses_tool_output_input_image_member_refused():
+    """A real input_image member of the output list is refused before any scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-image",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _run_responses_during_call(guardrail, [{"type": "input_image", "file_id": "file-1"}])
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def _skip_flag_tool_result_messages() -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01A", "name": "get_weather", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": "BLOCKME from tool"}],
+        },
+    ]
+
+
+def _sent_apply_guardrail_texts(mock_post) -> list[str]:
+    sent_body = json.loads(mock_post.call_args.kwargs["data"])
+    return [item["text"]["text"] for item in sent_body["content"] if "text" in item]
+
+
+async def _run_anthropic_during_call(guardrail, messages, response_json=None):
+    """Drive async_moderation_hook on an anthropic_messages call; return (data, post mock)."""
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = response_json or {"action": "NONE", "assessments": []}
+    data = {"model": "claude-sonnet-4-5", "messages": messages}
+    with (
+        patch.object(guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")),
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+    ):
+        mock_post.return_value = mock_response
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.anthropic_messages.value,
+        )
+    return data, mock_post
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_does_not_scan_tool_result_text():
+    """The ApplyGuardrail scan sees only text parts: a tool_result string is never a leaf."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-default",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "my ssn is 123-45-6789"},
+                {"type": "text", "text": "hi"},
+            ],
+        }
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_texts(mock_post) == ["hi"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_skip_tool_message_flag_drops_tool_result_text():
+    """skip_tool_message_in_guardrail removes the tool_result string from the INPUT scan."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-skip",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        skip_tool_message_in_guardrail=True,
+    )
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, _skip_flag_tool_result_messages())
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_texts(mock_post) == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_global_skip_tool_message_flag_drops_tool_result_text(monkeypatch):
+    """The litellm-level flag applies when the per-guardrail attr is unset."""
+    monkeypatch.setattr(litellm, "skip_tool_message_in_guardrail", True)
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-skip-global",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, _skip_flag_tool_result_messages())
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_texts(mock_post) == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_masked_writeback_drops_tool_result_like_base():
+    """Masked outputs align to scanned texts; a tool_result consumes no slot and is
+    dropped from the rewritten content list exactly like base masking did."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-mask",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": "BLOCKME from tool"}],
+        },
+        {"role": "user", "content": "and bye"},
+    ]
+
+    data, mock_post = await _run_anthropic_during_call(
+        guardrail,
+        messages,
+        response_json={"action": "GUARDRAIL_INTERVENED", "outputs": [{"text": "M1"}, {"text": "M2"}]},
+    )
+
+    assert _sent_apply_guardrail_texts(mock_post) == ["hello", "and bye"]
+    assert data["messages"][0]["content"] == "M1"
+    assert data["messages"][1]["content"] == []
+    assert data["messages"][2]["content"] == "M2"
+
+
+def test_mask_content_list_drops_tool_result_and_consumes_no_masked_text() -> None:
+    guardrail = BedrockGuardrail(guardrailIdentifier="x", guardrailVersion="1", aws_region_name="us-east-1")
+
+    new_content, masking_index = guardrail._mask_content_list(
+        content_list=[
+            {"type": "tool_result", "tool_use_id": "toolu_01A", "content": "BLOCKME from tool"},
+            {"type": "text", "text": "hi"},
+        ],
+        masked_texts=["M1"],
+        masking_index=0,
+    )
+
+    assert new_content == [{"type": "text", "text": "M1"}]
+    assert masking_index == 1
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_tool_result_document():
+    """A document nested in a tool_result is refused even though its text is not scanned."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-doc",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                        }
+                    ],
+                }
+            ],
+        },
+    ]
+
+    with (
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data={"model": "claude-sonnet-4-5", "messages": messages},
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.anthropic_messages.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def test_convert_to_bedrock_format_returns_bedrock_request_synchronously():
+    """The public INPUT converter is sync again; callers never await it."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    request = guardrail.convert_to_bedrock_format(source="INPUT", messages=[{"role": "user", "content": "hi"}])
+
+    import inspect
+
+    assert inspect.isawaitable(request) is False
+    assert request["content"][0]["text"]["text"] == "hi"
+
+
+def test_convert_to_bedrock_format_inline_png_builds_an_image_item():
+    """An inline png data URI decodes into an ApplyGuardrail image item without IO."""
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="}}],
+        }
+    ]
+
+    request = guardrail.convert_to_bedrock_format(source="INPUT", messages=messages)
+
+    assert request["content"][0]["image"]["format"] == "png"
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_refuses_remote_image_without_calling_a_fetcher():
+    """A remote image is refused by the substring test before any sync/async fetch."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-remote-image",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+            }
+        ],
+    }
+
+    with (
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.get_image_details",
+            side_effect=AssertionError("sync fetch reached"),
+        ) as sync_fetch,
+        patch(
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.get_image_details_async",
+            new_callable=AsyncMock,
+            side_effect=AssertionError("async fetch reached"),
+        ) as async_fetch,
+        patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await guardrail.async_moderation_hook(
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type=CallTypes.acompletion.value,
+        )
+
+    assert exc_info.value.status_code == 400
+    sync_fetch.assert_not_called()
+    async_fetch.assert_not_called()
+    mock_post.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "output",
+    [
+        json.dumps([{"type": "file", "name": "README.md", "url": "https://api.github.com/x"}]),
+        json.dumps([{"type": "file", "name": "q3.pdf", "file_id": "file-abc"}]),
+        json.dumps([{"type": "image_url", "image_url": "https://example.com/cat.jpg"}]),
+        json.dumps([{"type": "document", "source": {"title": "wiki", "page": 3}, "text": "hello"}]),
+        [{"type": "input_text", "text": json.dumps([{"type": "file", "file_id": "file-abc"}])}],
+    ],
+)
+async def test_during_call_hook_responses_function_call_output_json_string_scans_as_text(output):
+    """Client string outputs are never re-parsed; JSON-shaped tool output scans as text."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-resp-tool-json-text",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+
+    mock_post = await _run_responses_during_call(guardrail, output)
+
+    mock_post.assert_called_once()
+
+
+_PNG_B64 = "iVBORw0KGgoAAAANSUhEUg=="
+_PNG_IMAGE_ITEM = {"image": {"format": "png", "source": {"bytes": _PNG_B64}}}
+_PNG_SOURCE = {"type": "base64", "media_type": "image/png", "data": _PNG_B64}
+
+
+def _sent_apply_guardrail_items(mock_post) -> list[dict[str, object]]:
+    return json.loads(mock_post.call_args.kwargs["data"])["content"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_scans_tool_result_nested_image_but_not_its_text():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-image",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [
+                        {"type": "image", "source": _PNG_SOURCE},
+                        {"type": "text", "text": "my ssn is 123-45-6789"},
+                    ],
+                },
+                {"type": "text", "text": "hi"},
+            ],
+        }
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_items(mock_post) == [{"text": {"text": "hi"}}, _PNG_IMAGE_ITEM]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_tool_result_only_image_turn_still_calls_guardrail():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-image-only",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [{"type": "image", "source": _PNG_SOURCE}],
+                }
+            ],
+        }
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_items(mock_post) == [_PNG_IMAGE_ITEM]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_masked_writeback_pairs_masked_text_when_tool_result_carries_image():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-tool-result-image-mask",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01A",
+                    "content": [
+                        {"type": "image", "source": _PNG_SOURCE},
+                        {"type": "text", "text": "BLOCKME from tool"},
+                    ],
+                },
+                {"type": "text", "text": "hi"},
+            ],
+        }
+    ]
+
+    data, mock_post = await _run_anthropic_during_call(
+        guardrail,
+        messages,
+        response_json={"action": "GUARDRAIL_INTERVENED", "outputs": [{"text": "M1"}]},
+    )
+
+    assert _sent_apply_guardrail_items(mock_post) == [{"text": {"text": "hi"}}, _PNG_IMAGE_ITEM]
+    assert data["messages"][0]["content"] == [{"type": "text", "text": "M1"}]
+
+
+class _SecretRewritingGuardrail(BedrockGuardrail):
+    def __init__(self, **kwargs):
+        self.content_item_calls = 0
+        super().__init__(**kwargs)
+
+    def get_content_items_for_message(self, message):
+        self.content_item_calls += 1
+        blocks = super().get_content_items_for_message(message)
+        if not blocks:
+            return blocks
+        return [
+            QualifiedTextBlock(text=block.text.replace("SECRET", "[X]"), qualifier=block.qualifier) for block in blocks
+        ]
+
+
+def _secret_guardrail(**kwargs):
+    return _SecretRewritingGuardrail(
+        guardrail_name="bedrock-secret-rewrite",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_input_text_runs_through_get_content_items_for_message():
+    guardrail = _secret_guardrail()
+    messages = [
+        {"role": "user", "content": "hi SECRET"},
+        {"role": "user", "content": [{"type": "text", "text": "a SECRET"}]},
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_texts(mock_post) == ["hi [X]", "a [X]"]
+    assert guardrail.content_item_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_input_text_then_image_per_message():
+    guardrail = _secret_guardrail()
+    messages = [
+        {"role": "user", "content": "hi SECRET"},
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_PNG_B64}"}}],
+        },
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_items(mock_post) == [{"text": {"text": "hi [X]"}}, _PNG_IMAGE_ITEM]
+
+
+class _ToolCallArgsEmittingGuardrail(BedrockGuardrail):
+    def get_content_items_for_message(self, message):
+        content = message.get("content")
+        if content is None and message.get("tool_calls"):
+            tool_call = message["tool_calls"][0]
+            function = tool_call.get("function", {})
+            return [QualifiedTextBlock(text=function.get("arguments", ""), qualifier=None)]
+        return super().get_content_items_for_message(message)
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_override_can_emit_text_for_none_content_tool_call_message():
+    """An override emitting text for a content-None tool_call message reaches INPUT."""
+    guardrail = _ToolCallArgsEmittingGuardrail(
+        guardrail_name="bedrock-tool-call-args",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+    )
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"function": {"name": "q", "arguments": '{"q":"kill him"}'}}],
+        },
+        {"role": "user", "content": "ok"},
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_texts(mock_post) == ["hi", '{"q":"kill him"}', "ok"]

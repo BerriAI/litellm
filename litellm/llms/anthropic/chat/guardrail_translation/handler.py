@@ -173,10 +173,11 @@ class ScannedToolCall:
 class ExtractedInput:
     scanned: tuple[ScannedText, ...]
     images: tuple[str, ...]
+    files: tuple[str, ...] = ()
     tool_calls: tuple[ScannedToolCall, ...] = ()
 
 
-EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
+EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=(), files=())
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,6 +288,35 @@ class _AnthropicSSEDelta(TypedDict, total=False):
 
 class _AnthropicSSEEvent(TypedDict, total=False):
     delta: ReadOnly[_AnthropicSSEDelta]
+
+
+_ATTACHMENT_BLOCK_TYPES: Final = frozenset({"image", "document"})
+
+
+def _block_tree_has_attachment(block: Mapping[str, object]) -> bool:
+    stack: Final[list[Mapping[str, object]]] = [block]  # mutable-ok: LIFO walk, no recursion
+    while stack:
+        part = stack.pop()
+        if part.get("type") in _ATTACHMENT_BLOCK_TYPES:
+            return True
+        inner = part.get("content")
+        if isinstance(inner, list):
+            stack.extend(candidate for candidate in inner if isinstance(candidate, dict))
+    return False
+
+
+def _request_has_attachment_blocks(data: Mapping[str, object], messages: Sequence[object]) -> bool:
+    system: Final = data.get("system")
+    if isinstance(system, list) and any(
+        isinstance(block, dict) and _block_tree_has_attachment(block) for block in system
+    ):
+        return True
+    return any(
+        isinstance(part, dict) and _block_tree_has_attachment(part)
+        for message in messages
+        if isinstance(message, dict) and isinstance(message.get("content"), list)
+        for part in message["content"]
+    )
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -536,6 +566,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
+        scan_attachments: Final = getattr(
+            guardrail_to_apply, "scans_attachments", False
+        ) is True and _request_has_attachment_blocks(data, messages)
 
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
@@ -587,24 +620,30 @@ class AnthropicMessagesHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                **({"scan_attachments": True} if scan_attachments else {}),
             )
             for msg_idx, message in enumerate(messages)
         )
         scanned: Final = (
             *top_level_system_scanned,
-            *(item for one_message in extracted for item in one_message.scanned),
+            *(chain.from_iterable(one_message.scanned for one_message in extracted)),
         )
         texts_to_check: Final = [item.text for item in scanned]  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
-        images_to_check: Final = [image for one_message in extracted for image in one_message.images]
-        scanned_tool_calls: Final = tuple(item for one_message in extracted for item in one_message.tool_calls)
+        images_to_check: Final = list(chain.from_iterable(one_message.images for one_message in extracted))
+        files_to_check: Final = [  # mutable-ok: GenericGuardrailAPIInputs takes list[str]
+            *chain.from_iterable(one_message.files for one_message in extracted)
+        ]
+        scanned_tool_calls: Final = tuple(chain.from_iterable(one_message.tool_calls for one_message in extracted))
         tool_calls_to_check: Final = [item.tool_call for item in scanned_tool_calls]
         pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
-        if texts_to_check or tool_calls_to_check:
+        if texts_to_check or tool_calls_to_check or (scan_attachments and (images_to_check or files_to_check)):
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
+            if files_to_check:
+                inputs["files"] = files_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
             if tools_to_check:
@@ -934,6 +973,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        scan_attachments: bool = False,
     ) -> ExtractedInput:
         """Extract text content and images from a message.
 
@@ -943,10 +983,10 @@ class AnthropicMessagesHandler(BaseTranslation):
         role: Final = str(message.get("role") or "")
         if role == "system":
             if scan_only_tool_results:
-                return EMPTY_EXTRACTED_INPUT
+                return cls._scoped_out_container_attachments(message) if scan_attachments else EMPTY_EXTRACTED_INPUT
             return cls._extract_midturn_system_text(message=message, msg_idx=msg_idx)
         if skip_tool_message and role.lower() == "tool":
-            return EMPTY_EXTRACTED_INPUT
+            return cls._scoped_out_container_attachments(message) if scan_attachments else EMPTY_EXTRACTED_INPUT
 
         content: Final = message.get("content", None)
         if isinstance(content, str):
@@ -963,6 +1003,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 content_idx=content_idx,
                 skip_tool_message=skip_tool_message,
                 scan_only_tool_results=scan_only_tool_results,
+                **({"scan_attachments": True} if scan_attachments else {}),
             )
             for content_idx, content_item in enumerate(content)
             if isinstance(content_item, dict)
@@ -977,8 +1018,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             )
         )
         return ExtractedInput(
-            scanned=tuple(item for block in blocks for item in block.scanned),
-            images=tuple(image for block in blocks for image in block.images),
+            scanned=tuple(chain.from_iterable(block.scanned for block in blocks)),
+            images=tuple(chain.from_iterable(block.images for block in blocks)),
+            files=tuple(chain.from_iterable(block.files for block in blocks)),
             tool_calls=tuple(
                 ScannedToolCall(
                     tool_call=AnthropicConfig.convert_tool_use_to_openai_format(content_item, tool_call_idx),
@@ -996,21 +1038,44 @@ class AnthropicMessagesHandler(BaseTranslation):
         content_idx: int,
         skip_tool_message: bool,
         scan_only_tool_results: bool = False,
+        scan_attachments: bool = False,
     ) -> ExtractedInput:
         if content_item.get("type") == "tool_result":
             if skip_tool_message:
-                return EMPTY_EXTRACTED_INPUT
-            return cls._extract_tool_result(content_item=content_item, msg_idx=msg_idx, content_idx=content_idx)
+                return (
+                    cls._scoped_out_container_attachments(content_item) if scan_attachments else EMPTY_EXTRACTED_INPUT
+                )
+            return cls._extract_tool_result(
+                content_item=content_item,
+                msg_idx=msg_idx,
+                content_idx=content_idx,
+                **({"scan_attachments": True} if scan_attachments else {}),
+            )
 
         if scan_only_tool_results:
-            return EMPTY_EXTRACTED_INPUT
+            if not scan_attachments:
+                return EMPTY_EXTRACTED_INPUT
+            return ExtractedInput(
+                scanned=(),
+                images=(),
+                files=cls._scoped_out_block_file_refs(content_item),
+            )
 
         text_str: Final[str | None] = content_item.get("text")
         return ExtractedInput(
             scanned=(
                 () if text_str is None else (ScannedText(text_str, ContentBlockTextTarget(msg_idx, content_idx)),)
             ),
-            images=cls._image_sources(content_item) if content_item.get("type") == "image" else (),
+            images=(
+                cls._image_sources(content_item, **({"scan_attachments": True} if scan_attachments else {}))
+                if content_item.get("type") == "image"
+                else ()
+            ),
+            files=(
+                cls._document_sources(content_item)
+                if scan_attachments and content_item.get("type") == "document"
+                else ()
+            ),
         )
 
     @classmethod
@@ -1019,6 +1084,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         content_item: Mapping[str, object],
         msg_idx: int,
         content_idx: int,
+        scan_attachments: bool = False,
     ) -> ExtractedInput:
         tool_result_content: Final = content_item.get("content")
 
@@ -1040,17 +1106,54 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if isinstance(block.get("text"), str)
             ),
             images=tuple(
-                image for _, block in blocks if block.get("type") == "image" for image in cls._image_sources(block)
+                chain.from_iterable(
+                    cls._image_sources(block, **({"scan_attachments": True} if scan_attachments else {}))
+                    for _, block in blocks
+                    if block.get("type") == "image"
+                )
+            ),
+            files=tuple(
+                chain.from_iterable(
+                    cls._document_sources(block)
+                    for _, block in blocks
+                    if scan_attachments and block.get("type") == "document"
+                )
+            ),
+        )
+
+    @classmethod
+    def _scoped_out_block_file_refs(cls, block: Mapping[str, object]) -> tuple[str, ...]:
+        block_type: Final = block.get("type")
+        if block_type == "document":
+            return cls._document_sources(block)
+        if block_type == "image":
+            return tuple(ref for ref in cls._image_sources(block, scan_attachments=True) if not ref.startswith("data:"))
+        return ()
+
+    @classmethod
+    def _scoped_out_container_attachments(cls, container: Mapping[str, object]) -> ExtractedInput:
+        inner: Final = container.get("content")
+        return ExtractedInput(
+            scanned=(),
+            images=(),
+            files=(
+                tuple(
+                    chain.from_iterable(
+                        cls._scoped_out_block_file_refs(block) for block in inner if isinstance(block, dict)
+                    )
+                )
+                if isinstance(inner, list)
+                else ()
             ),
         )
 
     @staticmethod
-    def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
+    def _image_sources(block: Mapping[str, object], scan_attachments: bool = False) -> tuple[str, ...]:
         """Normalize an Anthropic image block into strings a guardrail can read.
 
         base64 becomes a data URI so the format travels with the payload, which is what
-        the OpenAI path already puts in this field. A file source yields nothing: those
-        bytes live behind the Files API and this extractor has no client to fetch them.
+        the OpenAI path already puts in this field. url and file sources yield their
+        reference string so the guardrail can refuse them rather than drop them.
         """
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
@@ -1060,6 +1163,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         if source_type == "url":
             url: Final = source.get("url")
             return (url,) if isinstance(url, str) and url else ()
+        if source_type == "file":
+            if not scan_attachments:
+                return ()
+            file_id: Final = source.get("file_id")
+            return (file_id,) if isinstance(file_id, str) and file_id else ()
 
         data: Final = source.get("data")
         if not isinstance(data, str) or not data:
@@ -1068,6 +1176,37 @@ class AnthropicMessagesHandler(BaseTranslation):
         if isinstance(media_type, str) and media_type:
             return (f"data:{media_type};base64,{data}",)
         return (data,)
+
+    @staticmethod
+    def _document_sources(block: Mapping[str, object]) -> tuple[str, ...]:
+        """Normalize an Anthropic document block into a single reference string.
+
+        The string is only used to prove an unscannable attachment reached the model,
+        so every source shape yields exactly one entry.
+        """
+        source: Final = block.get("source")
+        if not isinstance(source, Mapping):
+            return ("document",)
+
+        source_type: Final = source.get("type")
+        if source_type == "url":
+            url: Final = source.get("url")
+            return (url,) if isinstance(url, str) and url else ("document",)
+        if source_type == "file":
+            file_id: Final = source.get("file_id")
+            return (file_id,) if isinstance(file_id, str) and file_id else ("document",)
+
+        data: Final = source.get("data")
+        if not isinstance(data, str) or not data:
+            return ("document",)
+        media_type: Final = source.get("media_type")
+        if source_type == "text":
+            text_media_type: Final = media_type if isinstance(media_type, str) and media_type else "text/plain"
+            return (f"data:{text_media_type},{data}",)
+        base64_media_type: Final = (
+            media_type if isinstance(media_type, str) and media_type else "application/octet-stream"
+        )
+        return (f"data:{base64_media_type};base64,{data}",)
 
     async def _apply_guardrail_responses_to_input(
         self,
