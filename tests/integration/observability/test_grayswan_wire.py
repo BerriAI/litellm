@@ -106,7 +106,7 @@ def _grayswan_config(
     return path
 
 
-def _vendor(violation: float = 0.0):
+def _vendor(violation: float = 0.0) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/cygnal/monitor", request.target
@@ -125,7 +125,7 @@ def _serving_model_probe(respond: Callable[[Request], Reply]) -> Callable[[Reque
     return wrapped
 
 
-def _chat_provider(message: dict[str, JsonValue]):
+def _chat_provider(message: dict[str, JsonValue]) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert request.target == "/chat/completions", request.target
         return Reply(
@@ -577,7 +577,7 @@ def test_post_call_multi_choice_texts_and_tool_calls_stay_split(gateway: Gateway
             ], body
 
 
-def _chat_stream_provider(chunks: int):
+def _chat_stream_provider(chunks: int) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert request.target == "/chat/completions", request.target
         frames: Final = tuple(

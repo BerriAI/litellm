@@ -248,7 +248,7 @@ async def test_run_guardrail_posts_payload(monkeypatch, grayswan_guardrail: Gray
 
     def fake_process(
         response_json: dict,
-        data: dict | None = None,
+        data: dict[str, object] | None = None,
         hook_type: GuardrailEventHooks | None = None,
     ) -> None:
         captured["response"] = response_json
@@ -598,11 +598,13 @@ def test_ensure_litellm_metadata_noop_when_already_present() -> None:
 
 
 class _CapturingClient:
-    def __init__(self, payload: dict[str, float] | None = None):
+    def __init__(self, payload: dict[str, float] | None = None) -> None:
         self.payload = payload or {"violation": 0.0}
         self.calls: tuple[Mapping[str, object], ...] = ()
 
-    async def post(self, *, url: str, headers: dict, json: dict, timeout: float):
+    async def post(
+        self, *, url: str, headers: Mapping[str, str], json: Mapping[str, object], timeout: float
+    ) -> _DummyResponse:
         self.calls = (
             *self.calls,
             MappingProxyType({"url": url, "headers": headers, "json": json, "timeout": timeout}),
@@ -611,7 +613,7 @@ class _CapturingClient:
 
 
 class _LoggingObj:
-    def __init__(self, call_type):
+    def __init__(self, call_type: str | None) -> None:
         self.call_type = call_type
 
 
