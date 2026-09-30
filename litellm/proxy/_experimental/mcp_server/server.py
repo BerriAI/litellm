@@ -1581,21 +1581,6 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
 
-    async def _key_granted_single_server(
-        server: MCPServer,
-        mcp_servers: Sequence[str] | None,
-        user_api_key_auth: UserAPIKeyAuth | None,
-        client_ip: str | None,
-    ) -> bool:
-        """Sign-in challenges are issued only on a single-server connect the key's grant admits, so a key
-        without access gets the grant's 403 instead of a sign-in it could not use."""
-        if mcp_servers is None or len(mcp_servers) != 1:
-            return False
-        allowed: Final = await operations._get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
-        )
-        return any(granted.server_id == server.server_id for granted in allowed)
-
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
         mcp_servers: list[str] | None,
@@ -1716,7 +1701,9 @@ if MCP_AVAILABLE:
 
             # Caller sign-in: challenge at connect because a tool-call-time 401 is wrapped into a
             # JSON-RPC error and the WWW-Authenticate header is lost. OBO keeps its connect gate;
-            # guardrail-only gates fire only on a single-server connect the key's grant admits.
+            # guardrail-only gates fire only on a single-server connect the key's grant admits, so a
+            # key without access gets the grant's 403 instead of a sign-in it could not use. The one
+            # admission lookup below serves the challenge, the sign-in preflight and the exchange.
             sign_in = caller_sign_in_for(server, user_api_key_auth) if server is not None else None
             subject_token = (
                 operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
@@ -1725,15 +1712,20 @@ if MCP_AVAILABLE:
                 if server is not None
                 else None
             )
-            if (
-                server
-                and sign_in is not None
-                and subject_token is None
-                and (
-                    (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
-                    or await _key_granted_single_server(server, mcp_servers, user_api_key_auth, client_ip)
+            obo_without_subject = (
+                server is not None and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers
+            )
+            allowed_single = (
+                await operations._get_allowed_mcp_servers(
+                    user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
                 )
-            ):
+                if server and not obo_without_subject and mcp_servers is not None and len(mcp_servers) == 1
+                else ()
+            )
+            granted_single = server is not None and any(
+                allowed.server_id == server.server_id for allowed in allowed_single
+            )
+            if server and sign_in is not None and subject_token is None and (obo_without_subject or granted_single):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
@@ -1742,19 +1734,7 @@ if MCP_AVAILABLE:
                 )
 
                 raise_token_exchange_challenge(server, root_path=get_request_root_path(), connected_as=server_name)
-            allowed_single = (
-                await operations._get_allowed_mcp_servers(
-                    user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
-                )
-                if server and mcp_servers is not None and len(mcp_servers) == 1
-                else ()
-            )
-            if (
-                server
-                and sign_in is not None
-                and subject_token is not None
-                and any(allowed.server_id == server.server_id for allowed in allowed_single)
-            ):
+            if server and sign_in is not None and subject_token is not None and granted_single:
                 from litellm.proxy._experimental.mcp_server.caller_sign_in import (  # noqa: PLC0415  # lazy: provider discovery pulls the guardrail registry
                     preflight_caller_sign_in,
                 )
@@ -1777,11 +1757,7 @@ if MCP_AVAILABLE:
             # and what each mints from. Gated to single-server routes the key may reach; the
             # multi-server aggregate keeps absorbing per-server auth failures so one bad server
             # cannot 401 the whole connect.
-            if (
-                server
-                and len(mcp_servers or []) == 1
-                and server.server_id in frozenset(allowed.server_id for allowed in allowed_single)
-            ):
+            if server and granted_single:
                 await operations.global_mcp_server_manager.preflight_token_exchange(
                     server=server,
                     oauth2_headers=oauth2_headers,
