@@ -120,7 +120,9 @@ class TestJwtAutoRegisterMapExistingKey:
     ) -> None:
         identity: Final = _identity_with_user(idp, client, resources)
         existing_key: Final = client.proxy.generate_key(
-            KeyGenerateBody(user_id=identity.user_id, key_alias=f"e2e-jwt-existing-{unique_marker()}")
+            KeyGenerateBody(
+                user_id=identity.user_id, team_id=identity.group, key_alias=f"e2e-jwt-existing-{unique_marker()}"
+            )
         )
         resources.defer(lambda: client.proxy.delete_key(existing_key))
 
