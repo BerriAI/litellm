@@ -72,6 +72,18 @@ async def test_read_raw_json_body_is_none_for_form_bodies():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ["application/x-protobuf", "application/protobuf; charset=binary"])
+async def test_protobuf_body_is_not_parsed_as_json(content_type):
+    # OTLP trace exports (POST /v1/traces) are binary protobuf; arbitrary bytes like these
+    # used to hit the JSON surrogate-repair path and fail auth with a 400.
+    body = b"\n\xa2\x01\n\x1c\n\x0cservice.name\x12\x0c\n\nswarm\xed\xa0\x80\xff"
+    request = _starlette_request(body, content_type)
+
+    assert await _read_request_body(request) == {}
+    assert await request.body() == body  # body is still readable by the endpoint
+
+
+@pytest.mark.asyncio
 async def test_read_raw_json_body_is_none_for_a_request_that_only_mocks_the_parsed_body_path():
     mock_request = MagicMock()
 

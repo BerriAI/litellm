@@ -25,7 +25,7 @@ async fn schema_supports_span_rollups_and_spend_joins() -> Result<(), Box<dyn st
         container.get_host_port_ipv4(8123).await?
     );
     let client = Client::no_redirect_for_test();
-    let writer = Connection::writer(&url, "default", "")?;
+    let writer = Connection::writer(&url)?;
     ensure_schema(&client, &writer, "trace_test", 7, 14).await?;
     ensure_schema(&client, &writer, "trace_test", 7, 14).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
