@@ -1,6 +1,13 @@
 import os
+import re
 from unittest.mock import patch
+
 import pytest
+
+import litellm
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_DIR
+
+LEGACY_DATA_DIR = "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter"
 
 
 class TestContentFilterPathTraversal:
@@ -25,20 +32,35 @@ class TestContentFilterPathTraversal:
 
     def test_valid_category_file_inside_categories_dir_allowed(self):
         guardrail = self._get_guardrail()
-        categories_dir = os.path.join(
-            os.path.dirname(
-                __import__(
-                    "litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter",
-                    fromlist=["content_filter"],
-                ).__file__
-            ),
-            "categories",
-        )
-        valid_file = os.path.join(categories_dir, "harmful_self_harm.yaml")
+        valid_file = os.path.join(CATEGORIES_DIR, "harmful_self_harm.yaml")
         if not os.path.exists(valid_file):
             pytest.skip("harmful_self_harm.yaml not present in this environment")
         result = guardrail._resolve_category_file_path(valid_file)
         assert result == valid_file
+
+    @pytest.mark.parametrize(
+        "legacy_path",
+        [
+            f"{LEGACY_DATA_DIR}/policy_templates/eu_ai_act_article5.yaml",
+            f"{LEGACY_DATA_DIR}/categories/harmful_self_harm.yaml",
+        ],
+    )
+    def test_paths_recorded_before_the_data_move_still_resolve(self, legacy_path, monkeypatch, tmp_path):
+        """Policies saved by older releases point at the old package-internal folders."""
+        monkeypatch.chdir(tmp_path)
+        resolved = self._get_guardrail()._resolve_category_file_path(legacy_path)
+        assert os.path.isfile(resolved)
+        assert os.path.realpath(resolved) == os.path.realpath(os.path.join(DATA_DIR, *legacy_path.split("/")[-2:]))
+
+    def test_every_category_file_published_in_policy_templates_resolves(self, monkeypatch, tmp_path):
+        """The proxy fetches policy_templates.json from main, so every path in it must exist in the package."""
+        monkeypatch.chdir(tmp_path)
+        published = os.path.join(os.path.dirname(os.path.dirname(litellm.__file__)), "policy_templates.json")
+        category_files = re.findall(r'"category_file":\s*"([^"]+)"', open(published).read())
+        assert category_files
+        guardrail = self._get_guardrail()
+        missing = [p for p in category_files if not os.path.isfile(guardrail._resolve_category_file_path(p))]
+        assert missing == []
 
     def test_invalid_category_name_skipped(self):
         from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -76,18 +98,9 @@ class TestContentFilterPathTraversal:
             ContentFilterGuardrail,
         )
 
-        categories_dir = os.path.join(
-            os.path.dirname(
-                __import__(
-                    "litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter",
-                    fromlist=["content_filter"],
-                ).__file__
-            ),
-            "categories",
-        )
         with pytest.raises(ValueError, match="outside the allowed categories"):
             ContentFilterGuardrail._assert_within_categories_dir(
-                "/etc/passwd", categories_dir
+                "/etc/passwd", CATEGORIES_DIR
             )
 
     def test_assert_within_categories_dir_allows_valid_file(self, tmp_path):
@@ -121,17 +134,8 @@ class TestContentFilterPathTraversal:
     def test_resolve_category_file_path_direct_join_hit(self):
         """Cover the first-join-attempt success branch (lines 383-384)."""
         guardrail = self._get_guardrail()
-        # "categories/<file>" joined directly to module_dir resolves to an existing file.
-        categories_dir = os.path.join(
-            os.path.dirname(
-                __import__(
-                    "litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter",
-                    fromlist=["content_filter"],
-                ).__file__
-            ),
-            "categories",
-        )
-        yaml_files = [f for f in os.listdir(categories_dir) if f.endswith(".yaml")]
+        # "categories/<file>" joined directly to the data dir resolves to an existing file.
+        yaml_files = [f for f in os.listdir(CATEGORIES_DIR) if f.endswith(".yaml")]
         if not yaml_files:
             pytest.skip("No category YAML files present in this environment")
         relative_path = os.path.join("categories", yaml_files[0])
@@ -141,16 +145,7 @@ class TestContentFilterPathTraversal:
     def test_resolve_category_file_path_component_strip_hit(self):
         """Cover the component-stripping loop success branch (lines 392-393)."""
         guardrail = self._get_guardrail()
-        categories_dir = os.path.join(
-            os.path.dirname(
-                __import__(
-                    "litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter",
-                    fromlist=["content_filter"],
-                ).__file__
-            ),
-            "categories",
-        )
-        yaml_files = [f for f in os.listdir(categories_dir) if f.endswith(".yaml")]
+        yaml_files = [f for f in os.listdir(CATEGORIES_DIR) if f.endswith(".yaml")]
         if not yaml_files:
             pytest.skip("No category YAML files present in this environment")
         # Prefix with a fake leading component so the first-join attempt misses,

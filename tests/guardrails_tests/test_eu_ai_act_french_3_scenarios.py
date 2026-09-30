@@ -11,6 +11,7 @@ import os
 import pytest
 
 import litellm
+from litellm.proxy.guardrails.content_filter_data import POLICY_TEMPLATES_DIR
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
@@ -25,14 +26,7 @@ def content_filter_guardrail():
     """Initialize content filter guardrail with EU AI Act Article 5 French template."""
 
     # Get absolute path to the French policy template
-    content_filter_dir = os.path.join(
-        os.path.dirname(__file__),
-        "../../litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter",
-    )
-    policy_template_path = os.path.join(
-        content_filter_dir, "policy_templates/eu_ai_act_article5_fr.yaml"
-    )
-    policy_template_path = os.path.abspath(policy_template_path)
+    policy_template_path = os.path.join(POLICY_TEMPLATES_DIR, "eu_ai_act_article5_fr.yaml")
 
     # Load the EU AI Act Article 5 French policy template
     categories = [

@@ -28,6 +28,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_DIR
 from litellm.types.utils import (
     CallTypes,
     Function,
@@ -387,13 +388,15 @@ class ContentFilterGuardrail(CustomGuardrail):
         relative paths like "litellm/proxy/.../policy_templates/file.yaml".
         These only work when the CWD is the project root. In production
         (Docker, installed packages, etc.) the CWD is different, so the
-        file isn't found.
+        file isn't found. Paths recorded before the data moved out of the
+        guardrail package still resolve because only the trailing
+        ``policy_templates/<file>`` or ``categories/<file>`` suffix has to match.
 
         Resolution order:
-        1. Return as-is if absolute or already exists (jailed to module dir).
-        2. Try joining the full path relative to this module's directory (jailed).
+        1. Return as-is if absolute or already exists (jailed to the data dir).
+        2. Try joining the full path relative to the data directory (jailed).
         3. Progressively strip leading path components and try each suffix
-           relative to this module's directory (jailed).
+           relative to the data directory (jailed).
 
         The directory jail can be disabled for deployments that legitimately
         store category files outside the package (e.g. mounted volumes) by
@@ -410,10 +413,10 @@ class ContentFilterGuardrail(CustomGuardrail):
             resolution fails (caller should check existence).
 
         Raises:
-            ValueError: If the resolved path escapes the module directory
+            ValueError: If the resolved path escapes the data directory
                 and ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS`` is not set.
         """
-        module_dir: Final = os.path.dirname(__file__)
+        module_dir: Final = DATA_DIR
         allow_external: Final = os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower() == "true"
 
         if os.path.isabs(file_path) or os.path.exists(file_path):
@@ -463,7 +466,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                   severity_threshold: "medium"
                   category_file: "/path/to/custom_file.yaml"  # optional override
         """
-        categories_dir: Final = os.path.join(os.path.dirname(__file__), "categories")
+        categories_dir: Final = CATEGORIES_DIR
 
         for cat_config in categories:
             view = self._category_config_view(cat_config)

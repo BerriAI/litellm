@@ -12,6 +12,8 @@ from enum import Enum
 from re import Pattern
 from typing import Any, Final
 
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR
+
 
 def _load_patterns_from_json() -> dict:
     """Load pattern definitions from patterns.json file"""
@@ -136,7 +138,7 @@ def get_available_content_categories() -> list[dict[str, str]]:
     """
     import yaml
 
-    categories_dir: Final = os.path.join(os.path.dirname(__file__), "categories")
+    categories_dir: Final = CATEGORIES_DIR
     available_categories: Final = []
 
     if not os.path.exists(categories_dir):

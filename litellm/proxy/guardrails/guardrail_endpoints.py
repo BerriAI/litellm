@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.path_utils import safe_join
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     await_with_timeout,
@@ -1455,13 +1456,7 @@ async def get_category_yaml(category_name: str):
     Returns:
         The raw YAML or JSON content of the category file with file type indicator
     """
-    # Get the categories directory path
-    categories_dir: Final = os.path.join(
-        os.path.dirname(__file__),
-        "guardrail_hooks",
-        "litellm_content_filter",
-        "categories",
-    )
+    categories_dir: Final = CATEGORIES_DIR
 
     # Try to find the file with either .yaml or .json extension
     try:
