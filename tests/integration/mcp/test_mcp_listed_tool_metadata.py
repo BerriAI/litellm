@@ -167,3 +167,28 @@ def test_openapi_call_is_evaluated_against_the_masked_override_the_listing_serve
         assert seen == "Fetch one [MASKED] pet", "the OpenAPI call path must hand hooks the entry the listing served"
         assert parameters is not None and "petId" in parameters.get("properties", {}), parameters
         assert not [call for call in peer.drain() if call["path"].startswith("/pets")], "blocked before upstream"
+
+
+def test_openapi_call_is_evaluated_against_the_entry_this_key_was_listed_not_the_last_listing(
+    rig: Gateway,
+) -> None:
+    with openapi_peer() as peer, rig.scenario() as scenario:
+        alias: Final = "pets" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario, peer, alias, tool_name_to_description={"getpet": "Fetch one SECRET pet"}
+        )
+        guarded: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        opted_out: Final = scenario.key(
+            object_permission={"mcp_servers": [identity]}, metadata={"disable_global_guardrails": True}
+        )
+        guarded_served: Final = listed_tools(rig, guarded, identity)
+        opted_out_served: Final = listed_tools(rig, opted_out, identity)
+        name: Final = next(full for full in guarded_served if full.endswith("getpet"))
+        assert (guarded_served[name]["description"], opted_out_served[name]["description"]) == (
+            "Fetch one [MASKED] pet",
+            "Fetch one SECRET pet",
+        ), (guarded_served[name], opted_out_served[name])
+        seen, _ = _probe(McpCaller(rig, guarded, "rest"), name, identity)
+        assert seen == "Fetch one [MASKED] pet", (
+            "the guarded key must be evaluated against its own listing, not the opted-out key's later one"
+        )

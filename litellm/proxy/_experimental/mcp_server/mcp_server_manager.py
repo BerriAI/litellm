@@ -1203,6 +1203,23 @@ def _server_auth_header_for(
     return mcp_auth_header if server_specific is None else server_specific
 
 
+def listed_tools_caller_for(
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_auth_header: str | dict[str, str] | None,
+    mcp_server_auth_headers: Mapping[str, str | dict[str, str]] | None,
+    raw_headers: Mapping[str, str] | None,
+    oauth2_headers: Mapping[str, str] | None,
+) -> ListedToolsCaller:
+    """The caller a tools/call must look its listed entry up under: the same inputs tools/list keyed by."""
+    return ListedToolsCaller(
+        user_api_key_auth=user_api_key_auth,
+        mcp_auth_header=_server_auth_header_for(server, mcp_server_auth_headers, mcp_auth_header),
+        raw_headers=raw_headers,
+        oauth2_headers=oauth2_headers,
+    )
+
+
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
     """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection.
 
@@ -4638,15 +4655,15 @@ class MCPServerManager:
         invalidate_oauth_metadata_cache(server_id)
 
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
-        """Key the listed-tool cache by every request input that can change the upstream catalog.
+        """Key the listed-tool cache by every request input that can change the served catalog.
 
-        Forwarded headers, header-driven stdio env, the caller bearer (forwarded as-is or
-        exchanged as the OBO subject), the server-specific auth header, and the per-caller JWT
-        MCPJWTSigner mints for tools/list all reach upstream, so two callers differing in any of
-        them may be shown different tools. Shared servers with none of those stay on the shared
-        (``None``) slot. OpenAPI servers list from the process-wide registry.
+        The catalog is guardrail-shaped for the caller's own key (default-on guardrails, key or team
+        selections and opt-outs), so every keyed caller gets its own slot, on OpenAPI servers too.
+        Forwarded headers, header-driven stdio env, the caller bearer (forwarded as-is or exchanged as
+        the OBO subject) and the server-specific auth header also reach upstream and split the slot
+        further. Only unkeyed listings with none of those share the ``None`` slot.
         """
-        if server.spec_path or caller is None:
+        if caller is None:
             return None
         auth: Final = caller.user_api_key_auth
         forwarded: Final = self._forwarded_header_values(server, caller.raw_headers) or None
@@ -4664,19 +4681,9 @@ class MCPServerManager:
             forwarded,
             stdio_env,
             caller_bearer,
-            per_caller=self._signs_caller_identity_upstream(server),
+            per_caller=auth is not None,
         )
         return digest
-
-    @staticmethod
-    def _signs_caller_identity_upstream(server: MCPServer) -> bool:
-        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (  # noqa: PLC0415  # lazy: guardrail package imports the proxy server
-            get_mcp_jwt_signer,
-        )
-
-        if get_mcp_jwt_signer() is None:
-            return False
-        return server.static_headers is None or not any(k.lower() == "authorization" for k in server.static_headers)
 
     @staticmethod
     def _forwarded_header_values(
@@ -6633,11 +6640,8 @@ class MCPServerManager:
             user_api_key_auth,
             mcp_auth_header,
         )
-        listed_caller: Final = ListedToolsCaller(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=_server_auth_header_for(mcp_server, mcp_server_auth_headers, mcp_auth_header),
-            raw_headers=raw_headers,
-            oauth2_headers=oauth2_headers,
+        listed_caller: Final = listed_tools_caller_for(
+            mcp_server, user_api_key_auth, mcp_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers
         )
 
         #########################################################

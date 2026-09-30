@@ -81,12 +81,14 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    ListedToolsCaller,
     MCPServerManager,
     _caller_authorization_fans_out,
     _client_forwarded_authorization_headers,
     _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
     global_mcp_server_manager,
+    listed_tools_caller_for,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
@@ -1607,10 +1609,12 @@ async def _list_mcp_resource_templates(
     return managed_resource_templates
 
 
-def _registered_tool_metadata(name: str, registered: RegisteredTool, server: MCPServer) -> MCPTool:
-    """The tool as ``tools/list`` served it (pinned, overridden, guardrail-masked) when a listing was
-    recorded for ``server``, else the registry entry with the admin description override applied."""
-    listed: Final = global_mcp_server_manager.get_listed_tool(server, name)
+def _registered_tool_metadata(
+    name: str, registered: RegisteredTool, server: MCPServer, caller: ListedToolsCaller
+) -> MCPTool:
+    """The tool as ``tools/list`` served it to this caller (pinned, overridden, guardrail-masked) when a
+    listing was recorded, else the registry entry with the admin description override applied."""
+    listed: Final = global_mcp_server_manager.get_listed_tool(server, name, caller)
     if listed is not None:
         return listed
     overrides: Final = server.tool_name_to_description
@@ -2087,7 +2091,14 @@ async def _execute_mcp_tool(
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
-            tool=_registered_tool_metadata(original_tool_name, local_tool, mcp_server),
+            tool=_registered_tool_metadata(
+                original_tool_name,
+                local_tool,
+                mcp_server,
+                listed_tools_caller_for(
+                    mcp_server, user_api_key_auth, mcp_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers
+                ),
+            ),
         )
         # `pre_call_tool_check` may return guardrail-modified
         # arguments; honor them on the local path too.
@@ -2199,7 +2210,19 @@ async def _execute_mcp_tool(
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
                 guardrail_context=guardrail_context,
-                tool=_registered_tool_metadata(original_tool_name, registered_local_tool, prefix_server),
+                tool=_registered_tool_metadata(
+                    original_tool_name,
+                    registered_local_tool,
+                    prefix_server,
+                    listed_tools_caller_for(
+                        prefix_server,
+                        user_api_key_auth,
+                        mcp_auth_header,
+                        mcp_server_auth_headers,
+                        raw_headers,
+                        oauth2_headers,
+                    ),
+                ),
             )
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args

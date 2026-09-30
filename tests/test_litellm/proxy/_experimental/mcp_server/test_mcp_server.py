@@ -30,6 +30,7 @@ from pydantic import TypeAdapter
 from starlette.types import Message, Receive, Scope, Send
 
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPTransport,
@@ -8179,8 +8180,11 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_guarded_catalog_entry_cl
         handler=lambda petId: "ok",
     )
     manager = mcp_module.global_mcp_server_manager
+    alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
     manager._record_listed_tools(
-        petstore, [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=pinned_schema)], None
+        petstore,
+        [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=pinned_schema)],
+        ListedToolsCaller(user_api_key_auth=alice),
     )
     pre_call_tool_check = AsyncMock(return_value={})
 
@@ -8194,7 +8198,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_guarded_catalog_entry_cl
                 arguments={"petId": 1},
                 allowed_mcp_servers=[petstore],
                 start_time=datetime.now(),
-                user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"),
+                user_api_key_auth=alice,
             )
     finally:
         mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
@@ -8203,6 +8207,62 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_guarded_catalog_entry_cl
     handed_tool = pre_call_tool_check.call_args.kwargs["tool"]
     assert (handed_tool.description, handed_tool.input_schema) == ("Find a [MASKED] pet", pinned_schema), (
         "the pre-call policy must evaluate the entry tools/list served, not the raw registry entry"
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_openapi_hooks_each_callers_own_listed_entry():
+    """Two keys can be shown differently guarded OpenAPI catalogs. The call path must evaluate each key
+    against the entry its own tools/list served, not the entry the most recent listing left behind."""
+    from litellm.proxy._experimental.mcp_server import operations as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+    )
+    schema = {"type": "object", "properties": {"petId": {"type": "integer"}}}
+    mcp_module.global_mcp_tool_registry.register_tool(
+        name="petstore-getpetbyid", description="Find a SECRET pet", input_schema=schema, handler=lambda petId: "ok"
+    )
+    manager = mcp_module.global_mcp_server_manager
+    guarded = UserAPIKeyAuth(api_key="sk-guarded", user_id="alice")
+    opted_out = UserAPIKeyAuth(api_key="sk-opted-out", user_id="bob")
+    manager._record_listed_tools(
+        petstore,
+        [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=schema)],
+        ListedToolsCaller(user_api_key_auth=guarded),
+    )
+    manager._record_listed_tools(
+        petstore,
+        [MCPTool(name="getpetbyid", description="Find a SECRET pet", inputSchema=schema)],
+        ListedToolsCaller(user_api_key_auth=opted_out),
+    )
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            for caller in (guarded, opted_out):
+                await mcp_module.execute_mcp_tool(
+                    name="petstore-getpetbyid",
+                    arguments={"petId": 1},
+                    allowed_mcp_servers=[petstore],
+                    start_time=datetime.now(),
+                    user_api_key_auth=caller,
+                )
+    finally:
+        mcp_module.global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
+        manager._listed_tools_by_server_id.pop(petstore.server_id, None)
+
+    handed = [call.kwargs["tool"].description for call in pre_call_tool_check.call_args_list]
+    assert handed == ["Find a [MASKED] pet", "Find a SECRET pet"], (
+        "each key's tools/call must be evaluated against the OpenAPI entry its own listing served"
     )
 
 
