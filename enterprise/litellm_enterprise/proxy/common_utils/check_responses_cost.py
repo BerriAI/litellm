@@ -1,26 +1,50 @@
 """
 Polls LiteLLM_ManagedObjectTable to check if the response is complete.
-Cost tracking is handled automatically by the get-responses call.
+Cost tracking is handled by the get-responses call, which prices normally only because the
+poll stamps itself with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN; user-facing reads of the
+same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Optional, cast
+from typing import TYPE_CHECKING, Dict, Final, Optional, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.prisma_protocols import TableActions
     from litellm.router import Router
 
 TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
+
+
+class _ManagedObjectRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def unified_object_id(self) -> str: ...
+
+    @property
+    def created_by(self) -> str | None: ...
+
+    @property
+    def file_object(self) -> object: ...
+
+
+def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
+    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
+    return table
 
 
 class CheckResponsesCost:
@@ -113,7 +137,8 @@ class CheckResponsesCost:
         Check if background responses are complete and track their cost.
         - Get all status="queued" or "in_progress" and file_purpose="response" jobs
         - Query the provider to check if response is complete
-        - Cost is automatically tracked by the get-responses call
+        - Cost is tracked by the get-responses call, billed because the poll is stamped
+          with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
         - Mark responses in a terminal state as complete in the database
         """
         try:
@@ -123,7 +148,7 @@ class CheckResponsesCost:
                 f"CheckResponsesCost: stale cleanup failed (poll will continue): {cleanup_err}"
             )
 
-        jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+        jobs = await _managed_object_table(self.prisma_client).find_many(
             where={
                 "status": {"in": ["queued", "in_progress"]},
                 "file_purpose": "response",
@@ -133,7 +158,7 @@ class CheckResponsesCost:
         )
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
-        completed_jobs = []
+        completed_jobs: Final[list[_ManagedObjectRow]] = []
 
         for job in jobs:
             unified_object_id = job.unified_object_id
@@ -153,6 +178,7 @@ class CheckResponsesCost:
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
+                    INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                 }
                 
                 # Add model information if available
@@ -183,7 +209,7 @@ class CheckResponsesCost:
 
         # Mark completed jobs in the database
         if len(completed_jobs) > 0:
-            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            await _managed_object_table(self.prisma_client).update_many(
                 where={"id": {"in": [job.id for job in completed_jobs]}},
                 data={"status": "completed"},
             )

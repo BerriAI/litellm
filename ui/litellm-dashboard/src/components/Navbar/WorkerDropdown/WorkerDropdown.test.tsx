@@ -156,7 +156,7 @@ describe("WorkerDropdown", () => {
     });
 
     await user.clear(screen.getByRole("combobox"));
-    await user.type(screen.getByRole("combobox"), "worker 3");
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "worker 3" } });
 
     await waitFor(() => {
       expect(screen.queryByText("Worker 1")).not.toBeInTheDocument();

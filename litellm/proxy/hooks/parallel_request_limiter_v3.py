@@ -6,12 +6,16 @@ This is currently in development and not yet ready for production.
 
 import asyncio
 import binascii
+import itertools
+import logging
 import os
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,17 +26,31 @@ from typing import (
     TypedDict,
 )
 
+from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
+from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
+from typing_extensions import NotRequired, ReadOnly
+
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import (
+    BatchResult,
+    RegisteredScript,
+    active_post_call_redis_batch,
+    active_request_redis_batch,
+)
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     ESTIMATED_OUTPUT_TOKENS_FIELD,
     get_estimated_output_tokens,
+    get_key_own_model_rate_limit,
     get_key_tag_rpm_limit,
     get_model_rate_limit_from_metadata,
 )
@@ -42,13 +60,26 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.batch_enqueued_tokens import (
+    BATCH_ENQUEUED_REFUND_STATUSES,
+    BatchEnqueuedTokenReservation,
+    BatchEnqueuedTokenStore,
+    batch_response_view,
+    canonical_provider_batch_id,
+)
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.router_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+    response_has_hidden_params,
+)
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
     ModelResponse,
+    RerankResponse,
     TextCompletionResponse,
     Usage,
 )
@@ -66,6 +97,73 @@ else:
     Span = Any
     InternalUsageCache = Any
 
+
+_REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitedModel:
+    requested: str
+    group: str
+
+    def limit_in(self, limits: Mapping[str, int] | None) -> int | None:
+        if limits is None:
+            return None
+        requested_limit: Final = limits.get(self.requested)
+        return requested_limit if requested_limit is not None else limits.get(self.group)
+
+
+def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    return resolve_model_group_alias(llm_router.model_group_alias, model)
+
+
+FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"
+RATE_LIMIT_UNVERIFIABLE_MESSAGE: Final = (
+    "Rate limit enforcement unavailable: request counters could not be verified against Redis, and "
+    "fail_closed_rate_limit_enforcement is enabled, so the request was rejected to avoid exceeding the "
+    "configured rate limit. Retry shortly."
+)
+
+
+class RateLimitUnverifiableError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE},
+        )
+
+
+_FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
+
+
+def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING)
+    try:
+        return _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING,
+            raw_value,
+        )
+        return False
+
+
+def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return fail_closed_rate_limit_enforcement_enabled(general_settings)
+
+
+def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
+    prefix: Final = window_key.removesuffix(":window")
+    return f"{prefix}:requests", f"{prefix}:tokens"
+
+
 BATCH_RATE_LIMITER_SCRIPT: Final = """
 local results = {}
 local now = tonumber(ARGV[1])
@@ -81,6 +179,8 @@ for i = 1, #KEYS, 2 do
     local window_start = redis.call('GET', window_key)
     if not window_start or (now - tonumber(window_start)) >= window_size then
         -- Reset window and counter
+        local prefix = string.sub(window_key, 1, -(#':window') - 1)
+        redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment_value)
         redis.call('EXPIRE', window_key, window_size)
@@ -103,6 +203,8 @@ end
 return results
 """
 
+BATCH_COUNTER_READ_SCRIPT: Final = "return redis.call('MGET', unpack(KEYS))"
+
 CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
 -- Atomic check-and-increment-by-N across one or more descriptors.
 -- All-or-nothing: if any descriptor would exceed its limit, no counter is
@@ -120,11 +222,13 @@ CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
 --     ARGV[(i-1)*4 + 3] = ttl_seconds (counter TTL when window resets)
 --     ARGV[(i-1)*4 + 4] = window_size_seconds (sliding-window length)
 --
--- Return on success: { 0, new_counter_1, new_counter_2, ... }
+-- Return on success:
+--     { 0, new_counter_1, window_start_1, new_counter_2, window_start_2, ... }
 -- Return on over-limit: { 1, descriptor_index, current_counter, limit }
 local time_reply = redis.call('TIME')
 local now = tonumber(time_reply[1])
 local descriptor_count = #KEYS / 2
+local reset_windows = {}
 
 -- Pass 1: read state, validate. Abort without writing if any over limit.
 local descriptor_state = {}
@@ -157,7 +261,7 @@ for i = 1, descriptor_count do
         return { 1, i, current_counter, limit }
     end
 
-    descriptor_state[i] = { window_expired, current_counter }
+    descriptor_state[i] = { window_expired, current_counter, window_start }
 end
 
 -- Pass 2: all checks passed. Apply increments.
@@ -171,8 +275,15 @@ for i = 1, descriptor_count do
     local window_size = tonumber(ARGV[arg_base + 3])
 
     local window_expired = descriptor_state[i][1]
+    local active_window_start
 
     if window_expired then
+        active_window_start = now
+        if not reset_windows[window_key] then
+            local prefix = string.sub(window_key, 1, -(#':window') - 1)
+            redis.call('DEL', prefix .. ':requests', prefix .. ':tokens')
+            reset_windows[window_key] = true
+        end
         redis.call('SET', window_key, tostring(now))
         redis.call('SET', counter_key, increment)
         redis.call('EXPIRE', window_key, window_size)
@@ -181,6 +292,7 @@ for i = 1, descriptor_count do
         end
         table.insert(results, increment)
     else
+        active_window_start = tonumber(descriptor_state[i][3])
         local new_counter = redis.call('INCRBY', counter_key, increment)
         local current_ttl = redis.call('TTL', counter_key)
         if current_ttl == -1 and ttl > 0 then
@@ -188,8 +300,36 @@ for i = 1, descriptor_count do
         end
         table.insert(results, new_counter)
     end
+    table.insert(results, active_window_start)
 end
 
+return results
+"""
+
+WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT: Final = """
+local results = {}
+for i = 1, #KEYS, 2 do
+    local window_key = KEYS[i]
+    local counter_key = KEYS[i + 1]
+    local arg_base = ((i - 1) / 2) * 3 + 1
+    local expected_window_start = ARGV[arg_base]
+    local increment = tonumber(ARGV[arg_base + 1])
+    local ttl = tonumber(ARGV[arg_base + 2])
+    local active_window_start = redis.call('GET', window_key)
+
+    if active_window_start and active_window_start == expected_window_start then
+        local new_counter = redis.call('INCRBY', counter_key, increment)
+        local current_ttl = redis.call('TTL', counter_key)
+        if current_ttl == -1 and ttl > 0 then
+            redis.call('EXPIRE', counter_key, ttl)
+        end
+        table.insert(results, 1)
+        table.insert(results, new_counter)
+    else
+        table.insert(results, 0)
+        table.insert(results, tonumber(redis.call('GET', counter_key) or 0))
+    end
+end
 return results
 """
 
@@ -297,6 +437,38 @@ DEFAULT_CHARS_PER_TOKEN: Final = 4
 # (baseline floor) and to the smallest configured TPM limit (capped floor for
 # small per-tenant TPM caps).
 _TPM_FLOOR_FRACTION: Final = 4
+# Both embeddings and the Responses API put their prompt in data["input"],
+# but only embeddings have no output tokens. Every "is this an embedding"
+# check on data["input"] must exclude these call types, or a Responses call
+# gets misclassified as an embedding and skips output-token reservation/caps.
+RESPONSES_API_CALL_TYPES: Final = ("aresponses", "responses")
+EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
+TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
+RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
+GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
+    CallTypes.generate_content.value,
+    CallTypes.agenerate_content.value,
+    CallTypes.generate_content_stream.value,
+    CallTypes.agenerate_content_stream.value,
+)
+RESPONSES_API_MIN_OUTPUT_TOKENS: Final = 16
+# litellm.token_counter has no per-type handling for "input_audio" content
+# blocks (unlike images, which use use_default_image_token_count) -- it
+# silently contributes 0 tokens for them. When the block carries a base64
+# payload, the estimate is derived from the decoded byte count; when the
+# block is a reference without a payload (or the payload is missing), this
+# flat per-block floor is used instead.
+DEFAULT_AUDIO_TOKEN_ESTIMATE: Final = 300
+# Conservative bytes-per-token assumption for size-based audio estimation:
+# equivalent to 8 kHz mono PCM-16 (16 000 bytes/s) at 10 tokens/s. Choosing
+# the lowest reasonable bitrate means we never under-reserve for higher-
+# quality audio recorded at the same wall-clock duration.
+_AUDIO_BYTES_PER_TOKEN: Final = 1600
+# Descriptor "key" values for project-scoped ITPM/OTPM. Distinct from
+# "model_per_project" (the combined-TPM descriptor) so both can be enforced
+# on the same project+model simultaneously without colliding on cache keys.
+PROJECT_ITPM_DESCRIPTOR_KEY: Final = "model_per_project_itpm"
+PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
 # How long an acquired slot counts toward the in-flight total before it is
 # considered leaked (worker crashed without any release callback firing) and
 # pruned. Also the longest request duration the gauge can track: a request
@@ -308,7 +480,28 @@ CacheCounterValue: TypeAlias = int | float | str | bytes
 
 CacheCounterValues: TypeAlias = Sequence[CacheCounterValue | None]
 
+
+def _as_counter_values(reply: object) -> list[CacheCounterValue]:
+    """A Lua reply read back off the pipeline is the same array the script returns when called directly."""
+    if not isinstance(reply, (list, tuple)):
+        raise TypeError(f"rate limiter script reply is not a list: {type(reply).__name__}")
+    values: Final[list[CacheCounterValue]] = []  # mutable-ok: each element is narrowed before it is kept
+    for value in reply:  # pyright: ignore[reportUnknownVariableType]  # raw Redis reply
+        if not isinstance(value, (int, float, str, bytes)):
+            raise TypeError(f"rate limiter script reply holds {type(value).__name__}")  # pyright: ignore[reportUnknownArgumentType]  # raw Redis reply
+        values.append(value)
+    return values
+
+
+ReservationWindowIdentity: TypeAlias = tuple[str, str, Literal["redis", "local"]]
+
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
+
+
+class _AsyncLuaScript(Protocol):
+    """A Lua script registered against the async Redis client, called with KEYS and ARGV."""
+
+    def __call__(self, *, keys: Sequence[str], args: Sequence[object]) -> Awaitable[list[CacheCounterValue]]: ...
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -341,11 +534,25 @@ class RateLimitStatus(TypedDict):
     limit_remaining: int
     rate_limit_type: Literal["requests", "tokens", "max_parallel_requests"]
     descriptor_key: str
+    # Populated by the atomic_check_and_increment_by_n and windowed
+    # sliding-window paths. A caller matching a status back to its
+    # descriptor must key on (descriptor_key, descriptor_value) when this
+    # is present, not descriptor_key alone -- e.g. a batch charging several
+    # models' project ITPM/OTPM in one call, or a request carrying multiple
+    # rate-limited tags, produces statuses sharing the same descriptor_key.
+    descriptor_value: NotRequired[ReadOnly[str]]
 
 
 class RateLimitResponse(TypedDict):
     overall_code: str
     statuses: list[RateLimitStatus]
+    reservation_windows: NotRequired[ReadOnly[frozenset[tuple[str, str, Literal["redis", "local"]]]]]
+
+
+class ReservationAwareIncrementOperation(RedisPipelineIncrementOperation):
+    window_key: NotRequired[str]
+    expected_window_start: NotRequired[str]
+    reservation_backend: NotRequired[Literal["redis", "local"]]
 
 
 class RateLimitResponseWithDescriptors(TypedDict):
@@ -353,15 +560,21 @@ class RateLimitResponseWithDescriptors(TypedDict):
     response: RateLimitResponse
 
 
+class _RateLimitDescriptorSink(Protocol):
+    def append(self, descriptor: RateLimitDescriptor, /) -> None: ...
+
+
 class WindowKeyMetadata(TypedDict):
     requests_limit: int | None
     tokens_limit: int | None
     window_size: int
     descriptor_key: str
+    descriptor_value: ReadOnly[str]
 
 
 class AtomicCounterMeta(TypedDict):
     descriptor_key: str
+    descriptor_value: ReadOnly[str]
     current_limit: int
     rate_limit_type: Literal["requests", "tokens"]
     window_key: str
@@ -374,6 +587,7 @@ class AtomicCounterMeta(TypedDict):
 class AtomicCounterState(TypedDict):
     window_expired: bool
     current: int
+    window_start: ReadOnly[str]
 
 
 DescriptorAtomicGroup: TypeAlias = tuple[list[str], list[int], list[AtomicCounterMeta]]
@@ -415,10 +629,72 @@ class RequestRateLimiterStash:
     owner_litellm_call_id: str | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
+    parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     reserved_tokens: int = 0
-    reserved_model: str | None = None
+    reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    itpm_reserved_tokens: int = 0
+    itpm_reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    itpm_reserved_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]] = field(
+        default_factory=frozenset
+    )
+    otpm_reserved_tokens: int = 0
+    otpm_reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    otpm_reserved_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]] = field(
+        default_factory=frozenset
+    )
+    batch_enqueued_reservation: BatchEnqueuedTokenReservation | None = None
+    batch_tpd_refund_ops: tuple[ReservationAwareIncrementOperation, ...] = ()
     reservation_released: bool = False
+    tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
+
+
+@dataclass(frozen=True, slots=True)
+class CounterRefund:
+    window_key: str
+    counter_key: str
+    window_start: str
+    increment: int
+
+
+@dataclass(frozen=True, slots=True)
+class TagRateLimit:
+    rpm_limit: int | None
+    tpm_limit: int | None
+
+
+class TagRateLimitResolver(Protocol):
+    def __call__(self, tag_names: Sequence[str], /) -> Awaitable[Mapping[str, TagRateLimit]]: ...
+
+
+def _tag_rate_limit_descriptor(tag: str, limit: TagRateLimit, window_size: int) -> RateLimitDescriptor:
+    rate_limit: Final[RateLimitDescriptorRateLimitObject] = {
+        "requests_per_unit": limit.rpm_limit,
+        "tokens_per_unit": limit.tpm_limit,
+        "window_size": window_size,
+    }
+    return RateLimitDescriptor(key="tag", value=tag, rate_limit=rate_limit)
+
+
+async def resolve_tag_rate_limits_from_db(tag_names: Sequence[str]) -> Mapping[str, TagRateLimit]:
+    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    if prisma_client is None or not tag_names:
+        return MappingProxyType({})
+    tag_objects: Final = await get_tag_objects_batch(
+        tag_names=tag_names,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return MappingProxyType(
+        {
+            tag_name: TagRateLimit(rpm_limit=budget.rpm_limit, tpm_limit=budget.tpm_limit)
+            for tag_name, tag_object in tag_objects.items()
+            if (budget := tag_object.litellm_budget_table) is not None
+            and (budget.rpm_limit is not None or budget.tpm_limit is not None)
+        }
+    )
 
 
 _request_stash: Final[ContextVar[RequestRateLimiterStash | None]] = ContextVar(
@@ -462,40 +738,55 @@ def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
-def _declared_output_budget(value: object) -> int | None:
-    """Coerce a declared output budget to tokens, or None when it names no budget.
-
-    Accepts every shape the pre-existing ``int(...)`` coercion did, floats and numeric
-    strings included, because a budget this cannot read is a budget this cannot reserve
-    against, which is the bypass the caller-declared limits are checked for.
-    """
-    if isinstance(value, (int, float)):
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(float(value))
-        except ValueError:
-            return None
-    return None
+def _parse_output_cap_value(raw_value: object) -> int | None:
+    if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, str)):
+        return None
+    try:
+        return int(float(raw_value))
+    except (ValueError, OverflowError):
+        return None
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
+    batch_rate_limiter_script: _AsyncLuaScript | None
+    batch_counter_read_script: _AsyncLuaScript | None
+    token_increment_script: _AsyncLuaScript | None
+    check_and_increment_by_n_script: _AsyncLuaScript | None
+    window_guarded_token_increment_script: _AsyncLuaScript | None
+    parallel_acquire_script: _AsyncLuaScript | None
+    parallel_release_script: _AsyncLuaScript | None
+    parallel_count_script: _AsyncLuaScript | None
+
     def __init__(
         self,
         internal_usage_cache: InternalUsageCache,
         time_provider: Callable[[], datetime] | None = None,
+        tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
+        model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
+        self._tag_rate_limit_resolver = tag_rate_limit_resolver
+        self._model_group_resolver = model_group_resolver
+        self._fail_closed_resolver = fail_closed_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
+            )
+            self.batch_counter_read_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                BATCH_COUNTER_READ_SCRIPT
             )
             self.token_increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 TOKEN_INCREMENT_SCRIPT
             )
             self.check_and_increment_by_n_script = (
                 self.internal_usage_cache.dual_cache.redis_cache.async_register_script(CHECK_AND_INCREMENT_BY_N_SCRIPT)
+            )
+            self.window_guarded_token_increment_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT
+                )
             )
             self.parallel_acquire_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 PARALLEL_ACQUIRE_SCRIPT
@@ -508,8 +799,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         else:
             self.batch_rate_limiter_script = None
+            self.batch_counter_read_script = None
             self.token_increment_script = None
             self.check_and_increment_by_n_script = None
+            self.window_guarded_token_increment_script = None
             self.parallel_acquire_script = None
             self.parallel_release_script = None
             self.parallel_count_script = None
@@ -524,6 +817,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Batch rate limiter (lazy loaded)
         self._batch_rate_limiter: CallTypeRateLimiter | None = None
+        self.batch_enqueued_token_store = BatchEnqueuedTokenStore(internal_usage_cache=internal_usage_cache)
 
         # Serializes multi-phase check+increment sequences (batch + dynamic
         # limiters) within this process to close the TOCTOU window between
@@ -552,6 +846,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._batch_rate_limiter = _PROXY_BatchRateLimiter(
                     internal_usage_cache=self.internal_usage_cache,
                     parallel_request_limiter=self,
+                    time_provider=self._time_provider,
                 )
             except Exception as e:
                 verbose_proxy_logger.debug("Could not load batch rate limiter: %s", e)
@@ -562,7 +857,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return self._time_provider()
 
     @staticmethod
-    def _no_max_tokens_output_floor(
+    def no_max_tokens_output_floor(
         min_configured_tpm_limit: int | None,
     ) -> int:
         """Output-budget floor used when the request omits max_tokens.
@@ -576,11 +871,164 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return baseline
         return min(baseline, max(1, min_configured_tpm_limit // _TPM_FLOOR_FRACTION))
 
+    @staticmethod
+    def _is_embedding_request(data: object, call_type: str | None) -> bool:
+        if call_type in EMBEDDING_API_CALL_TYPES:
+            return True
+        if call_type in RESPONSES_API_CALL_TYPES:
+            return False
+        if call_type:
+            return False
+        if not isinstance(data, dict):
+            return False
+        return data.get("input") is not None
+
+    @staticmethod
+    def _translate_google_genai_native_request(
+        data: object,
+        call_type: str | None,
+    ) -> Mapping[str, object] | None:
+        contents: Final = data.get("contents") if isinstance(data, dict) else None
+        if (
+            not isinstance(data, dict)
+            or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES
+            or not isinstance(contents, (dict, list))
+        ):
+            return None
+        from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+        config: Final = data.get("config") if "config" in data else data.get("generationConfig")
+        return GoogleGenAIAdapter().translate_generate_content_to_completion(
+            model=data.get("model") if isinstance(data.get("model"), str) else "",
+            contents=contents,
+            config=config if isinstance(config, dict) else None,
+            systemInstruction=data.get("systemInstruction"),
+            system_instruction=data.get("system_instruction"),
+            tools=data.get("tools"),
+            toolConfig=data.get("toolConfig"),
+            tool_config=data.get("tool_config"),
+        )
+
+    @staticmethod
+    def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
+        if not isinstance(data, dict):
+            return None
+        if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
+            config: Final = data.get("config") if "config" in data else data.get("generationConfig")
+            google_cap_values: Final = tuple(
+                parsed
+                for field in ("maxOutputTokens", "max_output_tokens")
+                if isinstance(config, dict)
+                for parsed in (_parse_output_cap_value(config.get(field)),)
+                if parsed is not None
+            )
+            return max(google_cap_values, default=None)
+        if call_type in RESPONSES_API_CALL_TYPES:
+            responses_cap: Final = _parse_output_cap_value(data.get("max_output_tokens"))
+            if responses_cap is None:
+                return None
+            return max(RESPONSES_API_MIN_OUTPUT_TOKENS, responses_cap)
+        if call_type in EMBEDDING_API_CALL_TYPES:
+            return None
+        fields: Final = (
+            ("max_tokens", "max_completion_tokens")
+            if call_type
+            else ("max_tokens", "max_completion_tokens", "max_output_tokens")
+        )
+        output_cap_values: Final = tuple(
+            parsed for field in fields for parsed in (_parse_output_cap_value(data.get(field)),) if parsed is not None
+        )
+        return max(output_cap_values, default=None)
+
+    @classmethod
+    def _has_explicit_output_cap(cls, data: object, call_type: str | None) -> bool:
+        """Whether the caller explicitly set an output-token cap.
+
+        Checked via ``is not None`` (not truthiness) so an explicit 0 --
+        a legitimate zero-output request -- counts as explicit.
+        """
+        return cls._get_explicit_output_cap(data, call_type) is not None
+
+    @staticmethod
+    def get_output_candidate_count(data: object, call_type: str | None = None) -> int:
+        if not isinstance(data, Mapping):
+            return 1
+        config: Final = (
+            (data.get("config") if "config" in data else data.get("generationConfig"))
+            if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES
+            else None
+        )
+        candidate_values: Final = (
+            data.get("n"),
+            data.get("best_of"),
+            config.get("candidateCount") if isinstance(config, dict) else None,
+            config.get("candidate_count") if isinstance(config, dict) else None,
+        )
+        candidate_count = 1  # rebind-ok: running maximum across candidate-count aliases
+        for value in candidate_values:
+            try:
+                candidate_count = max(candidate_count, int(value or 1))
+            except (TypeError, ValueError, OverflowError):
+                continue
+        return candidate_count
+
+    @staticmethod
+    def _apply_implicit_output_cap(
+        data: object,
+        min_configured_limit: int | None,
+        call_type: str | None,
+        configured_output_tokens: int | None = None,
+    ) -> None:
+        """Hard-cap generation length when the request has no explicit cap.
+
+        Guards against an unbounded response overshooting a small TPM/OTPM
+        budget before post-call reconciliation runs. Skips requests that
+        already set an explicit cap and embeddings, which have no generation
+        budget. The Responses API only honors ``max_output_tokens`` (its
+        underlying chat-completion transformation ignores ``max_tokens``), so
+        the cap must be written to that field for Responses call types.
+
+        ``configured_output_tokens`` is the operator-declared per-tenant
+        estimate; when it exceeds the safety floor, the cap is raised to that
+        value instead of clamping every tenant to the same floor.
+        """
+        if not isinstance(data, dict):
+            return
+        base_capped_floor: Final = _PROXY_MaxParallelRequestsHandler_v3.no_max_tokens_output_floor(min_configured_limit)
+        capped_floor: Final = (
+            max(base_capped_floor, RESPONSES_API_MIN_OUTPUT_TOKENS)
+            if call_type in RESPONSES_API_CALL_TYPES
+            else base_capped_floor
+        )
+        baseline_floor: Final = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        is_embedding: Final = _PROXY_MaxParallelRequestsHandler_v3._is_embedding_request(data, call_type)
+        if (
+            capped_floor >= baseline_floor
+            or _PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
+            or is_embedding
+        ):
+            return
+        effective_cap: Final = max(capped_floor, configured_output_tokens or 0)
+        if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
+            config_field: Final = "config" if "config" in data or "generationConfig" not in data else "generationConfig"
+            config: Final = data.get(config_field)
+            if config is None or isinstance(config, dict):
+                data[config_field] = {  # rebind-ok: routed request needs cap  # mutable-ok: downstream needs dict
+                    **(config or {}),  # mutable-ok: downstream native routing requires a mutable request config
+                    "maxOutputTokens": effective_cap,
+                }
+            return
+        cap_field: Final = "max_output_tokens" if call_type in RESPONSES_API_CALL_TYPES else "max_tokens"
+        existing_cap: Final = data.get(cap_field)
+        if existing_cap is None or effective_cap < existing_cap:
+            data[cap_field] = effective_cap  # rebind-ok: downstream routing requires the bounded output cap
+
     def _estimate_tokens_for_request(
         self,
         data: dict,
         model: str | None = None,
         min_configured_tpm_limit: int | None = None,
+        call_type: str | None = None,
         configured_output_tokens: int | None = None,
     ) -> int:
         """
@@ -588,7 +1036,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         upfront (input + output budget):
         estimated = input_tokens + max_tokens.
 
-        Supports chat (messages), completions (prompt), and embeddings (input).
+        Supports chat (messages), completions (prompt), embeddings (input),
+        and the Responses API (also `input`, disambiguated from embeddings
+        via ``call_type``).
 
         ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
         the TPM-bearing descriptors this request will be charged against. When
@@ -601,77 +1051,107 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         floor entirely, so the reservation reflects what this tenant's model
         actually emits rather than one constant shared by every tenant.
         """
-        messages = data.get("messages")
-        prompt: Final = data.get("prompt")
-        input_text: Final = data.get("input")  # embeddings
-
-        match (messages, prompt, input_text):
-            case (messages, _, _) if messages:
-                total_chars = len(get_str_from_messages(messages))
-            case (_, str() as p, _):
-                total_chars = len(p)
-            case (_, list() as p, _):
-                total_chars = sum(len(str(item)) for item in p)
-            case (_, _, str() as t):
-                total_chars = len(t)
-            case (_, _, list() as t):
-                total_chars = sum(len(str(item)) for item in t)
-            case _:
-                total_chars = 0
-
-        estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
-
-        # Both spellings can arrive together, e.g. a deployment-level max_tokens default under a
-        # client-supplied max_completion_tokens. Reserving against the larger keeps the estimate an
-        # upper bound on what the provider can emit, whichever one it ends up honouring.
-        declared_output_budgets: Final = tuple(
-            budget
-            for budget in (
-                _declared_output_budget(data.get("max_tokens")),
-                _declared_output_budget(data.get("max_completion_tokens")),
-            )
-            if budget is not None
+        estimated_input_tokens, max_tokens_estimate = self._estimate_input_and_output_tokens(
+            data=data,
+            min_configured_tpm_limit=min_configured_tpm_limit,
+            call_type=call_type,
+            configured_output_tokens=configured_output_tokens,
         )
-        explicit_max_tokens: Final = max(declared_output_budgets) if declared_output_budgets else None
-
-        match (explicit_max_tokens, input_text):
-            case (mt, _) if mt is not None:
-                max_tokens_estimate = int(mt)
-            case (_, embeddings_input) if embeddings_input:
-                # Embeddings have no output tokens
-                max_tokens_estimate = 0
-            case _ if total_chars == 0 and configured_output_tokens is None:
-                # Fully contentless request (no messages, prompt, or input).
-                # Don't apply the conservative output-budget floor here — it
-                # would over-reserve and could push small TPM limits into a
-                # false 429. The caller floors at 1 so backpressure still
-                # applies once the counter is at limit.
-                max_tokens_estimate = 0
-            case _:
-                # No max_tokens specified — reserve at least the input size with a
-                # conservative floor so a stream of small concurrent requests can't
-                # collectively bypass the limit. Cap the floor by a fraction of
-                # the smallest TPM limit this request will be charged against,
-                # so a small per-tenant TPM cap can't be tripped by the floor
-                # alone.
-                output_floor: Final = self._no_max_tokens_output_floor(min_configured_tpm_limit)
-                max_tokens_estimate = (
-                    configured_output_tokens
-                    if configured_output_tokens is not None
-                    else max(estimated_input_tokens, output_floor)
-                )
-
         total_estimated: Final = estimated_input_tokens + max_tokens_estimate
 
         verbose_proxy_logger.debug(
-            "TPM reservation estimate: input=%s, max_tokens=%s (explicit=%s), total=%s",
+            "TPM reservation estimate: input=%s, max_tokens=%s, total=%s",
             estimated_input_tokens,
             max_tokens_estimate,
-            explicit_max_tokens is not None,
             total_estimated,
         )
 
         return total_estimated
+
+    def _estimate_input_and_output_tokens(
+        self,
+        data: object,
+        min_configured_tpm_limit: int | None = None,
+        call_type: str | None = None,
+        configured_output_tokens: int | None = None,
+    ) -> tuple[int, int]:
+        """
+        Estimate input tokens and output (max_tokens) budget separately, so
+        callers needing independent ITPM/OTPM reservations (rather than one
+        combined TPM reservation) can use each half on its own.
+
+        ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
+        the TPM-bearing descriptors this request will be charged against. When
+        provided, the no-``max_tokens`` output-budget floor is capped at a
+        fraction of that limit so small TPM caps remain usable. Omit to
+        preserve the unconstrained floor.
+
+        ``call_type`` disambiguates embeddings from the Responses API: both
+        put their prompt in ``data["input"]``, but only embeddings have no
+        output tokens. Unset (the default) preserves the historical
+        "any `input` means zero output" behavior for callers that don't have
+        a call type to pass.
+
+        ``configured_output_tokens`` is the operator-declared estimate resolved
+        from key or team metadata. When provided it replaces the heuristic
+        floor entirely, so the reservation reflects what this tenant's model
+        actually emits rather than one constant shared by every tenant.
+        """
+        if not isinstance(data, dict):
+            return 0, 0
+        translated_data: Final = self._translate_google_genai_native_request(data, call_type)
+        estimable_data: Final = translated_data if translated_data is not None else data
+        selected_fields: Final[tuple[object | None, object | None, object | None]] = (
+            (None, None, estimable_data.get("input"))
+            if call_type in RESPONSES_API_CALL_TYPES or call_type in EMBEDDING_API_CALL_TYPES
+            else (None, estimable_data.get("prompt"), None)
+            if call_type in TEXT_COMPLETION_API_CALL_TYPES
+            else (estimable_data.get("messages"), None, None)
+            if call_type
+            else (
+                estimable_data.get("messages"),
+                estimable_data.get("prompt"),
+                estimable_data.get("input"),
+            )
+        )
+        messages, prompt, input_text = selected_fields
+
+        total_chars: Final = (
+            len(get_str_from_messages(messages))
+            if isinstance(messages, list) and messages
+            else len(prompt)
+            if isinstance(prompt, str)
+            else sum(len(str(item)) for item in prompt)
+            if isinstance(prompt, list)
+            else len(input_text)
+            if isinstance(input_text, str)
+            else sum(len(str(item)) for item in input_text)
+            if isinstance(input_text, list)
+            else 0
+        )
+
+        estimated_input_tokens: Final = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+
+        explicit_max_tokens: Final = self._get_explicit_output_cap(data, call_type)
+        is_embedding: Final = self._is_embedding_request(data, call_type)
+
+        base_output_floor: Final = self.no_max_tokens_output_floor(min_configured_tpm_limit)
+        output_floor: Final = (
+            max(base_output_floor, RESPONSES_API_MIN_OUTPUT_TOKENS)
+            if call_type in RESPONSES_API_CALL_TYPES
+            else base_output_floor
+        )
+        max_tokens_estimate: Final = (
+            0
+            if is_embedding or (explicit_max_tokens is None and total_chars == 0 and configured_output_tokens is None)
+            else explicit_max_tokens
+            if explicit_max_tokens is not None
+            else configured_output_tokens
+            if configured_output_tokens is not None
+            else max(estimated_input_tokens, output_floor)
+        )
+
+        return estimated_input_tokens, max_tokens_estimate * self.get_output_candidate_count(data, call_type)
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -696,6 +1176,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Implement sliding window rate limiting logic using in-memory cache operations.
         This follows the same logic as the Redis Lua script but uses async cache operations.
         """
+        async with self._check_and_increment_lock:
+            return await self._in_memory_cache_sliding_window(keys=keys, now_int=now_int, window_size=window_size)
+
+    async def _in_memory_cache_sliding_window(
+        self,
+        keys: list[str],
+        now_int: int,
+        window_size: int,
+    ) -> CacheCounterValues:
         results: Final[list[CacheCounterValue | None]] = []
 
         # Process each window/counter pair
@@ -714,6 +1203,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # Check if window exists and is valid
             if window_start is None or (now_int - int(window_start)) >= window_size:
                 # Reset window and counter
+                for sibling_counter_key in _sibling_counter_keys(window_key):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=sibling_counter_key,
+                        value=0,
+                        ttl=window_size,
+                        litellm_parent_otel_span=None,
+                        local_only=True,
+                    )
                 await self.internal_usage_cache.async_set_cache(
                     key=window_key,
                     value=str(now_int),
@@ -768,10 +1265,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch: list[str],
         cache_values: CacheCounterValues,
         key_metadata: dict[str, WindowKeyMetadata],
+        read_only: bool = False,
     ) -> RateLimitResponse:
         """
         Check if the cache values are over the limit.
         """
+        pending_increment: Final = 1 if read_only else 0
         statuses: Final[list[RateLimitStatus]] = []
         overall_code = "OK"
 
@@ -796,7 +1295,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if current_limit is None or rate_limit_type is None:
                 continue
 
-            if counter_value is not None and int(counter_value) > current_limit:
+            if counter_value is not None and int(counter_value) + pending_increment > current_limit:
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
 
@@ -810,6 +1309,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "limit_remaining": limit_remaining,
                     "rate_limit_type": rate_limit_type,
                     "descriptor_key": key_metadata[window_key]["descriptor_key"],
+                    "descriptor_value": key_metadata[window_key]["descriptor_value"],
                 }
             )
 
@@ -841,6 +1341,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # Compute CRC16 and mod 16384
         crc: Final = binascii.crc_hqx(key.encode("utf-8"), 0)
         return crc % REDIS_CLUSTER_SLOTS
+
+    def _pipeline_scripts(
+        self,
+        source: str,
+        run: RegisteredScript,
+        calls: Sequence[tuple[Sequence[str], Sequence[int]]],
+    ) -> tuple[BatchResult[object] | None, ...]:
+        """Declare one Lua call per group on the request's Redis batch, so all groups share one round trip
+        with whatever else the request declared (the routing read). Returns ``None`` per call when no batch
+        is open, and the caller runs the script directly as before."""
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        batch: Final = None if redis_cache is None else active_request_redis_batch(redis_cache)
+        if batch is None:
+            return (None,) * len(calls)
+        return tuple(batch.script(source, run, keys, args) for keys, args in calls)
 
     def _group_keys_by_hash_tag(self, keys: list[str]) -> dict[str, list[str]]:
         """
@@ -891,6 +1406,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             local_only=True,
         )
 
+    async def _read_counter_values_from_redis(self, keys: list[str]) -> CacheCounterValues:
+        read_script: Final = self.batch_counter_read_script
+        if read_script is None:
+            return []
+        key_groups: Final = self._group_keys_by_hash_tag(keys)
+        group_values: Final[Sequence[CacheCounterValues]] = [
+            await read_script(keys=group_keys, args=[]) for group_keys in key_groups.values()
+        ]
+        values_by_key: Final = dict(
+            zip(
+                itertools.chain.from_iterable(key_groups.values()),
+                itertools.chain.from_iterable(group_values),
+            )
+        )
+        return [values_by_key.get(key) for key in keys]
+
+    async def _read_counter_values_without_incrementing(
+        self,
+        keys: list[str],
+        parent_otel_span: Span | None,
+    ) -> CacheCounterValues | None:
+        if self.batch_counter_read_script is None:
+            return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=False)
+        try:
+            return await self._read_counter_values_from_redis(keys)
+        except Exception as e:  # noqa: BLE001  # any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
+            self._reject_if_rate_limit_unverifiable("batch_counter_read_script", e)
+            log_redis_failure(
+                verbose_proxy_logger, logging.WARNING, "batch_counter_read_script failed, using local mirror", e
+            )
+            return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=True)
+
+    def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: BaseException) -> None:
+        if not self._fail_closed_resolver():
+            return
+        log_redis_failure(
+            verbose_proxy_logger,
+            logging.WARNING,
+            f"fail_closed_rate_limit_enforcement: rejecting request, {failed_operation} could not verify the "
+            "counters against Redis",
+            error,
+        )
+        raise RateLimitUnverifiableError()
+
     async def _execute_redis_batch_rate_limiter_script(
         self,
         keys_to_fetch: list[str],
@@ -909,18 +1468,34 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self.batch_rate_limiter_script is None:
             return []
 
-        key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
+        key_groups: Final = list(self._group_keys_by_hash_tag(keys_to_fetch).items())
         all_cache_values: Final[list[CacheCounterValue | None]] = []
+        args: Final = (now_int, self.window_size)
+        pipelined: Final = self._pipeline_scripts(
+            BATCH_RATE_LIMITER_SCRIPT,
+            self.batch_rate_limiter_script,
+            tuple((group_keys, args) for _tag, group_keys in key_groups),
+        )
 
-        for hash_tag, group_keys in key_groups.items():
+        for index, ((hash_tag, group_keys), group_result) in enumerate(zip(key_groups, pipelined)):
             try:
-                group_cache_values: CacheCounterValues = await self.batch_rate_limiter_script(
-                    keys=group_keys,
-                    args=[now_int, self.window_size],  # Use integer timestamp
+                group_cache_values: CacheCounterValues = (
+                    await self.batch_rate_limiter_script(keys=group_keys, args=args)
+                    if group_result is None
+                    else _as_counter_values(await group_result)
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
-                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", hash_tag, e)
+                if self._fail_closed_resolver():
+                    applied_keys = tuple(itertools.chain.from_iterable(keys for _tag, keys in key_groups[:index]))
+                    await self._refund_counter_increments(
+                        self._counter_refunds_from_batch_values(applied_keys, all_cache_values)
+                    )
+                    await self._refund_later_pipelined_groups(key_groups[index + 1 :], pipelined[index + 1 :])
+                self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
+                log_redis_failure(
+                    verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
+                )
                 # Fallback to in-memory cache for this group
                 group_cache_values = await self.in_memory_cache_sliding_window(
                     keys=group_keys,
@@ -931,9 +1506,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return all_cache_values
 
+    async def _refund_later_pipelined_groups(
+        self,
+        key_groups: Sequence[tuple[str, list[str]]],
+        pipelined: Sequence[BatchResult[object] | None],
+    ) -> None:
+        """Groups declared on the request batch ran in the same round trip as the one that failed, so their
+        increments landed even though the loop never read them."""
+        for (_tag, group_keys), group_result in zip(key_groups, pipelined):
+            if group_result is None:
+                continue
+            try:
+                group_values = _as_counter_values(await group_result)
+            except Exception:  # noqa: BLE001  # a group that failed in Redis incremented nothing to refund
+                continue
+            await self._refund_counter_increments(self._counter_refunds_from_batch_values(group_keys, group_values))
+
     async def should_rate_limit(
         self,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: Sequence[RateLimitDescriptor],
         parent_otel_span: Span | None = None,
         read_only: bool = False,
         skip_tpm_check: bool = False,
@@ -985,17 +1576,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if cache_values is not None:
-                rate_limit_response: Final = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+                rate_limit_response: Final = self.is_cache_list_over_limit(
+                    keys_to_fetch, cache_values, key_metadata, read_only=read_only
+                )
                 if rate_limit_response["overall_code"] == "OVER_LIMIT":
                     return rate_limit_response
 
             ## IF under limit in-memory, check Redis
             if read_only:
                 # READ-ONLY MODE: Just read current values without incrementing
-                cache_values = await self._batch_get_counter_values(  # rebind-ok: read-only mode replaces the in-memory snapshot with Redis values
+                cache_values = await self._read_counter_values_without_incrementing(  # rebind-ok: read-only mode replaces the in-memory snapshot with Redis values
                     keys=keys_to_fetch,
                     parent_otel_span=parent_otel_span,
-                    local_only=False,  # Check Redis too
                 )
 
                 # For keys that don't exist yet, set them to 0
@@ -1039,7 +1631,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
 
-            windowed_response = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+            windowed_response = self.is_cache_list_over_limit(
+                keys_to_fetch, cache_values, key_metadata, read_only=read_only
+            )
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
@@ -1059,7 +1653,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _collect_windowed_keys_and_gauges(
         self,
-        descriptors: list[RateLimitDescriptor],
+        descriptors: Sequence[RateLimitDescriptor],
         skip_tpm_check: bool,
     ) -> tuple[list[str], dict[str, WindowKeyMetadata], list[ParallelRequestGauge]]:
         """
@@ -1112,6 +1706,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "tokens_limit": int(tokens_limit) if tokens_limit is not None else None,
                 "window_size": int(window_size),
                 "descriptor_key": descriptor_key,
+                "descriptor_value": descriptor_value,
             }
         return keys_to_fetch, key_metadata, gauges
 
@@ -1166,8 +1761,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         args=[PARALLEL_REQUEST_SLOT_TTL_SECONDS for _ in gauges],
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
-                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
-                    verbose_proxy_logger.warning("parallel_count_script failed, using local mirror: %s", e)
+                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
+                    self._reject_if_rate_limit_unverifiable("parallel_count_script", e)
+                    log_redis_failure(
+                        verbose_proxy_logger, logging.WARNING, "parallel_count_script failed, using local mirror", e
+                    )
                     counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
             else:
                 counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
@@ -1197,7 +1795,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
-                verbose_proxy_logger.warning("parallel_acquire_script failed, falling back to in-memory gauge: %s", e)
+                self._reject_if_rate_limit_unverifiable("parallel_acquire_script", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_acquire_script failed, falling back to in-memory gauge",
+                    e,
+                )
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
             if int(raw[0]) == 1:
@@ -1290,6 +1894,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             statuses.append(self._gauge_status(gauge, in_flight + 1, "OK"))
         return RateLimitResponse(overall_code="OK", statuses=statuses)
 
+    async def _release_stashed_parallel_slot(
+        self,
+        stash: RequestRateLimiterStash | None,
+        parent_otel_span: Span | None,
+        *,
+        in_logging_callback: bool = False,
+    ) -> None:
+        if stash is None:
+            return
+        async with stash.parallel_slot_release_lock:
+            acquisition: Final = stash.parallel_slot
+            if acquisition is None:
+                return
+            deferred: Final = in_logging_callback and await self._defer_parallel_slot_release(
+                acquisition, parent_otel_span
+            )
+            if not deferred:
+                await self._release_parallel_request_slots(acquisition, parent_otel_span)
+            stash.parallel_slot = None  # rebind-ok: marks this request's slot as released
+
     async def _release_parallel_request_slots(
         self,
         acquisition: ParallelSlotAcquisition,
@@ -1313,18 +1937,64 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     keys=counter_keys,
                     args=[slot_id for _ in counter_keys],
                 )
-                for counter_key, remaining in zip(counter_keys, raw):
-                    await self.internal_usage_cache.async_set_cache(
-                        key=counter_key,
-                        value=max(0, int(remaining)),
-                        ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
-                        litellm_parent_otel_span=parent_otel_span,
-                        local_only=True,
-                    )
+                await self._mirror_released_parallel_slots(counter_keys, raw, parent_otel_span)
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
-                verbose_proxy_logger.warning("parallel_release_script failed, falling back to in-memory release: %s", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_release_script failed, falling back to in-memory release",
+                    e,
+                )
+        await self._release_parallel_request_slots_in_memory(counter_keys, slot_id, parent_otel_span)
 
+    async def _defer_parallel_slot_release(
+        self, acquisition: ParallelSlotAcquisition, parent_otel_span: Span | None
+    ) -> bool:
+        """Only for a release from the logging callbacks: the response has left and the callbacks' end flushes
+        the pipeline. A release before the response goes to Redis at once, so another worker's next acquire
+        never counts a finished request. The local gauge frees the slot at once, so admission on this worker
+        sees the capacity before the pipeline goes out. The count Redis returns from the pipeline is not
+        mirrored: by then a newer acquire on this worker may have written a fresher count, and the next
+        acquire refreshes the gauge anyway."""
+        counter_keys: Final = acquisition["counter_keys"]
+        slot_id: Final = acquisition["slot_id"]
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        script: Final = self.parallel_release_script
+        batch: Final = None if redis_cache is None else active_post_call_redis_batch(redis_cache)
+        if batch is None or script is None or not counter_keys or not slot_id:
+            return False
+        await self._release_parallel_request_slots_in_memory(counter_keys, slot_id, parent_otel_span)
+
+        async def settle(future: asyncio.Future[object]) -> None:
+            if future.cancelled() or future.exception() is not None:
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_release_script failed, the slot stays released in memory only",
+                    future.exception() if not future.cancelled() else asyncio.CancelledError(),
+                )
+
+        batch.script(PARALLEL_RELEASE_SCRIPT, script, counter_keys, (slot_id,) * len(counter_keys)).on_settled(settle)
+        return True
+
+    async def _mirror_released_parallel_slots(
+        self, counter_keys: list[str], remaining_by_key: Sequence[object], parent_otel_span: Span | None
+    ) -> None:
+        for counter_key, remaining in zip(counter_keys, remaining_by_key):
+            if not isinstance(remaining, (int, float, str, bytes)):
+                continue
+            await self.internal_usage_cache.async_set_cache(
+                key=counter_key,
+                value=max(0, int(remaining)),
+                ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
+
+    async def _release_parallel_request_slots_in_memory(
+        self, counter_keys: list[str], slot_id: str, parent_otel_span: Span | None
+    ) -> None:
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
                 raw_value: ParallelGaugeCacheValue | None = await self.internal_usage_cache.async_get_cache(
@@ -1463,6 +2133,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             meta.append(
                 {
                     "descriptor_key": descriptor_key,
+                    "descriptor_value": descriptor_value,
                     "current_limit": int(limit_value),
                     "rate_limit_type": rlt,
                     "window_key": window_key,
@@ -1485,11 +2156,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptor i, refund descriptors 0..i-1's increments. On Lua failure
         mid-loop, refund applied increments and fall back to in-memory.
         """
-        applied: Final[list[list[AtomicCounterMeta]]] = []
+        if not descriptor_groups:
+            return RateLimitResponse(
+                overall_code="OK",
+                statuses=[],  # mutable-ok: response contract requires a status list
+            )
+        applied: Final[list[tuple[CounterRefund, ...]]] = []
         statuses: Final[list[RateLimitStatus]] = []
+        reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         raw: list[CacheCounterValue]
 
-        for _idx, (keys, args, meta) in enumerate(descriptor_groups):
+        pipelined: Final = self._pipeline_scripts(
+            CHECK_AND_INCREMENT_BY_N_SCRIPT,
+            self.check_and_increment_by_n_script,  # pyright: ignore[reportArgumentType]  # sole caller guards it is not None
+            tuple((keys, args) for keys, args, _meta in descriptor_groups),
+        )
+        batched: Final = tuple(result for result in pipelined if result is not None)
+        if len(batched) == len(descriptor_groups):
+            return await self._settle_pipelined_descriptor_groups(descriptor_groups, batched, parent_otel_span)
+
+        for keys, args, meta in descriptor_groups:
             try:
                 raw = await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
                     keys=keys,
@@ -1500,14 +2186,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # state ambiguous. Refund any prior groups so Redis returns
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
-                verbose_proxy_logger.error(
-                    "atomic_check_and_increment_by_n: Redis Lua execution failed (%s: %s). Refunding %s prior descriptors and falling back to in-memory enforcement — counters will diverge from Redis until window expires (window_size=%ss).",
-                    type(e).__name__,
-                    e,
-                    len(applied),
-                    self.window_size,
-                )
                 await self._refund_applied_descriptor_groups(applied)
+                self._reject_if_rate_limit_unverifiable("check_and_increment_by_n_script", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.ERROR,
+                    f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(e).__name__}). Refunded "
+                    f"{len(applied)} prior descriptors and falling back to in-memory enforcement, counters will "
+                    f"diverge from Redis until window expires (window_size={self.window_size}s)",
+                    e,
+                )
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(
@@ -1519,36 +2207,147 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if response["overall_code"] == "OVER_LIMIT":
                 await self._refund_applied_descriptor_groups(applied)
                 return response
-            applied.append(meta)
+            if len(descriptor_groups) == 1:
+                return response
+            applied.append(self._counter_refunds_from_atomic_response(raw, meta))
             statuses.extend(response["statuses"])
+            reservation_windows.update(response.get("reservation_windows", frozenset()))
 
-        return RateLimitResponse(overall_code="OK", statuses=statuses)
+        return RateLimitResponse(
+            overall_code="OK",
+            statuses=statuses,
+            reservation_windows=frozenset(reservation_windows),
+        )
+
+    async def _settle_pipelined_descriptor_groups(
+        self,
+        descriptor_groups: list[DescriptorAtomicGroup],
+        results: Sequence[BatchResult[object]],
+        parent_otel_span: Span | None,
+    ) -> RateLimitResponse:
+        """Every group's Lua call left in one pipeline, so each group has already checked and incremented on
+        its own before any result is read. A failed or over-limit group therefore refunds every group that
+        incremented, after it as well as before it, where the one-at-a-time loop only unwinds the groups it ran.
+        A Redis denial stands even when another group failed: the in-memory fallback only replaces a verdict
+        Redis never gave."""
+        replies: Final = await asyncio.gather(*results, return_exceptions=True)
+        responses: Final = tuple(
+            self._pipelined_group_response(reply, meta)
+            for reply, (_keys, _args, meta) in zip(replies, descriptor_groups)
+        )
+        applied: Final[list[tuple[CounterRefund, ...]]] = []  # mutable-ok: filled by the group loop
+        statuses: Final[list[RateLimitStatus]] = []  # mutable-ok: filled by the group loop
+        reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
+        for reply, response, (_keys, _args, meta) in zip(replies, responses, descriptor_groups):
+            if isinstance(response, BaseException) or response["overall_code"] != "OK":
+                continue
+            applied.append(self._counter_refunds_from_atomic_response(_as_counter_values(reply), meta))
+            statuses.extend(response["statuses"])
+            reservation_windows.update(response.get("reservation_windows", frozenset()))
+
+        over_limit: Final = next(
+            (r for r in responses if not isinstance(r, BaseException) and r["overall_code"] == "OVER_LIMIT"), None
+        )
+        if over_limit is not None:
+            await self._refund_applied_descriptor_groups(applied)
+            return over_limit
+        failure: Final = next((r for r in responses if isinstance(r, BaseException)), None)
+        if failure is not None:
+            await self._refund_applied_descriptor_groups(applied)
+            self._reject_if_rate_limit_unverifiable("check_and_increment_by_n_script", failure)
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.ERROR,
+                f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(failure).__name__}). Refunding "
+                f"{len(applied)} pipelined descriptors and falling back to in-memory enforcement, counters will "
+                f"diverge from Redis until window expires (window_size={self.window_size}s)",
+                failure,
+            )
+            flat_meta: Final = tuple(
+                itertools.chain.from_iterable(group_meta for _k, _a, group_meta in descriptor_groups)
+            )
+            async with self._check_and_increment_lock:
+                return await self._atomic_check_and_increment_in_memory(
+                    per_counter_meta=flat_meta,
+                    parent_otel_span=parent_otel_span,
+                )
+        if len(responses) == 1 and not isinstance(responses[0], BaseException):
+            return responses[0]
+        return RateLimitResponse(
+            overall_code="OK",
+            statuses=statuses,
+            reservation_windows=frozenset(reservation_windows),
+        )
+
+    def _pipelined_group_response(
+        self, reply: object, per_counter_meta: list[AtomicCounterMeta]
+    ) -> RateLimitResponse | BaseException:
+        if isinstance(reply, BaseException):
+            return reply
+        try:
+            return self._build_atomic_response(_as_counter_values(reply), per_counter_meta)
+        except Exception as e:  # noqa: BLE001  # a reply this group cannot read is that group's Lua failure
+            return e
 
     async def _refund_applied_descriptor_groups(
         self,
-        applied: list[list[AtomicCounterMeta]],
+        applied: Sequence[Sequence[CounterRefund]],
     ) -> None:
         """
         Decrement counters for descriptor groups already applied via Lua.
         Best-effort: refund failures are logged but not raised — the original
         OVER_LIMIT / fallback decision is what matters to the caller.
         """
-        if not applied:
+        await self._refund_counter_increments(tuple(itertools.chain.from_iterable(applied)))
+
+    @staticmethod
+    def _counter_refunds_from_atomic_response(
+        raw: Sequence[CacheCounterValue],
+        per_counter_meta: Sequence[AtomicCounterMeta],
+    ) -> tuple[CounterRefund, ...]:
+        return tuple(
+            CounterRefund(
+                window_key=meta["window_key"],
+                counter_key=meta["counter_key"],
+                window_start=str(int(raw[2 + index * 2])),
+                increment=meta["increment"],
+            )
+            for index, meta in enumerate(per_counter_meta)
+        )
+
+    @staticmethod
+    def _counter_refunds_from_batch_values(
+        applied_keys: Sequence[str],
+        applied_values: Sequence[CacheCounterValue | None],
+    ) -> tuple[CounterRefund, ...]:
+        pairs: Final = tuple(zip(range(0, len(applied_keys), 2), applied_values[::2]))
+        return tuple(
+            CounterRefund(
+                window_key=applied_keys[offset],
+                counter_key=applied_keys[offset + 1],
+                window_start=str(int(window_start)),
+                increment=1,
+            )
+            for offset, window_start in pairs
+            if window_start is not None
+        )
+
+    async def _refund_counter_increments(self, refunds: Sequence[CounterRefund]) -> None:
+        if self.window_guarded_token_increment_script is None:
             return
-        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
-        if redis_cache is None:
-            return
-        for group_meta in applied:
-            for entry in group_meta:
-                try:
-                    await redis_cache.async_increment(
-                        key=entry["counter_key"],
-                        value=-entry["increment"],
-                    )
-                except Exception as e:
-                    verbose_proxy_logger.warning(
-                        "Failed to refund %s on cross-descriptor rollback: %s", entry["counter_key"], e
-                    )
+        for refund in refunds:
+            try:
+                await self.window_guarded_token_increment_script(
+                    keys=[refund.window_key, refund.counter_key],  # mutable-ok: Redis script API takes a list
+                    args=[refund.window_start, -refund.increment, 0],  # mutable-ok: Redis script API takes a list
+                )
+            except Exception as e:  # noqa: BLE001  # best-effort rollback, the rejection already decided the request
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    f"Failed to refund {refund.counter_key} on rollback",
+                    e,
+                )
 
     def _build_atomic_response(
         self,
@@ -1585,12 +2384,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         limit_remaining=max(0, limit - current_counter),
                         rate_limit_type=meta["rate_limit_type"],
                         descriptor_key=meta["descriptor_key"],
+                        descriptor_value=meta["descriptor_value"],
                     )
                 ],
             )
 
         statuses: Final[list[RateLimitStatus]] = []
-        for meta, new_counter in zip(per_counter_meta, raw[1:]):
+        for index, meta in enumerate(per_counter_meta):
+            new_counter = raw[1 + index * 2]
             statuses.append(
                 RateLimitStatus(
                     code="OK",
@@ -1598,13 +2399,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     limit_remaining=max(0, meta["current_limit"] - int(new_counter)),
                     rate_limit_type=meta["rate_limit_type"],
                     descriptor_key=meta["descriptor_key"],
+                    descriptor_value=meta["descriptor_value"],
                 )
             )
-        return RateLimitResponse(overall_code="OK", statuses=statuses)
+        return RateLimitResponse(
+            overall_code="OK",
+            statuses=statuses,
+            reservation_windows=frozenset(
+                (
+                    meta["counter_key"],
+                    str(int(raw[2 + index * 2])),
+                    "redis",
+                )
+                for index, meta in enumerate(per_counter_meta)
+            ),
+        )
 
     async def _atomic_check_and_increment_in_memory(
         self,
-        per_counter_meta: list[AtomicCounterMeta],
+        per_counter_meta: Sequence[AtomicCounterMeta],
         parent_otel_span: Span | None = None,
     ) -> RateLimitResponse:
         """In-memory all-or-nothing check-and-increment. Caller holds lock.
@@ -1653,12 +2466,33 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             limit_remaining=max(0, meta["current_limit"] - current_counter),
                             rate_limit_type=meta["rate_limit_type"],
                             descriptor_key=meta["descriptor_key"],
+                            descriptor_value=meta["descriptor_value"],
                         )
                     ],
                 )
-            descriptor_state.append({"window_expired": window_expired, "current": current_counter})
+            descriptor_state.append(
+                {  # mutable-ok: local atomic-counter state is updated during pass two
+                    "window_expired": window_expired,
+                    "current": current_counter,
+                    "window_start": str(now_int if window_expired else int(window_start)),
+                }
+            )
 
         # Pass 2: apply increments.
+        expired_windows: Final[Mapping[str, int]] = {
+            meta["window_key"]: meta["window_size"]
+            for meta, state in zip(per_counter_meta, descriptor_state)
+            if state["window_expired"]
+        }
+        for window_key, window_size in expired_windows.items():
+            for sibling_counter_key in _sibling_counter_keys(window_key):
+                await self.internal_usage_cache.async_set_cache(
+                    key=sibling_counter_key,
+                    value=0,
+                    ttl=window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
         statuses: Final[list[RateLimitStatus]] = []
         for meta, state in zip(per_counter_meta, descriptor_state):
             new_counter = meta["increment"] if state["window_expired"] else state["current"] + meta["increment"]
@@ -1684,9 +2518,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     limit_remaining=max(0, meta["current_limit"] - new_counter),
                     rate_limit_type=meta["rate_limit_type"],
                     descriptor_key=meta["descriptor_key"],
+                    descriptor_value=meta["descriptor_value"],
                 )
             )
-        return RateLimitResponse(overall_code="OK", statuses=statuses)
+        return RateLimitResponse(
+            overall_code="OK",
+            statuses=statuses,
+            reservation_windows=frozenset(
+                (meta["counter_key"], state["window_start"], "local")
+                for meta, state in zip(per_counter_meta, descriptor_state)
+            ),
+        )
 
     async def reserve_tpm_tokens(
         self,
@@ -1703,6 +2545,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         TPM-only descriptor/increment list and delegates the all-or-nothing
         atomicity (Lua on Redis, asyncio-locked DualCache otherwise) to the
         shared primitive.
+
+        Excludes project ITPM/OTPM descriptors -- those are reserved
+        separately (different estimate per bucket) via ``reserve_io_tokens``.
         """
         tpm_descriptors: Final[list[RateLimitDescriptor]] = [
             RateLimitDescriptor(
@@ -1714,7 +2559,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 ),
             )
             for d in descriptors
-            if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+            and (d.get("rate_limit") or {}).get("tokens_per_unit") is not None  # mutable-ok: optional descriptor
         ]
         if not tpm_descriptors:
             return RateLimitResponse(overall_code="OK", statuses=[])
@@ -1726,6 +2572,187 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=tpm_descriptors,
             increments=increments,
             parent_otel_span=parent_otel_span,
+        )
+
+    async def _refund_reserved_tokens(
+        self,
+        scopes: Sequence[tuple[str, str]],
+        amount: int,
+        reservation_windows: frozenset[tuple[str, str, Literal["redis", "local"]]] = frozenset(),
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        """
+        Directly decrement previously-reserved token counters for ``scopes``
+        by ``amount``. Used to roll back a reservation that already
+        succeeded once a *different* bucket in the same request turns out to
+        be over its limit (e.g. ITPM reserved fine, OTPM then hits its
+        limit -- the ITPM reservation must not be left inflated).
+        """
+        if amount <= 0 or not scopes:
+            return
+        if not reservation_windows:
+            await self.async_increment_tokens_with_ttl_preservation(
+                pipeline_operations=self._build_reservation_aware_tpm_ops(
+                    targets=scopes,
+                    reserved_scopes=frozenset(scopes),
+                    actual_tokens=0,
+                    reserved_tokens=amount,
+                ),
+                parent_otel_span=parent_otel_span,
+            )
+            return
+        pipeline_operations: Final = self._build_project_reservation_ops(
+            targets=scopes,
+            reserved_scopes=frozenset(scopes),
+            actual_tokens=0,
+            reserved_tokens=amount,
+            reservation_window_identities=reservation_windows,
+        )
+        await self.async_increment_reservation_aware_tokens(
+            pipeline_operations=pipeline_operations,
+            parent_otel_span=parent_otel_span,
+        )
+
+    async def reserve_io_tokens(
+        self,
+        descriptors: Sequence[RateLimitDescriptor],
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+        parent_otel_span: Span | None = None,
+    ) -> tuple[RateLimitResponse, int, int]:
+        """
+        Reserve ``estimated_input_tokens`` against project ITPM descriptors
+        and ``estimated_output_tokens`` against project OTPM descriptors.
+
+        ITPM and OTPM are reserved from different-sized estimates, so unlike
+        same-size TPM descriptors they can't share a single
+        ``atomic_check_and_increment_by_n`` call -- each bucket gets its own
+        all-or-nothing atomic call. If the OTPM reservation is over limit
+        after ITPM already succeeded, the ITPM reservation this call made is
+        rolled back before returning, so a partial reservation never leaks.
+
+        Returns ``(response, itpm_reserved, otpm_reserved)`` -- the latter two
+        are the amounts actually reserved (0 if that bucket wasn't
+        configured, or if the reservation failed), for the caller to stash
+        for post-call reconciliation.
+        """
+        itpm_descriptors: Final = [  # mutable-ok: atomic limiter API requires lists
+            d for d in descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
+        ]
+        otpm_descriptors: Final = [  # mutable-ok: atomic limiter API requires lists
+            d for d in descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+        ]
+
+        if not itpm_descriptors and not otpm_descriptors:
+            return RateLimitResponse(overall_code="OK", statuses=[]), 0, 0  # mutable-ok: response contract uses a list
+
+        itpm_response: Final = (
+            await self.atomic_check_and_increment_by_n(
+                descriptors=itpm_descriptors,
+                increments=[  # mutable-ok: atomic limiter API requires mutable increment records
+                    {"tokens": estimated_input_tokens}  # mutable-ok: atomic limiter increment record
+                    for _ in itpm_descriptors
+                ],
+                parent_otel_span=parent_otel_span,
+            )
+            if itpm_descriptors
+            else None
+        )
+        if itpm_response is not None and itpm_response["overall_code"] == "OVER_LIMIT":
+            return itpm_response, 0, 0
+        itpm_reserved: Final = estimated_input_tokens if itpm_response is not None else 0
+
+        if otpm_descriptors:
+            otpm_response: Final = await self.atomic_check_and_increment_by_n(
+                descriptors=otpm_descriptors,
+                increments=[  # mutable-ok: atomic limiter API requires mutable increment records
+                    {"tokens": estimated_output_tokens}  # mutable-ok: atomic limiter increment record
+                    for _ in otpm_descriptors
+                ],
+                parent_otel_span=parent_otel_span,
+            )
+            if otpm_response["overall_code"] == "OVER_LIMIT":
+                if itpm_reserved > 0:
+                    await self._refund_reserved_tokens(
+                        scopes=[  # mutable-ok: reservation rollback accepts collected scopes
+                            (d["key"], d["value"]) for d in itpm_descriptors
+                        ],
+                        amount=itpm_reserved,
+                        reservation_windows=itpm_response.get("reservation_windows", frozenset()),
+                        parent_otel_span=parent_otel_span,
+                    )
+                return otpm_response, 0, 0
+            statuses: Final = (
+                [  # mutable-ok: response contract uses a list
+                    *itpm_response["statuses"],
+                    *otpm_response["statuses"],
+                ]
+                if itpm_response is not None
+                else otpm_response["statuses"]
+            )
+            return (
+                RateLimitResponse(
+                    overall_code="OK",
+                    statuses=statuses,
+                    reservation_windows=(
+                        (
+                            itpm_response.get("reservation_windows", frozenset())
+                            if itpm_response is not None
+                            else frozenset()
+                        )
+                        | otpm_response.get("reservation_windows", frozenset())
+                    ),
+                ),
+                itpm_reserved,
+                estimated_output_tokens,
+            )
+
+        assert itpm_response is not None
+        return itpm_response, itpm_reserved, 0
+
+    async def enforce_project_io_token_quota_for_frame(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        requested_model: str | None,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+    ) -> None:
+        """Reserve one WebSocket ``response.create`` frame's tokens against
+        the caller's project ITPM/OTPM quota.
+
+        The Responses WebSocket connection-level pre-call hook only runs once
+        per connection, but a connection accepts many ``response.create``
+        frames over its lifetime. Without this, a project caller could send
+        unlimited high-token generations after a single minimal reservation.
+        There is no per-frame post-call hook to reconcile against, so --
+        like the batch rate limiter -- this charges the estimate immediately
+        and never refunds it.
+        """
+        if user_api_key_dict is None:
+            return
+        descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: descriptor helper appends in place
+        self.add_project_io_token_rate_limit_descriptors_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+        if not descriptors:
+            return
+        response, _itpm_reserved, _otpm_reserved = await self.reserve_io_tokens(
+            descriptors=descriptors,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        if response["overall_code"] == "OVER_LIMIT":
+            self._handle_rate_limit_error(response, descriptors, requested_model)
+
+    def _rate_limited_model(self, requested_model: str | None) -> RateLimitedModel | None:
+        if not requested_model:
+            return None
+        return RateLimitedModel(
+            requested=requested_model,
+            group=self._model_group_resolver(requested_model) or requested_model,
         )
 
     def create_organization_rate_limit_descriptor(
@@ -1749,43 +2776,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
-        # Model specific org rate limits
-        if (
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None:
+            return descriptors
+        model_specific_tpm_limit: Final = model.limit_in(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_tpm_limit")
+        )
+        model_specific_rpm_limit: Final = model.limit_in(
             get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_rpm_limit")
-            is not None
-            or get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_tpm_limit")
-            is not None
-        ):
-            _tpm_limit_for_team_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_tpm_limit") or {}
+        )
+        if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
+            return descriptors
+        descriptors.append(
+            RateLimitDescriptor(
+                key="model_per_organization",
+                value=f"{user_api_key_dict.org_id}:{model.group}",
+                rate_limit={
+                    "requests_per_unit": model_specific_rpm_limit,
+                    "tokens_per_unit": model_specific_tpm_limit,
+                    "window_size": self.window_size,
+                },
             )
-            _rpm_limit_for_team_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "organization_metadata", "model_rpm_limit") or {}
-            )
-
-            should_check_rate_limit = False
-            if requested_model in _tpm_limit_for_team_model or requested_model in _rpm_limit_for_team_model:
-                should_check_rate_limit = True
-
-            if should_check_rate_limit:
-                model_specific_tpm_limit = None
-                model_specific_rpm_limit = None
-                if requested_model in _tpm_limit_for_team_model:
-                    model_specific_tpm_limit = _tpm_limit_for_team_model[requested_model]
-                if requested_model in _rpm_limit_for_team_model:
-                    model_specific_rpm_limit = _rpm_limit_for_team_model[requested_model]
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_organization",
-                        value=f"{user_api_key_dict.org_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
-
+        )
         return descriptors
 
     def _add_model_per_key_rate_limit_descriptor(
@@ -1807,34 +2819,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             get_key_model_tpm_limit,
         )
 
-        if not requested_model:
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None:
             return
-
-        _tpm_limit_for_key_model = get_key_model_tpm_limit(user_api_key_dict, model_name=requested_model)
-        _rpm_limit_for_key_model = get_key_model_rpm_limit(user_api_key_dict, model_name=requested_model)
-
-        if _tpm_limit_for_key_model is None and _rpm_limit_for_key_model is None:
-            return
-
-        _tpm_limit_for_key_model = _tpm_limit_for_key_model or {}
-        _rpm_limit_for_key_model = _rpm_limit_for_key_model or {}
-
-        # Check if model has any rate limits configured
-        should_check_rate_limit: Final = (
-            requested_model in _tpm_limit_for_key_model or requested_model in _rpm_limit_for_key_model
+        model_specific_tpm_limit: Final = model.limit_in(
+            get_key_model_tpm_limit(user_api_key_dict, model_name=model.group)
         )
-
-        if not should_check_rate_limit:
+        model_specific_rpm_limit: Final = model.limit_in(
+            get_key_model_rpm_limit(user_api_key_dict, model_name=model.group)
+        )
+        if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
             return
-
-        # Get model-specific limits
-        model_specific_tpm_limit: Final[int | None] = _tpm_limit_for_key_model.get(requested_model)
-        model_specific_rpm_limit: Final[int | None] = _rpm_limit_for_key_model.get(requested_model)
 
         descriptors.append(
             RateLimitDescriptor(
                 key="model_per_key",
-                value=f"{user_api_key_dict.api_key}:{requested_model}",
+                value=f"{user_api_key_dict.api_key}:{model.group}",
                 rate_limit={
                     "requests_per_unit": model_specific_rpm_limit,
                     "tokens_per_unit": model_specific_tpm_limit,
@@ -2112,6 +3112,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return descriptors
 
+    async def _create_tag_rate_limit_descriptors(self, data: Mapping[str, object]) -> tuple[RateLimitDescriptor, ...]:
+        tags: Final = tuple(dict.fromkeys(get_tags_from_request_body(data)))
+        if not tags:
+            return ()
+        tag_limits: Final = await self._tag_rate_limit_resolver(tags)
+        return tuple(
+            _tag_rate_limit_descriptor(tag, limit, self.window_size)
+            for tag in tags
+            if (limit := tag_limits.get(tag)) is not None
+        )
+
     def _create_rate_limit_descriptors(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2127,12 +3138,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns list of descriptors for API key, user, team, team member, end user,
         model-specific, agent, and agent-session limits.
         """
-        from litellm.proxy.auth.auth_utils import (
-            get_team_model_rpm_limit,
-            get_team_model_tpm_limit,
-        )
-
-        descriptors: Final = []
+        descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: existing descriptor helpers append in place
 
         # API Key rate limits
         if user_api_key_dict.api_key and (
@@ -2257,34 +3263,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptors=descriptors,
             )
 
-        if (
-            get_team_model_rpm_limit(user_api_key_dict) is not None
-            or get_team_model_tpm_limit(user_api_key_dict) is not None
-        ):
-            _tpm_limit_for_team_model: Final = get_team_model_tpm_limit(user_api_key_dict) or {}
-            _rpm_limit_for_team_model: Final = get_team_model_rpm_limit(user_api_key_dict) or {}
-            should_check_rate_limit = False
-            if requested_model in _tpm_limit_for_team_model or requested_model in _rpm_limit_for_team_model:
-                should_check_rate_limit = True
-
-            if should_check_rate_limit:
-                model_specific_tpm_limit = None
-                model_specific_rpm_limit = None
-                if requested_model in _tpm_limit_for_team_model:
-                    model_specific_tpm_limit = _tpm_limit_for_team_model[requested_model]
-                if requested_model in _rpm_limit_for_team_model:
-                    model_specific_rpm_limit = _rpm_limit_for_team_model[requested_model]
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_team",
-                        value=f"{user_api_key_dict.team_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
+        self._add_team_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model if isinstance(requested_model, str) else None,
+            descriptors=descriptors,
+        )
 
         # Agent-level and session-level rate limits
         resolved_agent_id: Final = self._get_resolved_agent_id(user_api_key_dict, data)
@@ -2362,41 +3345,66 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return batch_limiter
         return None
 
+    def _key_owns_model_limit(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: RateLimitedModel,
+        rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    ) -> bool:
+        return model.limit_in(get_key_own_model_rate_limit(user_api_key_dict, rate_limit_key)) is not None
+
+    def _inherited_team_model_limit(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: RateLimitedModel,
+        rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    ) -> int | None:
+        team_limit: Final = model.limit_in(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", rate_limit_key)
+        )
+        if team_limit is None or self._key_owns_model_limit(user_api_key_dict, model, rate_limit_key):
+            return None
+        return team_limit
+
+    def _key_owns_model_tpm_limit_from_request_metadata(
+        self,
+        request_metadata: Mapping[str, object],
+        model: RateLimitedModel | None,
+    ) -> bool:
+        if model is None:
+            return False
+        key_view: Final = UserAPIKeyAuth.model_validate(
+            {
+                "metadata": request_metadata.get("user_api_key_metadata") or {},
+                "model_max_budget": request_metadata.get("user_api_key_model_max_budget") or {},
+            }
+        )
+        return self._key_owns_model_limit(key_view, model, "model_tpm_limit")
+
     def _add_team_model_rate_limit_descriptor_from_metadata(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         requested_model: str | None,
         descriptors: list[RateLimitDescriptor],
     ) -> None:
-        """Add team model rate limit descriptor from team_metadata if applicable."""
-        if (
-            get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_rpm_limit") is not None
-            or get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit") is not None
-        ):
-            _tpm_limit_for_team_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_tpm_limit") or {}
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None:
+            return
+        team_rpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_rpm_limit")
+        team_tpm_limit: Final = self._inherited_team_model_limit(user_api_key_dict, model, "model_tpm_limit")
+        if team_rpm_limit is None and team_tpm_limit is None:
+            return
+        descriptors.append(
+            RateLimitDescriptor(
+                key="model_per_team",
+                value=f"{user_api_key_dict.team_id}:{model.group}",
+                rate_limit={
+                    "requests_per_unit": team_rpm_limit,
+                    "tokens_per_unit": team_tpm_limit,
+                    "window_size": self.window_size,
+                },
             )
-            _rpm_limit_for_team_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", "model_rpm_limit") or {}
-            )
-            should_check_rate_limit: Final = (
-                requested_model in _tpm_limit_for_team_model or requested_model in _rpm_limit_for_team_model
-            )
-
-            if should_check_rate_limit and requested_model is not None:
-                model_specific_tpm_limit: Final = _tpm_limit_for_team_model.get(requested_model)
-                model_specific_rpm_limit: Final = _rpm_limit_for_team_model.get(requested_model)
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_team",
-                        value=f"{user_api_key_dict.team_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
-                )
+        )
 
     def _add_project_model_rate_limit_descriptor_from_metadata(
         self,
@@ -2405,34 +3413,80 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: list[RateLimitDescriptor],
     ) -> None:
         """Add project model rate limit descriptor from project_metadata if applicable."""
-        if (
-            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_rpm_limit") is not None
-            or get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_tpm_limit") is not None
-        ):
-            _tpm_limit_for_project_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_tpm_limit") or {}
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None:
+            return
+        model_specific_tpm_limit: Final = model.limit_in(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_tpm_limit")
+        )
+        model_specific_rpm_limit: Final = model.limit_in(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_rpm_limit")
+        )
+        if model_specific_tpm_limit is None and model_specific_rpm_limit is None:
+            return
+        descriptors.append(
+            RateLimitDescriptor(
+                key="model_per_project",
+                value=f"{user_api_key_dict.project_id}:{model.group}",
+                rate_limit={
+                    "requests_per_unit": model_specific_rpm_limit,
+                    "tokens_per_unit": model_specific_tpm_limit,
+                    "window_size": self.window_size,
+                },
             )
-            _rpm_limit_for_project_model: Final = (
-                get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_rpm_limit") or {}
-            )
-            should_check_rate_limit: Final = (
-                requested_model in _tpm_limit_for_project_model or requested_model in _rpm_limit_for_project_model
-            )
+        )
 
-            if should_check_rate_limit and requested_model is not None:
-                model_specific_tpm_limit: Final = _tpm_limit_for_project_model.get(requested_model)
-                model_specific_rpm_limit: Final = _rpm_limit_for_project_model.get(requested_model)
-                descriptors.append(
-                    RateLimitDescriptor(
-                        key="model_per_project",
-                        value=f"{user_api_key_dict.project_id}:{requested_model}",
-                        rate_limit={
-                            "requests_per_unit": model_specific_rpm_limit,
-                            "tokens_per_unit": model_specific_tpm_limit,
-                            "window_size": self.window_size,
-                        },
-                    )
+    def add_project_io_token_rate_limit_descriptors_from_metadata(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        descriptors: _RateLimitDescriptorSink,
+    ) -> None:
+        """Add project-scoped ITPM/OTPM descriptors from project_metadata.
+
+        Enforced independently of, and alongside, the combined ``model_per_project``
+        TPM descriptor above -- these give Bedrock Mantle-style separate input/output
+        token quotas at the project level.
+        """
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or user_api_key_dict.project_id is None:
+            return
+
+        model_itpm_limit: Final = model.limit_in(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_itpm_limit")
+        )
+        model_otpm_limit: Final = model.limit_in(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_otpm_limit")
+        )
+
+        if model_itpm_limit is None and model_otpm_limit is None:
+            return
+
+        descriptor_value: Final = f"{user_api_key_dict.project_id}:{model.group}"
+        if model_itpm_limit is not None:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key=PROJECT_ITPM_DESCRIPTOR_KEY,
+                    value=descriptor_value,
+                    rate_limit={  # mutable-ok: descriptor TypedDict requires a runtime dict
+                        "requests_per_unit": None,
+                        "tokens_per_unit": model_itpm_limit,
+                        "window_size": self.window_size,
+                    },
                 )
+            )
+        if model_otpm_limit is not None:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key=PROJECT_OTPM_DESCRIPTOR_KEY,
+                    value=descriptor_value,
+                    rate_limit={  # mutable-ok: descriptor TypedDict requires a runtime dict
+                        "requests_per_unit": None,
+                        "tokens_per_unit": model_otpm_limit,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
 
     def _handle_rate_limit_error(
         self,
@@ -2445,14 +3499,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
                 matching_descriptor = next(
-                    (desc for desc in descriptors if desc["key"] == descriptor_key),
+                    (
+                        desc
+                        for desc in descriptors
+                        if desc["key"] == descriptor_key
+                        and ((status_value := status.get("descriptor_value")) is None or desc["value"] == status_value)
+                    ),
                     None,
                 )
                 descriptor_value = matching_descriptor["value"] if matching_descriptor is not None else "unknown"
 
                 now = self._get_current_time().timestamp()
                 reset_time = now + self.window_size
-                reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+                reset_time_formatted = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
 
                 remaining_display = max(0, status["limit_remaining"])
                 rate_limit_type = status["rate_limit_type"]
@@ -2477,6 +3538,439 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     model=resolved_model,
                     llm_provider=llm_provider,
                 )
+
+    @staticmethod
+    def _estimate_audio_block_tokens(block: object) -> int:
+        """
+        Token estimate for one ``input_audio`` content block.
+
+        When the block carries a base64 ``data`` payload, the estimate comes
+        from the decoded byte count (``len(b64) * 3 // 4 // _AUDIO_BYTES_PER_TOKEN``),
+        assuming the lowest reasonable audio bitrate so we never under-reserve
+        for higher-quality recordings of the same duration.
+
+        When no payload is present (reference-only block or missing ``data``),
+        falls back to ``DEFAULT_AUDIO_TOKEN_ESTIMATE``.
+        """
+        if not isinstance(block, dict):
+            return DEFAULT_AUDIO_TOKEN_ESTIMATE
+        input_audio: Final = block.get("input_audio")
+        b64_data: Final = input_audio.get("data") if isinstance(input_audio, dict) else None
+        if b64_data and isinstance(b64_data, str):
+            decoded_bytes: Final = len(b64_data) * 3 // 4
+            return max(decoded_bytes // _AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+        return DEFAULT_AUDIO_TOKEN_ESTIMATE
+
+    @classmethod
+    def _estimate_audio_content_tokens(cls, messages: object) -> int:
+        """
+        Sum of per-block audio token estimates across all ``messages``.
+        Returns 0 when there are no ``input_audio`` blocks, which the caller
+        uses to skip the (relatively expensive) strip pass.
+        """
+        if not isinstance(messages, list):
+            return 0
+        return sum(
+            cls._estimate_audio_block_tokens(block)
+            for message in messages
+            if isinstance(message, dict)
+            for content in (message.get("content"),)
+            if isinstance(content, list)
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "input_audio"
+        )
+
+    @staticmethod
+    def _strip_audio_content_blocks(messages: object) -> object:
+        """
+        Drop ``input_audio`` content blocks before passing ``messages`` to
+        ``token_counter``, which raises ``ValueError`` on them (no per-type
+        handling, unlike images). The audio contribution is added back
+        separately via ``DEFAULT_AUDIO_TOKEN_ESTIMATE`` so the rest of the
+        message (text/images/tools) still gets counted accurately instead of
+        the whole call falling back to the cheap char-count estimate.
+        """
+        if not isinstance(messages, list):
+            return messages
+        sanitized: Final[list[object]] = []  # mutable-ok: token_counter requires a list of message dicts
+        for message in messages:
+            if not isinstance(message, dict):
+                sanitized.append(message)
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                sanitized.append(message)
+                continue
+            filtered_content = [  # mutable-ok: token_counter requires list content blocks
+                block for block in content if not (isinstance(block, dict) and block.get("type") == "input_audio")
+            ]
+            sanitized.append(
+                {**message, "content": filtered_content}  # mutable-ok: token_counter requires message dicts
+            )
+        return sanitized
+
+    @staticmethod
+    def _responses_input_to_chat_messages(data: object) -> Sequence[object]:
+        """
+        Convert a Responses API ``input`` (string or list of input items) into
+        chat-completion-style messages via the standard LiteLLM transformation
+        (the same one guardrails use, e.g. ``purview_dlp.py``), so multimodal
+        ``input_image``/``input_text`` content blocks get counted by
+        ``token_counter``'s ``messages`` path instead of silently contributing
+        zero tokens via its ``text`` path, which only joins plain strings.
+        """
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        if not isinstance(data, dict):
+            return ()
+        return LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=data.get("input") or "",
+            responses_api_request=data,
+        )
+
+    @staticmethod
+    def _count_pretokenized_embedding_input(value: object) -> int | None:
+        if not isinstance(value, list):
+            return None
+        if all(isinstance(token, int) for token in value):
+            return len(value)
+        if all(
+            isinstance(token_ids, list) and all(isinstance(token, int) for token in token_ids) for token_ids in value
+        ):
+            return sum(len(token_ids) for token_ids in value)
+        return None
+
+    @staticmethod
+    def _rerank_input_to_text(data: Mapping[str, object]) -> str:
+        documents: Final = data.get("documents")
+        document_items: Final[Sequence[object]] = documents if isinstance(documents, list) else ()  # pyright: ignore[reportUnknownVariableType]  # rerank documents are validated runtime JSON
+        input_parts: Final[tuple[object, ...]] = (  # pyright: ignore[reportUnknownVariableType]  # list narrowing preserves unknown JSON element types
+            data.get("query"),
+            *document_items,
+        )
+        return "\n".join(
+            str(part)  # pyright: ignore[reportUnknownArgumentType]  # accepted document dicts have provider-defined fields
+            for part in input_parts  # pyright: ignore[reportUnknownVariableType]  # runtime JSON list elements remain unknown after list narrowing
+            if isinstance(part, (str, dict))
+        )
+
+    def _estimate_precise_input_tokens(self, data: object, model: str | None, call_type: str | None = None) -> int:
+        """
+        Model-aware input token estimate for the project ITPM reservation,
+        using ``litellm.token_counter`` -- the same approach the
+        deployment-level itpm/otpm check uses in
+        ``io_token_rate_limit_check.py``. Unlike the cheap char-count
+        estimate the combined-TPM path uses, this accounts for image/tool
+        content and derives per-``input_audio``-block estimates from the
+        base64 payload size (assuming the lowest reasonable bitrate so
+        longer recordings always reserve proportionally more), so a burst
+        of multimodal, tool-heavy, or audio-heavy requests can't each
+        reserve only the one-token floor and blow past ITPM before
+        post-call reconciliation catches up.
+
+        For the Responses API, ``input`` is converted to chat messages first
+        (via ``_responses_input_to_chat_messages``) so its own multimodal
+        content blocks are counted the same way; ``token_counter``'s ``text``
+        argument can only see plain strings in a list, not content blocks.
+
+        Falls back to the cheap char-count estimate if ``token_counter``
+        can't resolve a tokenizer for this model (e.g. an unrecognized
+        custom model name) or otherwise raises -- the audio add-on still
+        applies on top of the fallback.
+        """
+        from litellm import token_counter
+
+        if not isinstance(data, dict):
+            return 0
+        is_responses_request: Final = call_type in RESPONSES_API_CALL_TYPES
+        translated_request: Final = (
+            None if is_responses_request else self._translate_google_genai_native_request(data, call_type)
+        )
+        is_embedding_request: Final = self._is_embedding_request(data, call_type)
+        embedding_text: Final = data.get("input") if is_embedding_request else None
+        pretokenized_input_tokens: Final = (
+            self._count_pretokenized_embedding_input(embedding_text) if is_embedding_request else None
+        )
+        if pretokenized_input_tokens is not None:
+            return pretokenized_input_tokens
+
+        prompt: Final = data.get("prompt")
+        fallback_text: Final = prompt if prompt is not None else data.get("input")
+        selected_inputs: Final[tuple[object | None, object | None, object | None, object | None]] = (
+            (self._responses_input_to_chat_messages(data), None, data.get("tools"), data.get("tool_choice"))
+            if is_responses_request
+            else (
+                translated_request.get("messages"),
+                None,
+                translated_request.get("tools"),
+                translated_request.get("tool_choice"),
+            )
+            if translated_request is not None
+            else (None, embedding_text, data.get("tools"), data.get("tool_choice"))
+            if is_embedding_request
+            else (None, self._rerank_input_to_text(data), data.get("tools"), data.get("tool_choice"))
+            if call_type in RERANK_API_CALL_TYPES
+            else (None, prompt, data.get("tools"), data.get("tool_choice"))
+            if call_type in TEXT_COMPLETION_API_CALL_TYPES
+            else (data.get("messages"), fallback_text, data.get("tools"), data.get("tool_choice"))
+        )
+        messages, selected_text, countable_tools, countable_tool_choice = selected_inputs
+
+        audio_token_estimate: Final = self._estimate_audio_content_tokens(messages)
+        countable_messages: Final = self._strip_audio_content_blocks(messages) if audio_token_estimate > 0 else messages
+
+        try:
+            estimate: Final = max(
+                0,
+                int(
+                    token_counter(
+                        model=model or "",
+                        messages=countable_messages,
+                        text=selected_text,
+                        tools=countable_tools,
+                        tool_choice=countable_tool_choice,
+                        use_default_image_token_count=True,
+                    )
+                ),
+            )
+            return estimate + audio_token_estimate
+        except Exception:  # noqa: BLE001  # tokenizer failures degrade to the cheap estimate
+            if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
+                return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
+            estimated_input_tokens, _ = self._estimate_input_and_output_tokens(data=data, call_type=call_type)
+            return estimated_input_tokens + audio_token_estimate
+
+    async def _reserve_project_io_tokens_or_raise(
+        self,
+        descriptors: Sequence[RateLimitDescriptor],
+        data: object,
+        requested_model: str | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        tpm_reservation_scopes: Sequence[tuple[str, str]],
+        tpm_reservation_amount: int,
+        call_type: str | None = None,
+    ) -> None:
+        """
+        Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
+        separate input/output token buckets), independently of -- and, when
+        both are configured, in addition to -- the combined-TPM reservation
+        the caller already made. Raises (via ``_handle_rate_limit_error``) on
+        an over-limit reservation, first rolling back the combined-TPM
+        reservation named by ``tpm_reservation_scopes``/``tpm_reservation_amount``
+        if one was made, so a partial reservation never leaks.
+        """
+        if not isinstance(data, dict):
+            return
+        stash: Final = claim_request_stash_for_data(data)
+        io_token_descriptors: Final = [  # mutable-ok: reservation API requires descriptor lists
+            d for d in descriptors if d["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+        ]
+        if not io_token_descriptors:
+            return
+
+        configured_otpm_limits: Final = [  # mutable-ok: min calculation materializes validated limits
+            int(v)
+            for d in io_token_descriptors
+            if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+            for v in [  # mutable-ok: comprehension binds the optional descriptor value
+                (d.get("rate_limit") or {}).get(  # mutable-ok: optional descriptor fallback
+                    "tokens_per_unit"
+                )
+            ]
+            if v is not None
+        ]
+        min_configured_otpm_limit: Final = min(configured_otpm_limits) if configured_otpm_limits else None
+        _, raw_estimated_output_tokens = self._estimate_input_and_output_tokens(
+            data=data,
+            min_configured_tpm_limit=min_configured_otpm_limit,
+            call_type=call_type,
+        )
+        raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
+            data=data, model=requested_model, call_type=call_type
+        )
+        estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
+        estimated_output_tokens: Final = (
+            raw_estimated_output_tokens
+            if self._has_explicit_output_cap(data, call_type)
+            else max(raw_estimated_output_tokens, 1)
+        )
+
+        # Hard-cap generation length so an unbounded response can't overshoot
+        # the OTPM budget before post-call reconciliation runs, mirroring the
+        # combined-TPM floor cap in the caller.
+        self._apply_implicit_output_cap(
+            data=data,
+            min_configured_limit=min_configured_otpm_limit,
+            call_type=call_type,
+        )
+
+        io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
+            descriptors=io_token_descriptors,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+
+        if io_response["overall_code"] == "OVER_LIMIT":
+            # A combined-TPM reservation may have already succeeded above for
+            # this same request; refund it too, or its counter stays inflated
+            # until the window's TTL expires. Mark it released so the
+            # ProxyRateLimitError we're about to raise doesn't get refunded
+            # a second time when async_post_call_failure_hook sees the same
+            # (still-stashed) reservation and refunds it again.
+            if tpm_reservation_amount > 0:
+                await self._refund_reserved_tokens(
+                    scopes=tpm_reservation_scopes,
+                    amount=tpm_reservation_amount,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                stash.reservation_released = True
+            await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+            self._handle_rate_limit_error(
+                response=io_response,
+                descriptors=descriptors,
+                requested_model=requested_model,
+            )
+
+        if itpm_reserved > 0:
+            itpm_scopes: Final = tuple(
+                (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_ITPM_DESCRIPTOR_KEY
+            )
+            stash.itpm_reserved_tokens = itpm_reserved
+            stash.itpm_reserved_scopes = frozenset(itpm_scopes)
+            stash.itpm_reserved_window_identities = frozenset(
+                (counter_key, window_start, backend)
+                for counter_key, window_start, backend in io_response.get("reservation_windows", frozenset())
+                if "model_per_project_itpm" in counter_key
+            )
+        if otpm_reserved > 0:
+            otpm_scopes: Final = tuple(
+                (d["key"], d["value"]) for d in io_token_descriptors if d["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+            )
+            stash.otpm_reserved_tokens = otpm_reserved
+            stash.otpm_reserved_scopes = frozenset(otpm_scopes)
+            stash.otpm_reserved_window_identities = frozenset(
+                (counter_key, window_start, backend)
+                for counter_key, window_start, backend in io_response.get("reservation_windows", frozenset())
+                if "model_per_project_otpm" in counter_key
+            )
+
+        if stash.rate_limit_response is not None:
+            stash.rate_limit_response["statuses"].extend(io_response["statuses"])
+        elif io_response["statuses"]:
+            stash.rate_limit_response = io_response
+
+        verbose_proxy_logger.debug(
+            "ITPM/OTPM tokens reserved: itpm=%s, otpm=%s for model %s",
+            itpm_reserved,
+            otpm_reserved,
+            requested_model,
+        )
+
+    async def _build_request_rate_limit_descriptors(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: Mapping[str, object],
+        call_type: str | None,
+    ) -> list[RateLimitDescriptor]:  # mutable-ok: the shared generation reservation helpers require a list
+        metadata: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(
+            user_api_key_dict.metadata or MappingProxyType({})  # pyright: ignore[reportUnknownMemberType]  # validates the legacy auth metadata boundary
+        )
+        rpm_value: Final = metadata.get("rpm_limit_type")
+        tpm_value: Final = metadata.get("tpm_limit_type")
+        rpm_limit_type: Final = rpm_value if isinstance(rpm_value, str) else None
+        tpm_limit_type: Final = tpm_value if isinstance(tpm_value, str) else None
+        model_value: Final = data.get("model")
+        requested_model: Final = model_value if isinstance(model_value, str) else None
+        model_has_failures: Final = (
+            await self._check_model_has_recent_failures(
+                model=requested_model,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+            )
+            if requested_model and self._is_dynamic_rate_limiting_enabled(rpm_limit_type, tpm_limit_type)
+            else False
+        )
+        descriptors: Final = self._create_rate_limit_descriptors(  # pyright: ignore[reportUnknownMemberType]  # legacy helper reads a dictionary with validated keys
+            user_api_key_dict=user_api_key_dict,
+            data=dict(data),  # mutable-ok: legacy descriptor helpers accept a request dictionary
+            rpm_limit_type=rpm_limit_type,
+            tpm_limit_type=tpm_limit_type,
+            model_has_failures=model_has_failures,
+            call_type=call_type,
+        )
+        self._add_project_model_rate_limit_descriptor_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+        self.add_project_io_token_rate_limit_descriptors_from_metadata(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model,
+            descriptors=descriptors,
+        )
+        return [  # mutable-ok: the shared generation reservation helpers require a list
+            *descriptors,
+            *self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model),
+            *await self._create_tag_rate_limit_descriptors(data),
+        ]
+
+    async def _release_request_capacity_when_admitted(
+        self,
+        admission: asyncio.Task[RateLimitResponse],
+        acquisition: ParallelSlotAcquisition,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        response: Final = await admission
+        if response["overall_code"] == "OK":
+            await self._release_parallel_request_slots(acquisition, user_api_key_dict.parent_otel_span)
+
+    @asynccontextmanager
+    async def request_capacity(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model: str,
+        *,
+        request_data: Mapping[str, object] | None = None,
+    ) -> AsyncGenerator[None, None]:
+        """Charge one non-generation provider request to RPM and hold its concurrency slot."""
+        data: Final = MappingProxyType({**(request_data or MappingProxyType({})), "model": model})
+        descriptors: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
+        acquisition: Final = ParallelSlotAcquisition(
+            slot_id=uuid.uuid4().hex,
+            counter_keys=[  # mutable-ok: the shared slot-release contract requires a list
+                self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
+                for d in descriptors
+                if d["rate_limit"] is not None and d["rate_limit"].get("max_parallel_requests") is not None
+            ],
+        )
+        admission: Final = asyncio.create_task(
+            self.should_rate_limit(
+                descriptors=descriptors,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                skip_tpm_check=True,
+                parallel_slot_id=acquisition["slot_id"],
+            )
+        )
+        try:
+            response: Final = await asyncio.shield(admission)
+            if response["overall_code"] == "OVER_LIMIT":
+                self._handle_rate_limit_error(response, descriptors, model)
+            yield
+        finally:
+            cleanup: Final = asyncio.create_task(
+                self._release_request_capacity_when_admitted(admission, acquisition, user_api_key_dict)
+            )
+            cancellation: asyncio.CancelledError | None = None  # rebind-ok: retain cancellation until cleanup finishes
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError as exc:
+                    cancellation = exc
+            cleanup.result()
+            if cancellation is not None:
+                raise cancellation
 
     async def async_pre_call_hook(
         self,
@@ -2506,53 +4000,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 call_type=call_type,
             )
 
-        # Get rate limit types from metadata
-        metadata: Final = user_api_key_dict.metadata or {}
-        rpm_limit_type: Final = metadata.get("rpm_limit_type")
-        tpm_limit_type: Final = metadata.get("tpm_limit_type")
-
-        # For dynamic mode, check if the model has recent failures
-        model_has_failures = False
-        requested_model: Final = data.get("model", None)
-
-        if (
-            self._is_dynamic_rate_limiting_enabled(
-                rpm_limit_type=rpm_limit_type,
-                tpm_limit_type=tpm_limit_type,
-            )
-            and requested_model
-        ):
-            model_has_failures = await self._check_model_has_recent_failures(
-                model=requested_model,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-            )
-
-        # Create rate limit descriptors
-        descriptors: Final = self._create_rate_limit_descriptors(
+        request_data: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
+        model_value: Final = request_data.get("model")
+        requested_model: Final = model_value if isinstance(model_value, str) else None
+        descriptors: Final = await self._build_request_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
-            data=data,
-            rpm_limit_type=rpm_limit_type,
-            tpm_limit_type=tpm_limit_type,
-            model_has_failures=model_has_failures,
+            data=request_data,
             call_type=call_type,
         )
-
-        # Add team model rate limits from team_metadata
-        self._add_team_model_rate_limit_descriptor_from_metadata(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=requested_model,
-            descriptors=descriptors,
+        stash.tpm_limited_tags = frozenset(
+            d["value"]
+            for d in descriptors
+            if d["key"] == "tag" and d["rate_limit"] is not None and d["rate_limit"].get("tokens_per_unit") is not None
         )
-
-        # Project Level Rate Limits
-        self._add_project_model_rate_limit_descriptor_from_metadata(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=requested_model,
-            descriptors=descriptors,
-        )
-
-        # Org Level Rate Limits
-        descriptors.extend(self.create_organization_rate_limit_descriptor(user_api_key_dict, requested_model))
 
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
@@ -2565,7 +4025,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # in-flight request would pre-inflate the :tokens counter by 1,
             # shrinking the effective TPM budget by N and causing
             # false-positive 429s under bursts. When reservation is disabled,
-            # this pass enforces TPM directly from the post-call counters.
+            # this pass enforces TPM directly from the post-call counters --
+            # except for project ITPM/OTPM descriptors, which are excluded
+            # then because _reserve_project_io_tokens_or_raise below charges
+            # them unconditionally and counting them here too would
+            # double-charge every request.
             parallel_counter_keys: Final = [
                 self.create_rate_limit_keys(d["key"], d["value"], "max_parallel_requests")
                 for d in descriptors
@@ -2573,8 +4037,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             ]
             parallel_slot_id: Final = uuid.uuid4().hex if parallel_counter_keys else None
 
+            first_pass_descriptors: Final = (
+                descriptors
+                if self.tpm_reservation_enabled
+                else tuple(
+                    d for d in descriptors if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                )
+            )
             response: Final = await self.should_rate_limit(
-                descriptors=descriptors,
+                descriptors=first_pass_descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
                 skip_tpm_check=self.tpm_reservation_enabled,
                 parallel_slot_id=parallel_slot_id,
@@ -2606,32 +4077,39 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             configured_tpm_limits: Final = [
                 int(v)
                 for d in descriptors
+                if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
                 for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
                 if v is not None
             ]
             has_tpm_limits: Final = bool(configured_tpm_limits)
 
+            # Populated on a successful combined-TPM reservation below, so the
+            # project ITPM/OTPM block further down can roll it back if a
+            # different bucket in the same request subsequently hits its
+            # limit. Stays empty/0 whenever no combined-TPM reservation was
+            # made (or it was over limit, in which case execution never
+            # reaches the ITPM/OTPM block -- `_handle_rate_limit_error` raises).
+            tpm_reservation_scopes: Sequence[tuple[str, str]] = ()  # rebind-ok: set after successful reservation
+            tpm_reservation_amount = 0  # rebind-ok: set after successful reservation
+
             if has_tpm_limits and self.tpm_reservation_enabled:
                 min_configured_tpm_limit: Final = min(configured_tpm_limits)
 
-                # When the configured TPM cap is small enough to constrain the
-                # no-max_tokens floor, also hard-cap the model output via
-                # data["max_tokens"] so concurrent unbounded generations can't
-                # spend past the limit before post-call reconciliation runs.
-                # Skip when the request already sets max_tokens or has no
-                # generation budget at all (embeddings).
-                capped_floor: Final = self._no_max_tokens_output_floor(min_configured_tpm_limit)
-                baseline_floor: Final = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
-                has_explicit_max_tokens: Final = (
-                    data.get("max_tokens") is not None or data.get("max_completion_tokens") is not None
-                )
-                is_embedding: Final = data.get("input") is not None
                 configured_output_tokens: Final = get_estimated_output_tokens(
                     user_api_key_dict=user_api_key_dict,
                     model_name=requested_model,
                 )
-                if capped_floor < baseline_floor and not has_explicit_max_tokens and not is_embedding:
-                    data["max_tokens"] = max(capped_floor, configured_output_tokens or 0)
+
+                # When the configured TPM cap is small enough to constrain the
+                # no-max_tokens floor, also hard-cap the model output so
+                # concurrent unbounded generations can't spend past the limit
+                # before post-call reconciliation runs.
+                self._apply_implicit_output_cap(
+                    data=data,
+                    min_configured_limit=min_configured_tpm_limit,
+                    call_type=call_type,
+                    configured_output_tokens=configured_output_tokens,
+                )
 
                 # Floor at 1 token so contentless requests (/responses,
                 # tool-call continuations, empty messages) still flow
@@ -2645,6 +4123,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         data=data,
                         model=requested_model,
                         min_configured_tpm_limit=min_configured_tpm_limit,
+                        call_type=call_type,
                         configured_output_tokens=configured_output_tokens,
                     ),
                     1,
@@ -2669,13 +4148,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
 
                 if tpm_response["overall_code"] == "OVER_LIMIT":
-                    acquisition: Final = stash.parallel_slot
-                    if acquisition is not None:
-                        await self._release_parallel_request_slots(
-                            acquisition=acquisition,
-                            parent_otel_span=user_api_key_dict.parent_otel_span,
-                        )
-                        stash.parallel_slot = None
+                    await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
@@ -2687,12 +4160,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
                     stash.reserved_tokens = estimated_tokens
-                    stash.reserved_model = requested_model
+                    stash.reserved_model = self._rate_limited_model(requested_model)
                     stash.reserved_scopes = frozenset(
                         (d["key"], d["value"])
                         for d in descriptors
-                        if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+                        if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                        and (d.get("rate_limit") or {}).get(  # mutable-ok: optional descriptor fallback
+                            "tokens_per_unit"
+                        )
+                        is not None
                     )
+                    tpm_reservation_scopes = tuple(  # rebind-ok: record successful reservation scopes
+                        stash.reserved_scopes
+                    )
+                    tpm_reservation_amount = estimated_tokens  # rebind-ok: record successful reservation amount
 
                     # Merge TPM statuses into the stored rate-limit response
                     # so x-ratelimit-{key}-remaining-tokens / -limit-tokens
@@ -2706,6 +4187,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     verbose_proxy_logger.debug(
                         "TPM tokens reserved: %s for model %s", estimated_tokens, requested_model
                     )
+            await self._reserve_project_io_tokens_or_raise(
+                descriptors=descriptors,
+                data=data,
+                requested_model=requested_model,
+                user_api_key_dict=user_api_key_dict,
+                tpm_reservation_scopes=tpm_reservation_scopes,
+                tpm_reservation_amount=tpm_reservation_amount,
+                call_type=call_type,
+            )
 
     def _create_pipeline_operations(
         self,
@@ -2782,7 +4272,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return total_tokens
 
     @staticmethod
-    def _aggregate_only_total_tokens(usage: Usage | dict | None) -> int:
+    def _aggregate_only_total_tokens(usage: Usage | ResponseAPIUsage | Mapping[str, object] | None) -> int:
         """Total for usage that carries no input/output split, else 0.
 
         A source that can only report one number for the whole request (a
@@ -2792,23 +4282,42 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         uncharged, which is how pass-through traffic slips past a TPM limit
         it is supposed to share.
         """
-        if isinstance(usage, Usage):
-            prompt_tokens, completion_tokens, total_tokens = (
-                usage.prompt_tokens or 0,
-                usage.completion_tokens or 0,
-                usage.total_tokens or 0,
-            )
-        elif isinstance(usage, dict):
-            prompt_tokens, completion_tokens, total_tokens = (
-                usage.get("prompt_tokens") or 0,
-                usage.get("completion_tokens") or 0,
+        if usage is None:
+            return 0
+        token_counts: Final = (
+            (usage.prompt_tokens or 0, usage.completion_tokens or 0, usage.total_tokens or 0)
+            if isinstance(usage, Usage)
+            else (usage.input_tokens or 0, usage.output_tokens or 0, usage.total_tokens or 0)
+            if isinstance(usage, ResponseAPIUsage)
+            else (
+                usage.get("prompt_tokens") or usage.get("input_tokens") or 0,
+                usage.get("completion_tokens") or usage.get("output_tokens") or 0,
                 usage.get("total_tokens") or 0,
             )
-        else:
-            return 0
-        if prompt_tokens or completion_tokens:
+        )
+        prompt_tokens, completion_tokens, total_tokens = token_counts
+        if prompt_tokens or completion_tokens or not isinstance(total_tokens, int):
             return 0
         return total_tokens
+
+    @staticmethod
+    def _response_usage(
+        response_obj: object,
+    ) -> Usage | ResponseAPIUsage | Mapping[str, object] | None:
+        if isinstance(response_obj, (Usage, ResponseAPIUsage)):
+            return response_obj
+        if isinstance(
+            response_obj,
+            (ModelResponse, EmbeddingResponse, TextCompletionResponse, BaseLiteLLMOpenAIResponseObject),
+        ):
+            usage: Final = getattr(response_obj, "usage", None)
+            return usage if isinstance(usage, (Usage, ResponseAPIUsage, dict)) else None
+        if isinstance(response_obj, dict):
+            nested_usage: Final = response_obj.get("usage")
+            if isinstance(nested_usage, (Usage, ResponseAPIUsage, dict)):
+                return nested_usage
+            return response_obj
+        return None
 
     async def _execute_token_increment_script(
         self,
@@ -2844,10 +4353,42 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 keys.append(op["key"])
                 args.extend([op["increment_value"], ttl_value])
 
+            if self._defer_token_increment_script(keys, args, group_operations):
+                continue
             await self.token_increment_script(
                 keys=keys,
                 args=args,
             )
+
+    def _defer_token_increment_script(
+        self,
+        keys: list[str],
+        args: list[int],
+        group_operations: list["RedisPipelineIncrementOperation"],
+    ) -> bool:
+        """Declared into the request's post-call pipeline instead of its own EVALSHA round trip; a failed
+        script falls back to the plain increment pipeline for its own group, as the direct path does."""
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        script: Final = self.token_increment_script
+        batch: Final = None if redis_cache is None else active_post_call_redis_batch(redis_cache)
+        if batch is None or script is None:
+            return False
+
+        async def fall_back(future: asyncio.Future[object]) -> None:
+            if future.cancelled() or future.exception() is None:
+                return
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.WARNING,
+                "TTL preservation failed, falling back to regular pipeline",
+                future.exception(),
+            )
+            await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                increment_list=group_operations,
+            )
+
+        batch.script(TOKEN_INCREMENT_SCRIPT, script, keys, args).on_settled(fall_back)
+        return True
 
     async def async_increment_tokens_with_ttl_preservation(
         self,
@@ -2878,11 +4419,124 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         except Exception as e:
-            verbose_proxy_logger.warning("TTL preservation failed, falling back to regular pipeline: %s", e)
+            log_redis_failure(
+                verbose_proxy_logger, logging.WARNING, "TTL preservation failed, falling back to regular pipeline", e
+            )
             # Fallback to regular pipeline on error
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                 increment_list=pipeline_operations,
                 litellm_parent_otel_span=parent_otel_span,
+            )
+
+    async def _apply_local_window_guarded_token_increments(
+        self,
+        operations: Sequence[ReservationAwareIncrementOperation],
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        async with self._check_and_increment_lock:
+            for operation in operations:
+                window_key = operation.get("window_key")
+                expected_window_start = operation.get("expected_window_start")
+                if window_key is None or expected_window_start is None:
+                    continue
+                active_window_start: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
+                    key=window_key,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+                if active_window_start is None or str(active_window_start) != expected_window_start:
+                    continue
+                current_counter = (
+                    await self.internal_usage_cache.async_get_cache(
+                        key=operation["key"],
+                        litellm_parent_otel_span=parent_otel_span,
+                        local_only=True,
+                    )
+                    or 0
+                )
+                await self.internal_usage_cache.async_set_cache(
+                    key=operation["key"],
+                    value=float(current_counter) + operation["increment_value"],
+                    ttl=operation["ttl"],
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+
+    async def _apply_redis_window_guarded_token_increments(
+        self,
+        operations: Sequence[ReservationAwareIncrementOperation],
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        for operation in operations:
+            window_key = operation.get("window_key")
+            expected_window_start = operation.get("expected_window_start")
+            if window_key is None or expected_window_start is None:
+                continue
+            if self.window_guarded_token_increment_script is not None:
+                try:
+                    await self.window_guarded_token_increment_script(
+                        keys=[  # mutable-ok: Redis script interface requires a key list
+                            window_key,
+                            operation["key"],
+                        ],
+                        args=[  # mutable-ok: Redis script interface requires an argument list
+                            expected_window_start,
+                            operation["increment_value"],
+                            operation["ttl"] or 0,
+                        ],
+                    )
+                    continue
+                except Exception as e:  # noqa: BLE001  # Redis failures use the plain increment fallback
+                    log_redis_failure(
+                        verbose_proxy_logger,
+                        logging.WARNING,
+                        f"Window-guarded token adjustment failed for {operation['key']}",
+                        e,
+                    )
+            if operation["increment_value"] > 0:
+                await self.internal_usage_cache.async_increment_cache(
+                    key=operation["key"],
+                    value=operation["increment_value"],
+                    litellm_parent_otel_span=parent_otel_span,
+                    ttl=operation["ttl"],
+                )
+
+    async def async_increment_reservation_aware_tokens(
+        self,
+        pipeline_operations: Sequence[ReservationAwareIncrementOperation],
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        for operation in pipeline_operations:
+            if operation.get("window_key") is None or operation.get("expected_window_start") is None:
+                await self.internal_usage_cache.async_increment_cache(
+                    key=operation["key"],
+                    value=operation["increment_value"],
+                    litellm_parent_otel_span=parent_otel_span,
+                    ttl=operation["ttl"],
+                )
+        local_guarded_operations: Final = tuple(
+            operation
+            for operation in pipeline_operations
+            if operation.get("window_key") is not None
+            and operation.get("expected_window_start") is not None
+            and operation.get("reservation_backend") == "local"
+        )
+        redis_guarded_operations: Final = tuple(
+            operation
+            for operation in pipeline_operations
+            if operation.get("window_key") is not None
+            and operation.get("expected_window_start") is not None
+            and operation.get("reservation_backend") != "local"
+        )
+        if local_guarded_operations:
+            await self._apply_local_window_guarded_token_increments(
+                operations=local_guarded_operations,
+                parent_otel_span=parent_otel_span,
+            )
+        if redis_guarded_operations:
+            await self._apply_redis_window_guarded_token_increments(
+                operations=redis_guarded_operations,
+                parent_otel_span=parent_otel_span,
             )
 
     def get_rate_limit_type(self) -> Literal["output", "input", "total"]:
@@ -2914,11 +4568,170 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             merged[f"{prefix}-limit-{status['rate_limit_type']}"] = status["current_limit"]
         return merged
 
+    @staticmethod
+    def _resolve_rerank_token_usage(response_obj: object) -> tuple[int, int, bool] | None:
+        if not isinstance(response_obj, RerankResponse) or response_obj.meta is None:
+            return None
+
+        rerank_tokens: Final = response_obj.meta.get("tokens")  # pyright: ignore[reportUnknownMemberType]  # TypedDict's optional generic metadata widens get overloads
+        if rerank_tokens is not None:
+            input_tokens: Final = rerank_tokens.get("input_tokens") or 0  # pyright: ignore[reportUnknownMemberType]  # token fields are typed integers despite the generic get overload
+            output_tokens: Final = rerank_tokens.get("output_tokens") or 0  # pyright: ignore[reportUnknownMemberType]  # token fields are typed integers despite the generic get overload
+            if input_tokens or output_tokens:
+                return max(0, input_tokens), max(0, output_tokens), True
+
+        billed_units: Final = response_obj.meta.get("billed_units")  # pyright: ignore[reportUnknownMemberType]  # TypedDict's optional generic metadata widens get overloads
+        if billed_units is not None:
+            total_tokens: Final = billed_units.get("total_tokens") or 0  # pyright: ignore[reportUnknownMemberType]  # billed total is a typed integer despite the generic get overload
+            if total_tokens:
+                return max(0, total_tokens), 0, True
+        return None
+
+    def _resolve_io_token_reconcile_usage(
+        self,
+        response_obj: object,
+    ) -> tuple[int, int, bool]:
+        """
+        Resolve ``(billable_input_tokens, completion_tokens, usage_resolved)``
+        for ITPM/OTPM reconciliation. Cache-read tokens are excluded from
+        billable input -- Bedrock Mantle doesn't count them toward ITPM --
+        but they're untouched everywhere else (cost/usage logging still sees
+        the full prompt token count).
+        """
+        rerank_usage: Final = self._resolve_rerank_token_usage(response_obj)
+        if rerank_usage is not None:
+            return rerank_usage
+
+        usage: Final = self._response_usage(response_obj)
+
+        if isinstance(usage, Usage):
+            prompt_tokens: Final = usage.prompt_tokens or 0
+            completion_tokens: Final = usage.completion_tokens or 0
+            cached_tokens: Final = (
+                getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                if usage.prompt_tokens_details is not None
+                else 0
+            )
+            if prompt_tokens == 0 and completion_tokens == 0:
+                return 0, 0, False
+            return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+
+        if isinstance(usage, ResponseAPIUsage):
+            response_input_tokens: Final = usage.input_tokens or 0
+            response_output_tokens: Final = usage.output_tokens or 0
+            response_cached_tokens: Final = (
+                usage.input_tokens_details.cached_tokens or 0 if usage.input_tokens_details is not None else 0
+            )
+            if response_input_tokens == 0 and response_output_tokens == 0:
+                return 0, 0, False
+            return max(0, response_input_tokens - response_cached_tokens), response_output_tokens, True
+
+        if isinstance(usage, Mapping):
+            raw_prompt_tokens: Final = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+            raw_completion_tokens: Final = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+            mapped_prompt_tokens: Final = raw_prompt_tokens if isinstance(raw_prompt_tokens, int) else 0
+            mapped_completion_tokens: Final = raw_completion_tokens if isinstance(raw_completion_tokens, int) else 0
+            prompt_details: Final = usage.get("prompt_tokens_details") or usage.get("input_tokens_details")
+            raw_cached_tokens: Final = (
+                (prompt_details.get("cached_tokens", 0) if isinstance(prompt_details, dict) else 0)
+                or usage.get("cache_read_input_tokens")
+                or 0
+            )
+            mapped_cached_tokens: Final = raw_cached_tokens if isinstance(raw_cached_tokens, int) else 0
+            if mapped_prompt_tokens == 0 and mapped_completion_tokens == 0:
+                return 0, 0, False
+            return max(0, mapped_prompt_tokens - mapped_cached_tokens), mapped_completion_tokens, True
+
+        return 0, 0, False
+
+    def _build_io_token_reservation_ops(
+        self,
+        kwargs: object,
+        response_obj: object,
+    ) -> Sequence[RedisPipelineIncrementOperation]:
+        """
+        Reconcile project ITPM/OTPM reservations to actual usage on success:
+        ITPM to billable input tokens, OTPM to actual completion tokens.
+        Reuses ``_build_reservation_aware_tpm_ops``'s delta pattern -- ITPM/OTPM
+        are stored in the same ":tokens" cache bucket as combined TPM, just
+        under distinct scope keys, so the reservation-aware increment math is
+        identical; only the usage fields being reconciled against differ.
+        """
+        if not isinstance(kwargs, dict):
+            return ()
+        stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
+        if stash is None:
+            return ()
+
+        itpm_reserved: Final = stash.itpm_reserved_tokens
+        otpm_reserved: Final = stash.otpm_reserved_tokens
+        if itpm_reserved <= 0 and otpm_reserved <= 0:
+            return ()
+
+        response_usage: Final = self._resolve_io_token_reconcile_usage(response_obj)
+        combined_usage: Final = self._resolve_io_token_reconcile_usage(kwargs.get("combined_usage_object"))
+        aggregate_total: Final = self._aggregate_only_total_tokens(
+            self._response_usage(response_obj)
+        ) or self._aggregate_only_total_tokens(self._response_usage(kwargs.get("combined_usage_object")))
+
+        if not response_usage[2] and not combined_usage[2] and aggregate_total <= 0 and not stash.reservation_released:
+            return ()
+        resolved_usage: Final = (
+            response_usage
+            if response_usage[2]
+            else combined_usage
+            if combined_usage[2]
+            else (aggregate_total, aggregate_total, True)
+            if aggregate_total > 0
+            else (itpm_reserved, otpm_reserved, False)
+        )
+        billable_input, completion_tokens, _ = resolved_usage
+
+        if stash.reservation_released or (
+            not stash.itpm_reserved_window_identities and not stash.otpm_reserved_window_identities
+        ):
+            return self._build_reservation_aware_tpm_ops(
+                targets=tuple(stash.itpm_reserved_scopes),
+                reserved_scopes=frozenset() if stash.reservation_released else stash.itpm_reserved_scopes,
+                actual_tokens=billable_input,
+                reserved_tokens=0 if stash.reservation_released else itpm_reserved,
+            ) + self._build_reservation_aware_tpm_ops(
+                targets=tuple(stash.otpm_reserved_scopes),
+                reserved_scopes=frozenset() if stash.reservation_released else stash.otpm_reserved_scopes,
+                actual_tokens=completion_tokens,
+                reserved_tokens=0 if stash.reservation_released else otpm_reserved,
+            )
+
+        itpm_ops: Final[Sequence[ReservationAwareIncrementOperation]] = (
+            self._build_project_reservation_ops(
+                targets=tuple(stash.itpm_reserved_scopes),
+                reserved_scopes=frozenset() if stash.reservation_released else stash.itpm_reserved_scopes,
+                actual_tokens=billable_input,
+                reserved_tokens=itpm_reserved,
+                reservation_window_identities=stash.itpm_reserved_window_identities,
+            )
+            if itpm_reserved > 0
+            else ()
+        )
+        otpm_ops: Final[Sequence[ReservationAwareIncrementOperation]] = (
+            self._build_project_reservation_ops(
+                targets=tuple(stash.otpm_reserved_scopes),
+                reserved_scopes=frozenset() if stash.reservation_released else stash.otpm_reserved_scopes,
+                actual_tokens=completion_tokens,
+                reserved_tokens=otpm_reserved,
+                reservation_window_identities=stash.otpm_reserved_window_identities,
+            )
+            if otpm_reserved > 0
+            else ()
+        )
+        return tuple((*itpm_ops, *otpm_ops))
+
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: dict[str, Any],
-        kwargs: Any,
+        kwargs: object,
         model_group: str | None,
+        tpm_limited_tags: Set[str] = frozenset(),
     ) -> list[tuple[str, str]]:
         """
         Enumerate every (scope_key, scope_value) pair that *might* carry a
@@ -2974,12 +4787,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             targets.append(("agent", agent_id))
             if session_id:
                 targets.append(("agent_session", f"{agent_id}:{session_id}"))
+        targets.extend(("tag", tag) for tag in sorted(tpm_limited_tags))
         return targets
 
     def _build_reservation_aware_tpm_ops(
         self,
-        targets: list[tuple[str, str]],
-        reserved_scopes: frozenset[tuple[str, str]],
+        targets: Sequence[tuple[str, str]],
+        reserved_scopes: Set[tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
     ) -> list[RedisPipelineIncrementOperation]:
@@ -3012,10 +4826,70 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         return ops
 
+    def _build_project_reservation_op(
+        self,
+        scope: tuple[str, str],
+        reserved_scopes: Set[tuple[str, str]],
+        actual_tokens: int,
+        reserved_tokens: int,
+        reservation_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]],
+    ) -> ReservationAwareIncrementOperation | None:
+        scope_key, scope_value = scope
+        is_reserved_scope: Final = scope in reserved_scopes
+        increment: Final = actual_tokens - reserved_tokens if is_reserved_scope else actual_tokens
+        if increment == 0:
+            return None
+        counter_key: Final = self.create_rate_limit_keys(scope_key, scope_value, "tokens")
+        window_identity: Final = next(
+            (
+                (window_start, backend)
+                for identity_counter_key, window_start, backend in reservation_window_identities
+                if identity_counter_key == counter_key
+            ),
+            None,
+        )
+        if not is_reserved_scope or window_identity is None:
+            return ReservationAwareIncrementOperation(
+                key=counter_key,
+                increment_value=increment,
+                ttl=self.window_size,
+            )
+        return ReservationAwareIncrementOperation(
+            key=counter_key,
+            increment_value=increment,
+            ttl=self.window_size,
+            window_key=f"{{{scope_key}:{scope_value}}}:window",
+            expected_window_start=window_identity[0],
+            reservation_backend=window_identity[1],
+        )
+
+    def _build_project_reservation_ops(
+        self,
+        targets: Sequence[tuple[str, str]],
+        reserved_scopes: Set[tuple[str, str]],
+        actual_tokens: int,
+        reserved_tokens: int,
+        reservation_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]],
+    ) -> tuple[ReservationAwareIncrementOperation, ...]:
+        return tuple(
+            operation
+            for scope in targets
+            if (
+                operation := self._build_project_reservation_op(
+                    scope=scope,
+                    reserved_scopes=reserved_scopes,
+                    actual_tokens=actual_tokens,
+                    reserved_tokens=reserved_tokens,
+                    reservation_window_identities=reservation_window_identities,
+                )
+            )
+            is not None
+        )
+
     def _build_success_event_pipeline_operations(
         self,
-        kwargs: Any,
-        response_obj: Any,
+        kwargs: dict[str, Any],
+        response_obj: object,
         rate_limit_type: Literal["output", "input", "total"],
     ) -> list[RedisPipelineIncrementOperation]:
         """Build Redis pipeline increment ops for TPM / parallel-request counters."""
@@ -3028,9 +4902,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
         request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
-            # Internal sub-calls bill spend to the caller but are not the caller's
-            # traffic; charging them here would let background evals eat TPM headroom.
+        origin: Final = request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        if origin and origin != "autorouter_compaction":
+            # Background evaluations keep their exemption; foreground compaction
+            # is necessary caller traffic and consumes the caller's token limits.
             return []
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 
@@ -3066,9 +4941,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
         # Reconciliation must target the same model-scoped counter that the
         # pre-call reservation incremented. If a reservation was made,
-        # ``reserved_model`` is authoritative; otherwise fall back to the
-        # router's ``model_group`` (covers the no-reservation charge path).
-        reconcile_model: Final = reserved_model or model_group
+        # ``reserved_model`` (resolved at admission, so an alias map reload
+        # mid-flight cannot move the charge) is authoritative; otherwise fall
+        # back to the router's ``model_group`` (the no-reservation charge path).
+        reconcile_model: Final = reserved_model if reserved_model is not None else self._rate_limited_model(model_group)
 
         pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
@@ -3086,7 +4962,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         targets: Final = self._collect_tpm_scope_targets(
             standard_logging_metadata=standard_logging_metadata,
             kwargs=kwargs,
-            model_group=reconcile_model,
+            tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
+            model_group=reconcile_model.group if reconcile_model is not None else None,
+        )
+        charged_targets: Final = (
+            [target for target in targets if target[0] != "model_per_team"]
+            if self._key_owns_model_tpm_limit_from_request_metadata(request_metadata, reconcile_model)
+            else targets
         )
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
@@ -3097,7 +4979,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         pipeline_operations.extend(
             self._build_reservation_aware_tpm_ops(
-                targets=targets,
+                targets=charged_targets,
                 reserved_scopes=reserved_scopes,
                 actual_tokens=total_tokens,
                 reserved_tokens=reserved_tokens,
@@ -3121,25 +5003,33 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-            acquisition: Final = stash.parallel_slot if stash is not None else None
-            if stash is not None and acquisition is not None:
-                await self._release_parallel_request_slots(
-                    acquisition=acquisition,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
-                stash.parallel_slot = None
+            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
 
             pipeline_operations: Final = self._build_success_event_pipeline_operations(
                 kwargs=kwargs,
                 response_obj=response_obj,
                 rate_limit_type=rate_limit_type,
             )
-
             if pipeline_operations:
                 await self.async_increment_tokens_with_ttl_preservation(
                     pipeline_operations=pipeline_operations,
                     parent_otel_span=litellm_parent_otel_span,
                 )
+            io_token_operations: Final = self._build_io_token_reservation_ops(
+                kwargs=kwargs,
+                response_obj=response_obj,
+            )
+            if io_token_operations:
+                if isinstance(io_token_operations, list):
+                    await self.async_increment_tokens_with_ttl_preservation(
+                        pipeline_operations=io_token_operations,
+                        parent_otel_span=litellm_parent_otel_span,
+                    )
+                else:
+                    await self.async_increment_reservation_aware_tokens(
+                        pipeline_operations=io_token_operations,
+                        parent_otel_span=litellm_parent_otel_span,
+                    )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
@@ -3203,12 +5093,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 statuses=statuses,
             )
 
+    def _recovered_partial_usage_tokens(self, source: Mapping[str, object]) -> tuple[int, int, int]:
+        usage: Final = source.get("combined_usage_object")
+        if not isinstance(usage, Usage) or (usage.completion_tokens or 0) <= 0:
+            return 0, 0, 0
+        billable_input, completion_tokens, _ = self._resolve_io_token_reconcile_usage(usage)
+        return (
+            self._get_total_tokens_from_usage(usage=usage, rate_limit_type=self.get_rate_limit_type()),
+            billable_input,
+            completion_tokens,
+        )
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         On failure: decrement max_parallel_requests and refund the upfront
         TPM reservation only against the scopes the reservation actually
         charged. Unreserved scopes were never incremented at pre-call, so
-        refunding them would drive their counter negative.
+        refunding them would drive their counter negative. A failed stream
+        whose partial usage was recovered settles the reservation at that
+        usage instead of refunding it.
         """
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
@@ -3220,43 +5123,90 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-            acquisition: Final = stash.parallel_slot if stash is not None else None
-            if stash is not None and acquisition is not None:
-                await self._release_parallel_request_slots(
-                    acquisition=acquisition,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
-                stash.parallel_slot = None
+            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
 
             # Skip the reservation refund if async_post_call_failure_hook
             # already released it (proxy-level rejection that also bubbles up
             # here as an LLM-error callback). max_parallel_requests is its
             # own counter and is always decremented per call.
-            reserved_tokens = 0
-            if stash is not None and not stash.reservation_released:
-                reserved_tokens = stash.reserved_tokens
+            reserved_tokens, itpm_reserved, otpm_reserved = (
+                (0, 0, 0)
+                if stash is None or stash.reservation_released
+                else (stash.reserved_tokens, stash.itpm_reserved_tokens, stash.otpm_reserved_tokens)
+            )
+            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(kwargs)
+
             if stash is not None and reserved_tokens > 0:
-                verbose_proxy_logger.debug("Releasing reserved TPM tokens on failure: %s", reserved_tokens)
-                # Refund only against the scopes the reservation actually
-                # charged. _build_reservation_aware_tpm_ops with
-                # actual_tokens=0 emits -reserved on reserved scopes and 0
-                # on unreserved (skipped), so unreserved scopes can't drift
-                # negative.
+                verbose_proxy_logger.debug(
+                    "Settling reserved TPM tokens on failure: reserved=%s actual=%s", reserved_tokens, tpm_actual
+                )
+                # Settle only against the scopes the reservation actually
+                # charged: unreserved scopes were never incremented, so a
+                # refund there would drive their counter negative.
                 pipeline_operations.extend(
                     self._build_reservation_aware_tpm_ops(
                         targets=list(stash.reserved_scopes),
                         reserved_scopes=stash.reserved_scopes,
-                        actual_tokens=0,
+                        actual_tokens=tpm_actual,
                         reserved_tokens=reserved_tokens,
                     )
                 )
 
-            if pipeline_operations:
-                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                    increment_list=pipeline_operations,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
+            # Settle project ITPM/OTPM reservations the same way: at the
+            # recovered partial usage, or a full refund when there is none.
+            itpm_operations: Final = (
+                self._build_project_reservation_ops(
+                    targets=tuple(stash.itpm_reserved_scopes),
+                    reserved_scopes=stash.itpm_reserved_scopes,
+                    actual_tokens=itpm_actual,
+                    reserved_tokens=itpm_reserved,
+                    reservation_window_identities=stash.itpm_reserved_window_identities,
                 )
-            if stash is not None and reserved_tokens > 0:
+                if stash is not None and itpm_reserved > 0 and stash.itpm_reserved_window_identities
+                else self._build_reservation_aware_tpm_ops(
+                    targets=tuple(stash.itpm_reserved_scopes),
+                    reserved_scopes=stash.itpm_reserved_scopes,
+                    actual_tokens=itpm_actual,
+                    reserved_tokens=itpm_reserved,
+                )
+                if stash is not None and itpm_reserved > 0
+                else ()
+            )
+
+            otpm_operations: Final = (
+                self._build_project_reservation_ops(
+                    targets=tuple(stash.otpm_reserved_scopes),
+                    reserved_scopes=stash.otpm_reserved_scopes,
+                    actual_tokens=otpm_actual,
+                    reserved_tokens=otpm_reserved,
+                    reservation_window_identities=stash.otpm_reserved_window_identities,
+                )
+                if stash is not None and otpm_reserved > 0 and stash.otpm_reserved_window_identities
+                else self._build_reservation_aware_tpm_ops(
+                    targets=tuple(stash.otpm_reserved_scopes),
+                    reserved_scopes=stash.otpm_reserved_scopes,
+                    actual_tokens=otpm_actual,
+                    reserved_tokens=otpm_reserved,
+                )
+                if stash is not None and otpm_reserved > 0
+                else ()
+            )
+
+            if pipeline_operations:
+                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
+                    pipeline_operations, parent_otel_span=litellm_parent_otel_span
+                )
+            for project_operations in (itpm_operations, otpm_operations):
+                if isinstance(project_operations, list):
+                    await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
+                        project_operations, parent_otel_span=litellm_parent_otel_span
+                    )
+                elif project_operations:
+                    await self.async_increment_reservation_aware_tokens(
+                        pipeline_operations=project_operations,
+                        parent_otel_span=litellm_parent_otel_span,
+                    )
+            if stash is not None and (reserved_tokens > 0 or itpm_reserved > 0 or otpm_reserved > 0):
                 stash.reservation_released = True
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
@@ -3279,52 +5229,61 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         object's current max_parallel_requests configuration, which can
         change mid-request) decides whether there is anything to release.
         """
-        stash: Final = get_request_stash()
-        if stash is None or stash.parallel_slot is None:
-            return
-
-        await self._release_parallel_request_slots(
-            acquisition=stash.parallel_slot,
-            parent_otel_span=None,
-        )
-        stash.parallel_slot = None
+        await self._release_stashed_parallel_slot(get_request_stash(), None)
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """
-        Post-call hook to update rate limit headers in the response.
+        Release completed-request slots and update rate limit headers in the response.
         """
         try:
-            from pydantic import BaseModel
+            slot_stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(data))
+            await self._release_stashed_parallel_slot(slot_stash, user_api_key_dict.parent_otel_span)
+        except Exception as e:
+            verbose_proxy_logger.exception("Error releasing parallel request slot in post-call hook: %s", e)
 
-            stash: Final = get_request_stash()
-            litellm_proxy_rate_limit_response: Final = stash.rate_limit_response if stash is not None else None
+        try:
+            header_stash: Final = get_request_stash()
+            litellm_proxy_rate_limit_response: Final = (
+                header_stash.rate_limit_response if header_stash is not None else None
+            )
 
-            if litellm_proxy_rate_limit_response is not None:
-                # Update response headers
-                if hasattr(response, "_hidden_params"):
-                    _hidden_params = getattr(response, "_hidden_params")
-                else:
-                    _hidden_params = None
-
-                if _hidden_params is not None and (
-                    isinstance(_hidden_params, BaseModel) or isinstance(_hidden_params, dict)
-                ):
-                    if isinstance(_hidden_params, BaseModel):
-                        _hidden_params = _hidden_params.model_dump()
-
-                    _additional_headers: Final = self._merge_ratelimit_statuses_into_additional_headers(
-                        additional_headers=_hidden_params.get("additional_headers", {}) or {},
+            if litellm_proxy_rate_limit_response is not None and response_has_hidden_params(response):
+                additional_headers: Final = ensure_response_additional_headers(response)
+                additional_headers.update(
+                    self._merge_ratelimit_statuses_into_additional_headers(
+                        additional_headers={},
                         statuses=litellm_proxy_rate_limit_response["statuses"],
                     )
-
-                    setattr(
-                        response,
-                        "_hidden_params",
-                        {**_hidden_params, "additional_headers": _additional_headers},
-                    )
+                )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit post-call hook: %s", e)
+
+        try:
+            await self._handle_batch_enqueued_post_call(user_api_key_dict=user_api_key_dict, response=response)
+        except Exception as e:  # noqa: BLE001  # post-call batch accounting must never fail the response
+            verbose_proxy_logger.exception("Error in batch enqueued-token post-call hook: %s", e)
+
+    async def _handle_batch_enqueued_post_call(self, user_api_key_dict: UserAPIKeyAuth, response: object) -> None:
+        view: Final = batch_response_view(response)
+        if view is None:
+            return
+        span: Final = user_api_key_dict.parent_otel_span
+        stash: Final = get_request_stash()
+        if stash is not None and stash.batch_enqueued_reservation is not None:
+            await self.batch_enqueued_token_store.save_reservation(
+                batch_id=canonical_provider_batch_id(view.id),
+                reservation=stash.batch_enqueued_reservation,
+                litellm_parent_otel_span=span,
+            )
+            stash.batch_enqueued_reservation = None
+        if view.status.lower() in BATCH_ENQUEUED_REFUND_STATUSES:
+            popped: Final = await self.batch_enqueued_token_store.pop_reservation(
+                batch_id=canonical_provider_batch_id(view.id),
+                litellm_parent_otel_span=span,
+            )
+            if popped is not None:
+                await self.batch_enqueued_token_store.refund(reservation=popped, litellm_parent_otel_span=span)
 
     async def async_post_call_failure_hook(
         self,
@@ -3334,51 +5293,120 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         traceback_str: str | None = None,
     ) -> None:
         """
-        Release the parallel-request slot and any TPM reservation when the
-        request is rejected after the pre-call hook acquired them but before
-        the LLM call ran (e.g. a downstream guardrail/auth hook raised).
-        Without this, those resources are stranded — async_log_failure_event
-        is a litellm completion-level callback and never fires for proxy-side
-        rejections, so a leaked slot would occupy the gauge for the full
-        PARALLEL_REQUEST_SLOT_TTL_SECONDS.
+        Release the parallel-request slot and any TPM/ITPM/OTPM reservation
+        when the request is rejected after the pre-call hook acquired them
+        but before the LLM call ran (e.g. a downstream guardrail/auth hook
+        raised). Without this, those resources are stranded —
+        async_log_failure_event is a litellm completion-level callback and
+        never fires for proxy-side rejections, so a leaked slot would occupy
+        the gauge for the full PARALLEL_REQUEST_SLOT_TTL_SECONDS.
 
         Idempotent: the slot release clears the stashed acquisition (and slot
-        removal is a no-op ZREM on a second run), and the TPM refund is
-        guarded by the stash's ``reservation_released`` flag — if both this
-        hook and async_log_failure_event end up running in the same flow, only
-        the first release/refund applies.
+        removal is a no-op ZREM on a second run), and the TPM/ITPM/OTPM
+        refund is guarded by the stash's ``reservation_released`` flag — if
+        both this hook and async_log_failure_event end up running in the same
+        flow, only the first release/refund applies. A mid-stream failure
+        relayed here with recovered partial usage settles the reservation at
+        that usage instead of refunding it.
         """
         try:
             stash: Final = get_request_stash()
             if stash is None:
                 return
-            if stash.parallel_slot is not None:
-                await self._release_parallel_request_slots(
-                    acquisition=stash.parallel_slot,
+            await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+
+            if stash.batch_enqueued_reservation is not None:
+                await self.batch_enqueued_token_store.refund(
+                    reservation=stash.batch_enqueued_reservation,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                stash.batch_enqueued_reservation = None
+
+            if stash.batch_tpd_refund_ops:
+                await self.async_increment_reservation_aware_tokens(
+                    pipeline_operations=stash.batch_tpd_refund_ops,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
-                stash.parallel_slot = None
+                stash.batch_tpd_refund_ops = ()
 
             if stash.reservation_released:
                 return
             reserved_tokens: Final = stash.reserved_tokens
-            if reserved_tokens <= 0:
+            itpm_reserved: Final = stash.itpm_reserved_tokens
+            otpm_reserved: Final = stash.otpm_reserved_tokens
+            if reserved_tokens <= 0 and itpm_reserved <= 0 and otpm_reserved <= 0:
                 return
+            tpm_actual, itpm_actual, otpm_actual = self._recovered_partial_usage_tokens(request_data)
 
-            ops: Final = self._build_reservation_aware_tpm_ops(
-                targets=list(stash.reserved_scopes),
-                reserved_scopes=stash.reserved_scopes,
-                actual_tokens=0,
-                reserved_tokens=reserved_tokens,
-            )
-            if ops:
-                verbose_proxy_logger.debug(
-                    "Releasing reserved TPM tokens on proxy-level rejection: %s", reserved_tokens
+            combined_ops: Final = (
+                self._build_reservation_aware_tpm_ops(
+                    targets=tuple(stash.reserved_scopes),
+                    reserved_scopes=stash.reserved_scopes,
+                    actual_tokens=tpm_actual,
+                    reserved_tokens=reserved_tokens,
                 )
+                if reserved_tokens > 0
+                else ()
+            )
+            itpm_ops: Final = (
+                self._build_project_reservation_ops(
+                    targets=tuple(stash.itpm_reserved_scopes),
+                    reserved_scopes=stash.itpm_reserved_scopes,
+                    actual_tokens=itpm_actual,
+                    reserved_tokens=itpm_reserved,
+                    reservation_window_identities=stash.itpm_reserved_window_identities,
+                )
+                if itpm_reserved > 0 and stash.itpm_reserved_window_identities
+                else self._build_reservation_aware_tpm_ops(
+                    targets=tuple(stash.itpm_reserved_scopes),
+                    reserved_scopes=stash.itpm_reserved_scopes,
+                    actual_tokens=itpm_actual,
+                    reserved_tokens=itpm_reserved,
+                )
+                if itpm_reserved > 0
+                else ()
+            )
+            otpm_ops: Final = (
+                self._build_project_reservation_ops(
+                    targets=tuple(stash.otpm_reserved_scopes),
+                    reserved_scopes=stash.otpm_reserved_scopes,
+                    actual_tokens=otpm_actual,
+                    reserved_tokens=otpm_reserved,
+                    reservation_window_identities=stash.otpm_reserved_window_identities,
+                )
+                if otpm_reserved > 0 and stash.otpm_reserved_window_identities
+                else self._build_reservation_aware_tpm_ops(
+                    targets=tuple(stash.otpm_reserved_scopes),
+                    reserved_scopes=stash.otpm_reserved_scopes,
+                    actual_tokens=otpm_actual,
+                    reserved_tokens=otpm_reserved,
+                )
+                if otpm_reserved > 0
+                else ()
+            )
+            if combined_ops or itpm_ops or otpm_ops:
+                verbose_proxy_logger.debug(
+                    "Releasing reserved tokens on proxy-level rejection: tpm=%s, itpm=%s, otpm=%s",
+                    reserved_tokens,
+                    itpm_reserved,
+                    otpm_reserved,
+                )
+            if combined_ops:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                    increment_list=ops,
+                    increment_list=combined_ops,
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
+            for project_ops in (itpm_ops, otpm_ops):
+                if isinstance(project_ops, list):
+                    await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                        increment_list=project_ops,
+                        litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                    )
+                elif project_ops:
+                    await self.async_increment_reservation_aware_tokens(
+                        pipeline_operations=project_ops,
+                        parent_otel_span=user_api_key_dict.parent_otel_span,
+                    )
             stash.reservation_released = True
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)

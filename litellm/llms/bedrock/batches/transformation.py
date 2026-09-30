@@ -1,11 +1,13 @@
 import os
 import re
 import time
-from typing import Any, Final, Literal, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix, is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
@@ -25,14 +27,18 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateBatchRequest,
 )
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import LiteLLMBatch, LlmProviders, Usage
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     CommonBatchFilesUtils,
     merge_bedrock_aws_request_params,
+    resolve_s3_bucket_owner,
     resolve_s3_encryption_key_id,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # Bedrock batch input files are uploaded as
 # s3://bucket/litellm-bedrock-files-{model, ":" -> "-"}-{uuid4}.jsonl (see
@@ -46,6 +52,26 @@ _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
 _BEDROCK_TAGS_ADAPTER: Final[TypeAdapter[list[BedrockTag]]] = TypeAdapter(list[BedrockTag])
 
 
+def _build_s3_input_config(s3_uri: str, s3_bucket_owner: str | None) -> BedrockS3InputDataConfig:
+    if s3_bucket_owner is None:
+        return BedrockS3InputDataConfig(s3Uri=s3_uri)
+    return BedrockS3InputDataConfig(s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner)
+
+
+def _build_s3_output_config(
+    s3_uri: str, s3_bucket_owner: str | None, s3_encryption_key_id: str | None
+) -> BedrockS3OutputDataConfig:
+    if s3_bucket_owner is None:
+        if s3_encryption_key_id is None:
+            return BedrockS3OutputDataConfig(s3Uri=s3_uri)
+        return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3EncryptionKeyId=s3_encryption_key_id)
+    if s3_encryption_key_id is None:
+        return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner)
+    return BedrockS3OutputDataConfig(
+        s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner, s3EncryptionKeyId=s3_encryption_key_id
+    )
+
+
 def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
     try:
         return _BEDROCK_TAGS_ADAPTER.validate_python(raw_tags, strict=True)
@@ -54,6 +80,20 @@ def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
             "Invalid 'bedrock_tags' value. Expected a list of {'key': <str>, 'value': <str>} dicts, "
             f"e.g. [{{'key': 'team', 'value': 'genai'}}]. Got: {raw_tags!r}"
         ) from e
+
+
+def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) -> Usage | None:
+    """Titan embedding batch lines report usage as a top-level inputTextTokenCount, not a usage block."""
+    if "embedding" not in model_output and "embeddingsByType" not in model_output:
+        return None
+    input_text_token_count: Final = model_output.get("inputTextTokenCount")
+    if isinstance(input_text_token_count, bool) or not isinstance(input_text_token_count, int):
+        return None
+    return Usage(
+        prompt_tokens=input_text_token_count,
+        completion_tokens=0,
+        total_tokens=input_text_token_count,
+    )
 
 
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
@@ -138,8 +178,10 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         aws_region_name: Final = self._get_aws_region_name(request_params, model)
 
         # Bedrock model invocation job endpoint
-        # Format: https://bedrock.{region}.amazonaws.com/model-invocation-job
-        bedrock_endpoint: Final = f"https://bedrock.{aws_region_name}.amazonaws.com/model-invocation-job"
+        # Format: https://bedrock.{region}.{partition dns suffix}/model-invocation-job
+        bedrock_endpoint: Final = (
+            f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/model-invocation-job"
+        )
 
         return bedrock_endpoint
 
@@ -149,7 +191,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform the batch creation request to Bedrock format.
 
@@ -193,25 +235,23 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         job_name: Final = self.common_utils.generate_unique_job_name(model, prefix="litellm")
         output_key: Final = f"litellm-batch-outputs/{job_name}/"
 
-        # Build input data config
-        input_data_config: Final[BedrockInputDataConfig] = {
-            "s3InputDataConfig": BedrockS3InputDataConfig(s3Uri=f"s3://{input_bucket}/{input_key}")
-        }
-
-        # Build output data config
-        s3_output_config: Final[BedrockS3OutputDataConfig] = BedrockS3OutputDataConfig(
-            s3Uri=f"s3://{output_bucket}/{output_key}"
-        )
-
-        # Add optional KMS encryption key ID if provided
-        s3_encryption_key_id = resolve_s3_encryption_key_id(
+        s3_bucket_owner: Final = resolve_s3_bucket_owner(litellm_params=litellm_params, optional_params=optional_params)
+        s3_encryption_key_id: Final = resolve_s3_encryption_key_id(
             litellm_params=litellm_params,
             optional_params=optional_params,
         )
-        if s3_encryption_key_id:
-            s3_output_config["s3EncryptionKeyId"] = s3_encryption_key_id
-
-        output_data_config: Final[BedrockOutputDataConfig] = {"s3OutputDataConfig": s3_output_config}
+        input_data_config: Final[BedrockInputDataConfig] = {
+            "s3InputDataConfig": _build_s3_input_config(
+                s3_uri=f"s3://{input_bucket}/{input_key}", s3_bucket_owner=s3_bucket_owner
+            )
+        }
+        output_data_config: Final[BedrockOutputDataConfig] = {
+            "s3OutputDataConfig": _build_s3_output_config(
+                s3_uri=f"s3://{output_bucket}/{output_key}",
+                s3_bucket_owner=s3_bucket_owner,
+                s3_encryption_key_id=s3_encryption_key_id,
+            )
+        }
 
         # Create Bedrock batch request with proper typing
         bedrock_request: Final[BedrockCreateBatchRequest] = {
@@ -238,8 +278,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         # For Bedrock, we need to return a pre-signed request with AWS auth headers
         # Use common utility for AWS signing
         request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
+        aws_region_name: Final = self._get_aws_region_name(request_params, model)
         endpoint_url: Final = (
-            f"https://bedrock.{self._get_aws_region_name(request_params, model)}.amazonaws.com/model-invocation-job"
+            f"https://bedrock.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/model-invocation-job"
         )
         signed_headers, signed_data = self.common_utils.sign_aws_request(
             service_name="bedrock",
@@ -261,7 +302,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         litellm_params: dict,
     ) -> LiteLLMBatch:
         """
@@ -332,7 +373,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         )
 
     @staticmethod
-    def _get_openai_compatible_batch_metadata(metadata: Any) -> dict[str, str]:
+    def _get_openai_compatible_batch_metadata(metadata: object) -> dict[str, str]:
         """
         OpenAI Batch metadata only accepts string values.
         """
@@ -357,7 +398,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform batch retrieval request for Bedrock.
 
@@ -371,7 +412,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         """
         # For Bedrock, batch_id should be the full job ARN
         # The GetModelInvocationJob API expects the full ARN as the identifier
-        if not batch_id.startswith("arn:aws:bedrock:"):
+        if not is_bedrock_arn(batch_id):
             raise ValueError(f"Invalid batch_id format. Expected ARN, got: {batch_id}")
 
         # Extract the job identifier from the ARN - use the full ARN path part
@@ -390,7 +431,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         import urllib.parse as _ul
 
         encoded_arn: Final = _ul.quote(batch_id, safe="")
-        endpoint_url: Final = f"https://bedrock.{region}.amazonaws.com/model-invocation-job/{encoded_arn}"
+        endpoint_url: Final = (
+            f"https://bedrock.{region}.{get_aws_dns_suffix(region)}/model-invocation-job/{encoded_arn}"
+        )
 
         # Use common utility for AWS signing
         request_params: Final = merge_bedrock_aws_request_params(litellm_params, optional_params)
@@ -499,7 +542,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             )
 
         # Enrich metadata with useful Bedrock fields
-        enriched_metadata_raw: Final[dict[str, Any]] = {
+        enriched_metadata_raw: Final[dict[str, object]] = {
             "jobName": response_data.get("jobName"),
             "clientRequestToken": response_data.get("clientRequestToken"),
             "modelId": response_data.get("modelId"),
@@ -527,7 +570,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         self,
         model: str | None,
         raw_response: Response,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         litellm_params: dict,
     ) -> LiteLLMBatch:
         """

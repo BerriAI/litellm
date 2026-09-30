@@ -14,13 +14,6 @@ vi.mock("./networking", () => ({
   }),
 }));
 
-vi.mock("./molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const csvFile = () =>
   new File(["user_email,user_role\nnew.hire@example.com,internal_user\n"], "users.csv", { type: "text/csv" });
 
@@ -33,8 +26,8 @@ const openUploadStep = async () => {
 
 describe("BulkCreateUsersButton", () => {
   it("should render", () => {
-    const { getByText } = render(<BulkCreateUsersButton accessToken="test-token" teams={[]} possibleUIRoles={null} />);
-    expect(getByText("+ Bulk Invite Users")).toBeInTheDocument();
+    render(<BulkCreateUsersButton accessToken="test-token" teams={[]} possibleUIRoles={null} />);
+    expect(screen.getByText("+ Bulk Invite Users")).toBeInTheDocument();
   });
 
   it("parses a CSV chosen through the file input", async () => {

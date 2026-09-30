@@ -14,7 +14,7 @@ Key differences from OpenAI:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm import get_secret_str
 from litellm._logging import verbose_logger
@@ -26,12 +26,12 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
-def _get_str_or_none(value: Any) -> str | None:
+def _get_str_or_none(value: object) -> str | None:
     """Cast config value to Optional[str]."""
     return str(value) if value is not None else None
 
 
-def _get_int(value: Any, default: int) -> int:
+def _get_int(value: str | float | None, default: int) -> int:
     """Cast config value to int with default."""
     if value is None:
         return default
@@ -122,41 +122,26 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         """
         import litellm
 
-        # Set GCS_BUCKET_NAME env var for litellm.files.create_file
-        # The handler uses this to determine where to upload
-        original_bucket: Final = os.environ.get("GCS_BUCKET_NAME")
-        if self.gcs_bucket:
-            os.environ["GCS_BUCKET_NAME"] = self.gcs_bucket
+        file_tuple: Final = (filename, file_content, content_type)
 
-        try:
-            # Create file tuple for litellm.files.acreate_file
-            file_tuple: Final = (filename, file_content, content_type)
+        verbose_logger.debug(
+            "Uploading file to GCS via litellm.files.acreate_file: %s (bucket: %s)", filename, self.gcs_bucket
+        )
 
-            verbose_logger.debug(
-                "Uploading file to GCS via litellm.files.acreate_file: %s (bucket: %s)", filename, self.gcs_bucket
-            )
+        response: Final = await litellm.acreate_file(
+            file=file_tuple,
+            purpose="assistants",
+            custom_llm_provider="vertex_ai",
+            gcs_bucket_name=self.gcs_bucket,
+            vertex_project=self.vertex_project,
+            vertex_location=self.vertex_location,
+            vertex_credentials=self.vertex_credentials,
+        )
 
-            # Upload to GCS using LiteLLM's file upload
-            response: Final = await litellm.acreate_file(
-                file=file_tuple,
-                purpose="assistants",  # Purpose for file storage
-                custom_llm_provider="vertex_ai",
-                vertex_project=self.vertex_project,
-                vertex_location=self.vertex_location,
-                vertex_credentials=self.vertex_credentials,
-            )
+        gcs_uri: Final = response.id
+        verbose_logger.info("Uploaded file to GCS: %s", gcs_uri)
 
-            # The response.id should be the GCS URI
-            gcs_uri: Final = response.id
-            verbose_logger.info("Uploaded file to GCS: %s", gcs_uri)
-
-            return gcs_uri
-        finally:
-            # Restore original env var
-            if original_bucket is not None:
-                os.environ["GCS_BUCKET_NAME"] = original_bucket
-            elif "GCS_BUCKET_NAME" in os.environ:
-                del os.environ["GCS_BUCKET_NAME"]
+        return gcs_uri
 
     async def _import_file_to_corpus_via_sdk(
         self,
@@ -205,7 +190,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             )
             verbose_logger.info("Import started asynchronously")
 
-    def _build_transformation_config(self) -> Any:
+    def _build_transformation_config(self) -> object:
         """
         Build Vertex AI TransformationConfig from unified chunking_strategy.
 
@@ -259,6 +244,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
         content_type: str | None,
         chunks: list[str],
         embeddings: list[list[float]] | None,
+        existing_file_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         """
         Store content in Vertex AI RAG corpus.
@@ -274,6 +260,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             content_type: MIME type
             chunks: Ignored - Vertex AI handles chunking
             embeddings: Ignored - Vertex AI handles embedding
+            existing_file_id: Existing provider file ID, unsupported for Vertex AI RAG Engine
 
         Returns:
             Tuple of (corpus_id, gcs_uri)

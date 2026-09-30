@@ -7,7 +7,7 @@ import re
 import secrets
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, ClassVar, Final, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, ClassVar, Final, TypeAlias, TypedDict, cast
 
 from typing_extensions import ReadOnly
 
@@ -18,13 +18,14 @@ from litellm.types.utils import CallTypesLiteral
 
 if TYPE_CHECKING:
     from fastapi import Request
-    from redis.asyncio import Redis, RedisCluster
+    from redis.asyncio import Redis
 
     from litellm.caching.redis_cache import RedisCache
     from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 
 
-HASHED_KEY_PATTERN: Final = re.compile(r"(?:hashed-jwt-)?[0-9a-f]{64}")
+VIRTUAL_KEY_HASH_PATTERN: Final = re.compile(r"[0-9a-f]{64}")
+HASHED_JWT_PATTERN: Final = re.compile(r"hashed-jwt-[0-9a-f]{64}")
 
 
 class ActiveRequestRecord(TypedDict):
@@ -148,6 +149,11 @@ async def register_http_request(
         request.state.active_request_registry_id = registry_id  # rebind-ok: handover to the middleware
 
 
+def _async_client(redis_cache: "RedisCache") -> "Redis":
+    client: Final = redis_cache.init_async_client()
+    return cast("Redis", client)  # cast-ok: cluster client exposes the same commands without stubs
+
+
 class ActiveRequestRegistry(CustomLogger):
     """Track live requests across proxy replicas without retaining request content."""
 
@@ -169,7 +175,7 @@ class ActiveRequestRegistry(CustomLogger):
             max_scan_members if max_scan_members is not None else self.DEFAULT_MAX_SCAN_MEMBERS
         )
         self._local_tasks: dict[str, asyncio.Task[object]] = {}  # mutable-ok: per-process handles for cancellation
-        self._cancel_watcher: asyncio.Task[None] | None = None  # rebind-ok: started lazily on first registration
+        self._cancel_watcher: asyncio.Task[None] | None = None
         self._filtered_cache: dict[FilterCacheKey, tuple[float, ActiveRequestsPage]] = {}  # mutable-ok: bounded cache
 
     @staticmethod
@@ -224,18 +230,15 @@ class ActiveRequestRegistry(CustomLogger):
         return next((value for value in candidates if value is not None), None)
 
     @staticmethod
-    def _key_hash(api_key: str | None) -> str | None:
-        """The key hash the rest of the UI shows, so a row can be traced back to its key.
-
-        `UserAPIKeyAuth` has already hashed virtual keys and JWTs by the time a record is
-        built and those pass through unchanged, which is what makes the value match the
-        Key Hash column in Logs and on the key pages. Custom auth can hand back a raw
-        credential, so anything that is neither of those two hashed forms is hashed here
-        rather than published.
-        """
+    def _key_hash(auth: UserAPIKeyAuth) -> str | None:
+        api_key: Final = auth.api_key
         if not api_key:
             return None
-        return api_key if HASHED_KEY_PATTERN.fullmatch(api_key) else hash_token(api_key)
+        if HASHED_JWT_PATTERN.fullmatch(api_key):
+            return api_key
+        if auth.via_virtual_key and VIRTUAL_KEY_HASH_PATTERN.fullmatch(api_key):
+            return api_key
+        return hash_token(api_key)
 
     @classmethod
     def build_record(
@@ -268,7 +271,7 @@ class ActiveRequestRegistry(CustomLogger):
             team_id=cls._safe_string(auth.team_id),
             team_alias=cls._safe_string(auth.team_alias),
             key_alias=cls._safe_string(auth.key_alias),
-            key_hash=cls._key_hash(auth.api_key),
+            key_hash=cls._key_hash(auth),
             pod=cls._safe_string(os.getenv("HOSTNAME"), max_length=253),
         )
 
@@ -294,7 +297,7 @@ class ActiveRequestRegistry(CustomLogger):
             redis_cache: Final = self._redis_cache()
             if redis_cache is None:
                 return None
-            client: Final = redis_cache.init_async_client()
+            client: Final = _async_client(redis_cache)
             record: Final = self.build_record(
                 data, user_api_key_dict, call_type, started_at=started_at, registry_id=resolved_id
             )
@@ -320,7 +323,7 @@ class ActiveRequestRegistry(CustomLogger):
         try:
             redis_cache: Final = self._redis_cache()
             if redis_cache is not None:
-                client: Final = redis_cache.init_async_client()
+                client: Final = _async_client(redis_cache)
                 async with client.pipeline(transaction=False) as pipe:
                     pipe.delete(self._item_key(redis_cache, registry_id))
                     pipe.zrem(self._index_key(redis_cache), registry_id)
@@ -335,7 +338,7 @@ class ActiveRequestRegistry(CustomLogger):
 
     async def _read_records(
         self,
-        client: "Redis | RedisCluster",
+        client: "Redis",
         redis_cache: "RedisCache",
         index_key: str,
         members: Sequence[str],
@@ -349,7 +352,7 @@ class ActiveRequestRegistry(CustomLogger):
         return tuple(record for _, record in decoded if record is not None)
 
     @staticmethod
-    async def _drop_stale(client: "Redis | RedisCluster", index_key: str, stale: Iterable[str]) -> None:
+    async def _drop_stale(client: "Redis", index_key: str, stale: Iterable[str]) -> None:
         stale_members: Final = tuple(stale)
         if stale_members:
             await client.zrem(index_key, *stale_members)
@@ -391,7 +394,7 @@ class ActiveRequestRegistry(CustomLogger):
         if redis_cache is None:
             return
         owned: Final = tuple(self._local_tasks)
-        client: Final = redis_cache.init_async_client()
+        client: Final = _async_client(redis_cache)
         flags: Final = await client.mget(tuple(self._cancel_key(redis_cache, rid) for rid in owned))
         flagged: Final = tuple(rid for rid, flag in zip(owned, flags) if flag is not None)
         for registry_id in flagged:
@@ -416,7 +419,7 @@ class ActiveRequestRegistry(CustomLogger):
             redis_cache: Final = self._redis_cache()
             if redis_cache is None:
                 return False
-            client: Final = redis_cache.init_async_client()
+            client: Final = _async_client(redis_cache)
             known: Final = await client.zscore(self._index_key(redis_cache), registry_id)
             if known is None:
                 return False
@@ -457,7 +460,7 @@ class ActiveRequestRegistry(CustomLogger):
             organization_id=organization_id,
             project_id=project_id,
         )
-        client: Final = redis_cache.init_async_client()
+        client: Final = _async_client(redis_cache)
         index_key: Final = self._index_key(redis_cache)
         await client.zremrangebyscore(index_key, "-inf", time.time() - self.ttl_seconds)
 
@@ -467,7 +470,7 @@ class ActiveRequestRegistry(CustomLogger):
 
     async def _list_filtered(
         self,
-        client: "Redis | RedisCluster",
+        client: "Redis",
         redis_cache: "RedisCache",
         index_key: str,
         filters: ActiveRequestFilters,
@@ -517,7 +520,7 @@ class ActiveRequestRegistry(CustomLogger):
 
     async def _list_page(
         self,
-        client: "Redis | RedisCluster",
+        client: "Redis",
         redis_cache: "RedisCache",
         index_key: str,
         page: int,
@@ -540,7 +543,7 @@ class ActiveRequestRegistry(CustomLogger):
 
     async def _read_live_slice(
         self,
-        client: "Redis | RedisCluster",
+        client: "Redis",
         redis_cache: "RedisCache",
         index_key: str,
         start: int,

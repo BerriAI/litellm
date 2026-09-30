@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import RoutingDecisionCard from "@/components/view_logs/LogDetailsDrawer/RoutingDecisionCard";
 import { AutoRouterRoutingTestResult, testAutoRouterRouting } from "../networking";
-import { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
+import { ComplexityRouterConfigPayload, getHeuristicV2SuccessThresholdError } from "./build_complexity_router_config";
 import { buildAutoRouterRoutingTestRequest } from "./build_auto_router_routing_test_request";
 
 interface AutoRouterRoutingTestProps {
@@ -31,8 +31,10 @@ const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
 }) => {
   const [prompt, setPrompt] = React.useState<string>("");
   const [state, setState] = React.useState<TestState>({ status: "idle" });
+  const configError = getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold);
 
   const send = async () => {
+    if (configError) return;
     setState({ status: "running" });
     const params = { prompt, config, defaultModel, routerName, teamId };
     const request = buildAutoRouterRoutingTestRequest(params);
@@ -62,12 +64,14 @@ const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
       <div className="flex justify-end">
         <Button
           onClick={send}
-          disabled={prompt.trim().length === 0 || state.status === "running"}
+          disabled={prompt.trim().length === 0 || state.status === "running" || Boolean(configError)}
           data-testid="auto-router-routing-test-send"
         >
           {state.status === "running" ? "Routing..." : "Send Test Prompt"}
         </Button>
       </div>
+
+      {configError && <p className="text-sm text-destructive">{configError}</p>}
 
       {state.status === "failed" && (
         <div
@@ -88,7 +92,7 @@ const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
             </Badge>
             {!state.result.routed_model_configured && (
               <span
-                className="flex items-center gap-1 text-amber-600"
+                className="flex items-center gap-1 text-warning"
                 data-testid="auto-router-routing-test-unconfigured"
               >
                 <TriangleAlert className="size-3.5" />

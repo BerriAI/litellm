@@ -38,7 +38,6 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    ## CALCULATE INPUT COST
     return generic_cost_per_token(
         model=model,
         usage=usage,
@@ -46,49 +45,6 @@ def cost_per_token(
         service_tier=service_tier,
         data_residency=data_residency,
     )
-    # ### Non-cached text tokens
-    # non_cached_text_tokens = usage.prompt_tokens
-    # cached_tokens: Optional[int] = None
-    # if usage.prompt_tokens_details and usage.prompt_tokens_details.cached_tokens:
-    #     cached_tokens = usage.prompt_tokens_details.cached_tokens
-    #     non_cached_text_tokens = non_cached_text_tokens - cached_tokens
-    # prompt_cost: float = non_cached_text_tokens * model_info["input_cost_per_token"]
-    # ## Prompt Caching cost calculation
-    # if model_info.get("cache_read_input_token_cost") is not None and cached_tokens:
-    #     # Note: We read ._cache_read_input_tokens from the Usage - since cost_calculator.py standardizes the cache read tokens on usage._cache_read_input_tokens
-    #     prompt_cost += cached_tokens * (
-    #         model_info.get("cache_read_input_token_cost", 0) or 0
-    #     )
-
-    # _audio_tokens: Optional[int] = (
-    #     usage.prompt_tokens_details.audio_tokens
-    #     if usage.prompt_tokens_details is not None
-    #     else None
-    # )
-    # _audio_cost_per_token: Optional[float] = model_info.get(
-    #     "input_cost_per_audio_token"
-    # )
-    # if _audio_tokens is not None and _audio_cost_per_token is not None:
-    #     audio_cost: float = _audio_tokens * _audio_cost_per_token
-    #     prompt_cost += audio_cost
-
-    # ## CALCULATE OUTPUT COST
-    # completion_cost: float = (
-    #     usage["completion_tokens"] * model_info["output_cost_per_token"]
-    # )
-    # _output_cost_per_audio_token: Optional[float] = model_info.get(
-    #     "output_cost_per_audio_token"
-    # )
-    # _output_audio_tokens: Optional[int] = (
-    #     usage.completion_tokens_details.audio_tokens
-    #     if usage.completion_tokens_details is not None
-    #     else None
-    # )
-    # if _output_cost_per_audio_token is not None and _output_audio_tokens is not None:
-    #     audio_cost = _output_audio_tokens * _output_cost_per_audio_token
-    #     completion_cost += audio_cost
-
-    # return prompt_cost, completion_cost
 
 
 def cost_per_second(model: str, custom_llm_provider: str | None, duration: float = 0.0) -> tuple[float, float]:
@@ -134,14 +90,7 @@ def cost_per_second(model: str, custom_llm_provider: str | None, duration: float
 
 
 def _video_resolution_to_cost_field_suffix(resolution: str) -> str | None:
-    """
-    Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys.
-
-    Note: Currently only ``output_cost_per_second_1080p`` is explicitly declared in
-    ModelInfo (types/utils.py). Other resolution tiers (e.g., 720p, 4k) can be added
-    to model_prices_and_context_window.json but are not exposed via get_model_info()
-    until added to the ModelInfo TypedDict.
-    """
+    """Map usage resolution to a safe suffix for ``output_cost_per_second_<suffix>`` keys."""
     r: Final = resolution.strip().lower()
     if not r:
         return None

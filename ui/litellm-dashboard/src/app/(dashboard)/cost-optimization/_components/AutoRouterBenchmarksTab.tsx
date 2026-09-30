@@ -4,18 +4,19 @@ import React, { useState } from "react";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SimpleTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 import {
   ALL_ROUTERS,
-  WINDOW_LABELS,
   bucketRows,
   bucketTurnsTotal,
   durationLabel,
@@ -27,63 +28,127 @@ import {
   type AutoRouterBenchmarksResponse,
   type AutoRouterCacheStats,
   type BenchmarkView,
-  type BenchmarkWindow,
   type BucketRow,
 } from "./autoRouterBenchmarks";
-import { usd } from "./costOptimizationUtils";
+import { classificationRatePer1kTurns, formatRangeLabel, usd } from "./costOptimizationUtils";
 import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
+import { DailyActivityRange } from "./useDailyActivityRange";
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>
 );
 
-const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ label, value, hint }) => (
   <Card size="sm">
     <CardHeader>
       <CardTitle className="text-sm font-normal text-muted-foreground">{label}</CardTitle>
     </CardHeader>
-    <CardContent>
+    <CardContent className="flex flex-wrap items-baseline gap-2">
       <p className="text-3xl font-semibold text-foreground">{value}</p>
+      {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
     </CardContent>
   </Card>
 );
 
+const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean; tooltip?: string }> = ({
+  label,
+  value,
+  hint,
+  subdued,
+  tooltip,
+}) => (
+  <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-2">
+    <dt className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground">
+      {label}
+      {tooltip && <SimpleTooltip content={tooltip} />}
+      {hint && <span className="text-xs">{hint}</span>}
+    </dt>
+    <dd
+      className={`min-w-0 break-all tabular-nums ${subdued ? "text-sm font-normal text-muted-foreground" : "text-base font-semibold text-foreground"}`}
+    >
+      {value}
+    </dd>
+  </dl>
+);
+
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
-  const cheaper = stats.saved_spend >= 0;
+  const cheaper = stats.saved_pct != null && stats.saved_pct >= 0;
+  const completeCoverage = stats.savings_estimated_turns === stats.turns;
+  const coveredClassifierCost =
+    stats.savings_estimated_classifier_cost ?? (completeCoverage ? stats.classifier_cost : null);
+  const classifierCost = stats.baseline_spend == null ? null : coveredClassifierCost;
   return (
     <Card className="overflow-hidden py-0">
-      <div className="grid md:grid-cols-[1fr_1fr]">
-        <div className="flex flex-col justify-center gap-3 p-6">
-          <p className="text-sm text-muted-foreground">Total estimated savings</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
-            <Badge
-              variant="secondary"
-              className={cheaper ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-destructive"}
-            >
-              {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
-              {Math.abs(stats.saved_pct).toFixed(0)}%
-            </Badge>
+      <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="flex flex-col items-center justify-center gap-2 p-6">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Total estimated savings
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <p className="min-w-0 break-all text-center text-4xl font-semibold tracking-tight text-foreground xl:text-6xl">
+              {stats.saved_spend == null ? "Unavailable" : usd(stats.saved_spend)}
+            </p>
+            {stats.saved_pct != null && (
+              <Badge
+                variant="secondary"
+                className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
+              >
+                {stats.saved_pct !== 0 && (cheaper ? "-" : "+")}
+                {Math.abs(stats.saved_pct).toFixed(0)}%
+              </Badge>
+            )}
           </div>
-          <dl className="divide-y text-sm">
-            <div className="flex items-baseline justify-between gap-6 py-3">
-              <dt className="text-muted-foreground">Actual auto-router spend</dt>
-              <dd className="font-medium tabular-nums text-foreground">{usd(stats.spend)}</dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-6 py-3">
-              <dt className="text-muted-foreground">Estimated spend at highest-tier model</dt>
-              <dd className="font-medium tabular-nums text-foreground">{usd(stats.baseline_spend)}</dd>
-            </div>
-          </dl>
+          {stats.baseline_spend != null && !completeCoverage && (
+            <p className="text-center text-xs text-muted-foreground">
+              Savings based on {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()}{" "}
+              requests
+            </p>
+          )}
+          {stats.saved_spend != null && stats.baseline_spend == null && (
+            <p className="text-center text-xs text-muted-foreground">
+              Historical savings are included. Matching cost details are unavailable.
+            </p>
+          )}
         </div>
 
-        <div className="flex flex-col items-center justify-center gap-2 border-t p-6 md:border-t-0 md:border-l">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Avg saved per session</p>
-          <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_per_session)}</p>
-          <p className="text-sm text-muted-foreground">across {stats.sessions.toLocaleString()} sessions</p>
+        <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
+          <SpendRow
+            label="Actual auto-router spend"
+            value={stats.baseline_spend == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend)}
+            tooltip="Savings, actual spend, and baseline include historical and newer requests with recorded savings estimates. Requests without estimates are excluded. Actual spend includes classification costs."
+          />
+          <div className="mb-3 border-l-2 pl-4">
+            <SpendRow
+              subdued
+              label="LLM spend"
+              value={
+                classifierCost == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend - classifierCost)
+              }
+            />
+            <SpendRow
+              subdued
+              label="Classification cost"
+              value={classifierCost == null ? "Unavailable" : usd(classifierCost)}
+              hint={
+                classifierCost == null
+                  ? undefined
+                  : classificationRatePer1kTurns(classifierCost, stats.savings_estimated_turns)
+              }
+            />
+          </div>
+          {stats.baseline_spend != null && classifierCost == null && (
+            <p className="mb-3 text-xs text-muted-foreground">
+              Breakdown unavailable because some usage predates classification-cost tracking.
+            </p>
+          )}
+          <Separator />
+          <SpendRow
+            label="Estimated baseline spend"
+            value={stats.baseline_spend == null ? "Unavailable" : usd(stats.baseline_spend)}
+          />
         </div>
       </div>
     </Card>
@@ -239,16 +304,23 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
       <TierTurnsChart view={view} autoRouters={autoRouters} />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Metric
+          label="Avg saved per session"
+          value={stats.saved_per_session == null ? "Unavailable" : usd(stats.saved_per_session)}
+          hint={`· ${stats.sessions.toLocaleString()} sessions`}
+        />
         <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
         <Metric label="Avg session length" value={durationLabel(stats.avg_session_seconds)} />
         <Metric label="Avg tokens per session" value={formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)} />
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Compares your actual routed spend with the estimated cost of using only the most expensive model configured in
-        the auto-router. It accounts for both the cache savings from staying on one model and the added cache costs from
-        switching models.
+        Savings, actual spend, and baseline compare the same historical and newer requests with recorded estimates,
+        including zero or negative savings. Requests without estimates are excluded. Savings are net of recorded LLM
+        classification cost. If historical cost details are unavailable, recorded savings remain visible without a
+        baseline or percentage. The range counts whole sessions that overlap it, so totals can differ from savings views
+        that group usage by UTC day.
       </p>
 
       <div className="space-y-4">
@@ -266,32 +338,35 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
 interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
+  activity: Pick<DailyActivityRange, "dateValue" | "onDateChange">;
+  apiKey?: string;
+  userId?: string;
 }
 
-const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
-  const [range, setRange] = useState<BenchmarkWindow>("30d");
-  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, range);
+export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
+  accessToken,
+  activity,
+  apiKey,
+  userId,
+}) => {
+  const { dateValue, onDateChange } = activity;
+  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue, apiKey, userId);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
   const { data: autoRouters } = useAutoRouters();
 
   const groups = data?.groups ?? [];
   const selectedLabel = data ? viewFor(data, selectedKey).label : "All auto-routers";
+  const rangeLabel = formatRangeLabel(dateValue.from, dateValue.to);
 
   return (
     <div className="w-full space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-xl font-semibold text-foreground">Auto-router usage</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{WINDOW_LABELS[range]}</p>
+          {rangeLabel && <p className="mt-1 text-sm text-muted-foreground">{rangeLabel} (UTC)</p>}
         </div>
         <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
-          <Tabs value={range} onValueChange={(value) => setRange(value === "7d" || value === "24h" ? value : "30d")}>
-            <TabsList>
-              <TabsTrigger value="30d">30d</TabsTrigger>
-              <TabsTrigger value="7d">7d</TabsTrigger>
-              <TabsTrigger value="24h">24h</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
           <div className="w-full sm:w-64">
             <Select value={selectedKey} onValueChange={(value: string | null) => setSelectedKey(value ?? ALL_ROUTERS)}>
               <SelectTrigger className="w-full">
@@ -310,6 +385,12 @@ const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
         </div>
       </div>
 
+      {userId && (
+        <p className="text-sm text-muted-foreground">
+          Usage for this user across API keys and JWT-authenticated requests. Older sessions recorded without a user ID
+          are not included.
+        </p>
+      )}
       <BenchmarksBody
         isPending={isPending}
         error={error}
@@ -321,7 +402,7 @@ const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
   );
 };
 
-const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken }) => {
+const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
   const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
 
   const handleTabChange = (value: unknown) => {
@@ -344,7 +425,7 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
       </TabsList>
 
       <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
-        <UsageView accessToken={accessToken} />
+        <AutoRouterUsageView accessToken={accessToken} activity={activity} />
       </TabsContent>
       <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
         <ShadowEvalSection />

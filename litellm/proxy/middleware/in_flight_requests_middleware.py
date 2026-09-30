@@ -14,7 +14,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 
-EMPTY_STATE: Final[Mapping[str, object]] = MappingProxyType({})  # mutable-ok: MappingProxyType needs a dict to wrap
+EMPTY_STATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class InFlightRequestsMiddleware:

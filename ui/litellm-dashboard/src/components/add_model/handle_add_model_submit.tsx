@@ -1,4 +1,4 @@
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Model, modelCreateCall } from "../networking";
 import { provider_map } from "../provider_info_helpers";
 import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
@@ -91,6 +91,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (value === "") {
           continue;
         }
+        if (key === "litellm_credential_name" && value == null) {
+          continue;
+        }
         // Skip the custom_pricing and pricing_model fields as they're only used for UI control
         if (key === "custom_pricing" || key === "pricing_model" || key === "cache_control") {
           continue;
@@ -124,12 +127,12 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
-              if ("litellm_credential_name" in litellmExtraParams) {
-                delete litellmExtraParams.litellm_credential_name;
-              }
             } catch (error) {
-              NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
+              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            if ("litellm_credential_name" in litellmExtraParams && formValues.litellm_credential_name) {
+              delete litellmExtraParams.litellm_credential_name;
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
               litellmParamsObj[key] = value;
@@ -141,7 +144,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
             try {
               modelInfoParams = JSON.parse(value);
             } catch (error) {
-              NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
+              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
             }
             for (const [key, value] of Object.entries(modelInfoParams)) {
@@ -193,7 +196,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
     return deployments;
   } catch (error) {
-    NotificationManager.fromBackend("Failed to create model: " + error);
+    toast.fromError("Failed to create model: " + error);
   }
 };
 
@@ -221,6 +224,6 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
     callback && callback();
     form.resetFields();
   } catch (error) {
-    NotificationManager.fromBackend("Failed to add model: " + error);
+    toast.fromError("Failed to add model: " + error);
   }
 };

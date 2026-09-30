@@ -1,14 +1,19 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
+import logging
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, "../../../../../")
 
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+if sys.version_info < (3, 11):
+    from exceptiongroup import ExceptionGroup
+
+
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError, MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _extract_upstream_auth_failure,
@@ -39,7 +44,7 @@ def test_extract_upstream_auth_failure_walks_exception_group():
     inner = httpx.HTTPStatusError("401", request=response.request, response=response)
 
     try:
-        raise ExceptionGroup("wrapped", [inner])  # noqa: F821 (PEP 654, py3.11+)
+        raise ExceptionGroup("wrapped", [inner])
     except Exception as group:
         result = _extract_upstream_auth_failure(group)
 
@@ -335,16 +340,16 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
             raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
         return [good_tool]
 
-    with patch.object(mcp_server, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate, working])), patch.object(
-        mcp_server, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-    ), patch.object(mcp_server, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-        mcp_server, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
+    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate, working])), patch.object(
+        mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
+    ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
+        mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
     ), patch.object(
-        mcp_server, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
+        mcp_operations, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
     ), patch.object(
-        mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        mcp_operations.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
-        listing = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_operations._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
@@ -378,14 +383,14 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
     # /<server>/mcp sets the path-derived single-server scope; absorption must hold even then.
     token = _mcp_gateway_server_name.set("delegate_docs")
     try:
-        with patch.object(mcp_server, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
-            mcp_server, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-        ), patch.object(mcp_server, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-            mcp_server, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
+        with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
+            mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
+        ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
+            mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
         ), patch.object(
-            mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+            mcp_operations.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
         ):
-            listing = await mcp_server._get_tools_from_mcp_servers(
+            listing = await mcp_operations._get_tools_from_mcp_servers(
                 user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
                 mcp_auth_header=None,
                 mcp_servers=["delegate_docs"],
@@ -415,15 +420,15 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
     async def fake_get_tools(server, **kwargs):
         raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
 
-    with patch.object(mcp_server, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
-        mcp_server, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
-    ), patch.object(mcp_server, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
-        mcp_server, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
+    with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
+        mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
+    ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
+        mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
     ), patch.object(
-        mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        mcp_operations.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
         # Aggregate route: no explicit server filter, even though only one server is accessible.
-        listing = await mcp_server._get_tools_from_mcp_servers(
+        listing = await mcp_operations._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
             mcp_auth_header=None,
             mcp_servers=None,
@@ -431,3 +436,65 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
 
     assert listing.tools == []
     assert listing.outcomes["delegate_docs"].tag == "auth_required"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_logs_upstream_request_details_on_500(caplog):
+    manager = MCPServerManager()
+    request = httpx.Request(
+        "POST",
+        "https://upstream/apis/mcp",
+        headers={"Authorization": "Bearer upstream-token-0123456789"},
+        content=b'{"method":"initialize","jsonrpc":"2.0","id":0}',
+    )
+    response = httpx.Response(500, request=request)
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(
+        side_effect=httpx.HTTPStatusError("500", request=request, response=response)
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with pytest.raises(MCPServerListError):
+            await manager._fetch_tools_with_timeout(mock_client, "sample_docs")
+
+    assert "POST https://upstream/ -> HTTP 500" in caplog.text
+    assert '"method":"initialize"' in caplog.text
+    assert "upstream-token-0123456789" not in caplog.text
+
+
+
+@pytest.mark.asyncio
+async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, caplog):
+    manager = MCPServerManager()
+    server = MCPServer(server_id="sample", name="sample", url="https://upstream/mcp", transport=MCPTransport.http, auth_type=MCPAuth.none)
+    request = httpx.Request("POST", "https://upstream/mcp?credential=query-secret")
+    response = httpx.Response(500, request=request, json={"error":"missing_scope"})
+    error = httpx.HTTPStatusError("query-secret", request=request, response=response)
+    monkeypatch.setattr(manager, "_create_mcp_client", AsyncMock(side_effect=error))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        with pytest.raises(MCPServerListError):
+            await manager._get_tools_from_server(server)
+    assert "POST https://upstream/ -> HTTP 500" in caplog.text
+    assert "missing_scope" in caplog.text and "query-secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "oauth_headers,server_headers,authorized",
+    [
+        ({"Authorization": "Bearer upstream"}, None, True),
+        ({"AUTHORIZATION": "Bearer upstream"}, None, True),
+        ({"x-unrelated": "present"}, None, False),
+        (None, {"catalog": {"Authorization": "Bearer scoped"}}, True),
+        (None, {"other-server": {"Authorization": "Bearer unrelated"}}, False),
+        (None, {"catalog": {"x-unrelated": "present"}}, False),
+        (None, {"catalog": "Bearer legacy"}, True),
+        (None, {"catalog": "   "}, False),
+    ],
+)
+def test_passthrough_admission_recognizes_only_matching_authorization(oauth_headers, server_headers, authorized):
+    from litellm.proxy._experimental.mcp_server.operations import _client_has_passthrough_authorization
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(server_id="catalog", name="catalog", alias="catalog", transport=MCPTransport.http)
+    assert _client_has_passthrough_authorization(server, oauth_headers, server_headers) is authorized

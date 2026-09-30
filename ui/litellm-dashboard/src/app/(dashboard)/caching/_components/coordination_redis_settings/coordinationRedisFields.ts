@@ -1,12 +1,10 @@
-import type { FormItemProps } from "antd";
-
 export type CoordinationFieldType = "string" | "password" | "integer" | "boolean" | "list";
 
 export type CoordinationRedisType = "node" | "cluster" | "sentinel";
 
 export type CoordinationSection = "connection" | "cluster" | "sentinel" | "ssl";
 
-export type CoordinationFieldRule = NonNullable<FormItemProps["rules"]>[number];
+export type CoordinationFieldRule = (value: unknown) => string | null;
 
 export interface CoordinationField {
   readonly name: string;
@@ -34,35 +32,27 @@ export const COORDINATION_REDIS_TYPE_LABELS: Readonly<Record<CoordinationRedisTy
   sentinel: "Sentinel",
 };
 
-const portRule: CoordinationFieldRule = {
-  validator: (_rule, value) => {
-    if (value === undefined || value === null || String(value).trim() === "") {
-      return Promise.resolve();
-    }
-    const port = Number(value);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      return Promise.reject(new Error("Port must be an integer between 1 and 65535"));
-    }
-    return Promise.resolve();
-  },
+const isBlank = (value: unknown): boolean => value === undefined || value === null || String(value).trim() === "";
+
+const portRule: CoordinationFieldRule = (value) => {
+  if (isBlank(value)) {
+    return null;
+  }
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? null : "Port must be an integer between 1 and 65535";
 };
 
-const jsonListRule: CoordinationFieldRule = {
-  validator: (_rule, value) => {
-    if (value === undefined || value === null || String(value).trim() === "") {
-      return Promise.resolve();
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(String(value));
-    } catch {
-      return Promise.reject(new Error("Must be a valid JSON array (use double quotes)"));
-    }
-    if (!Array.isArray(parsed)) {
-      return Promise.reject(new Error("Must be a JSON array"));
-    }
-    return Promise.resolve();
-  },
+const jsonListRule: CoordinationFieldRule = (value) => {
+  if (isBlank(value)) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(value));
+  } catch {
+    return "Must be a valid JSON array (use double quotes)";
+  }
+  return Array.isArray(parsed) ? null : "Must be a JSON array";
 };
 
 export const COORDINATION_FIELDS: readonly CoordinationField[] = [

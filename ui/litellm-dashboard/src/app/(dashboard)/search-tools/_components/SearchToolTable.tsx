@@ -50,6 +50,7 @@ const SearchToolTable: React.FC<SearchToolTableProps> = ({
   return (
     <DataTable
       data={searchTools}
+      paginationMode="client"
       columns={columns}
       getRowId={(tool, index) => searchToolKey(tool) || String(index)}
       sortingMode="client"

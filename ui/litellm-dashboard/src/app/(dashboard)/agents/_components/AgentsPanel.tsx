@@ -5,7 +5,7 @@ import AddAgentForm from "./add_agent_form";
 import { isAdminRole } from "@/utils/roles";
 import AgentInfoView from "./agent_info";
 import AgentsTable from "./AgentsTable";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Agent } from "@/components/agents/types";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -120,11 +120,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     setIsDeleting(true);
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
-      NotificationsManager.success(`Agent "${agentToDelete.name}" deleted successfully`);
+      toast.success(`Agent "${agentToDelete.name}" deleted successfully`);
       await refetchAgents(healthCheckEnabled);
     } catch (error) {
       console.error("Error deleting agent:", error);
-      NotificationsManager.fromBackend("Failed to delete agent");
+      toast.fromError("Failed to delete agent");
     } finally {
       setIsDeleting(false);
       setAgentToDelete(null);

@@ -163,12 +163,6 @@ class TestBudgetManagement:
             f"/budget/list never included the created budget {budget_id}",
         )
 
-    @pytest.mark.skip(
-        reason=(
-            "stage red: product gap, /budget/update 500s on any model_max_budget "
-            "(prisma Json arg + unquoted GraphQL interpolation)"
-        )
-    )
     @pytest.mark.covers("mgmt.budget.update.accepts_model_max_budget")
     def test_update_accepts_per_model_budgets_including_punctuated_names(
         self, client: ManagementClient, resources: ResourceManager

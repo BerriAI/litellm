@@ -1,14 +1,9 @@
 import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
-import {
-  ADMIN_STORAGE_PATH,
-  E2E_TEAM_CRUD_ID,
-  E2E_TEAM_DELETE_ALIAS,
-  E2E_TEAM_NO_ADMIN_ID,
-  E2E_TEAM_ORG_ID,
-} from "../../constants";
+import { ADMIN_STORAGE_PATH, E2E_TEAM_CRUD_ID, E2E_TEAM_NO_ADMIN_ID, E2E_TEAM_ORG_ID } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 import { readBack } from "../../helpers/roundTrip";
+import { masterKey } from "../../helpers/traffic";
 
 /** GET /team/list returns a bare array of teams, each carrying team_alias/team_id. */
 async function findTeamByAlias(page: PlaywrightPage, alias: string): Promise<Record<string, any> | undefined> {
@@ -23,6 +18,17 @@ async function teamMemberEmails(page: PlaywrightPage, teamId: string): Promise<s
     `/team/info?team_id=${encodeURIComponent(teamId)}`,
   );
   return (info.team_info.members_with_roles ?? []).map((member) => member.user_email ?? "").filter(Boolean);
+}
+
+/** A team this test owns, so deleting it costs the suite nothing on a retry or a second run. */
+async function createDeletableTeam(page: PlaywrightPage): Promise<string> {
+  const alias = `e2e-delete-team-${Date.now()}`;
+  const res = await page.request.post("/team/new", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { team_alias: alias, models: ["fake-openai-gpt-4"] },
+  });
+  expect(res.ok(), `POST /team/new failed (${res.status()}): ${await res.text()}`).toBe(true);
+  return alias;
 }
 
 test.describe("Proxy Admin - Teams", () => {
@@ -41,11 +47,12 @@ test.describe("Proxy Admin - Teams", () => {
       .click();
 
     // Wait for the Create Team modal
-    const dialog = page.locator(".ant-modal:visible");
+    const dialog = page.getByRole("dialog", { name: "Create Team" });
     await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-    // Fill Team Name — the input has id="team_alias"
-    await dialog.locator("#team_alias").fill(uniqueAlias);
+    // Fill Team Name — FormField derives the control id from React.useId(), so
+    // the input is only addressable by its label or its test id.
+    await dialog.getByTestId("team-name-input").fill(uniqueAlias);
 
     // Select models — the models multi-select is inside the modal. Its popup is
     // portaled to the body, so scope the option lookup to the page, not the dialog.
@@ -75,11 +82,11 @@ test.describe("Proxy Admin - Teams", () => {
     await page.getByRole("button", { name: /Add Member/i }).click();
 
     // Wait for Add Team Member modal
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Add Team Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     // The email field is a Select — type to search, then select from dropdown
-    await modal.locator(".ant-select").first().click();
+    await modal.getByRole("combobox").first().click();
     await page.keyboard.type("invitable@test.local");
 
     // Wait for the option to appear, then select via keyboard (avoids viewport issues)
@@ -112,7 +119,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await page.getByTestId("edit-member").first().click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Edit Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.getByRole("button", { name: /Save Changes/i }).click();
 
@@ -120,10 +127,14 @@ test.describe("Proxy Admin - Teams", () => {
   });
 
   test("Delete a team", async ({ page }) => {
+    // Deleting the seeded team leaves nothing for the next attempt, so the retries CI runs with are
+    // guaranteed to fail and the suite cannot run twice against one database. Bring our own.
+    const alias = await createDeletableTeam(page);
+
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
 
-    const teamRow = page.locator("tr", { hasText: E2E_TEAM_DELETE_ALIAS }).first();
+    const teamRow = page.locator("tr", { hasText: alias }).first();
     await expect(teamRow).toBeVisible({ timeout: 10_000 });
     // Actions live in a kebab menu: open it, then click "Delete team".
     await teamRow.locator('[data-testid^="team-actions-"]').click();
@@ -131,15 +142,15 @@ test.describe("Proxy Admin - Teams", () => {
 
     const modal = page.getByRole("dialog", { name: "Delete Team?" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
-    await modal.locator("input").fill(E2E_TEAM_DELETE_ALIAS);
+    await modal.locator("input").fill(alias);
     await modal.getByRole("button", { name: /Force Delete|Delete/i }).click();
 
     await expect(teamRow).not.toBeVisible({ timeout: 10_000 });
 
     // A row vanishing is local state, which happens whether or not the delete landed.
     await expect
-      .poll(async () => await findTeamByAlias(page, E2E_TEAM_DELETE_ALIAS), {
-        message: `team ${E2E_TEAM_DELETE_ALIAS} still readable from /team/list after delete`,
+      .poll(async () => await findTeamByAlias(page, alias), {
+        message: `team ${alias} still readable from /team/list after delete`,
         timeout: 15_000,
       })
       .toBeUndefined();
@@ -155,7 +166,7 @@ test.describe("Proxy Admin - Teams", () => {
 
     await page.getByTestId("edit-member").first().click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Edit Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.getByRole("button", { name: /Save Changes/i }).click();
 

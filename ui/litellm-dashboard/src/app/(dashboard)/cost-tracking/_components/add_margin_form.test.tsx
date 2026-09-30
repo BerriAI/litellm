@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddMarginForm from "./add_margin_form";
 import { MarginConfig } from "./types";
@@ -95,6 +95,33 @@ describe("AddMarginForm", () => {
     expect(onAddProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("should report the edited percentage as the user types", async () => {
+    const onPercentageChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddMarginForm {...DEFAULT_PROPS} percentageValue="1" onPercentageChange={onPercentageChange} />,
+    );
+
+    await user.type(screen.getByPlaceholderText("10"), "0");
+    expect(onPercentageChange).toHaveBeenCalledWith("10");
+  });
+
+  it("should report the edited fixed amount as the user types", async () => {
+    const onFixedAmountChange = vi.fn();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <AddMarginForm
+        {...DEFAULT_PROPS}
+        marginType="fixed"
+        fixedAmountValue="0.00"
+        onFixedAmountChange={onFixedAmountChange}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("0.001"), "1");
+    expect(onFixedAmountChange).toHaveBeenCalledWith("0.001");
+  });
+
   it("should call onMarginTypeChange when the Fixed Amount radio is clicked", async () => {
     const onMarginTypeChange = vi.fn();
     const user = userEvent.setup();
@@ -102,5 +129,17 @@ describe("AddMarginForm", () => {
 
     await user.click(screen.getByText("Fixed Amount"));
     expect(onMarginTypeChange).toHaveBeenCalledWith("fixed");
+  });
+
+  it("should call onProviderChange with the provider key when a provider is picked", async () => {
+    const onProviderChange = vi.fn();
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderWithProviders(<AddMarginForm {...DEFAULT_PROPS} onProviderChange={onProviderChange} />);
+
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByText("Anthropic"));
+
+    expect(onProviderChange.mock.calls).toHaveLength(1);
+    expect(onProviderChange.mock.calls[0]?.[0]).toBe("Anthropic");
   });
 });

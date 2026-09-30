@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.client import ChatClient, Client, ModelsManagementClient
 from litellm.proxy.client.http_client import HTTPClient
@@ -87,6 +82,12 @@ def test_client_initialization():
     assert client.http._base_url == "http://localhost:4000"
     assert client.http._api_key == "test-key"
     assert client.http._timeout == 60
+    assert client.teams._timeout == 60
+    assert client.keys._timeout == 60
+    assert client.credentials._timeout == 60
+    assert client.models._timeout == 60
+    assert client.model_groups._timeout == 60
+    assert client.chat._timeout == 600
 
 
 def test_client_default_timeout():
@@ -97,6 +98,8 @@ def test_client_default_timeout():
     )
 
     assert client.http._timeout == 30
+    assert client.keys._timeout == 30
+    assert client.chat._timeout == 600
 
 
 def test_client_without_api_key():

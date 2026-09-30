@@ -24,6 +24,8 @@ interface AuditLogsTableProps {
   onPaginationChange: OnChangeFn<PaginationState>;
   columnFilters: ColumnFiltersState;
   onColumnFiltersChange: OnChangeFn<ColumnFiltersState>;
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
   onRefresh: () => void;
   onViewLog: (log: AuditLogEntry) => void;
 }
@@ -35,6 +37,7 @@ const ACTION_OPTIONS = [
   { label: "Updated", value: "updated" },
   { label: "Deleted", value: "deleted" },
   { label: "Rotated", value: "rotated" },
+  { label: "Kill switch fired", value: "kill_switch_fired" },
 ] as const;
 
 const TABLE_OPTIONS = [
@@ -43,7 +46,18 @@ const TABLE_OPTIONS = [
   { label: "Users", value: "LiteLLM_UserTable" },
   { label: "Organizations", value: "LiteLLM_OrganizationTable" },
   { label: "Models", value: "LiteLLM_ProxyModelTable" },
+  { label: "Agents", value: "LiteLLM_AgentsTable" },
 ] as const;
+
+const ACTION_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Actions" },
+  ...ACTION_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+];
+
+const TABLE_FILTER_ITEMS = [
+  { value: ALL_VALUE, label: "All Tables" },
+  ...TABLE_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+];
 
 const FILTER_LABELS: Record<string, string> = {
   object_id: "Object ID",
@@ -92,11 +106,14 @@ export function AuditLogsTable({
   onPaginationChange,
   columnFilters,
   onColumnFiltersChange,
+  searchValue,
+  onSearchChange,
   onRefresh,
   onViewLog,
 }: AuditLogsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const columns = useMemo(() => getAuditLogsTableColumns({ onViewLog }), [onViewLog]);
+  const hasActiveSearch = Boolean(searchValue?.trim());
 
   return (
     <DataTable
@@ -112,12 +129,15 @@ export function AuditLogsTable({
       onColumnFiltersChange={onColumnFiltersChange}
       isLoading={isLoading}
       loadingMessage="Loading audit logs…"
-      noDataMessage={<AuditLogsEmptyState filtered={columnFilters.length > 0} />}
+      noDataMessage={<AuditLogsEmptyState filtered={columnFilters.length > 0 || hasActiveSearch} />}
       size="compact"
       toolbar={(table) => (
         <>
           <DataTableToolbar
             table={table}
+            searchValue={searchValue}
+            onSearchChange={onSearchChange}
+            searchPlaceholder="Search audit logs by ID…"
             onRefresh={onRefresh}
             isRefreshing={isRefreshing}
             onOpenFilters={() => setFiltersOpen(true)}
@@ -164,6 +184,7 @@ export function AuditLogsTable({
                 </DataTableFilterField>
                 <DataTableFilterField label="Action">
                   <Select
+                    items={ACTION_FILTER_ITEMS}
                     value={(get("action") as string) ?? ALL_VALUE}
                     onValueChange={(value) => set("action", value === ALL_VALUE ? undefined : value)}
                   >
@@ -182,6 +203,7 @@ export function AuditLogsTable({
                 </DataTableFilterField>
                 <DataTableFilterField label="Table">
                   <Select
+                    items={TABLE_FILTER_ITEMS}
                     value={(get("table_name") as string) ?? ALL_VALUE}
                     onValueChange={(value) => set("table_name", value === ALL_VALUE ? undefined : value)}
                   >

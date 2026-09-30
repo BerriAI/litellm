@@ -4,9 +4,25 @@ on:
   workflow_call:
     inputs:
       test-path:
-        description: "Pytest path(s) to run"
+        description: >-
+          Space-separated pytest paths to run. A path that no longer exists is
+          dropped with a warning instead of being passed to pytest, because one
+          missing path makes pytest-xdist collect nothing and report exit 5, which
+          the step treats as a drained shard. Options are passed through as
+          written, so use the `--flag=value` form: a bare `--ignore path` would
+          have its path existence-checked like any other token.
         required: true
         type: string
+      unit-flag:
+        description: >-
+          Codecov flag of the `.circleci/tests.yml` job that now owns part of
+          this shard. The shard also runs the files
+          `.circleci/scripts/unit_selection.sh` lists for the flag, on every
+          event, because the CircleCI pipeline is manual-only while the tests
+          migrate.
+        required: false
+        type: string
+        default: ""
       workers:
         description: "Number of pytest-xdist workers"
         required: false
@@ -27,7 +43,7 @@ on:
         default: 20
       job-timeout-minutes:
         description: >-
-          Backstop for the whole job. Keep it >= `timeout-minutes` plus 35: 30 for
+          Backstop for the whole job. Keep it >= `timeout-minutes` plus 40: 35 for
           the per-step ceilings on the setup steps below, and 5 for the runner
           overhead the job clock charges but no step owns (job init, step
           transitions, post-job cleanup). That headroom is what makes the test
@@ -36,7 +52,19 @@ on:
           arithmetic, so the sum is passed in rather than computed.
         required: false
         type: number
-        default: 55
+        default: 60
+      test-timeout-seconds:
+        description: >-
+          Per-test ceiling enforced by pytest-timeout, covering fixture setup and
+          teardown as well as the test body. A test that hangs fails with a
+          traceback of where it was stuck instead of idling the shard until
+          `timeout-minutes` cancels it. Timed-out tests are excluded from reruns
+          because pytest-timeout arms its timer once per test and
+          pytest-rerunfailures reruns inside that same window, so a rerun of a
+          timed-out test would run with no timer at all.
+        required: false
+        type: number
+        default: 120
       max-failures:
         description: "Stop after this many failures"
         required: false
@@ -51,17 +79,30 @@ on:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: true
         type: string
+      legacy-mcp-peer:
+        description: "Install the isolated SDK1 peer for MCP compatibility tests"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+env:
+  UV_PYTHON: "3.12"
+  LITELLM_LOCAL_MODEL_COST_MAP: "True"
 
 jobs:
   run:
     name: Run tests
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       decision: ${{ steps.changes.outputs.decision }}
+      has-coverage: ${{ steps.tests.outputs.has-coverage }}
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -69,39 +110,54 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Detect backend-relevant changes
+      - name: Detect relevant changes
         id: changes
         timeout-minutes: 2
-        uses: ./.github/actions/detect-backend-changes
+        uses: ./.github/actions/detect-changes
 
       - name: Set up Python
+        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: ${{ env.UV_PYTHON }}
 
       - name: Set up uv
+        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
         uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          path: ${{ env.UV_CACHE_DIR }}
+          key: ${{ runner.os }}-uv-downloads-py${{ env.UV_PYTHON }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            ${{ runner.os }}-uv-
+            ${{ runner.os }}-uv-downloads-py${{ env.UV_PYTHON }}-
+
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 5
+        uses: ./.github/actions/cache-cargo-build
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
+        env:
+          LEGACY_MCP_PEER: ${{ inputs.legacy-mcp-peer }}
         run: |
+          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
+          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+          if [ "$LEGACY_MCP_PEER" = "true" ]; then
+            uv venv --python "${UV_PYTHON}" .venv-mcp-peer
+            uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+            echo "MCP_TEST_PEER_PYTHON=$GITHUB_WORKSPACE/.venv-mcp-peer/bin/python" >> "$GITHUB_ENV"
+          fi
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -115,38 +171,74 @@ jobs:
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Run tests
+        id: tests
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
+          UNIT_FLAG: ${{ inputs.unit-flag }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
+          TEST_TIMEOUT_SECONDS: ${{ inputs.test-timeout-seconds }}
           DIST: ${{ inputs.dist }}
+          COVERAGE_CORE: sysmon
         run: |
-          if [ "${WORKERS}" = "0" ]; then
-            uv run --no-sync pytest ${TEST_PATH:?} \
-              --tb=short -vv \
-              --maxfail="${MAX_FAILURES}" \
-              --reruns "${RERUNS}" \
-              --reruns-delay 1 \
-              --durations=20 \
-              --cov=./litellm \
-              --cov-report=xml:coverage.xml \
-              --cov-config=pyproject.toml
-          else
-            uv run --no-sync pytest ${TEST_PATH:?} \
-              --tb=short -vv \
-              --maxfail="${MAX_FAILURES}" \
-              -n "${WORKERS}" \
-              --reruns "${RERUNS}" \
-              --reruns-delay 1 \
-              --dist="${DIST}" \
-              --durations=20 \
-              --cov=./litellm \
-              --cov-report=xml:coverage.xml \
-              --cov-config=pyproject.toml
+          echo "has-coverage=false" >> "$GITHUB_OUTPUT"
+          selection="${TEST_PATH}"
+          if [ -n "${UNIT_FLAG}" ]; then
+            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${UNIT_FLAG}" | tr '\n' ' ')"
           fi
+          if [ -z "${selection// /}" ]; then
+            echo "shard selection is empty; nothing to run"
+            exit 0
+          fi
+          pytest_args=()
+          existing_paths=0
+          for token in ${selection}; do
+            case "${token}" in
+              -*) pytest_args+=("${token}") ;;
+              *)
+                if [ -e "${token%%::*}" ]; then
+                  pytest_args+=("${token}")
+                  existing_paths=$((existing_paths + 1))
+                else
+                  echo "::warning::${token} does not exist; drop it from this shard's test-path"
+                fi
+                ;;
+            esac
+          done
+          if [ "${existing_paths}" -eq 0 ]; then
+            echo "No path in the selection exists (${selection}); nothing to run"
+            exit 0
+          fi
+          xdist_args=()
+          if [ "${WORKERS}" != "0" ]; then
+            xdist_args=(-n "${WORKERS}" --dist="${DIST}")
+          fi
+          set +e
+          uv run --no-sync pytest "${pytest_args[@]}" \
+            --tb=short -vv \
+            --maxfail="${MAX_FAILURES}" \
+            "${xdist_args[@]}" \
+            --reruns "${RERUNS}" \
+            --reruns-delay 1 \
+            --timeout="${TEST_TIMEOUT_SECONDS}" \
+            --rerun-except "from pytest-timeout" \
+            --durations=20 \
+            --cov=./litellm --cov=./enterprise/litellm_enterprise \
+            --cov-report=xml:coverage.xml \
+            --cov-config=pyproject.toml
+          status=$?
+          set -e
+          if [ -f coverage.xml ]; then
+            echo "has-coverage=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$status" -eq 5 ]; then
+            echo "pytest collected no tests from ${selection}; passing"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Save coverage report
         if: always() && steps.changes.outputs.decision != 'skip'
@@ -159,7 +251,7 @@ jobs:
   upload-coverage:
     name: Upload coverage to Codecov
     needs: run
-    if: always() && needs.run.outputs.decision != 'skip'
+    if: always() && needs.run.outputs.decision != 'skip' && needs.run.outputs.has-coverage == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

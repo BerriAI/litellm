@@ -4,14 +4,10 @@ import os
 import pytest
 import random
 from typing import Any
-import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
 
 import litellm
 from pydantic import BaseModel
@@ -149,19 +145,26 @@ def test_async_rate_limit(
     router: Router = router_factory(rpm, tpm, routing_strategy)
 
     print(f"router: {router.model_list}")
-    with pytest.raises(expected_exception) as excinfo:  # asserts correct type raised
-        if sync_mode:
-            results = sync_call(router, list_of_messages)
-        else:
-            results = asyncio.run(async_call(router, list_of_messages))
+    received = []
+
+    def _send_and_check():
+        results = (
+            sync_call(router, list_of_messages)
+            if sync_mode
+            else asyncio.run(async_call(router, list_of_messages))
+        )
+        received.extend(results)
         print(results)
         if len([i for i in results if i is not None]) != num_try_send:
             # since not all results got returned, raise rate limit error
             raise ValueError("No deployments available for selected model")
         raise ExpectNoException
 
+    with pytest.raises(expected_exception) as excinfo:  # asserts correct type raised
+        _send_and_check()
+
     print(expected_exception, excinfo)
     if expected_exception is ValueError:
         assert "No deployments available for selected model" in str(excinfo.value)
     else:
-        assert len([i for i in results if i is not None]) == num_try_send
+        assert len([i for i in received if i is not None]) == num_try_send

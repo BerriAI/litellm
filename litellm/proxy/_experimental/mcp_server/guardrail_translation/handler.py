@@ -1,16 +1,24 @@
 """
 MCP Guardrail Handler for Unified Guardrails.
 
-Converts an MCP call_tool (name + arguments) into a single OpenAI-compatible
-tool_call and passes it to apply_guardrail. Works with the synthetic payload
-from ProxyLogging._convert_mcp_to_llm_format.
+Converts an MCP call_tool (name + arguments) into the OpenAI-compatible shape
+apply_guardrail expects: the tool as a single-entry ``tools`` definition, and
+every string leaf of the call arguments as ``texts`` so text guardrails can
+detect and mask sensitive values in the payload. Works with the synthetic
+request from ProxyLogging._convert_mcp_to_llm_format.
+
+A discovery scan (``list_mcp_tools``) hands the same handler the tool's
+description and input schema instead of call arguments: the description and
+every ``description`` string in the schema lead ``texts``, so a guardrail that
+blocks or masks them decides what the client gets to see in ``tools/list``.
 
 Note: For MCP tool definitions (schema) -> OpenAI tools=[], see
 litellm.experimental_mcp_client.tools.transform_mcp_tool_to_openai_tool
 when you have a full MCP Tool from list_tools. Here we only have the call
-payload (name + arguments) so we just build the tool_call.
+payload (name + arguments) so we just build the tool definition.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException
@@ -20,6 +28,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.experimental_mcp_client.tools import transform_mcp_tool_to_openai_tool
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.proxy._experimental.mcp_server.utils import (
+    MAX_STRUCTURED_CONTENT_SCAN_DEPTH,
+    JSONLeafPath,
     json_string_leaves,
     json_unrewritable_labels,
     mcp_content_item_text,
@@ -39,6 +49,89 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+def _blocked(reason: str) -> HTTPException:
+    return HTTPException(status_code=400, detail={"error": f"Content blocked: {reason}"})
+
+
+def _too_deeply_nested() -> HTTPException:
+    return _blocked(
+        f"MCP tool call arguments exceed the maximum nesting depth of {MAX_STRUCTURED_CONTENT_SCAN_DEPTH} "
+        "and cannot be scanned by the configured guardrail"
+    )
+
+
+def _masked_texts(guarded: Mapping[str, object] | None, scanned: int) -> Sequence[str] | None:
+    """The guardrail's returned texts, or None when it returned nothing to write back.
+
+    A guardrail that returns the wrong number of texts fails closed, because the
+    positional write-back would scramble the payload rather than mask it.
+    """
+    masked: Final[object] = guarded.get("texts") if guarded else None
+    if masked is None:
+        return None
+    if not isinstance(masked, Sequence) or isinstance(masked, str) or len(masked) != scanned:
+        raise _blocked(
+            f"guardrail returned {len(masked) if isinstance(masked, Sequence) else 'no'} texts for {scanned} "
+            "MCP tool strings, so the redaction cannot be mapped back"
+        )
+    return tuple(str(text) for text in masked)
+
+
+def _leaf_replacements(
+    leaves: tuple[tuple[JSONLeafPath, str], ...],
+    masked_texts: Sequence[str],
+) -> Mapping[JSONLeafPath, str]:
+    """Only the leaves the guardrail actually rewrote, so a guardrail that detects nothing leaves the payload byte-identical."""
+    return {path: masked for (path, original), masked in zip(leaves, masked_texts) if masked != original}
+
+
+def _schema_description_leaves(input_schema: object) -> tuple[tuple[JSONLeafPath, str], ...]:
+    leaves: Final = json_string_leaves(input_schema) if isinstance(input_schema, Mapping) else ()
+    if leaves is None:
+        raise _blocked(
+            f"MCP tool input schema exceeds the maximum nesting depth of {MAX_STRUCTURED_CONTENT_SCAN_DEPTH} "
+            "and cannot be scanned by the configured guardrail"
+        )
+    return tuple((path, text) for path, text in leaves if path and path[-1] == "description")
+
+
+def _conflicting_rewrite_paths(
+    scanned_leaves: tuple[tuple[JSONLeafPath, str], ...],
+    current_leaves: tuple[tuple[JSONLeafPath, str], ...],
+    replacements: Mapping[JSONLeafPath, str],
+) -> tuple[JSONLeafPath, ...]:
+    """Paths another guardrail already rewrote differently from what this one wants.
+
+    Guardrails opted into ``run_in_parallel`` all scan the same payload snapshot, so
+    each one returns a full replacement string derived from the *original* leaf. Two
+    of them rewriting one leaf to different values cannot be merged: writing either
+    result discards the other guardrail's redaction. A leaf still holding the text
+    this guardrail was handed, or already holding this guardrail's own replacement,
+    is safe to write; the latter is how a guardrail that masks the arguments itself
+    as well as through ``texts`` gets there first. Anything else fails closed,
+    including a payload reshaped so the leaves no longer line up, because the
+    write-back is positional and would land a redaction on the wrong value.
+    """
+    if tuple(path for path, _ in scanned_leaves) != tuple(path for path, _ in current_leaves):
+        return tuple(replacements)
+    return tuple(
+        path
+        for (path, scanned), (_, current) in zip(scanned_leaves, current_leaves)
+        if path in replacements and current not in (scanned, replacements[path])
+    )
+
+
+def _conflicting_rewrite(paths: tuple[JSONLeafPath, ...]) -> HTTPException:
+    return _blocked(
+        "two guardrails running concurrently rewrote the same MCP tool call "
+        f"argument{'s' if len(paths) > 1 else ''} "
+        f"({', '.join('.'.join(str(part) for part in path) for path in paths)}); "
+        "their redactions cannot be merged. Remove run_in_parallel from one of them so they "
+        "run in sequence."
+    )
 
 
 class MCPGuardrailTranslationHandler(BaseTranslation):
@@ -48,13 +141,12 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         self,
         data: dict[str, Any],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, Any]:
         mcp_tool_name: Final = data.get("mcp_tool_name") or data.get("name")
-        mcp_arguments = data.get("mcp_arguments") or data.get("arguments")
+        mcp_arguments: Final[object] = data.get("mcp_arguments") or data.get("arguments")
         mcp_tool_description: Final = data.get("mcp_tool_description") or data.get("description")
-        if mcp_arguments is None or not isinstance(mcp_arguments, dict):
-            mcp_arguments = {}
+        mcp_input_schema: Final[object] = data.get("mcp_input_schema")
 
         if not mcp_tool_name:
             verbose_proxy_logger.debug("MCP Guardrail: mcp_tool_name missing")
@@ -65,7 +157,9 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         mcp_tool: Final = MCPTool(
             name=mcp_tool_name,
             description=mcp_tool_description or "",
-            inputSchema={},  # Call payload has no schema; guardrail gets args from request_data
+            input_schema=dict(mcp_input_schema)
+            if isinstance(mcp_input_schema, Mapping)
+            else {},  # mutable-ok: SDK dict field
         )
         openai_tool: Final = transform_mcp_tool_to_openai_tool(mcp_tool)
         fn: Final = openai_tool["function"]
@@ -83,23 +177,59 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
                 strict=fn.get("strict", False) or False,  # Default to False if None
             ),
         }
+        description_texts: Final = (str(mcp_tool_description),) if mcp_tool_description else ()
+        schema_leaves: Final = _schema_description_leaves(mcp_input_schema)
+        argument_leaves: Final = json_string_leaves(mcp_arguments)
+        if argument_leaves is None:
+            raise _too_deeply_nested()
+        scanned_texts: Final = (
+            *description_texts,
+            *(text for _, text in schema_leaves),
+            *(text for _, text in argument_leaves),
+        )
         inputs: Final[GenericGuardrailAPIInputs] = GenericGuardrailAPIInputs(
             tools=[tool_def],
+            texts=list(scanned_texts),
         )
 
-        await guardrail_to_apply.apply_guardrail(
+        guarded: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
+        masked_texts: Final = _masked_texts(guarded, len(scanned_texts))
+        if masked_texts is None:
+            return data
+        schema_start: Final = len(description_texts)
+        argument_start: Final = schema_start + len(schema_leaves)
+        if description_texts and masked_texts[0] != description_texts[0]:
+            data["mcp_tool_description"] = masked_texts[0]  # rebind-ok: serve the masked description
+        schema_replacements: Final = _leaf_replacements(schema_leaves, masked_texts[schema_start:argument_start])
+        if schema_replacements:
+            masked_schema: Final = with_json_string_leaves(mcp_input_schema, schema_replacements)
+            data["mcp_input_schema"] = masked_schema  # rebind-ok: serve the masked schema
+        replacements: Final = _leaf_replacements(argument_leaves, masked_texts[argument_start:])
+        if not replacements:
+            return data
+
+        current_arguments: Final[object] = data.get("mcp_arguments") or data.get("arguments")
+        current_leaves: Final = json_string_leaves(current_arguments)
+        if current_leaves is None:
+            raise _too_deeply_nested()
+        conflicting: Final = _conflicting_rewrite_paths(argument_leaves, current_leaves, replacements)
+        if conflicting:
+            raise _conflicting_rewrite(conflicting)
+        masked_arguments: Final = with_json_string_leaves(current_arguments, replacements)
+        data["mcp_arguments"] = masked_arguments  # rebind-ok: preserve the mask for the outbound MCP call
+        data["modified_arguments"] = masked_arguments  # rebind-ok: expose the applied mask to the caller
         return data
 
     async def process_output_response(
         self,
         response: "CallToolResult",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
     ) -> Any:
@@ -130,14 +260,8 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         structured_leaves: Final = json_string_leaves(structured) if structured is not None else ()
         structured_labels: Final = json_unrewritable_labels(structured) if structured is not None else ()
         if structured_leaves is None or structured_labels is None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        "Content blocked: MCP tool result structuredContent is nested too deeply to be scanned "
-                        "by the configured guardrail"
-                    )
-                },
+            raise _blocked(
+                "MCP tool result structuredContent is nested too deeply to be scanned by the configured guardrail"
             )
 
         if not text_blocks and not structured_leaves and not structured_labels:
@@ -157,12 +281,10 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         if masked_texts is None:
             return response
         if len(masked_texts) != len(originals):
-            verbose_proxy_logger.warning(
-                "MCP Guardrail: guardrail returned %d texts for %d tool result texts; leaving the result unmasked",
-                len(masked_texts),
-                len(originals),
+            raise _blocked(
+                f"guardrail returned {len(masked_texts)} texts for {len(originals)} MCP tool result texts, "
+                "so the redaction cannot be mapped back to the result"
             )
-            return response
 
         split: Final = len(text_blocks)
         if content is not None:
@@ -172,15 +294,10 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
 
         label_start: Final = split + len(structured_leaves)
         if any(masked != original for original, masked in zip(structured_labels, masked_texts[label_start:])):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        "Content blocked: MCP tool result matched a masking rule on a non-rewritable field "
-                        "(a structuredContent key or numeric value), which cannot be redacted without changing "
-                        "the payload contract"
-                    )
-                },
+            raise _blocked(
+                "MCP tool result matched a masking rule on a non-rewritable field "
+                "(a structuredContent key or numeric value), which cannot be redacted without changing "
+                "the payload contract"
             )
 
         structured_replacements: Final = {

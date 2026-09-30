@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AiSuggestionModal from "./ai_suggestion_modal";
@@ -92,7 +92,7 @@ describe("AiSuggestionModal", () => {
     await screen.findByText("AI Policy Suggestion");
     expect(screen.getByRole("button", { name: "Suggest Policies" })).toBeDisabled();
 
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     expect(screen.getByRole("button", { name: "Suggest Policies" })).toBeDisabled();
 
     await pickModel(user);
@@ -104,8 +104,10 @@ describe("AiSuggestionModal", () => {
     renderModal();
 
     await screen.findByText("AI Policy Suggestion");
-    await user.type(screen.getByPlaceholderText(/Ignore all previous instructions/), "my ssn is 123");
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Ignore all previous instructions/), {
+      target: { value: "my ssn is 123" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     await pickModel(user);
     await user.click(screen.getByRole("button", { name: "Suggest Policies" }));
 
@@ -136,7 +138,7 @@ describe("AiSuggestionModal", () => {
     renderModal();
 
     await screen.findByText("AI Policy Suggestion");
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     await pickModel(user);
     await user.click(screen.getByRole("button", { name: "Suggest Policies" }));
 
@@ -152,7 +154,7 @@ describe("AiSuggestionModal", () => {
     renderModal();
 
     await screen.findByText("AI Policy Suggestion");
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     await pickModel(user);
     await user.click(screen.getByRole("button", { name: "Suggest Policies" }));
 
@@ -164,7 +166,7 @@ describe("AiSuggestionModal", () => {
     renderModal();
 
     await screen.findByText("AI Policy Suggestion");
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     await pickModel(user);
     await user.click(screen.getByRole("button", { name: "Suggest Policies" }));
 
@@ -179,7 +181,7 @@ describe("AiSuggestionModal", () => {
     renderModal({ onSelectTemplates });
 
     await screen.findByText("AI Policy Suggestion");
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     await pickModel(user);
     await user.click(screen.getByRole("button", { name: "Suggest Policies" }));
     await user.click(await screen.findByRole("button", { name: "Use 2 Selected Templates" }));
@@ -193,7 +195,7 @@ describe("AiSuggestionModal", () => {
     renderModal();
 
     await screen.findByText("AI Policy Suggestion");
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     await pickModel(user);
     await user.click(screen.getByRole("button", { name: "Suggest Policies" }));
     await user.click(await screen.findByRole("button", { name: "Back" }));
@@ -209,7 +211,7 @@ describe("AiSuggestionModal", () => {
     renderModal();
 
     await screen.findByText("AI Policy Suggestion");
-    await user.type(screen.getByPlaceholderText(/Block PII leakage/), "block PII");
+    fireEvent.change(screen.getByPlaceholderText(/Block PII leakage/), { target: { value: "block PII" } });
     await pickModel(user);
     await user.click(screen.getByRole("button", { name: "Suggest Policies" }));
 

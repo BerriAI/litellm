@@ -136,6 +136,7 @@ def test_should_build_identity_record_without_request_content(monkeypatch):
         organization_metadata={"organization_alias": "Example Org"},
         project_metadata={"project_alias": "Chat Project"},
     )
+    auth.via_virtual_key = True
 
     record = ActiveRequestRegistry.build_record(
         {"litellm_call_id": "call-1", "model": "gpt-test", "messages": ["secret"]},
@@ -571,22 +572,36 @@ def test_should_omit_the_key_hash_when_there_is_no_key():
     assert record["key_hash"] is None
 
 
-@pytest.mark.parametrize(
-    "already_hashed",
-    (
-        hashlib.sha256(b"sk-virtual-key").hexdigest(),
-        f"hashed-jwt-{hashlib.sha256(b'jwt').hexdigest()}",
-    ),
-)
-def test_should_keep_the_key_hash_the_proxy_already_computed(already_hashed):
-    """The value has to match what Logs shows, so a hashed key passes through untouched."""
+def test_should_keep_the_virtual_key_hash_the_proxy_already_computed():
+    digest = hashlib.sha256(b"sk-virtual-key").hexdigest()
+    auth = UserAPIKeyAuth(api_key="sk-virtual-key")
+    auth.via_virtual_key = True
+
+    record = ActiveRequestRegistry.build_record({"litellm_call_id": "call-1"}, auth, "acompletion")
+
+    assert auth.api_key == digest
+    assert record["key_hash"] == digest
+
+
+def test_should_keep_the_hashed_jwt_the_proxy_already_computed():
+    hashed_jwt = f"hashed-jwt-{hashlib.sha256(b'jwt').hexdigest()}"
+
     record = ActiveRequestRegistry.build_record(
-        {"litellm_call_id": "call-1"},
-        UserAPIKeyAuth(api_key=already_hashed),
-        "acompletion",
+        {"litellm_call_id": "call-1"}, UserAPIKeyAuth(api_key=hashed_jwt), "acompletion"
     )
 
-    assert record["key_hash"] == already_hashed
+    assert record["key_hash"] == hashed_jwt
+
+
+def test_should_hash_a_hash_shaped_credential_that_custom_auth_returned_raw():
+    raw = "ab" * 32
+
+    record = ActiveRequestRegistry.build_record(
+        {"litellm_call_id": "call-1"}, UserAPIKeyAuth(api_key=raw), "acompletion"
+    )
+
+    assert record["key_hash"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert raw not in str(record)
 
 
 def test_should_never_publish_a_credential_that_custom_auth_returned_raw():

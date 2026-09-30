@@ -9,7 +9,7 @@ import { useHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides
 import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useUpdateHashicorpVaultConfig";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,9 +52,9 @@ export default function HashicorpVault() {
     setIsTesting(true);
     try {
       const result = await testHashicorpVaultConnection(accessToken);
-      NotificationManager.success(result.message || "Connection to Vault successful!");
+      toast.success(result.message || "Connection to Vault successful!");
     } catch (err) {
-      NotificationManager.fromBackend(err);
+      toast.fromError(err);
     } finally {
       setIsTesting(false);
     }
@@ -63,10 +63,10 @@ export default function HashicorpVault() {
   const handleDelete = () => {
     deleteConfig(undefined, {
       onSuccess: () => {
-        NotificationManager.success("Hashicorp Vault configuration deleted");
+        toast.success("Hashicorp Vault configuration deleted");
         setIsDeleteModalOpen(false);
       },
-      onError: (err) => NotificationManager.fromBackend(err),
+      onError: (err) => toast.fromError(err),
     });
   };
 
@@ -76,10 +76,10 @@ export default function HashicorpVault() {
       { [clearingField]: "" },
       {
         onSuccess: () => {
-          NotificationManager.success(`${FIELD_LABELS[clearingField] ?? clearingField} cleared`);
+          toast.success(`${FIELD_LABELS[clearingField] ?? clearingField} cleared`);
           setClearingField(null);
         },
-        onError: (err) => NotificationManager.fromBackend(err),
+        onError: (err) => toast.fromError(err),
       },
     );
   };

@@ -27,6 +27,9 @@ const AUDIT_LOGS_TAB: LogsTab = { id: "audit logs", label: "Audit Logs" };
 const DELETED_KEYS_TAB: LogsTab = { id: "deleted keys", label: "Deleted Keys" };
 const DELETED_TEAMS_TAB: LogsTab = { id: "deleted teams", label: "Deleted Teams" };
 
+const tabContentClassName = (tabId: LogsTabId): string =>
+  tabId === REQUEST_LOGS_TAB.id ? "flex min-h-0 flex-1 flex-col" : "min-h-0 flex-1 overflow-y-auto";
+
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const [activeTab, setActiveTab] = useState<LogsTabId>(REQUEST_LOGS_TAB.id);
   const canViewAuditLogs = useCan("viewAuditLogs");
@@ -78,8 +81,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   };
 
   return (
-    <div className="box-border w-full overflow-x-hidden p-6">
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as LogsTabId)}>
+    <div className="flex h-full w-full flex-col p-6">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as LogsTabId)} className="min-h-0 flex-1">
         <TabsList variant="line">
           {tabs.map((tab) => (
             <TabsTrigger key={tab.id} value={tab.id} className="flex-none">
@@ -88,7 +91,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           ))}
         </TabsList>
         {tabs.map((tab) => (
-          <TabsContent key={tab.id} value={tab.id} keepMounted>
+          <TabsContent key={tab.id} value={tab.id} keepMounted className={tabContentClassName(tab.id)}>
             {renderPanel(tab.id)}
           </TabsContent>
         ))}

@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -12,6 +12,9 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/components/networking", () => ({
   organizationListCall: vi.fn().mockResolvedValue([]),
   userDailyActivityCall: vi
+    .fn()
+    .mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
+  userDailyActivityAggregatedCall: vi
     .fn()
     .mockResolvedValue({ results: [], metadata: { total_pages: 1, has_more: false, page: 1 } }),
 }));
@@ -41,25 +44,33 @@ describe("CostOptimizationView", () => {
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "Admin" });
   });
 
-  it("renders the four cost-optimization tabs", () => {
-    const { getByText } = renderView();
+  it("renders the standard page header with the sidebar's Cost Optimization icon", () => {
+    const { container } = renderView();
 
-    expect(getByText("Overall")).toBeInTheDocument();
-    expect(getByText("Prompt Compression")).toBeInTheDocument();
-    expect(getByText("Prompt Caching")).toBeInTheDocument();
-    expect(getByText("Auto-Router")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Cost Optimization" })).toBeInTheDocument();
+    expect(screen.getByText(/Track and configure the mechanisms that save you money/)).toBeInTheDocument();
+    expect(container.querySelector(".lucide-piggy-bank")).not.toBeNull();
+  });
+
+  it("renders the four cost-optimization tabs", () => {
+    renderView();
+
+    expect(screen.getByText("Overall")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Compression")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Caching")).toBeInTheDocument();
+    expect(screen.getByText("Auto-Router")).toBeInTheDocument();
   });
 
   it("defaults to the Overall tab and switches the active tab on click", () => {
-    const { getByRole } = renderView();
+    renderView();
 
-    expect(getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "true");
-    expect(getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "false");
 
-    fireEvent.click(getByRole("tab", { name: "Prompt Compression" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Prompt Compression" }));
 
-    expect(getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "false");
-    expect(getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Prompt Compression" })).toHaveAttribute("aria-selected", "true");
   });
 
   // Unlike the other three pages in this cleanup, Cost Optimization keeps its
@@ -69,21 +80,21 @@ describe("CostOptimizationView", () => {
   // are proxy-admin-only, so those are what disappear.
   describe("proxy-admin-only tabs", () => {
     it.each(["Internal User", "Internal Viewer", "Org Admin"])("shows %s the Overall tab only", (userRole) => {
-      const { getByRole, queryByRole } = renderView(userRole);
+      renderView(userRole);
 
-      expect(getByRole("tab", { name: "Overall" })).toBeInTheDocument();
-      expect(queryByRole("tab", { name: "Prompt Compression" })).not.toBeInTheDocument();
-      expect(queryByRole("tab", { name: "Prompt Caching" })).not.toBeInTheDocument();
-      expect(queryByRole("tab", { name: "Auto-Router" })).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Overall" })).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Prompt Compression" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Prompt Caching" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Auto-Router" })).not.toBeInTheDocument();
     });
 
     it("never mounts the panels behind the admin-only endpoints for an internal user", () => {
-      const { getByTestId, queryByTestId } = renderView("Internal User");
+      renderView("Internal User");
 
-      expect(getByTestId("usage-tab")).toBeInTheDocument();
-      expect(queryByTestId("compression-tab")).not.toBeInTheDocument();
-      expect(queryByTestId("caching-tab")).not.toBeInTheDocument();
-      expect(queryByTestId("autorouter-benchmarks-tab")).not.toBeInTheDocument();
+      expect(screen.getByTestId("usage-tab")).toBeInTheDocument();
+      expect(screen.queryByTestId("compression-tab")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("caching-tab")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("autorouter-benchmarks-tab")).not.toBeInTheDocument();
     });
   });
 });

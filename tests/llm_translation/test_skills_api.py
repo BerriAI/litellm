@@ -3,7 +3,6 @@ Tests for Skills API operations across providers
 """
 
 import os
-import sys
 import zipfile
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -12,7 +11,6 @@ from typing import Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.types.llms.anthropic_skills import (
@@ -143,7 +141,6 @@ class BaseSkillsAPITest(ABC):
         """
         Test listing skills.
         """
-        import os
 
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()
@@ -280,4 +277,4 @@ class BaseSkillsAPITest(ABC):
 #
 # Transformation logic (URL construction, headers, request/response parsing) is
 # covered by unit tests in:
-#   tests/test_litellm/test_anthropic_skills_transformation.py
+#   tests/unit/test_anthropic_skills_transformation.py

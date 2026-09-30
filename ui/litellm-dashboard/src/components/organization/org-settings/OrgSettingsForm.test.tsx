@@ -1,13 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: { success: vi.fn(), fromBackend: vi.fn() },
-}));
 vi.mock("@/components/ModelSelect/ModelSelect", () => ({
   ModelSelect: ({ onChange }: { onChange: (values: string[]) => void }) => (
     <button type="button" onClick={() => onChange([])}>
@@ -71,11 +67,7 @@ const org: Organization = {
   },
 };
 
-const renderForm = (overrides?: {
-  patchOrganization?: ReturnType<typeof vi.fn>;
-  onSaved?: () => void;
-  org?: Organization;
-}) => {
+const renderForm = (overrides?: { patchOrganization?: Mock; onSaved?: () => void; org?: Organization }) => {
   const patchOrganization = overrides?.patchOrganization ?? vi.fn().mockResolvedValue({});
   const onSaved = overrides?.onSaved ?? vi.fn();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -106,7 +98,7 @@ describe("OrgSettingsForm", () => {
     const { patchOrganization } = renderForm();
 
     await user.clear(screen.getByLabelText("Organization Name"));
-    await user.type(screen.getByLabelText("Organization Name"), "acme-2");
+    fireEvent.change(screen.getByLabelText("Organization Name"), { target: { value: "acme-2" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(patchOrganization).toHaveBeenCalledTimes(1));
@@ -119,7 +111,7 @@ describe("OrgSettingsForm", () => {
 
     const budget: HTMLInputElement = screen.getByLabelText("Max Budget (USD)");
     await user.clear(budget);
-    await user.type(budget, "0.001");
+    fireEvent.change(budget, { target: { value: "0.001" } });
 
     // jsdom never blocks the submit itself, so assert the constraint the real browser
     // enforces before handleSubmit ever runs
@@ -202,7 +194,7 @@ describe("OrgSettingsForm", () => {
 
     const alias = screen.getByLabelText("Organization Name");
     await user.clear(alias);
-    await user.type(alias, "acme");
+    fireEvent.change(alias, { target: { value: "acme" } });
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled());
   });
@@ -211,7 +203,7 @@ describe("OrgSettingsForm", () => {
     const user = userEvent.setup();
     const { patchOrganization } = renderForm();
 
-    await user.type(screen.getByLabelText("Metadata"), "not json");
+    fireEvent.change(screen.getByLabelText("Metadata"), { target: { value: "not json" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Metadata must be a valid JSON object");
@@ -227,7 +219,7 @@ describe("OrgSettingsForm", () => {
     });
 
     await user.clear(screen.getByLabelText("Organization Name"));
-    await user.type(screen.getByLabelText("Organization Name"), "acme-2");
+    fireEvent.change(screen.getByLabelText("Organization Name"), { target: { value: "acme-2" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(patchOrganization).toHaveBeenCalledTimes(1));
@@ -240,7 +232,7 @@ describe("OrgSettingsForm", () => {
     renderForm({ onSaved });
 
     await user.clear(screen.getByLabelText("Requests per minute Limit (RPM)"));
-    await user.type(screen.getByLabelText("Requests per minute Limit (RPM)"), "75");
+    fireEvent.change(screen.getByLabelText("Requests per minute Limit (RPM)"), { target: { value: "75" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));

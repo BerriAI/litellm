@@ -1,16 +1,11 @@
 import asyncio
 import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
-import asyncio
 import logging
 
 import litellm
@@ -91,6 +86,7 @@ def test_async_fallbacks(caplog):
         if "Task exception was never retrieved" not in log
         and "Task was destroyed but it is pending" not in log
         and "get_available_deployment" not in log
+        and "Selected deployment for model" not in log
         and "in the Langfuse queue" not in log
         and "Unclosed client session" not in log
         and "Unclosed connector" not in log

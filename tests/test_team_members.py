@@ -310,9 +310,8 @@ def test_delete_nonexistent_member(api_client, new_team):
     ), "Test setup error: nonexistent user somehow exists"
 
     # Attempt to delete nonexistent user
-    try:
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
         api_client.delete_team_member(new_team, nonexistent_user)
-        pytest.fail("Expected HTTPError for deleting nonexistent user")
-    except requests.exceptions.HTTPError as e:
-        logger.info(f"Expected error received: {str(e)}")
-        assert e.response.status_code == 400
+    e = exc_info.value
+    logger.info(f"Expected error received: {str(e)}")
+    assert e.response.status_code == 400

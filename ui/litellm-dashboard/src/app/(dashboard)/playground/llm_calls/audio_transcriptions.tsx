@@ -1,6 +1,7 @@
 import openai from "openai";
 import { getProxyBaseUrl } from "@/components/networking";
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
+import { toast } from "@/lib/toast";
 
 export async function makeOpenAIAudioTranscriptionRequest(
   audioFile: File,
@@ -14,6 +15,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
   responseFormat?: string,
   temperature?: number,
   customBaseUrl?: string,
+  customHeaders?: CustomHeaders,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -26,7 +28,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
     apiKey: accessToken,
     baseURL: proxyBaseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: tags && tags.length > 0 ? { "x-litellm-tags": tags.join(",") } : undefined,
+    defaultHeaders: buildPlaygroundHeaders(tags, customHeaders),
   });
 
   try {
@@ -45,7 +47,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
     // The response is a transcription object with a text field
     if (response && response.text) {
       updateUI(response.text, selectedModel);
-      NotificationManager.success(`Audio transcribed successfully`);
+      toast.success(`Audio transcribed successfully`);
     } else {
       throw new Error("No transcription text in response");
     }
@@ -62,7 +64,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
         errorMessage = error.message;
       }
 
-      NotificationManager.fromBackend(`Audio transcription failed: ${errorMessage}`);
+      toast.fromError(`Audio transcription failed: ${errorMessage}`);
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

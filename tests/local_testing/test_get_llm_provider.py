@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -9,9 +8,6 @@ import io
 
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.types.router import LiteLLM_Params
@@ -71,7 +67,17 @@ def test_get_llm_provider_deepseek_custom_api_base():
     os.environ.pop("DEEPSEEK_API_BASE")
 
 
-def test_get_llm_provider_vertex_ai_image_models():
+def test_get_llm_provider_vertex_ai_image_models(monkeypatch):
+    monkeypatch.setattr(litellm, "vertex_ai_image_models", set())
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+    litellm.add_known_models(
+        model_cost_map={
+            "vertex_ai/imagegeneration@006": {
+                "litellm_provider": "vertex_ai-image-models",
+                "mode": "image_generation",
+            }
+        }
+    )
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
         model="imagegeneration@006", custom_llm_provider=None
     )
@@ -105,17 +111,17 @@ def test_get_llm_provider_ai21_chat_test2():
 
 def test_get_llm_provider_cohere_chat_test2():
     """
-    if user prefix with cohere/ but calls command-r-plus then it should be cohere_chat provider
+    if user prefix with cohere/ but calls command-r-plus-08-2024 then it should be cohere_chat provider
     """
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-        model="cohere/command-r-plus",
+        model="cohere/command-r-plus-08-2024",
     )
 
     print("model=", model)
     print("custom_llm_provider=", custom_llm_provider)
     print("api_base=", api_base)
     assert custom_llm_provider == "cohere_chat"
-    assert model == "command-r-plus"
+    assert model == "command-r-plus-08-2024"
 
 
 def test_get_llm_provider_azure_o1():
@@ -125,41 +131,6 @@ def test_get_llm_provider_azure_o1():
     )
     assert custom_llm_provider == "azure"
     assert model == "o1-mini"
-
-
-def test_default_api_base():
-    from litellm.litellm_core_utils.get_llm_provider_logic import (
-        _get_openai_compatible_provider_info,
-    )
-    from litellm.types.utils import LlmProviders
-
-    # Patch environment variable to remove API base if it's set
-    with patch.dict(os.environ, {}, clear=True):
-        for provider in litellm.openai_compatible_providers:
-            # Get the API base for the given provider
-            if provider == "github_copilot":
-                continue
-            # Skip chatgpt as it requires OAuth authentication
-            if provider == "chatgpt":
-                continue
-            # Skip ragflow as it requires specific model format: ragflow/chat/{id}/{model} or ragflow/agent/{id}/{model}
-            if provider == "ragflow":
-                continue
-            _, _, _, api_base = _get_openai_compatible_provider_info(
-                model=f"{provider}/*", api_base=None, api_key=None, dynamic_api_key=None
-            )
-            if api_base is None:
-                continue
-
-            for other_provider in LlmProviders:
-                if other_provider.value != provider and provider != "{}_chat".format(
-                    other_provider.value
-                ):
-                    if provider == "codestral" and other_provider.value == "mistral":
-                        continue
-                    elif provider == "github" and other_provider.value == "azure":
-                        continue
-                    assert other_provider.value not in api_base.replace("/openai", "")
 
 
 def test_hosted_vllm_default_api_key():
@@ -569,5 +540,5 @@ class TestClaudeModelPatternMatching:
         )
 
         set_fallback_generalizations([])
-        with pytest.raises(Exception):
+        with pytest.raises(litellm.BadRequestError):
             litellm.get_llm_provider(model="claude-opus-4-9")

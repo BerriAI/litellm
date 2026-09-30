@@ -5,7 +5,7 @@ Verifies that _init_cache attaches Redis to user_api_key_cache only when
 the flag is explicitly set to True, and leaves it in-memory-only otherwise.
 """
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 from unittest.mock import MagicMock, patch
 
@@ -29,7 +29,7 @@ class _FakeRedisCache(RedisCache):
     network calls are made.
     """
 
-    def __init__(self):  # noqa: super().__init__ skipped intentionally
+    def __init__(self):  # super().__init__ skipped intentionally
         self._store = {}
 
     def set_cache(self, key, value, **kwargs):  # type: ignore[override]
@@ -167,3 +167,25 @@ class TestRedisAuthCacheFlag:
                     f"cli_sso_session_cache must always get Redis "
                     f"(enable_redis_auth_cache={flag_value!r})"
                 )
+
+    def test_flag_absent_still_shares_the_model_budget_counters_over_redis(self):
+        """
+        Per-model budget counters are spend counters: the limiter must be able to
+        push and read them through Redis without the auth-cache opt-in, or every
+        worker enforces and reports its own share of a key's spend
+        """
+        fake_redis = _FakeRedisCache()
+        limiter_cache = ps.model_max_budget_limiter.dual_cache
+        touched_caches = (
+            limiter_cache,
+            ps.spend_counter_cache,
+            ps.cli_sso_session_cache,
+            ps.user_api_key_cache,
+            ps.litellm_config_cache,
+        )
+        with ExitStack() as detached:
+            for cache in touched_caches:
+                detached.enter_context(patch.object(cache, "redis_cache", None))
+            ps._attach_redis_usage_cache(fake_redis, enable_redis_auth_cache=False)
+            assert limiter_cache.redis_cache is fake_redis
+            assert ps.user_api_key_cache.redis_cache is None

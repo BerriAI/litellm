@@ -1,15 +1,16 @@
 import json
 from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -45,18 +46,9 @@ class SagemakerLLM(BaseAWSLLM):
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
         aws_region_name = optional_params.pop("aws_region_name", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        optional_params.pop("aws_bedrock_runtime_endpoint", None)  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
+        optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -73,17 +65,7 @@ class SagemakerLLM(BaseAWSLLM):
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-        )
+        credentials: Final[Credentials] = self.resolve_credentials(auth_params, aws_region_name)
         return credentials, aws_region_name
 
     def _prepare_request(
@@ -104,10 +86,11 @@ class SagemakerLLM(BaseAWSLLM):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         sigv4: Final = SigV4Auth(credentials, "sagemaker", aws_region_name)
+        dns_suffix: Final = get_aws_dns_suffix(aws_region_name)
         if optional_params.get("stream") is True:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations-response-stream"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations-response-stream"
         else:
-            api_base = f"https://runtime.sagemaker.{aws_region_name}.amazonaws.com/endpoints/{model}/invocations"
+            api_base = f"https://runtime.sagemaker.{aws_region_name}.{dns_suffix}/endpoints/{model}/invocations"
 
         sagemaker_base_url: Final = optional_params.get("sagemaker_base_url", None)
         if sagemaker_base_url is not None:
@@ -404,7 +387,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         model_id: str | None,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         headers: dict,
     ):
@@ -467,7 +450,7 @@ class SagemakerLLM(BaseAWSLLM):
         encoding,
         model_response: ModelResponse,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         model_id: str | None,
         headers: dict,
         litellm_params: dict,
