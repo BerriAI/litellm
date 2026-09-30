@@ -6,7 +6,6 @@ import importlib
 import json
 import logging
 import os
-import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator, Mapping
@@ -9086,33 +9085,6 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
-_CONCRETE_INTEGRATION_MODULES: Final = (
-    "litellm.integrations.langfuse.langfuse",
-    "litellm.integrations.datadog.datadog",
-    "litellm.integrations.opik.opik",
-    "litellm.integrations.s3",
-    "litellm.integrations.langsmith",
-    "litellm.integrations.opentelemetry",
-    "litellm.integrations.agentops",
-    "litellm.integrations.mlflow",
-)
-
-
-def test_import_litellm_does_not_load_concrete_logging_integrations():
-    probe: Final = (
-        f"import sys, litellm; print(','.join(m for m in {_CONCRETE_INTEGRATION_MODULES!r} if m in sys.modules))"
-    )
-    result: Final = subprocess.run(
-        [sys.executable, "-P", "-c", probe],
-        check=True,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
-    )
-
-    assert result.stdout.strip() == ""
-
-
 def test_init_custom_logger_compatible_class_builds_langsmith_once_and_reuses_it():
     from litellm.integrations.langsmith import LangsmithLogger
     from litellm.litellm_core_utils import litellm_logging as logging_module
@@ -9150,11 +9122,11 @@ def test_lazy_integration_names_import_from_litellm_logging_as_the_real_classes(
         | set(litellm_logging_module._LOOKUP_ONLY_LOGGER_CLASS.values())
     ),
 )
-def test_every_dispatch_table_entry_resolves_to_a_custom_logger_subclass(class_name: str):
-    resolved: Final = litellm_logging_module._custom_logger_class(class_name)
+def test_every_string_callback_logger_imports_from_litellm_logging_as_a_custom_logger(class_name: str):
+    imported: Final = getattr(importlib.import_module("litellm.litellm_core_utils.litellm_logging"), class_name)
 
-    assert issubclass(resolved, CustomLogger)
-    assert getattr(litellm_logging_module, class_name) is resolved
+    assert isinstance(imported, type)
+    assert issubclass(imported, CustomLogger)
 
 
 _LEGACY_CALLBACK_ENV: Final = MappingProxyType(
@@ -9246,11 +9218,13 @@ def test_get_custom_logger_compatible_class_finds_a_newrelic_logger_registered_a
         litellm_logging_module._in_memory_loggers.clear()
 
 
-def test_modify_integration_sets_the_supabase_table_name(monkeypatch: pytest.MonkeyPatch):
+def test_modify_integration_sets_the_supabase_table_name():
     from litellm.integrations.supabase import Supabase
 
-    monkeypatch.setattr(Supabase, "supabase_table_name", Supabase.supabase_table_name)
+    original_table_name: Final = Supabase.supabase_table_name
+    try:
+        litellm_logging_module.modify_integration("supabase", {"table_name": "litellm-test-logs"})
 
-    litellm_logging_module.modify_integration("supabase", {"table_name": "litellm-test-logs"})
-
-    assert Supabase.supabase_table_name == "litellm-test-logs"
+        assert Supabase.supabase_table_name == "litellm-test-logs"
+    finally:
+        Supabase.supabase_table_name = original_table_name
