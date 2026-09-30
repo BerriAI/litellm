@@ -8,10 +8,9 @@ use std::{collections::HashMap, future::Future, io};
 
 use serde::Serialize;
 use serde_json::{
-    Map, Value,
+    Value, json,
     ser::{CharEscape, Formatter, Serializer},
 };
-use sha2::{Digest, Sha256};
 
 use crate::{BaseCache, Error, SemanticCacheContext};
 
@@ -84,225 +83,122 @@ impl Embedder for PreparedEmbedding {
     }
 }
 
-const PLAIN_TYPES: [&str; 4] = ["text", "input_text", "output_text", "message"];
-const PLAIN_KEYS: [&str; 5] = ["role", "type", "text", "content", "status"];
-const TOOL_ROLES: [&str; 2] = ["tool", "function"];
-const IGNORED_KEYS: [&str; 1] = ["cache_control"];
-const CALL_ID_KEYS: [&str; 4] = ["id", "call_id", "tool_use_id", "tool_call_id"];
-const OPAQUE_KEYS: [&str; 4] = ["data", "file_data", "signature", "encrypted_content"];
-
-/// `get_str_from_messages_with_tools`: plain text parts stay plain text, and every other part is
-/// kept as compact JSON with call ids replaced by their position and opaque blobs by a digest.
+/// `get_str_from_messages_with_tools`: every message's content text, tool calls and tool results,
+/// then its OpenAI `tool_calls`, then its search results. Each tool result is encoded with the
+/// position of the call it answers.
 pub fn str_from_messages(messages: &[Value]) -> String {
-    let messages: Vec<&Value> = messages
-        .iter()
-        .filter(|message| message.is_object())
-        .collect();
-    let call_ordinals = call_id_ordinals(messages.iter().copied());
-    messages
-        .into_iter()
-        .filter_map(Value::as_object)
-        .map(|message| message_prompt(message, &call_ordinals))
-        .collect()
-}
-
-/// `get_str_from_responses_input`: `str_from_messages` for a Responses API `input`, one stripped
-/// line per part. `None` when nothing is left.
-fn str_from_responses_input(input: &Value) -> Option<String> {
-    let call_ordinals = call_id_ordinals(std::iter::once(input));
-    let mut parts = Vec::new();
-    push_responses_input_parts(input, &call_ordinals, &mut parts);
-    let prompt = python_strip(&parts.join("\n")).to_owned();
-    (!prompt.is_empty()).then_some(prompt)
-}
-
-fn message_prompt(message: &Map<String, Value>, call_ordinals: &HashMap<&str, usize>) -> String {
-    let is_tool = message
-        .get("role")
-        .and_then(Value::as_str)
-        .is_some_and(|role| TOOL_ROLES.contains(&role));
-    if is_tool || !is_plain(message) {
-        return compact_json(&normalized(message, call_ordinals));
+    let messages: Vec<_> = messages.iter().filter_map(Value::as_object).collect();
+    let call_ordinals = tool_call_ordinals(messages.iter().flat_map(|message| {
+        let block_ids = message
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+            .filter_map(|block| block.get("id"));
+        let tool_call_ids = message
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|tool_call| tool_call.get("id"));
+        block_ids.chain(tool_call_ids)
+    }));
+    let mut text = String::new();
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) == Some("tool") {
+            let mut output = String::new();
+            push_content_text(&mut output, message.get("content"), &call_ordinals);
+            text.push_str(&tool_result_json(
+                message.get("tool_call_id"),
+                &call_ordinals,
+                &output,
+            ));
+        } else {
+            push_content_text(&mut text, message.get("content"), &call_ordinals);
+        }
+        if let Some(Value::Array(tool_calls)) = message.get("tool_calls") {
+            for tool_call in tool_calls.iter().filter_map(Value::as_object) {
+                let function = tool_call.get("function");
+                text.push_str(&tool_call_json(
+                    function.and_then(|function| function.get("name")),
+                    function.and_then(|function| function.get("arguments")),
+                ));
+            }
+        }
+        push_search_results_text(&mut text, message.get("search_results"));
     }
-    plain_prompt(message, call_ordinals)
+    text
 }
 
-fn plain_prompt(value: &Map<String, Value>, call_ordinals: &HashMap<&str, usize>) -> String {
-    let mut prompt = value
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    push_content_prompt(&mut prompt, value.get("content"), call_ordinals);
-    prompt
-}
-
-fn push_content_prompt(
-    prompt: &mut String,
+/// `_content_str_with_tools`: text parts, Anthropic `tool_use` blocks and `tool_result` content.
+fn push_content_text(
+    text: &mut String,
     content: Option<&Value>,
     call_ordinals: &HashMap<&str, usize>,
 ) {
     match content {
-        None | Some(Value::Null) => {}
-        Some(Value::String(text)) => prompt.push_str(text),
-        Some(Value::Array(items)) => {
-            for item in items {
-                push_content_prompt(prompt, Some(item), call_ordinals);
-            }
-        }
-        Some(Value::Object(map)) if is_plain(map) => {
-            prompt.push_str(&plain_prompt(map, call_ordinals));
-        }
-        Some(Value::Object(map)) => prompt.push_str(&compact_json(&normalized(map, call_ordinals))),
-        Some(other) => prompt.push_str(&compact_json(other)),
-    }
-}
-
-fn push_responses_input_parts(
-    value: &Value,
-    call_ordinals: &HashMap<&str, usize>,
-    parts: &mut Vec<String>,
-) {
-    match value {
-        Value::Null => {}
-        Value::String(text) => push_stripped(text, parts),
-        Value::Array(items) => {
-            for item in items {
-                push_responses_input_parts(item, call_ordinals, parts);
-            }
-        }
-        Value::Object(map) if is_plain(map) => {
-            push_stripped(
-                map.get("text").and_then(Value::as_str).unwrap_or_default(),
-                parts,
-            );
-            if let Some(content) = map.get("content") {
-                push_responses_input_parts(content, call_ordinals, parts);
-            }
-        }
-        Value::Object(map) => parts.push(compact_json(&normalized(map, call_ordinals))),
-        other => parts.push(compact_json(other)),
-    }
-}
-
-fn push_stripped(text: &str, parts: &mut Vec<String>) {
-    let stripped = python_strip(text);
-    if !stripped.is_empty() {
-        parts.push(stripped.to_owned());
-    }
-}
-
-/// `_is_plain`: a text-only part whose every kept key is a plain or call id key.
-fn is_plain(value: &Map<String, Value>) -> bool {
-    let plain_type = match value.get("type") {
-        None | Some(Value::Null) => true,
-        Some(Value::String(value_type)) => PLAIN_TYPES.contains(&value_type.as_str()),
-        Some(_) => false,
-    };
-    let plain_text = matches!(
-        value.get("text"),
-        None | Some(Value::Null | Value::String(_))
-    );
-    plain_type
-        && plain_text
-        && kept_entries(value).all(|(key, _)| {
-            PLAIN_KEYS.contains(&key.as_str()) || CALL_ID_KEYS.contains(&key.as_str())
-        })
-}
-
-fn kept_entries(value: &Map<String, Value>) -> impl Iterator<Item = (&String, &Value)> {
-    value
-        .iter()
-        .filter(|(key, item)| !IGNORED_KEYS.contains(&key.as_str()) && !is_empty(item))
-}
-
-fn is_empty(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::String(text) => text.is_empty(),
-        Value::Array(items) => items.is_empty(),
-        Value::Object(map) => map.is_empty(),
-        Value::Bool(_) | Value::Number(_) => false,
-    }
-}
-
-/// `_normalized`: the part minus ignored and empty entries, with call ids replaced by their
-/// position and opaque blobs by `sha256:` plus the first 16 hex digits of their digest.
-fn normalized(value: &Map<String, Value>, call_ordinals: &HashMap<&str, usize>) -> Value {
-    Value::Object(
-        kept_entries(value)
-            .map(|(key, item)| {
-                (
-                    key.clone(),
-                    normalized_value(item, call_ordinals, Some(key)),
-                )
-            })
-            .collect(),
-    )
-}
-
-fn normalized_value(
-    value: &Value,
-    call_ordinals: &HashMap<&str, usize>,
-    key: Option<&str>,
-) -> Value {
-    match value {
-        Value::Object(map) => normalized(map, call_ordinals),
-        Value::Array(items) => Value::Array(
-            items
-                .iter()
-                .map(|item| normalized_value(item, call_ordinals, None))
-                .collect(),
-        ),
-        Value::String(text) if key.is_some_and(|key| CALL_ID_KEYS.contains(&key)) => call_ordinals
-            .get(text.as_str())
-            .map_or_else(|| value.clone(), |ordinal| Value::from(*ordinal)),
-        Value::String(text)
-            if key.is_some_and(|key| OPAQUE_KEYS.contains(&key)) || text.starts_with("data:") =>
-        {
-            Value::String(digest(text))
-        }
-        other => other.clone(),
-    }
-}
-
-fn digest(text: &str) -> String {
-    let hash = Sha256::digest(text.as_bytes());
-    let hex: String = hash[..8].iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("sha256:{hex}")
-}
-
-/// `_call_id_ordinals`: the 1-based position of each distinct call id string, first seen first.
-fn call_id_ordinals<'a>(values: impl Iterator<Item = &'a Value>) -> HashMap<&'a str, usize> {
-    let mut ids = Vec::new();
-    for value in values {
-        collect_call_ids(value, None, &mut ids);
-    }
-    let mut ordinals = HashMap::new();
-    for id in ids {
-        let next = ordinals.len() + 1;
-        ordinals.entry(id).or_insert(next);
-    }
-    ordinals
-}
-
-fn collect_call_ids<'a>(value: &'a Value, key: Option<&str>, ids: &mut Vec<&'a str>) {
-    match value {
-        Value::String(text) if key.is_some_and(|key| CALL_ID_KEYS.contains(&key)) => ids.push(text),
-        Value::Object(map) => {
-            for (child_key, child) in map {
-                if !IGNORED_KEYS.contains(&child_key.as_str()) {
-                    collect_call_ids(child, Some(child_key), ids);
+        Some(Value::String(content)) => text.push_str(content),
+        Some(Value::Array(blocks)) => {
+            for block in blocks.iter().filter_map(Value::as_object) {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_use") => {
+                        text.push_str(&tool_call_json(block.get("name"), block.get("input")));
+                    }
+                    Some("tool_result") => {
+                        let mut output = String::new();
+                        push_content_text(&mut output, block.get("content"), call_ordinals);
+                        text.push_str(&tool_result_json(
+                            block.get("tool_use_id"),
+                            call_ordinals,
+                            &output,
+                        ));
+                    }
+                    _ => {
+                        if let Some(block_text) = block.get("text").and_then(Value::as_str) {
+                            text.push_str(block_text);
+                        }
+                    }
                 }
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_call_ids(item, None, ids);
             }
         }
         _ => {}
     }
+}
+
+/// `tool_call_ordinals`: the 1-based position of each distinct string call id, first seen first.
+fn tool_call_ordinals<'a>(call_ids: impl Iterator<Item = &'a Value>) -> HashMap<&'a str, usize> {
+    let mut ordinals = HashMap::new();
+    for call_id in call_ids.filter_map(Value::as_str) {
+        let next = ordinals.len() + 1;
+        ordinals.entry(call_id).or_insert(next);
+    }
+    ordinals
+}
+
+/// `tool_result_str`: `{"result_of_call":N,"output":...}`, with a `null` position when the result
+/// answers no known call.
+fn tool_result_json(
+    call_id: Option<&Value>,
+    call_ordinals: &HashMap<&str, usize>,
+    output: &str,
+) -> String {
+    let ordinal = call_id
+        .and_then(Value::as_str)
+        .and_then(|call_id| call_ordinals.get(call_id));
+    format!(
+        "{{\"result_of_call\":{},\"output\":{}}}",
+        compact_json(&json!(ordinal)),
+        compact_json(&Value::String(output.to_owned())),
+    )
+}
+
+/// `tool_call_str`: the compact `{"name":...,"arguments":...}` a tool call contributes.
+fn tool_call_json(name: Option<&Value>, arguments: Option<&Value>) -> String {
+    compact_json(&json!({
+        "name": name.unwrap_or(&Value::Null),
+        "arguments": arguments.unwrap_or(&Value::Null),
+    }))
 }
 
 /// The messages prompt Qdrant embeds: `None` when the request carries no messages.
@@ -319,7 +215,103 @@ pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
     {
         return Some(str_from_messages(messages));
     }
-    str_from_responses_input(context.input.as_ref()?)
+    let input = context.input.as_ref()?;
+    let call_ordinals = tool_call_ordinals(
+        input
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
+            .filter_map(|item| item.get("call_id")),
+    );
+    let mut parts = Vec::new();
+    collect_input_text(input, &mut parts, &call_ordinals);
+    let prompt = python_strip(&parts.join("\n")).to_owned();
+    (!prompt.is_empty()).then_some(prompt)
+}
+
+/// `extract_search_results_text`.
+fn push_search_results_text(text: &mut String, search_results: Option<&Value>) {
+    let Some(Value::Array(results)) = search_results else {
+        return;
+    };
+    for result in results.iter().filter_map(Value::as_object) {
+        for key in ["source", "title"] {
+            if let Some(value) = result.get(key).and_then(Value::as_str) {
+                text.push_str(value);
+            }
+        }
+        if let Some(Value::Array(content)) = result.get("content") {
+            for block in content.iter().filter_map(Value::as_object) {
+                if let Some(value) = block.get("text").and_then(Value::as_str) {
+                    text.push_str(value);
+                }
+            }
+        }
+        if let Some(citations) = result.get("citations").filter(|value| !value.is_null()) {
+            text.push_str(&compact_json(citations));
+        }
+    }
+}
+
+fn collect_input_text(
+    value: &Value,
+    parts: &mut Vec<String>,
+    call_ordinals: &HashMap<&str, usize>,
+) {
+    match value {
+        Value::String(text) => {
+            push_trimmed(text, parts);
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_input_text(item, parts, call_ordinals);
+            }
+        }
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("function_call") {
+                parts.push(tool_call_json(map.get("name"), map.get("arguments")));
+                return;
+            }
+            if map.get("type").and_then(Value::as_str) == Some("function_call_output") {
+                let mut output_parts = Vec::new();
+                if let Some(output) = map.get("output") {
+                    collect_input_text(output, &mut output_parts, call_ordinals);
+                }
+                parts.push(tool_result_json(
+                    map.get("call_id"),
+                    call_ordinals,
+                    python_strip(&output_parts.join("\n")),
+                ));
+                return;
+            }
+            if let Some(content) = map.get("content").filter(|content| !content.is_null()) {
+                collect_input_text(content, parts, call_ordinals);
+                return;
+            }
+            for key in ["text", "output", "input_text", "output_text"] {
+                match map.get(key) {
+                    Some(nested @ Value::Array(_)) => {
+                        collect_input_text(nested, parts, call_ordinals);
+                        return;
+                    }
+                    Some(Value::String(text)) if push_trimmed(text, parts) => return,
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Pushes `text` stripped as Python's `str.strip` does, reporting whether anything was left.
+fn push_trimmed(text: &str, parts: &mut Vec<String>) -> bool {
+    let trimmed = python_strip(text);
+    if trimmed.is_empty() {
+        return false;
+    }
+    parts.push(trimmed.to_owned());
+    true
 }
 
 /// `str.strip()`: Python's whitespace also covers the ASCII information separators.

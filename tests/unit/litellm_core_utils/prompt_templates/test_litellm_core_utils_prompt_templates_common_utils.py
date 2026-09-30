@@ -3,7 +3,6 @@ import functools
 import json
 import os
 import sys
-from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -2024,12 +2023,12 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                     "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}}],
                 },
             ],
-            'fix the failing test{"type":"tool_use","id":1,"name":"Bash","input":{"cmd":"ls"}}',
-            id="anthropic-tool-use-with-its-call-position",
+            'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}',
+            id="anthropic-tool-use-name-and-input-without-id",
         ),
         pytest.param(
             [_TASK, {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "calc.py"}]}],
-            'fix the failing test{"type":"tool_result","tool_use_id":1,"content":"calc.py"}',
+            'fix the failing test{"result_of_call":null,"output":"calc.py"}',
             id="anthropic-string-tool-result",
         ),
         pytest.param(
@@ -2046,7 +2045,7 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                     ],
                 }
             ],
-            '{"type":"tool_result","tool_use_id":1,"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}next',
+            '{"result_of_call":null,"output":"ab"}next',
             id="anthropic-nested-text-tool-result-then-text",
         ),
         pytest.param(
@@ -2062,11 +2061,9 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                 },
                 {"role": "tool", "tool_call_id": "c1", "content": "ok"},
             ],
-            'fix the failing test{"role":"assistant","content":"writing","tool_calls":['
-            '{"id":1,"type":"function","function":{"name":"write","arguments":"{\\"path\\": \\"a\\"}"}},'
-            '{"id":2,"type":"function","function":{"name":"write","arguments":"{\\"path\\": \\"b\\"}"}}]}'
-            '{"role":"tool","tool_call_id":1,"content":"ok"}',
-            id="openai-tool-calls-then-tool-result",
+            'fix the failing testwriting{"name":"write","arguments":"{\\"path\\": \\"a\\"}"}'
+            '{"name":"write","arguments":"{\\"path\\": \\"b\\"}"}{"result_of_call":1,"output":"ok"}',
+            id="openai-tool-calls-in-order-before-tool-result",
         ),
         pytest.param(
             [
@@ -2085,9 +2082,8 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                     ],
                 },
             ],
-            '{"type":"tool_use","id":1,"name":"Read","input":{"path":"a"}}'
-            '{"type":"tool_use","id":2,"name":"Read","input":{"path":"b"}}'
-            '{"type":"tool_result","tool_use_id":2,"content":"B"}{"type":"tool_result","tool_use_id":1,"content":"A"}',
+            '{"name":"Read","arguments":{"path":"a"}}{"name":"Read","arguments":{"path":"b"}}'
+            '{"result_of_call":2,"output":"B"}{"result_of_call":1,"output":"A"}',
             id="anthropic-parallel-tool-results-tagged-with-their-call",
         ),
         pytest.param(
@@ -2097,11 +2093,19 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                     "content": None,
                     "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "a", "arguments": "{}"}}],
                 },
-                {"role": "tool", "tool_call_id": "call_0", "content": "C"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_0", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+                        {"id": "call_1", "type": "function", "function": {"name": "c", "arguments": "{}"}},
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "C"},
             ],
-            '{"role":"assistant","tool_calls":[{"id":1,"type":"function","function":{"name":"a","arguments":"{}"}}]}'
-            '{"role":"tool","tool_call_id":1,"content":"C"}',
-            id="null-content-dropped-from-encoded-message",
+            '{"name":"a","arguments":"{}"}{"name":"b","arguments":"{}"}{"name":"c","arguments":"{}"}'
+            '{"result_of_call":2,"output":"C"}',
+            id="reused-call-ids-keep-first-position",
         ),
         pytest.param(
             [
@@ -2112,13 +2116,13 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                     "search_results": [{"source": "s", "title": "t"}],
                 }
             ],
-            '{"role":"tool","tool_call_id":1,"content":"small","search_results":[{"source":"s","title":"t"}]}',
-            id="tool-result-keeps-search-results",
+            '{"result_of_call":null,"output":"small"}st',
+            id="tool-result-search-results-follow-the-encoded-result",
         ),
         pytest.param(
-            [{"role": "tool", "content": 'x"}{"role":"tool","content":"y'}],
-            '{"role":"tool","content":"x\\"}{\\"role\\":\\"tool\\",\\"content\\":\\"y"}',
-            id="tool-output-is-escaped-even-without-a-call-id",
+            [{"role": "tool", "tool_call_id": "c1", "content": '"},{"result_of_call":2,"output":"'}],
+            '{"result_of_call":null,"output":"\\"},{\\"result_of_call\\":2,\\"output\\":\\""}',
+            id="tool-output-cannot-forge-an-encoded-result",
         ),
         pytest.param(
             [
@@ -2127,32 +2131,17 @@ _TASK: Final = {"role": "user", "content": "fix the failing test"}
                     tool_calls=[ChatCompletionMessageToolCall(id="c1", function=Function(name="read", arguments="{}"))],
                 )
             ],
-            '{"role":"assistant","tool_calls":[{"function":{"arguments":"{}","name":"read"},"id":1,"type":"function"}]}',
+            '{"name":"read","arguments":"{}"}',
             id="openai-response-message-object",
         ),
         pytest.param(
-            [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}],
-            "hi",
-            id="cache-control-ignored",
-        ),
-        pytest.param(
-            [{"role": "user", "name": "alice", "content": "hi"}],
-            '{"role":"user","name":"alice","content":"hi"}',
-            id="extra-message-field-kept",
-        ),
-        pytest.param(
-            [{"role": "user", "content": [{"type": "brand_new_block", "payload": {"k": "v"}}, {"type": "text", "text": "!"}]}],
-            '{"type":"brand_new_block","payload":{"k":"v"}}!',
-            id="unknown-block-type-kept",
-        ),
-        pytest.param(
-            [{"role": "user", "content": [{"type": "text", "text": 3}]}],
-            '{"type":"text","text":3}',
-            id="non-string-text-kept",
+            [{"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function"}, "junk"]}, "junk"],
+            '{"name":null,"arguments":null}',
+            id="malformed-tool-call-entries",
         ),
     ],
 )
-def test_get_str_from_messages_with_tools_keeps_every_part(messages: list[object], expected: str) -> None:
+def test_get_str_from_messages_with_tools_keeps_tool_exchange(messages: list[object], expected: str) -> None:
     assert get_str_from_messages_with_tools(messages) == expected
 
 
@@ -2161,52 +2150,23 @@ def test_get_str_from_messages_with_tools_keeps_every_part(messages: list[object
     [
         pytest.param([_TASK, {"role": "assistant", "content": "done"}], id="string-content"),
         pytest.param(
-            [{"role": "user", "content": [{"type": "text", "text": "what is "}, {"type": "text", "text": "this"}]}],
-            id="text-parts",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is "},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                        {"type": "text", "text": "this"},
+                    ],
+                }
+            ],
+            id="text-and-image-parts",
         ),
         pytest.param([{"role": "assistant", "content": None}, {"role": "user"}], id="missing-content"),
     ],
 )
-def test_get_str_from_messages_with_tools_matches_get_str_from_messages_for_text(messages: list[object]) -> None:
+def test_get_str_from_messages_with_tools_matches_get_str_from_messages_without_tools(messages: list[object]) -> None:
     assert get_str_from_messages_with_tools(messages) == get_str_from_messages(messages)  # pyright: ignore[reportArgumentType]  # untyped fixtures
-
-
-def _anthropic_image(data: str) -> list[object]:
-    return [{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "data": data}}]}]
-
-
-def _openai_image(url: str) -> list[object]:
-    return [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
-
-
-def _thinking(signature: str) -> list[object]:
-    return [{"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm", "signature": signature}]}]
-
-
-@pytest.mark.parametrize(
-    ("build", "blob"),
-    [
-        pytest.param(_anthropic_image, "iVBORw0KGgo" * 50, id="anthropic-base64-image"),
-        pytest.param(_openai_image, "data:image/png;base64," + "iVBORw0KGgo" * 50, id="openai-data-url-image"),
-        pytest.param(_thinking, "EqQBCkgIARABGAIiQL" * 20, id="thinking-signature"),
-    ],
-)
-def test_get_str_from_messages_with_tools_replaces_opaque_blobs_with_distinct_digests(
-    build: Callable[[str], list[object]], blob: str
-) -> None:
-    prompt: Final = get_str_from_messages_with_tools(build(blob))
-
-    assert blob not in prompt
-    assert "sha256:" in prompt
-    assert len(prompt) < len(blob)
-    assert prompt == get_str_from_messages_with_tools(build(blob))
-    assert prompt != get_str_from_messages_with_tools(build(blob + "A"))
-
-
-def test_get_str_from_messages_with_tools_keeps_image_urls_distinct() -> None:
-    assert get_str_from_messages_with_tools(_openai_image("https://example.com/a.png")) != (
-        get_str_from_messages_with_tools(_openai_image("https://example.com/b.png"))
-    )
 
 
 def _parallel_reads(result_for_a: str, result_for_b: str, *, call_id_prefix: str = "c") -> list[object]:

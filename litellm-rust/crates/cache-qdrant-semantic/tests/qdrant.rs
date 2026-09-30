@@ -225,7 +225,7 @@ async fn async_and_sync_set_get_store_exact_payload(entry: JsonValue) {
 }
 
 #[rstest]
-#[case::content_parts_keep_images_in_place(
+#[case::content_parts_skip_images(
     json!([
         {"role": "user", "content": "hello"},
         {
@@ -237,9 +237,9 @@ async fn async_and_sync_set_get_store_exact_payload(entry: JsonValue) {
             ],
         },
     ]),
-    r#"helloworld{"type":"image_url","image_url":{"url":"ignored"}}!"#
+    "helloworld!"
 )]
-#[case::tool_message_with_search_results_kept_as_json(
+#[case::search_results_and_compact_citations(
     json!([{
         "role": "tool",
         "content": null,
@@ -250,7 +250,7 @@ async fn async_and_sync_set_get_store_exact_payload(entry: JsonValue) {
             "citations": {"page": 1, "section": "intro"},
         }],
     }]),
-    r#"{"role":"tool","search_results":[{"source":"source","title":"title","content":[{"text":"body"}],"citations":{"page":1,"section":"intro"}}]}"#
+    r#"{"result_of_call":null,"output":""}sourcetitlebody{"page":1,"section":"intro"}"#
 )]
 #[tokio::test(flavor = "multi_thread")]
 async fn prompt_matches_python_message_rules(

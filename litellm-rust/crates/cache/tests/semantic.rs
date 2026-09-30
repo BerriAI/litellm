@@ -16,115 +16,168 @@ fn context(messages: Option<Value>, input: Option<Value>) -> SemanticCacheContex
 }
 
 #[rstest]
-#[case::empty(r#"[]"#, r#""#)]
-#[case::string_content(r#"[{"role": "user", "content": "hello"}]"#, r#"hello"#)]
+#[case::empty(json!([]), "")]
+#[case::string_content(json!([{"role": "user", "content": "hello"}]), "hello")]
 #[case::concatenates_messages(
-    r#"[{"role": "system", "content": "be brief. "}, {"role": "user", "content": "hello"}]"#,
-    r#"be brief. hello"#
+    json!([{"role": "system", "content": "be brief. "}, {"role": "user", "content": "hello"}]),
+    "be brief. hello",
 )]
 #[case::text_parts(
-    r#"[{"role": "user", "content": [{"type": "text", "text": "What is "}, {"type": "text", "text": "this?"}]}]"#,
-    r#"What is this?"#,
-)]
-#[case::image_part_kept_in_place(
-    r#"[{"role": "user", "content": [{"type": "text", "text": "What is "}, {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}, {"type": "text", "text": "this?"}]}]"#,
-    r#"What is {"type":"image_url","image_url":{"url":"https://example.com/a.png"}}this?"#,
+    json!([{"role": "user", "content": [
+        {"type": "text", "text": "What is "},
+        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+        {"type": "text", "text": "this?"},
+    ]}]),
+    "What is this?",
 )]
 #[case::missing_null_and_empty_content(
-    r#"[{"role": "assistant"}, {"role": "assistant", "content": null}, {"role": "user", "content": ""}]"#,
-    r#""#,
+    json!([{"role": "assistant"}, {"role": "assistant", "content": null}, {"role": "user", "content": ""}]),
+    "",
 )]
-#[case::non_object_messages_skipped(
-    r#"["junk", 3, {"role": "user", "content": "kept"}]"#,
-    r#"kept"#
+#[case::search_results_hidden_behind_small_content(
+    json!([{"role": "tool", "content": "small", "search_results": [
+        {"source": "s", "title": "t", "content": [{"text": "hidden payload"}]},
+    ]}]),
+    r#"{"result_of_call":null,"output":"small"}sthidden payload"#,
 )]
-#[case::cache_control_ignored(
-    r#"[{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}]"#,
-    r#"hi"#,
+#[case::title_only_search_result(
+    json!([{"role": "tool", "content": "small", "search_results": [
+        {"source": "s", "title": "long title", "content": []},
+    ]}]),
+    r#"{"result_of_call":null,"output":"small"}slong title"#,
 )]
-#[case::extra_message_field_kept(
-    r#"[{"role": "user", "name": "alice", "content": "hi"}]"#,
-    r#"{"role":"user","name":"alice","content":"hi"}"#
+#[case::search_results_without_content(
+    json!([{"role": "tool", "search_results": [{"source": "s", "title": "t"}]}]),
+    r#"{"result_of_call":null,"output":""}st"#,
 )]
-#[case::unknown_block_type_kept(
-    r#"[{"role": "user", "content": [{"type": "brand_new_block", "payload": {"k": "v"}}, {"type": "text", "text": "!"}]}]"#,
-    r#"{"type":"brand_new_block","payload":{"k":"v"}}!"#,
+#[case::search_result_fields_in_python_order(
+    json!([{"role": "tool", "content": "c", "search_results": [
+        {"citations": {"enabled": true}, "content": [{"text": "body"}], "title": "t", "source": "s"},
+        {"source": "s2"},
+    ]}]),
+    r#"{"result_of_call":null,"output":"c"}stbody{"enabled":true}s2"#,
 )]
-#[case::non_string_text_kept(
-    r#"[{"role": "user", "content": [{"type": "text", "text": 3}]}]"#,
-    r#"{"type":"text","text":3}"#
+#[case::null_citations_skipped(
+    json!([{"role": "tool", "content": "c", "search_results": [
+        {"source": "s", "citations": null},
+    ]}]),
+    r#"{"result_of_call":null,"output":"c"}s"#,
 )]
-#[case::scalar_content_kept(
-    r#"[{"role": "user", "content": 7}, {"role": "user", "content": [1.5, true, "x"]}]"#,
-    r#"71.5truex"#
+#[case::non_string_and_non_object_entries_skipped(
+    json!([{"role": "tool", "content": "c", "search_results": [
+        "junk",
+        {"source": 1, "title": null, "content": ["junk", {"text": 3}, {"text": "kept"}]},
+    ]}]),
+    r#"{"result_of_call":null,"output":"c"}kept"#,
 )]
-#[case::search_results_kept(
-    r#"[{"role": "tool", "content": "small", "search_results": [{"source": "s", "title": "t", "content": [{"type": "text", "text": "hidden payload"}], "citations": {"enabled": true}}]}]"#,
-    r#"{"role":"tool","content":"small","search_results":[{"source":"s","title":"t","content":[{"type":"text","text":"hidden payload"}],"citations":{"enabled":true}}]}"#,
+#[case::non_list_search_results_skipped(
+    json!([{"role": "tool", "content": "c", "search_results": {"source": "s"}}]),
+    r#"{"result_of_call":null,"output":"c"}"#,
 )]
-#[case::anthropic_tool_use(
-    r#"[{"role": "user", "content": "fix the failing test"}, {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}}]}]"#,
-    r#"fix the failing test{"type":"tool_use","id":1,"name":"Bash","input":{"cmd":"ls"}}"#,
+#[case::citations_compact_in_insertion_order(
+    json!([{"role": "tool", "search_results": [
+        {"citations": {"z": 1, "a": [1.5, true, null], "m": {"k": "v"}}},
+    ]}]),
+    r#"{"result_of_call":null,"output":""}{"z":1,"a":[1.5,true,null],"m":{"k":"v"}}"#,
+)]
+#[case::citations_ensure_ascii(
+    json!([{"role": "tool", "search_results": [{"citations": ["caf\u{e9}", "\u{4e2d}"]}]}]),
+    r#"{"result_of_call":null,"output":""}["caf\u00e9","\u4e2d"]"#,
+)]
+#[case::citations_astral_chars_as_surrogate_pairs(
+    json!([{"role": "tool", "search_results": [{"citations": "\u{1f600}"}]}]),
+    r#"{"result_of_call":null,"output":""}"\ud83d\ude00""#,
+)]
+#[case::citations_escapes(
+    json!([{"role": "tool", "search_results": [{"citations": "q\"\\\n\t\u{1}/"}]}]),
+    r#"{"result_of_call":null,"output":""}"q\"\\\n\t\u0001/""#,
+)]
+#[case::citations_large_float_exponent(
+    json!([{"role": "tool", "search_results": [{"citations": [1e20, 1.0]}]}]),
+    r#"{"result_of_call":null,"output":""}[1e+20,1.0]"#,
+)]
+#[case::citations_scalars(
+    json!([{"role": "tool", "search_results": [{"citations": false}, {"citations": 3}]}]),
+    r#"{"result_of_call":null,"output":""}false3"#,
+)]
+#[case::anthropic_tool_use_name_and_input_without_id(
+    json!([
+        {"role": "user", "content": "fix the failing test"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}},
+        ]},
+    ]),
+    r#"fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}"#,
 )]
 #[case::anthropic_string_tool_result(
-    r#"[{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "calc.py"}]}]"#,
-    r#"{"type":"tool_result","tool_use_id":1,"content":"calc.py"}"#,
+    json!([{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "calc.py"},
+    ]}]),
+    r#"{"result_of_call":null,"output":"calc.py"}"#,
 )]
 #[case::anthropic_nested_text_tool_result_then_text(
-    r#"[{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}, {"type": "text", "text": "next"}]}]"#,
-    r#"{"type":"tool_result","tool_use_id":1,"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]}next"#,
+    json!([{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": [
+            {"type": "text", "text": "a"},
+            {"type": "text", "text": "b"},
+        ]},
+        {"type": "text", "text": "next"},
+    ]}]),
+    r#"{"result_of_call":null,"output":"ab"}next"#,
 )]
-#[case::openai_tool_calls_then_tool_result(
-    r#"[{"role": "assistant", "content": "writing", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "write", "arguments": "{\"path\": \"a\"}"}}, {"id": "c2", "type": "function", "function": {"name": "write", "arguments": "{\"path\": \"b\"}"}}]}, {"role": "tool", "tool_call_id": "c1", "content": "ok"}]"#,
-    r#"{"role":"assistant","content":"writing","tool_calls":[{"id":1,"type":"function","function":{"name":"write","arguments":"{\"path\": \"a\"}"}},{"id":2,"type":"function","function":{"name":"write","arguments":"{\"path\": \"b\"}"}}]}{"role":"tool","tool_call_id":1,"content":"ok"}"#,
+#[case::openai_tool_calls_in_order_before_tool_result(
+    json!([
+        {"role": "assistant", "content": "writing", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "write", "arguments": "{\"path\": \"a\"}"}},
+            {"id": "c2", "type": "function", "function": {"name": "write", "arguments": "{\"path\": \"b\"}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ]),
+    r#"writing{"name":"write","arguments":"{\"path\": \"a\"}"}{"name":"write","arguments":"{\"path\": \"b\"}"}{"result_of_call":1,"output":"ok"}"#,
 )]
 #[case::anthropic_parallel_tool_results_tagged_with_their_call(
-    r#"[{"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "a"}}, {"type": "tool_use", "id": "t2", "name": "Read", "input": {"path": "b"}}]}, {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": "B"}, {"type": "tool_result", "tool_use_id": "t1", "content": "A"}]}]"#,
-    r#"{"type":"tool_use","id":1,"name":"Read","input":{"path":"a"}}{"type":"tool_use","id":2,"name":"Read","input":{"path":"b"}}{"type":"tool_result","tool_use_id":2,"content":"B"}{"type":"tool_result","tool_use_id":1,"content":"A"}"#,
+    json!([
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"path": "a"}},
+            {"type": "tool_use", "id": "t2", "name": "Read", "input": {"path": "b"}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t2", "content": "B"},
+            {"type": "tool_result", "tool_use_id": "t1", "content": "A"},
+        ]},
+    ]),
+    r#"{"name":"Read","arguments":{"path":"a"}}{"name":"Read","arguments":{"path":"b"}}{"result_of_call":2,"output":"B"}{"result_of_call":1,"output":"A"}"#,
 )]
 #[case::reused_call_ids_keep_first_position(
-    r#"[{"role": "assistant", "content": null, "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "a", "arguments": "{}"}}]}, {"role": "assistant", "content": null, "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "b", "arguments": "{}"}}, {"id": "call_1", "type": "function", "function": {"name": "c", "arguments": "{}"}}]}, {"role": "tool", "tool_call_id": "call_1", "content": "C"}]"#,
-    r#"{"role":"assistant","tool_calls":[{"id":1,"type":"function","function":{"name":"a","arguments":"{}"}}]}{"role":"assistant","tool_calls":[{"id":1,"type":"function","function":{"name":"b","arguments":"{}"}},{"id":2,"type":"function","function":{"name":"c","arguments":"{}"}}]}{"role":"tool","tool_call_id":2,"content":"C"}"#,
+    json!([
+        {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "call_0", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+        ]},
+        {"role": "assistant", "content": null, "tool_calls": [
+            {"id": "call_0", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+            {"id": "call_1", "type": "function", "function": {"name": "c", "arguments": "{}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "C"},
+    ]),
+    r#"{"name":"a","arguments":"{}"}{"name":"b","arguments":"{}"}{"name":"c","arguments":"{}"}{"result_of_call":2,"output":"C"}"#,
 )]
-#[case::tool_output_cannot_forge_a_record(
-    r#"[{"role": "tool", "content": "x\"}{\"role\":\"tool\",\"content\":\"y"}]"#,
-    r#"{"role":"tool","content":"x\"}{\"role\":\"tool\",\"content\":\"y"}"#
+#[case::unknown_call_ids_encode_a_null_position(
+    json!([
+        {"role": "tool", "tool_call_id": "c9", "content": "ok"},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t9", "content": "done"}]},
+    ]),
+    r#"{"result_of_call":null,"output":"ok"}{"result_of_call":null,"output":"done"}"#,
+)]
+#[case::tool_output_cannot_forge_an_encoded_result(
+    json!([{"role": "tool", "tool_call_id": "c1", "content": "\"},{\"result_of_call\":2,\"output\":\""}]),
+    r#"{"result_of_call":null,"output":"\"},{\"result_of_call\":2,\"output\":\""}"#,
 )]
 #[case::malformed_tool_call_entries(
-    r#"[{"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function"}, "junk"]}]"#,
-    r#"{"role":"assistant","tool_calls":[{"id":1,"type":"function"},"junk"]}"#,
+    json!([{"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function"}, "junk"]}]),
+    r#"{"name":null,"arguments":null}"#,
 )]
-#[case::anthropic_base64_image_digested(
-    r#"[{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgo"}}]}]"#,
-    r#"{"type":"image","source":{"type":"base64","media_type":"image/png","data":"sha256:b1a66f8de3276946"}}"#,
-)]
-#[case::openai_data_url_digested(
-    r#"[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgoiVBORw0KGgo"}}]}]"#,
-    r#"{"type":"image_url","image_url":{"url":"sha256:19c7f028a60a33b8"}}"#,
-)]
-#[case::thinking_signature_digested(
-    r#"[{"role": "assistant", "content": [{"type": "thinking", "thinking": "hmm", "signature": "EqQBCkgIARABEqQBCkgIARABEqQBCkgIARABEqQBCkgIARABEqQBCkgIARABEqQBCkgIARABEqQBCkgIARABEqQBCkgIARABEqQBCkgIARABEqQBCkgIARAB"}, {"type": "text", "text": "done"}]}]"#,
-    r#"{"type":"thinking","thinking":"hmm","signature":"sha256:b20cbbd82e4b3791"}done"#,
-)]
-#[case::non_ascii_escaped(
-    r#"[{"role": "tool", "content": "caf\u00e9 \u4e2d \ud83d\ude00 \u007f q\"\\\n\t\u0001/"}]"#,
-    r#"{"role":"tool","content":"caf\u00e9 \u4e2d \ud83d\ude00 \u007f q\"\\\n\t\u0001/"}"#
-)]
-#[case::non_ascii_plain_text_kept_raw(
-    r#"[{"role": "user", "content": "caf\u00e9 \ud83d\ude00"}]"#,
-    r#"café 😀"#
-)]
-#[case::floats_in_python_repr(
-    r#"[{"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {"a": [1e+20, 1.0, 1.5e-07, 0.0001, 1e+16, -2.5, 3]}}]}]"#,
-    r#"{"type":"tool_use","id":1,"name":"n","input":{"a":[1e+20,1.0,1.5e-07,0.0001,1e+16,-2.5,3]}}"#,
-)]
-#[case::empty_fields_dropped(
-    r#"[{"role": "assistant", "content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}, "extra": [], "note": ""}]}]"#,
-    r#"{"type":"tool_use","id":1,"name":"n"}"#,
-)]
-fn str_from_messages_matches_python(#[case] messages: &str, #[case] expected: &str) {
-    let messages: Vec<Value> = serde_json::from_str(messages).unwrap();
-    assert_eq!(str_from_messages(&messages), expected);
+fn str_from_messages_matches_python(#[case] messages: Value, #[case] expected: &str) {
+    assert_eq!(str_from_messages(messages.as_array().unwrap()), expected);
 }
 
 #[rstest]
@@ -143,109 +196,167 @@ fn prompt_from_messages_reads_messages_only(
 
 #[rstest]
 #[case::prefers_messages(
-    Some(r#"[{"content": "message prompt"}]"#),
-    Some(r#""responses prompt""#),
-    Some(r#"message prompt"#)
+    Some(json!([{"content": "message prompt"}])),
+    Some(json!("responses prompt")),
+    Some("message prompt"),
 )]
 #[case::empty_messages_fall_back_to_input(
-    Some(r#"[]"#),
-    Some(r#""responses prompt""#),
-    Some(r#"responses prompt"#)
+    Some(json!([])),
+    Some(json!("responses prompt")),
+    Some("responses prompt"),
 )]
 #[case::messages_without_text_keep_an_empty_prompt(
-    Some(r#"[{"content": null}]"#),
-    Some(r#""x""#),
-    Some(r#""#)
+    Some(json!([{"content": null}])),
+    Some(json!("x")),
+    Some(""),
 )]
-#[case::null_input(None, None, None)]
-#[case::blank_string(None, Some(r#""   ""#), None)]
+#[case::nothing(None, None, None)]
+#[case::null_input(None, Some(Value::Null), None)]
+#[case::blank_string(None, Some(json!("   ")), None)]
 #[case::trimmed_string(
     None,
-    Some(r#""  What is the capital of France?\n""#),
-    Some(r#"What is the capital of France?"#)
+    Some(json!("  What is the capital of France?\n")),
+    Some("What is the capital of France?"),
 )]
-#[case::strip_information_separators(None, Some(r#""\u001ca\u001f""#), Some(r#"a"#))]
-#[case::image_only_kept(
+#[case::image_only(
     None,
-    Some(r#"[{"type": "input_image", "image_url": "https://example.com"}]"#),
-    Some(r#"{"type":"input_image","image_url":"https://example.com"}"#)
+    Some(json!([{"type": "input_image", "image_url": "https://example.com"}])),
+    None,
 )]
 #[case::structured_input(
     None,
-    Some(r#"[{"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}, {"type": "input_text", "text": "Answer briefly."}, {"type": "input_image", "image_url": "https://example.com/paris.png"}]}]"#),
-    Some(r#"What is the capital of France?
-Answer briefly.
-{"type":"input_image","image_url":"https://example.com/paris.png"}"#),
+    Some(json!([{"role": "user", "content": [
+        {"type": "input_text", "text": "What is the capital of France?"},
+        {"type": "input_text", "text": "Answer briefly."},
+        {"type": "input_image", "image_url": "https://example.com/paris.png"},
+    ]}])),
+    Some("What is the capital of France?\nAnswer briefly."),
 )]
-#[case::message_items_with_ids(
+#[case::model_objects_after_dump(
     None,
-    Some(r#"[{"type": "message", "id": "msg_1", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": "hi", "annotations": []}]}]"#),
-    Some(r#"hi"#),
+    Some(json!([
+        {"content": [{"text": "model dump prompt"}]},
+        {"content": [{"output_text": "dict prompt"}]},
+        {"content": [{"input_text": "inline prompt"}]},
+        {"content": [{"type": "input_image", "image_url": "https://example.com"}]},
+    ])),
+    Some("model dump prompt\ndict prompt\ninline prompt"),
 )]
 #[case::object_content(
     None,
-    Some(r#"{"content": [{"text": "object content prompt"}]}"#),
-    Some(r#"object content prompt"#)
+    Some(json!({"content": [{"text": "object content prompt"}]})),
+    Some("object content prompt"),
 )]
-#[case::string_content(None, Some(r#"{"content": "  inline  "}"#), Some(r#"inline"#))]
-#[case::unknown_keys_kept(
+#[case::string_content(None, Some(json!({"content": "  inline  "})), Some("inline"))]
+#[case::null_content_uses_text_keys(
     None,
-    Some(r#"{"text": "   ", "input_text": "fallback prompt"}"#),
-    Some(r#"{"text":"   ","input_text":"fallback prompt"}"#)
+    Some(json!({"content": null, "output": "tool output"})),
+    Some("tool output"),
 )]
-#[case::nested_lists(
+#[case::content_wins_over_text(None, Some(json!({"content": [], "text": "ignored"})), None)]
+#[case::text_key_precedence(
     None,
-    Some(r#"[["a", [" b "]], "", "c"]"#),
-    Some(
-        r#"a
-b
-c"#
-    )
+    Some(json!({"output_text": "d", "input_text": "c", "output": "b", "text": "a"})),
+    Some("a"),
 )]
-#[case::scalars_kept(
+#[case::input_text_key(None, Some(json!({"input_text": "only input"})), Some("only input"))]
+#[case::output_text_key(None, Some(json!({"output_text": "only output"})), Some("only output"))]
+#[case::non_string_text_keys_skipped(
     None,
-    Some(r#"[1, true, null, "kept"]"#),
-    Some(
-        r#"1
-true
-kept"#
-    )
+    Some(json!({"text": 1, "output": "fallback"})),
+    Some("fallback"),
 )]
-#[case::blank_text_parts(None, Some(r#"[{"type": "input_text", "text": "  "}]"#), None)]
+#[case::nested_lists(None, Some(json!([["a", [" b "]], "", "c"])), Some("a\nb\nc"))]
+#[case::scalars_ignored(None, Some(json!([1, true, null, "kept"])), Some("kept"))]
 #[case::responses_function_call(
     None,
-    Some(r#"[{"role": "user", "content": "update the config"}, {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{\"path\":\"a.yaml\"}"}, {"type": "function_call_output", "call_id": "c1", "output": "ok"}]"#),
-    Some(r#"update the config
-{"type":"function_call","call_id":1,"name":"write_file","arguments":"{\"path\":\"a.yaml\"}"}
-{"type":"function_call_output","call_id":1,"output":"ok"}"#),
+    Some(json!([
+        {"role": "user", "content": "update the config"},
+        {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{\"path\":\"a.yaml\"}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+    ])),
+    Some("update the config\n{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.yaml\\\"}\"}\n{\"result_of_call\":1,\"output\":\"ok\"}"),
 )]
 #[case::responses_structured_function_call_output(
     None,
-    Some(r#"[{"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{}"}, {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": " denied "}]}]"#),
-    Some(r#"{"type":"function_call","call_id":1,"name":"write_file","arguments":"{}"}
-{"type":"function_call_output","call_id":1,"output":[{"type":"input_text","text":" denied "}]}"#),
+    Some(json!([
+        {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "denied"}]},
+    ])),
+    Some("{\"name\":\"write_file\",\"arguments\":\"{}\"}\n{\"result_of_call\":1,\"output\":\"denied\"}"),
+)]
+#[case::responses_multi_part_output_joined_by_lines(
+    None,
+    Some(json!([
+        {"type": "function_call", "call_id": "c1", "name": "run", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": [
+            {"type": "input_text", "text": " line one "},
+            {"type": "input_text", "text": "line two"},
+        ]},
+    ])),
+    Some(r#"{"name":"run","arguments":"{}"}
+{"result_of_call":1,"output":"line one\nline two"}"#),
 )]
 #[case::responses_parallel_outputs_tagged_with_their_call(
     None,
-    Some(r#"[{"type": "function_call", "call_id": "c1", "name": "read", "arguments": "a"}, {"type": "function_call", "call_id": "c2", "name": "read", "arguments": "b"}, {"type": "function_call_output", "call_id": "c2", "output": "B"}, {"type": "function_call_output", "call_id": "c1", "output": "A"}]"#),
-    Some(r#"{"type":"function_call","call_id":1,"name":"read","arguments":"a"}
-{"type":"function_call","call_id":2,"name":"read","arguments":"b"}
-{"type":"function_call_output","call_id":2,"output":"B"}
-{"type":"function_call_output","call_id":1,"output":"A"}"#),
+    Some(json!([
+        {"type": "function_call", "call_id": "c1", "name": "read", "arguments": "a"},
+        {"type": "function_call", "call_id": "c2", "name": "read", "arguments": "b"},
+        {"type": "function_call_output", "call_id": "c2", "output": "B"},
+        {"type": "function_call_output", "call_id": "c1", "output": "A"},
+    ])),
+    Some("{\"name\":\"read\",\"arguments\":\"a\"}\n{\"name\":\"read\",\"arguments\":\"b\"}\n{\"result_of_call\":2,\"output\":\"B\"}\n{\"result_of_call\":1,\"output\":\"A\"}"),
 )]
-#[case::responses_reasoning_digested(
+#[case::responses_unknown_call_id_encodes_a_null_position(
     None,
-    Some(r#"[{"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "gAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAABgAAAAB"}]"#),
-    Some(r#"{"type":"reasoning","id":1,"encrypted_content":"sha256:010b9eb723d8d1e2"}"#),
+    Some(json!([{"type": "function_call_output", "call_id": "c9", "output": "orphan"}])),
+    Some(r#"{"result_of_call":null,"output":"orphan"}"#),
 )]
 fn prompt_from_context_matches_python(
-    #[case] messages: Option<&str>,
-    #[case] input: Option<&str>,
+    #[case] messages: Option<Value>,
+    #[case] input: Option<Value>,
     #[case] expected: Option<&str>,
 ) {
-    let parse = |value: &str| serde_json::from_str::<Value>(value).unwrap();
-    let context = context(messages.map(parse), input.map(parse));
-    assert_eq!(prompt_from_context(&context).as_deref(), expected);
+    assert_eq!(
+        prompt_from_context(&context(messages, input)).as_deref(),
+        expected
+    );
+}
+
+/// Python `test_redis_semantic_cache_prompt_extraction_skips_blank_dict_text_keys`: a blank
+/// text key falls through to the next one.
+#[rstest]
+#[case::blank_text_falls_through(
+    json!({"text": "   ", "input_text": "fallback prompt"}),
+    "fallback prompt",
+)]
+fn prompt_from_context_skips_blank_text_keys(#[case] input: Value, #[case] expected: &str) {
+    assert_eq!(
+        prompt_from_context(&context(None, Some(input))).as_deref(),
+        Some(expected)
+    );
+}
+
+/// Where `json.dumps(..., separators=(",", ":"))` and Python `str.strip` differ from
+/// `semantic.rs`: ensure_ascii escapes DEL, small floats keep Python's two-digit exponent, and
+/// strip also removes the ASCII information separators.
+#[rstest]
+#[case::del_is_escaped(json!([{"search_results": [{"citations": "\u{7f}"}]}]), None, r#""\u007f""#)]
+#[case::small_float_exponent(json!([{"search_results": [{"citations": 1.5e-7}]}]), None, "1.5e-07")]
+#[case::float_at_positional_floor(json!([{"search_results": [{"citations": 1e-4}]}]), None, "0.0001")]
+#[case::float_at_scientific_ceiling(json!([{"search_results": [{"citations": 1e16}]}]), None, "1e+16")]
+#[case::large_float(json!([{"search_results": [{"citations": [1.25e20, -2.5, 3.0]}]}]), None, "[1.25e+20,-2.5,3.0]")]
+#[case::strip_information_separators(json!([]), Some(json!("\u{1c}a\u{1f}")), "a")]
+fn python_serialization_edge_cases(
+    #[case] messages: Value,
+    #[case] input: Option<Value>,
+    #[case] expected: &str,
+) {
+    let actual = match input {
+        Some(input) => prompt_from_context(&context(None, Some(input))).unwrap_or_default(),
+        None => str_from_messages(messages.as_array().unwrap()),
+    };
+    assert_eq!(actual, expected);
 }
 
 #[rstest]
