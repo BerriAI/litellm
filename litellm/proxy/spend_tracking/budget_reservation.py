@@ -753,9 +753,9 @@ async def _get_team_member_budget_counter(
 
     member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
     now: Final = datetime.now(timezone.utc)
-    team_member_budget: float | None = None
+    admin_budget: float | None = None
     if member_budget_row is not None and member_budget_row.max_budget is not None:
-        team_member_budget = member_budget_row.effective_max_budget(now=now)
+        admin_budget = member_budget_row.effective_max_budget(now=now)
     else:
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
@@ -764,9 +764,13 @@ async def _get_team_member_budget_counter(
             )
             default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
             if default_cap is not None and default_cap > 0:
-                team_member_budget = default_cap + (
+                admin_budget = default_cap + (
                     member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
                 )
+
+    team_member_budget: Final = (
+        team_membership.capped_budget(admin_budget) if team_membership is not None else admin_budget
+    )
 
     if team_member_budget is None or team_member_budget <= 0:
         return None

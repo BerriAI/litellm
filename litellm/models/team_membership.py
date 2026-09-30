@@ -15,7 +15,18 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     budget_id: str | None = None
     spend: float | None = 0.0
     total_spend: float | None = 0.0
+    self_max_budget: float | None = None
     litellm_budget_table: LiteLLM_BudgetTableFull | LiteLLM_BudgetTable | None = None
+
+    def self_cap_binds(self, admin_budget: float | None) -> bool:
+        if self.self_max_budget is None:
+            return False
+        return admin_budget is None or self.self_max_budget < admin_budget
+
+    def capped_budget(self, admin_budget: float | None) -> float | None:
+        if self.self_cap_binds(admin_budget):
+            return self.self_max_budget
+        return admin_budget
 
     def safe_get_team_member_rpm_limit(self) -> int | None:
         if self.litellm_budget_table is not None:

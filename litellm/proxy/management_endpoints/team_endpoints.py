@@ -104,6 +104,7 @@ from litellm.proxy.auth.auth_checks import (
     delete_cache_team_object,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_org_object,
+    get_team_member_admin_budget,
     get_team_membership,
     get_team_object,
     get_user_object,
@@ -208,13 +209,16 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
+    TeamMemberEffectiveBudgetSource,
     TeamMemberInfoResponse,
+    TeamMemberSelfBudgetUpdateRequest,
     TeamMetadataSchemaResponse,
     TeamUserSpendResponse,
     TeamUserSpendRow,
     UpdateTeamMemberPermissionsRequest,
 )
 from litellm.types.utils import BudgetConfig
+from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -5073,17 +5077,7 @@ async def team_member_me(
         user_api_key_cache=user_api_key_cache,
     )
 
-    caller_user_email: Final = user_api_key_dict.user_email
-    member_role: str | None = None
-    for m in team_table.members_with_roles:
-        # Match by user_id when present, else fall back to email — members
-        # added by email may have user_id=None on the stored entry.
-        if (m.user_id is not None and m.user_id == caller_user_id) or (
-            m.user_email is not None and caller_user_email is not None and m.user_email == caller_user_email
-        ):
-            member_role = m.role
-            break
-
+    member_role: Final = _caller_team_member_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
     if member_role is None:
         # Caller is not a member of this team. Even proxy admins get 404 here —
         # they can use /team/info to view all members; "me" only resolves for
@@ -5108,6 +5102,71 @@ async def team_member_me(
     )
     user_email: Final = getattr(user_row, "user_email", None) if user_row is not None else None
 
+    return await _build_team_member_info_response(
+        team_id=team_id,
+        team_table=team_table,
+        member_role=member_role,
+        caller_user_id=caller_user_id,
+        user_email=user_email,
+        membership=membership,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+def _caller_team_member_role(team_table: LiteLLM_TeamTable, user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    caller_user_id: Final = user_api_key_dict.user_id
+    caller_user_email: Final = user_api_key_dict.user_email
+    for m in team_table.members_with_roles:
+        if (m.user_id is not None and m.user_id == caller_user_id) or (
+            m.user_email is not None and caller_user_email is not None and m.user_email == caller_user_email
+        ):
+            return m.role
+    return None
+
+
+def _member_effective_budget_source(
+    membership: LiteLLM_TeamMembership | None,
+    admin_budget: float | None,
+    team_table: LiteLLM_TeamTable,
+) -> TeamMemberEffectiveBudgetSource:
+    if membership is not None and membership.self_cap_binds(admin_budget):
+        return "self"
+    member_budget_row: Final = membership.litellm_budget_table if membership is not None else None
+    if membership is not None and member_budget_row is not None and member_budget_row.max_budget is not None:
+        default_budget_id: Final = (
+            team_table.metadata or {}  # mutable-ok: read-only empty fallback
+        ).get("team_member_budget_id")
+        return _member_budget_source(
+            membership.budget_id,
+            default_budget_id if isinstance(default_budget_id, str) else None,
+        )
+    return "team_default" if admin_budget is not None else "none"
+
+
+async def _build_team_member_info_response(
+    team_id: str,
+    team_table: LiteLLM_TeamTable,
+    member_role: str,
+    caller_user_id: str,
+    user_email: str | None,
+    membership: LiteLLM_TeamMembership | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> TeamMemberInfoResponse:
+    admin_budget: Final = await get_team_member_admin_budget(
+        team_object=team_table,
+        team_membership=membership,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        now=get_utc_datetime(),
+    )
+    effective_budget: Final = membership.capped_budget(admin_budget) if membership is not None else admin_budget
+    budget_source: Final = (
+        _member_effective_budget_source(membership=membership, admin_budget=admin_budget, team_table=team_table)
+        if effective_budget is not None
+        else "none"
+    )
     if membership is None:
         # Member is in members_with_roles but has no membership row yet
         # (no per-member budget/limits configured). Return defaults.
@@ -5120,9 +5179,11 @@ async def team_member_me(
             spend=0.0,
             total_spend=0.0,
             budget_id=None,
+            self_max_budget=None,
             litellm_budget_table=None,
+            effective_budget=effective_budget,
+            budget_source=budget_source,
         )
-
     return TeamMemberInfoResponse(
         user_id=caller_user_id,
         team_id=team_id,
@@ -5132,7 +5193,206 @@ async def team_member_me(
         spend=membership.spend,
         total_spend=membership.total_spend,
         budget_id=membership.budget_id,
+        self_max_budget=membership.self_max_budget,
         litellm_budget_table=membership.litellm_budget_table,
+        effective_budget=effective_budget,
+        budget_source=budget_source,
+    )
+
+
+@router.patch(
+    "/team/{team_id}/members/me",
+    tags=["team management"],  # mutable-ok: FastAPI's `tags` param is typed as list[str], not Sequence
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=TeamMemberInfoResponse,
+)
+@management_endpoint_wrapper
+async def team_member_me_update_self_budget(
+    http_request: Request,
+    team_id: str,
+    data: TeamMemberSelfBudgetUpdateRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+) -> TeamMemberInfoResponse:
+    """
+    Set or clear the caller's own personal spend cap within the team.
+
+    The self cap can only lower the member's effective budget below their
+    team allocation, never raise it: values above the current admin-set
+    allocation are rejected, and the cap binds only while it stays below
+    that allocation. Send `self_max_budget: null` to clear it.
+
+    Returns 404 if the caller is not a member of the team.
+
+    ```
+    curl --location --request PATCH 'http://localhost:4000/team/your_team_id/members/me' \
+    --header 'Authorization: Bearer your_api_key_here' \
+    --header 'Content-Type: application/json' \
+    --data '{"self_max_budget": 80.0}'
+    ```
+    """
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+        is_audit_logging_enabled,
+    )
+    from litellm.proxy.proxy_server import (
+        create_audit_log_for_update,
+        litellm_proxy_admin_name,
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+                "error": "Database not connected. Connect a database to your proxy - "
+                "https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            },
+        )
+
+    caller_user_id: Final = user_api_key_dict.user_id
+    if caller_user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+                "error": "API key has no associated user_id; cannot resolve 'me' for team membership."
+            },
+        )
+
+    team_table: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
+    )
+
+    member_role: Final = _caller_team_member_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
+    if member_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+                "error": f"User user_id={caller_user_id} is not a member of team_id={team_id}."
+            },
+        )
+
+    membership_row: Final = await _team_membership_db(prisma_client).find_unique(
+        where={  # mutable-ok: prisma client requires a plain dict where= argument
+            "user_id_team_id": {  # mutable-ok: Prisma query filters are dict-shaped
+                "user_id": caller_user_id,
+                "team_id": team_id,
+            }
+        },
+        include={"litellm_budget_table": True},  # mutable-ok: prisma client requires a plain dict include= argument
+    )
+    membership: Final = (
+        LiteLLM_TeamMembership.model_validate(membership_row.model_dump()) if membership_row is not None else None
+    )
+
+    admin_budget: Final = await get_team_member_admin_budget(
+        team_object=team_table,
+        team_membership=membership,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        now=get_utc_datetime(),
+    )
+
+    new_self_max_budget: Final = data.self_max_budget
+    if new_self_max_budget is not None and admin_budget is not None and new_self_max_budget > admin_budget:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={  # mutable-ok: HTTPException detail must be a plain mapping to keep this route's {"error": ...} response shape
+                "error": (
+                    f"self_max_budget {new_self_max_budget} exceeds your current team allocation of {admin_budget}."
+                )
+            },
+        )
+
+    membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
+        "user_id_team_id": {  # mutable-ok: Prisma query filters are dict-shaped
+            "user_id": caller_user_id,
+            "team_id": team_id,
+        }
+    }
+    if membership_row is not None or new_self_max_budget is not None:
+        await _team_membership_db(prisma_client).upsert(
+            where=membership_where,
+            data={  # mutable-ok: prisma client requires a plain dict data= argument
+                "create": {  # mutable-ok: same prisma data= argument
+                    "user_id": caller_user_id,
+                    "team_id": team_id,
+                    "self_max_budget": new_self_max_budget,
+                },
+                "update": {"self_max_budget": new_self_max_budget},  # mutable-ok: same prisma data= argument
+            },
+        )
+        await invalidate_team_member_spend_state(
+            user_id=caller_user_id,
+            team_id=team_id,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+        if is_audit_logging_enabled():
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=None,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                        object_id=team_id,
+                        action="updated",
+                        updated_values=json.dumps(
+                            {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
+                                "user_id": caller_user_id,
+                                "self_max_budget": new_self_max_budget,
+                            }
+                        ),
+                        before_value=json.dumps(
+                            {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
+                                "user_id": caller_user_id,
+                                "self_max_budget": membership.self_max_budget if membership is not None else None,
+                            }
+                        ),
+                    )
+                )
+            )
+
+    updated_membership: Final = (
+        membership.model_copy(
+            update={  # mutable-ok: pydantic update payload
+                "self_max_budget": new_self_max_budget,
+            }
+        )
+        if membership is not None
+        else (
+            LiteLLM_TeamMembership(user_id=caller_user_id, team_id=team_id, self_max_budget=new_self_max_budget)
+            if new_self_max_budget is not None
+            else None
+        )
+    )
+
+    user_row: Final = await get_user_object(
+        user_id=caller_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+    )
+    user_email: Final = user_row.user_email if user_row is not None else None
+
+    return await _build_team_member_info_response(
+        team_id=team_id,
+        team_table=team_table,
+        member_role=member_role,
+        caller_user_id=caller_user_id,
+        user_email=user_email,
+        membership=updated_membership,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
     )
 
 

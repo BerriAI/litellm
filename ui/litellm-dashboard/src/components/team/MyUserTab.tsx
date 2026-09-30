@@ -2,10 +2,12 @@ import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { CircleHelp } from "lucide-react";
-import React from "react";
-import { useMyTeamMember } from "./useMyTeamMember";
+import React, { useState } from "react";
+import { type TeamMemberInfo, useMyTeamMember, useUpdateMySelfBudget } from "./useMyTeamMember";
 
 interface MyUserTabProps {
   teamId: string;
@@ -29,6 +31,110 @@ const formatRateLimit = (value: number | null | undefined): string => {
   if (value === null || value === undefined) return "Unlimited";
   return formatNumberWithCommas(value, 0);
 };
+
+const BUDGET_SOURCE_LABELS: Record<NonNullable<TeamMemberInfo["budget_source"]>, string> = {
+  team_default: "Team default",
+  custom: "Custom",
+  self: "Set by you",
+  none: "None",
+};
+
+function MyLimitEditor({
+  teamId,
+  selfMaxBudget,
+  spend,
+}: {
+  teamId: string;
+  selfMaxBudget: number | null;
+  spend: number;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const mutation = useUpdateMySelfBudget(teamId);
+
+  const parsed = draft.trim() === "" ? NaN : Number(draft);
+  const draftValid = Number.isFinite(parsed) && parsed >= 0;
+  const belowSpend = editing && draftValid && parsed < spend;
+
+  const save = () => {
+    if (!draftValid) return;
+    mutation.mutate(parsed, {
+      onSuccess: () => setEditing(false),
+    });
+  };
+
+  const clear = () => {
+    mutation.mutate(null, {
+      onSuccess: () => setEditing(false),
+    });
+  };
+
+  const startEditing = () => {
+    setDraft(selfMaxBudget === null ? "" : String(selfMaxBudget));
+    mutation.reset();
+    setEditing(true);
+  };
+
+  if (!editing) {
+    return (
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-xl font-semibold" data-testid="my-limit-value">
+          {selfMaxBudget === null ? "Not set" : `$${formatNumber(selfMaxBudget, 4)}`}
+        </span>
+        <Button variant="outline" size="xs" data-testid="edit-my-limit" onClick={startEditing}>
+          Edit
+        </Button>
+        {selfMaxBudget !== null && (
+          <Button variant="link" size="xs" data-testid="clear-my-limit" disabled={mutation.isPending} onClick={clear}>
+            Clear
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          min={0}
+          step="any"
+          value={draft}
+          data-testid="my-limit-input"
+          aria-label="My limit"
+          className="w-40"
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <Button size="xs" data-testid="save-my-limit" disabled={!draftValid || mutation.isPending} onClick={save}>
+          Save
+        </Button>
+        <Button
+          variant="outline"
+          size="xs"
+          data-testid="cancel-my-limit"
+          onClick={() => {
+            mutation.reset();
+            setEditing(false);
+          }}
+        >
+          Cancel
+        </Button>
+      </div>
+      {belowSpend && (
+        <div className="mt-1 text-amber-600" data-testid="below-spend-warning">
+          This is below your current spend of ${formatNumber(spend, 4)}. New requests will be blocked until you raise or
+          clear your limit.
+        </div>
+      )}
+      {mutation.isError && (
+        <div className="mt-1 text-destructive" data-testid="my-limit-error">
+          {mutation.error instanceof Error ? mutation.error.message : "Failed to update your limit."}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function MyUserTab({ teamId }: MyUserTabProps) {
   const { data, isLoading, error } = useMyTeamMember(teamId);
@@ -62,7 +168,9 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
   }
 
   const budgetTable = data.litellm_budget_table ?? null;
-  const maxBudget = budgetTable?.max_budget ?? null;
+  const maxBudget = data.effective_budget ?? null;
+  const budgetSource = data.budget_source ?? "none";
+  const selfMaxBudget = data.self_max_budget ?? null;
   const spend = data.spend ?? 0;
   const totalSpend = data.total_spend ?? 0;
   const tpmLimit = budgetTable?.tpm_limit ?? null;
@@ -99,8 +207,13 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
             )}
             <div className="mt-2">
               <h3 className="text-2xl font-semibold">${formatNumber(spend, 4)}</h3>
-              <span className="text-muted-foreground">
+              <span className="inline-flex items-center gap-2 text-muted-foreground">
                 of {maxBudget === null ? "Unlimited" : `$${formatNumber(maxBudget, 4)}`}
+                {budgetSource !== "none" && (
+                  <Badge variant={budgetSource === "self" ? "outline" : "secondary"} data-testid="budget-source-badge">
+                    {BUDGET_SOURCE_LABELS[budgetSource]}
+                  </Badge>
+                )}
               </span>
             </div>
             {budgetReset && <div className="mt-1 text-muted-foreground">Resets {budgetReset}</div>}
@@ -115,6 +228,16 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
               <br />
               <span>RPM: {formatRateLimit(rpmLimit)}</span>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent>
+            {labelWithTooltip(
+              "My limit",
+              "A personal limit you set for yourself. It can only lower your team allocation, never raise it.",
+            )}
+            <MyLimitEditor teamId={teamId} selfMaxBudget={selfMaxBudget} spend={spend} />
           </CardContent>
         </Card>
 

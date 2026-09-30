@@ -47,6 +47,7 @@ GET /search_tools/ui/available_providers
 GET /team/available
 GET /team/metadata_schema
 GET /team/{team_id}/members/me
+PATCH /team/{team_id}/members/me
 GET /user/available_users
 
 # Imperative one-shot operations: bulk edits, rotation, health probes, test hooks,

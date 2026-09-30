@@ -16604,7 +16604,22 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Team Member Me Update Self Budget
+         * @description Set or clear the caller's own personal spend cap within the team.
+         *
+         *     The self cap can only lower the member's effective budget below their
+         *     team allocation, never raise it: values above the current admin-set
+         *     allocation are rejected, and the cap binds only while it stays below
+         *     that allocation. Send `self_max_budget: null` to clear it.
+         *
+         *     Returns 404 if the caller is not a member of the team.
+         *
+         *     ```
+         *     curl --location --request PATCH 'http://localhost:4000/team/your_team_id/members/me'     --header 'Authorization: Bearer your_api_key_here'     --header 'Content-Type: application/json'     --data '{"self_max_budget": 80.0}'
+         *     ```
+         */
+        patch: operations["team_member_me_update_self_budget_team__team_id__members_me_patch"];
         trace?: never;
     };
     "/test": {
@@ -33563,6 +33578,8 @@ export interface components {
             budget_id?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Self Max Budget */
+            self_max_budget?: number | null;
             /**
              * Spend
              * @default 0
@@ -43547,10 +43564,20 @@ export interface components {
         TeamMemberInfoResponse: {
             /** Budget Id */
             budget_id?: string | null;
+            /**
+             * Budget Source
+             * @default none
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "self" | "none";
+            /** Effective Budget */
+            effective_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role?: string | null;
+            /** Self Max Budget */
+            self_max_budget?: number | null;
             /**
              * Spend
              * @default 0
@@ -43595,6 +43622,16 @@ export interface components {
             team_id: string;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMemberSelfBudgetUpdateRequest
+         * @description Body of `PATCH /team/{team_id}/members/me`. `self_max_budget` is
+         *     required: a non-negative number sets the caller's personal cap, null
+         *     clears it.
+         */
+        TeamMemberSelfBudgetUpdateRequest: {
+            /** Self Max Budget */
+            self_max_budget: number | null;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -68114,6 +68151,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMemberInfoResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    team_member_me_update_self_budget_team__team_id__members_me_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamMemberSelfBudgetUpdateRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

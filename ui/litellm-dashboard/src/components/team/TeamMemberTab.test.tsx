@@ -334,6 +334,45 @@ describe("TeamMembersComponent", () => {
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 
+  it("shows a read-only Self cap badge when the member has a self_max_budget", () => {
+    const teamData = createMockTeamData({
+      team_memberships: [{ ...createMockTeamData().team_memberships[0], self_max_budget: 250 }],
+    });
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const badge = screen.getByTestId("member-self-cap");
+    expect(badge).toHaveTextContent("Self cap $250.00");
+    expect(screen.queryByRole("button", { name: /self cap/i })).not.toBeInTheDocument();
+  });
+
+  it("shows no Self cap badge when the member has no self_max_budget", () => {
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        onMemberSpendReset={mockOnMemberSpendReset}
+        onMemberBudgetReset={mockOnMemberBudgetReset}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.queryByTestId("member-self-cap")).not.toBeInTheDocument();
+  });
+
   it("should display No Limits for rate limits when member has no limits", () => {
     renderWithProviders(
       <TeamMembersComponent

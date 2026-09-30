@@ -268,6 +268,7 @@ export interface TeamMembership {
   team_id: string;
   budget_id: string | null;
   budget_source: TeamMemberBudgetSource;
+  self_max_budget?: number | null;
   spend: number;
   total_spend: number | null;
   litellm_budget_table: {

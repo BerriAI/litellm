@@ -7927,13 +7927,12 @@ async def test_get_team_membership_invalidation_during_cache_write_evicts_stale_
 async def test_common_checks_calls_get_team_membership_once_per_request():
     from fastapi import Request
 
+    from litellm.proxy._types import LiteLLM_TeamMembership
     from litellm.proxy.auth.auth_checks import common_checks
 
     team = LiteLLM_TeamTable(team_id="t-once")
     token = UserAPIKeyAuth(token="k-once", user_id="u-once", team_id="t-once", models=["gpt-4o-mini"])
-    membership = MagicMock()
-    membership.litellm_budget_table = None
-    membership.spend = 0.0
+    membership = LiteLLM_TeamMembership(user_id="u-once", team_id="t-once", spend=0.0)
 
     with (
         patch(  # test-quality-ok: common_checks imports prisma_client from proxy_server
@@ -10276,3 +10275,241 @@ async def test_authoritative_group_grants_propagate_policy_outages(
             await _get_agent_ids_from_access_groups(["group"], check_db_only=True)
     else:
         assert await _get_agent_ids_from_access_groups(["group"]) == []
+
+
+def _team_member_check_setup(
+    membership,
+    spend: float,
+    team_metadata: dict[str, str] | None = None,
+):
+    """Return the shared fixtures for a _check_team_member_budget call."""
+    from litellm.caching.dual_cache import DualCache
+
+    team_object = LiteLLM_TeamTable(team_id=membership.team_id, metadata=team_metadata or {})
+    user_object = LiteLLM_UserTable(user_id=membership.user_id)
+    valid_token = UserAPIKeyAuth(token="test-token", user_id=membership.user_id, team_id=membership.team_id)
+
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+        if counter_key == f"spend:team_member:{membership.user_id}:{membership.team_id}":
+            return spend
+        return fallback_spend
+
+    ctx = (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=membership,
+        ),
+    )
+    return team_object, user_object, valid_token, ctx, DualCache()
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_self_cap_binds_below_admin_budget():
+    """A self cap below the member-row admin budget enforces the self cap,
+    and the raised error points the member at the self-cap route."""
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    binding_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        self_max_budget=80.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+    )
+    team_object, user_object, valid_token, ctx, cache = _team_member_check_setup(binding_membership, 85.0)
+    with ctx[0], ctx[1]:
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+    assert exc_info.value.max_budget == 80.0
+    assert "personal spend cap" in str(exc_info.value.message)
+
+    loose_membership = binding_membership.model_copy(update={"self_max_budget": 90.0})
+    team_object, user_object, valid_token, ctx, cache = _team_member_check_setup(loose_membership, 85.0)
+    with ctx[0], ctx[1]:
+        await _check_team_member_budget(
+            team_object=team_object,
+            user_object=user_object,
+            valid_token=valid_token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+        )
+
+    tied_membership = binding_membership.model_copy(update={"self_max_budget": 100.0})
+    team_object, user_object, valid_token, ctx, cache = _team_member_check_setup(tied_membership, 100.0)
+    with ctx[0], ctx[1]:
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+    assert "personal spend cap" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_self_cap_against_team_default_with_temp_increase():
+    """The self cap is measured against the live admin allocation: the team
+    default plus an active temp increase. Above it the admin side binds and
+    no self-cap error fires; below it the self cap does."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = DualCache()
+    await cache.async_set_cache(
+        key="team_member_default_budget:default-budget-1",
+        value=LiteLLM_BudgetTable(budget_id="default-budget-1", max_budget=100.0),
+    )
+    budget_row = LiteLLM_BudgetTable(
+        max_budget=None,
+        temp_budget_increase=50.0,
+        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    async def run(self_cap, spend):
+        membership = LiteLLM_TeamMembership(
+            user_id="test-user",
+            team_id="test-team",
+            spend=0.0,
+            self_max_budget=self_cap,
+            budget_id="budget-1",
+            litellm_budget_table=budget_row,
+        )
+        team_object = LiteLLM_TeamTable(team_id="test-team", metadata={"team_member_budget_id": "default-budget-1"})
+
+        async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
+            if counter_key == "spend:team_member:test-user:test-team":
+                return spend
+            return fallback_spend
+
+        with (
+            patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_membership",
+                new_callable=AsyncMock,
+                return_value=membership,
+            ),
+        ):
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=LiteLLM_UserTable(user_id="test-user"),
+                valid_token=UserAPIKeyAuth(token="test-token", user_id="test-user", team_id="test-team"),
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await run(self_cap=120.0, spend=130.0)
+    assert exc_info.value.max_budget == 120.0
+    assert "personal spend cap" in str(exc_info.value.message)
+
+    await run(self_cap=None, spend=130.0)
+
+    await run(self_cap=200.0, spend=130.0)
+
+    with pytest.raises(litellm.BudgetExceededError) as exc_info:
+        await run(self_cap=200.0, spend=160.0)
+    assert exc_info.value.max_budget == 150.0
+    assert "personal spend cap" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_self_cap_enforced_without_any_admin_budget():
+    """A self cap alone, with no member-row budget and no team default, is
+    still enforced."""
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        self_max_budget=50.0,
+        budget_id=None,
+        litellm_budget_table=None,
+    )
+    team_object, user_object, valid_token, ctx, cache = _team_member_check_setup(membership, 60.0)
+    with ctx[0], ctx[1]:
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+            )
+    assert exc_info.value.max_budget == 50.0
+    assert "personal spend cap" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_alert_uses_admin_budget_never_self_cap():
+    """The team-admin alert must be computed against the admin allocation:
+    a binding self cap below it must not fire it, and a self cap above the
+    admin threshold must not suppress it."""
+    from litellm.proxy._types import LiteLLM_TeamMembership
+
+    captured: list[tuple[str, CallInfo]] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            captured.append((type, user_info))
+
+    metadata = {"team_member_max_budget_alert_emails": {"80": ["admin@co.com"]}}
+
+    binding_membership = LiteLLM_TeamMembership(
+        user_id="user-1",
+        team_id="team-1",
+        spend=0.0,
+        self_max_budget=50.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+    )
+    team_object, user_object, valid_token, ctx, cache = _team_member_check_setup(
+        binding_membership, 60.0, team_metadata=metadata
+    )
+    with ctx[0], ctx[1]:
+        with pytest.raises(litellm.BudgetExceededError):
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                proxy_logging_obj=RecordingProxyLogging(),
+            )
+    await asyncio.sleep(0)
+    assert captured == [], captured
+
+    loose_membership = binding_membership.model_copy(update={"self_max_budget": 95.0})
+    team_object, user_object, valid_token, ctx, cache = _team_member_check_setup(
+        loose_membership, 85.0, team_metadata=metadata
+    )
+    with ctx[0], ctx[1]:
+        await _check_team_member_budget(
+            team_object=team_object,
+            user_object=user_object,
+            valid_token=valid_token,
+            prisma_client=MagicMock(),
+            user_api_key_cache=cache,
+            proxy_logging_obj=RecordingProxyLogging(),
+        )
+    await asyncio.sleep(0)
+    assert len(captured) == 1, captured
+    assert captured[0][0] == "max_budget_alert"
+    assert captured[0][1].max_budget == 100.0

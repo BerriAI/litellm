@@ -342,3 +342,87 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 
     assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
     assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_team_member_reservation_counter_self_cap_binds_below_admin_budget() -> None:
+    user_id: Final = "member-self"
+    team_id: Final = "team-self"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=0.5,
+            self_max_budget=80.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+        ),
+    )
+
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+    )
+
+    assert counter is not None
+    assert counter.max_budget == 80.0
+    assert counter.fallback_spend == 0.5
+
+
+@pytest.mark.asyncio
+async def test_team_member_reservation_counter_admin_budget_binds_over_self_cap() -> None:
+    user_id: Final = "member-self2"
+    team_id: Final = "team-self2"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=0.5,
+            self_max_budget=200.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+        ),
+    )
+
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+    )
+
+    assert counter is not None
+    assert counter.max_budget == 100.0
+
+
+@pytest.mark.asyncio
+async def test_team_member_reservation_counter_self_cap_alone_creates_counter() -> None:
+    user_id: Final = "member-self3"
+    team_id: Final = "team-self3"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=LiteLLM_TeamMembership(
+            user_id=user_id,
+            team_id=team_id,
+            spend=0.5,
+            self_max_budget=42.0,
+            budget_id=None,
+            litellm_budget_table=None,
+        ),
+    )
+
+    counter: Final = await _get_team_member_budget_counter(
+        valid_token=UserAPIKeyAuth(token="hashed", user_id=user_id, team_id=team_id),
+        team_object=LiteLLM_TeamTable(team_id=team_id),
+        user_object=LiteLLM_UserTable(user_id=user_id),
+        user_api_key_cache=cache,
+    )
+
+    assert counter is not None
+    assert counter.max_budget == 42.0
+    assert counter.fallback_spend == 0.5

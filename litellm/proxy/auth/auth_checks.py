@@ -14,6 +14,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from datetime import datetime
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
@@ -5849,31 +5850,19 @@ async def _check_team_member_budget(
             )
         loaded_membership = team_membership
 
-        # Per-member override wins; otherwise fall back to the team-level
-        # default configured via team.metadata["team_member_budget_id"].
-        team_member_budget: float | None = None
-        member_budget_row: Final = loaded_membership.litellm_budget_table if loaded_membership is not None else None
         now: Final = get_utc_datetime()
-        if member_budget_row is not None and member_budget_row.max_budget is not None:
-            team_member_budget = member_budget_row.effective_max_budget(now=now)
-        else:
-            default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
-            if isinstance(default_budget_id, str):
-                default_budget: Final = await get_team_member_default_budget(
-                    budget_id=default_budget_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
-                # Treat 0 on the team default as "no cap".
-                # Per-member rows still respect 0 as an explicit admin disable.
-                if (
-                    default_budget is not None
-                    and default_budget.max_budget is not None
-                    and default_budget.max_budget > 0
-                ):
-                    team_member_budget = default_budget.max_budget + (
-                        member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
-                    )
+        admin_budget: Final = await get_team_member_admin_budget(
+            team_object=team_object,
+            team_membership=loaded_membership,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            now=now,
+        )
+
+        self_binds: Final = loaded_membership is not None and loaded_membership.self_cap_binds(admin_budget)
+        team_member_budget: Final = (
+            loaded_membership.capped_budget(admin_budget) if loaded_membership is not None else admin_budget
+        )
 
         if team_member_budget is not None:
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
@@ -5890,19 +5879,34 @@ async def _check_team_member_budget(
             if not math.isfinite(team_member_budget):
                 return
 
-            _team_member_max_budget_alert_check(
-                team_id=team_object.team_id,
-                team_alias=team_object.team_alias,
-                team_metadata=team_object.metadata,
-                organization_id=team_object.organization_id,
-                user_id=valid_token.user_id,
-                user_email=user_object.user_email if user_object is not None else None,
-                proxy_logging_obj=proxy_logging_obj,
-                spend=team_member_spend,
-                max_budget=team_member_budget,
-            )
+            if admin_budget is not None and math.isfinite(admin_budget):
+                _team_member_max_budget_alert_check(
+                    team_id=team_object.team_id,
+                    team_alias=team_object.team_alias,
+                    team_metadata=team_object.metadata,
+                    organization_id=team_object.organization_id,
+                    user_id=valid_token.user_id,
+                    user_email=user_object.user_email if user_object is not None else None,
+                    proxy_logging_obj=proxy_logging_obj,
+                    spend=team_member_spend,
+                    max_budget=admin_budget,
+                )
 
             if team_member_spend >= team_member_budget:
+                if self_binds:
+                    raise litellm.BudgetExceededError(
+                        current_cost=team_member_spend,
+                        max_budget=team_member_budget,
+                        message=(
+                            f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} "
+                            f"Current cost: {team_member_spend}, Max budget: {team_member_budget}. "
+                            "This is the personal spend cap you set for yourself in this team; raise or clear "
+                            f"it with PATCH /team/{team_object.team_id}/members/me "
+                            "or from the My User tab of the team."
+                        ),
+                        entity_type=Litellm_EntityType.TEAM_MEMBER.value,
+                        entity_id=f"{valid_token.user_id}:{team_object.team_id}",
+                    )
                 raise litellm.BudgetExceededError(
                     current_cost=team_member_spend,
                     max_budget=team_member_budget,
@@ -5910,6 +5914,34 @@ async def _check_team_member_budget(
                     entity_type=Litellm_EntityType.TEAM_MEMBER.value,
                     entity_id=f"{valid_token.user_id}:{team_object.team_id}",
                 )
+
+
+async def get_team_member_admin_budget(
+    team_object: LiteLLM_TeamTable,
+    team_membership: LiteLLM_TeamMembership | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    now: datetime,
+) -> float | None:
+    """The admin-set per-member budget, or None when no admin cap applies."""
+    member_budget_row: Final = team_membership.litellm_budget_table if team_membership is not None else None
+    if member_budget_row is not None and member_budget_row.max_budget is not None:
+        return member_budget_row.effective_max_budget(now=now)
+
+    default_budget_id: Final = (
+        team_object.metadata or {}  # mutable-ok: read-only empty fallback
+    ).get("team_member_budget_id")
+    if isinstance(default_budget_id, str):
+        default_budget: Final = await get_team_member_default_budget(
+            budget_id=default_budget_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if default_budget is not None and default_budget.max_budget is not None and default_budget.max_budget > 0:
+            return default_budget.max_budget + (
+                member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
+            )
+    return None
 
 
 async def _check_team_member_model_access(

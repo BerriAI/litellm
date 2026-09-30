@@ -1,6 +1,7 @@
-import { useQuery, UseQueryResult } from "@tanstack/react-query";
+import { useMutation, UseMutationResult, useQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
 import { deriveErrorMessage, getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { fetchClient } from "@/lib/http/api";
 
 export interface TeamMemberInfo {
   user_id: string;
@@ -9,6 +10,9 @@ export interface TeamMemberInfo {
   role?: string | null;
   user_email?: string | null;
   budget_id?: string | null;
+  self_max_budget?: number | null;
+  effective_budget?: number | null;
+  budget_source?: "team_default" | "custom" | "self" | "none";
   spend?: number | null;
   total_spend?: number | null;
   litellm_budget_table?: {
@@ -61,5 +65,29 @@ export const useMyTeamMember = (teamId: string | null | undefined): UseQueryResu
     queryKey: ["team", teamId, "members", "me"],
     queryFn: () => fetchMyTeamMember(accessToken!, teamId!),
     enabled: Boolean(accessToken && teamId),
+  });
+};
+
+const updateMySelfBudget = async (teamId: string, selfMaxBudget: number | null): Promise<TeamMemberInfo> => {
+  const { data, error } = await fetchClient.PATCH("/team/{team_id}/members/me", {
+    params: { path: { team_id: teamId } },
+    body: { self_max_budget: selfMaxBudget },
+  });
+
+  if (error) {
+    throw new Error(deriveErrorMessage(error));
+  }
+
+  return data as TeamMemberInfo;
+};
+
+export const useUpdateMySelfBudget = (teamId: string): UseMutationResult<TeamMemberInfo, Error, number | null> => {
+  const queryClient = useQueryClient();
+  return useMutation<TeamMemberInfo, Error, number | null>({
+    mutationFn: (selfMaxBudget) => updateMySelfBudget(teamId, selfMaxBudget),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["team", teamId, "members", "me"], data);
+      queryClient.invalidateQueries({ queryKey: ["teams"] });
+    },
   });
 };

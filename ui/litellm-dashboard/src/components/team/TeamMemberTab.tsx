@@ -103,6 +103,12 @@ export default function TeamMemberTab({
     return membership?.budget_source ?? "none";
   };
 
+  const getUserSelfCap = (userId: string | null): number | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.self_max_budget ?? null;
+  };
+
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
@@ -218,9 +224,15 @@ export default function TeamMemberTab({
       sortValue: (record: Member) => getUserBudget(record.user_id),
       render: (record: Member) => {
         const source = getUserBudgetSource(record.user_id);
+        const selfCap = getUserSelfCap(record.user_id);
         return (
           <span className="flex items-center justify-end gap-2">
             <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
+            {selfCap !== null && (
+              <Badge variant="outline" data-testid="member-self-cap">
+                Self cap ${selfCap.toFixed(2)}
+              </Badge>
+            )}
             {source !== "none" && (
               <Badge variant={source === "custom" ? "outline" : "secondary"} data-testid="member-budget-source">
                 {BUDGET_SOURCE_LABELS[source]}

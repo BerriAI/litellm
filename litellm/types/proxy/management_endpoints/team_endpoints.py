@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal
+from typing import Annotated, Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -207,12 +207,27 @@ class BulkTeamMemberBudgetUpdateResponse(ResourceResponse[tuple[TeamMemberBudget
     """`{data: [...]}` with one `TeamMemberBudgetUpdateResult` per requested member, in request order."""
 
 
+TeamMemberEffectiveBudgetSource: TypeAlias = Literal["team_default", "custom", "self", "none"]
+
+
 class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     """Response for GET /team/{team_id}/members/me — caller's own membership row."""
 
     role: str | None = None
     user_email: str | None = None
     team_alias: str | None = None
+    effective_budget: float | None = None
+    budget_source: TeamMemberEffectiveBudgetSource = "none"
+
+
+class TeamMemberSelfBudgetUpdateRequest(BaseModel):
+    """Body of `PATCH /team/{team_id}/members/me`. `self_max_budget` is
+    required: a non-negative number sets the caller's personal cap, null
+    clears it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    self_max_budget: Annotated[float, Field(ge=0, allow_inf_nan=False, strict=True)] | None
 
 
 class TeamMetadataFieldSchema(BaseModel):
