@@ -177,7 +177,7 @@ async def test_get_agent_with_read_through_recovers_agent_created_on_sibling_rep
     assert agent.agent_id == agent_id
     prisma_client.db.litellm_agentstable.find_unique.assert_awaited_once_with(
         where={"agent_id": agent_id},
-        include={"object_permission": True},
+        include={"object_permission": True, "identity": True},
     )
 
 
@@ -202,7 +202,7 @@ async def test_get_agent_with_read_through_recovers_agent_by_name(clean_agent_re
     assert agent.agent_name == agent_name
     prisma_client.db.litellm_agentstable.find_unique.assert_awaited_with(
         where={"agent_name": agent_name},
-        include={"object_permission": True},
+        include={"object_permission": True, "identity": True},
     )
 
 
@@ -521,3 +521,33 @@ async def test_resync_agents_waits_for_agent_reload_and_skips_duplicate_registra
 
     assert await resync_task is True
     assert len(clean_agent_registry.agent_list) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup", ["agent-id", "Agent name"])
+async def test_agent_read_through_hydrates_identity_binding(lookup, clean_agent_registry, fresh_agent_read_through, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+    binding = {
+        "agent_id": "agent-id", "provider": "microsoft_entra", "tenant_id": "tenant", "client_id": "client",
+        "issuer": "https://login.microsoftonline.com/tenant/v2.0", "revision": "revision",
+    }
+
+    async def load_row(*, where, include):
+        if where == {"agent_id": "Agent name"}:
+            return None
+        row = FakeAgentRow("agent-id", "Agent name").model_dump()
+        return SimpleNamespace(model_dump=lambda: {**row, "identity": binding if include.get("identity") else None})
+
+    prisma = MagicMock()
+    prisma.db.litellm_agentstable.find_unique = AsyncMock(side_effect=load_row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    agent = await get_agent_with_read_through(lookup)
+    assert agent is not None
+    assert agent.identity is not None
+    assert agent.identity.model_dump(include=set(binding)) == binding
+    assert clean_agent_registry.get_agent_by_id(agent_id="agent-id").identity == agent.identity

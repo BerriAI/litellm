@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import re
+import sqlite3
 from datetime import timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3785,6 +3786,7 @@ class TestSpendLogsPayload:
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
                     "agent_id": None,
+                    "billing_agent_id": None,
                 }
             )
 
@@ -6590,9 +6592,7 @@ def test_key_spend_report_scopes_to_caller_key(client, monkeypatch):
 
 
 def test_key_spend_report_scopes_a_cli_session_to_the_per_user_alias_not_the_login_token(client, monkeypatch):
-    mock_prisma = _spend_report_mock_prisma(
-        query_raw_returns=[{"api_key": "cli-session-alice", "total_cost": 1.5}]
-    )
+    mock_prisma = _spend_report_mock_prisma(query_raw_returns=[{"api_key": "cli-session-alice", "total_cost": 1.5}])
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -7142,9 +7142,8 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         rep_call = emitted[2]
         assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
         assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
-            in rep_call[0]
-        ), "the session representative must prefer the newest non-MCP call"
+            f"ORDER BY {SESSION_GROUP_KEY_SQL}, " + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+        ) in rep_call[0]
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:
@@ -7632,6 +7631,39 @@ def test_ui_view_request_response_internal_user_missing_row_forbidden(client, mo
         assert custom_logger.requested_ids == []
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    ("parent_status", "child_status", "expected"),
+    [("failure", "success", "failure"), ("success", "failure", "success")],
+)
+def test_session_representative_uses_completed_agent_outcome(parent_status, child_status, expected):
+    with sqlite3.connect(":memory:") as connection:
+        connection.execute(
+            'CREATE TABLE logs (request_id TEXT, call_type TEXT, status TEXT, "startTime" TEXT, "endTime" TEXT)'
+        )
+        connection.executemany(
+            "INSERT INTO logs VALUES (?, ?, ?, ?, ?)",
+            (
+                ("parent", "asend_message", parent_status, "10:00:00", "10:00:05"),
+                ("nested-agent", "asend_message", child_status, "10:00:01", "10:00:03"),
+                ("llm", "acompletion", "success", "10:00:02", "10:00:04"),
+                ("tool", "call_mcp_tool", child_status, "10:00:04", "10:00:04"),
+            ),
+        )
+        result = connection.execute(
+            "SELECT request_id, status FROM logs ORDER BY "
+            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + " LIMIT 1"
+        ).fetchone()
+        assert result == ("parent", expected)
+        connection.execute("DELETE FROM logs WHERE call_type = 'asend_message'")
+        fallback = connection.execute(
+            "SELECT request_id, status FROM logs ORDER BY "
+            + spend_management_endpoints._SESSION_REPRESENTATIVE_ORDER_SQL
+            + " LIMIT 1"
+        ).fetchone()
+        assert fallback == ("llm", "success")
 
 
 @pytest.mark.asyncio
