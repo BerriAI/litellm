@@ -18,8 +18,8 @@ describe("SimpleTable numeric columns", () => {
     render(<SimpleTable data={[{ name: "Alice", spend: 42 }]} columns={columns} />);
 
     expect(screen.getByRole("columnheader", { name: "Spend" })).toHaveClass("text-right", "tabular-nums");
-    expect(screen.getByText("42").closest("td")).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("cell", { name: "42" })).toHaveClass("text-right", "tabular-nums");
     expect(screen.getByRole("columnheader", { name: "Name" })).not.toHaveClass("text-right");
-    expect(screen.getByText("Alice").closest("td")).not.toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: "Alice" })).not.toHaveClass("text-right");
   });
 });

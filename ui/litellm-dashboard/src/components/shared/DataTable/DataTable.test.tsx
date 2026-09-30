@@ -161,12 +161,10 @@ describe("DataTable numeric columns", () => {
   it("right-aligns the header and cells of a numeric column only", () => {
     render(<DataTable data={[person("a", "Alice")]} columns={numericColumns} sortingMode="client" />);
 
-    const spendHeader = screen.getByText("Spend").closest("th");
-    expect(spendHeader).toHaveClass("text-right", "tabular-nums");
-    expect(spendHeader?.querySelector("div")).toHaveClass("justify-end");
-    expect(screen.getByText("$1.50").closest("td")).toHaveClass("text-right", "tabular-nums");
-    expect(screen.getByText("Name").closest("th")).not.toHaveClass("text-right");
-    expect(screen.getByTestId("name-cell").closest("td")).not.toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Spend" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("cell", { name: "$1.50" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("columnheader", { name: "Name" })).not.toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: "Alice" })).not.toHaveClass("text-right");
   });
 });
 

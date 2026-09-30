@@ -209,8 +209,7 @@ it("should render VirtualKeysTable component", () => {
 
 it("right-aligns the Spend / Budget column", async () => {
   renderWithProviders(<VirtualKeysTable />);
-  const spendHeader = await screen.findByText("Spend", { selector: "[data-sort-field='spend']" });
-  expect(spendHeader.closest("th")).toHaveClass("text-right");
+  expect(await screen.findByRole("columnheader", { name: /^Spend/ })).toHaveClass("text-right");
   expect(screen.getByRole("columnheader", { name: /^Key$/ })).not.toHaveClass("text-right");
 });
 

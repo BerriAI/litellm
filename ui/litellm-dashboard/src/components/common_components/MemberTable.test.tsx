@@ -224,9 +224,9 @@ describe("MemberTable numeric columns", () => {
       ],
     });
 
-    expect(screen.getByText("Spend (USD)").closest("th")).toHaveClass("text-right", "tabular-nums");
-    expect(screen.getByText("$1.50").closest("td")).toHaveClass("text-right", "tabular-nums");
-    expect(screen.getByText("Joined").closest("th")).not.toHaveClass("text-right");
-    expect(screen.getByText("Aug 1").closest("td")).not.toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Spend (USD)" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("cell", { name: "$1.50" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("columnheader", { name: "Joined" })).not.toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: "Aug 1" })).not.toHaveClass("text-right");
   });
 });

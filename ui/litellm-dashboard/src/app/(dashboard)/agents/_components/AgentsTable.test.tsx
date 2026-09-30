@@ -35,8 +35,8 @@ describe("AgentsTable", () => {
 
   it("right-aligns the Spend (USD) column", () => {
     render(<AgentsTable agents={[]} {...baseProps} />);
-    expect(screen.getByText("Spend (USD)").closest("th")).toHaveClass("text-right");
-    expect(screen.getByText("Agent Name").closest("th")).not.toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Spend (USD)" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Agent Name" })).not.toHaveClass("text-right");
   });
 
   it("renders the agent's model and opens the detail view when the ID cell is clicked", async () => {
