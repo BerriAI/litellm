@@ -12,16 +12,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import secrets
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from dataclasses import dataclass
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+import openai
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.constants import (
     DEFAULT_POLLING_INTERVAL,
     HARNESS_ENDPOINT_HOST,
@@ -35,8 +36,12 @@ from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
 
 if TYPE_CHECKING:
+    from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import Response
+    from uvicorn import Server
+
+verbose_logger: Final = logging.getLogger("LiteLLM")
 
 MISSING_DEPS_MESSAGE = "litellm.harness needs starlette and uvicorn: pip install starlette uvicorn"
 
@@ -44,6 +49,11 @@ ROUTE_MESSAGES = "messages"
 ROUTE_CHAT = "chat/completions"
 ROUTE_RESPONSES = "responses"
 POST_ROUTES = (ROUTE_MESSAGES, ROUTE_CHAT, ROUTE_RESPONSES)
+ROUTE_PREFIXES: Final = ("", "/v1")
+
+# What an SDK call or its stream can raise: LiteLLM maps provider failures onto openai's
+# exception hierarchy; transport errors, bad request kwargs and unserializable chunks remain.
+SDK_ERRORS: Final = (openai.OpenAIError, httpx.HTTPError, HarnessError, ValueError, TypeError)
 
 HOP_BY_HOP_HEADERS = frozenset(
     {
@@ -121,7 +131,7 @@ class UsageTracker:
 # ---------------------------------------------------------------------------
 
 
-def _as_int(value: Any) -> int:
+def _as_int(value: object) -> int:
     if isinstance(value, bool):
         return 0
     if isinstance(value, (int, float)):
@@ -129,7 +139,7 @@ def _as_int(value: Any) -> int:
     return 0
 
 
-def usage_from_mapping(usage: Any) -> tuple[int, int]:
+def usage_from_mapping(usage: object) -> tuple[int, int]:
     """(input, output) from a usage dict using OpenAI or Anthropic/Responses field names."""
     if not isinstance(usage, Mapping):
         return 0, 0
@@ -138,7 +148,7 @@ def usage_from_mapping(usage: Any) -> tuple[int, int]:
     return _as_int(input_tokens), _as_int(output_tokens)
 
 
-def usage_from_body(body: Any) -> tuple[int, int]:
+def usage_from_body(body: object) -> tuple[int, int]:
     """Usage from a non-streaming JSON response body."""
     if not isinstance(body, Mapping):
         return 0, 0
@@ -229,8 +239,8 @@ def compute_cost(model: str | None, input_tokens: int, output_tokens: int) -> fl
             model=model, prompt_tokens=input_tokens, completion_tokens=output_tokens
         )
         return float(prompt_cost) + float(completion_cost)
-    except Exception as e:  # accounting must never break a call
-        verbose_logger.debug("harness endpoint: cost lookup failed for %s: %s", model, e)
+    except Exception:  # accounting must never break a call; the price-map lookup raises bare Exception
+        verbose_logger.debug("harness endpoint: cost lookup failed for %s", model, exc_info=True)
         return 0.0
 
 
@@ -244,7 +254,7 @@ def header_cost(headers: Mapping[str, str]) -> float | None:
         return None
 
 
-def hidden_cost(response: Any) -> float | None:
+def hidden_cost(response: object) -> float | None:
     hidden = getattr(response, "_hidden_params", None)
     if not isinstance(hidden, Mapping):
         return None
@@ -303,7 +313,7 @@ def error_body(exc: BaseException, message: str) -> dict[str, Any]:
     return {"error": {"type": type(exc).__name__, "message": message}}
 
 
-def to_jsonable(obj: Any) -> Any:
+def to_jsonable(obj: object) -> object:
     if hasattr(obj, "model_dump"):
         return obj.model_dump(mode="json", exclude_none=True)
     if isinstance(obj, Mapping):
@@ -311,7 +321,7 @@ def to_jsonable(obj: Any) -> Any:
     return obj
 
 
-def encode_anthropic_chunk(chunk: Any) -> bytes:
+def encode_anthropic_chunk(chunk: object) -> bytes:
     if isinstance(chunk, bytes):
         return chunk
     if isinstance(chunk, str):
@@ -321,13 +331,13 @@ def encode_anthropic_chunk(chunk: Any) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
 
 
-def encode_chat_chunk(chunk: Any) -> bytes:
+def encode_chat_chunk(chunk: object) -> bytes:
     if hasattr(chunk, "model_dump_json"):
         return f"data: {chunk.model_dump_json()}\n\n".encode()
     return f"data: {json.dumps(to_jsonable(chunk))}\n\n".encode()
 
 
-def encode_responses_chunk(chunk: Any) -> bytes:
+def encode_responses_chunk(chunk: object) -> bytes:
     data = to_jsonable(chunk)
     event_type = data.get("type", "message") if isinstance(data, Mapping) else "message"
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
@@ -431,7 +441,7 @@ class ModelEndpoint:
                 raise HarnessError("harness model endpoint failed to start")
             await asyncio.sleep(DEFAULT_POLLING_INTERVAL)
 
-    def _build_server(self, deps: _ServerDeps) -> Any:
+    def _build_server(self, deps: _ServerDeps) -> Server:
         config = deps.uvicorn.Config(
             self._build_app(deps),
             host=HARNESS_ENDPOINT_HOST,
@@ -450,13 +460,14 @@ class ModelEndpoint:
             server.install_signal_handlers = _noop
         return server
 
-    def _build_app(self, deps: _ServerDeps) -> Any:
+    def _build_app(self, deps: _ServerDeps) -> Starlette:
         Route = deps.routing.Route
-        routes = []
-        for prefix in ("", "/v1"):
-            for route in POST_ROUTES:
-                routes.append(Route(f"{prefix}/{route}", self._handle, methods=["POST"]))
-            routes.append(Route(f"{prefix}/models", self._models, methods=["GET"]))
+        routes = [
+            Route(f"{prefix}/{route}", self._handle, methods=["POST"])
+            for prefix in ROUTE_PREFIXES
+            for route in POST_ROUTES
+        ]
+        routes.extend(Route(f"{prefix}/models", self._models, methods=["GET"]) for prefix in ROUTE_PREFIXES)
         return deps.applications.Starlette(routes=routes)
 
     # -- request handling ---------------------------------------------------
@@ -471,7 +482,7 @@ class ModelEndpoint:
         token = extract_token(request.headers)
         return token is not None and secrets.compare_digest(token.encode(), self.token.encode())
 
-    def _json(self, body: Any, status_code: int = 200) -> Response:
+    def _json(self, body: object, status_code: int = 200) -> Response:
         return self._responses.JSONResponse(body, status_code=status_code)
 
     def _unauthorized(self) -> Response:
@@ -601,7 +612,7 @@ class ModelEndpoint:
             kwargs["api_base"] = self.api_base
         return kwargs
 
-    async def _invoke_sdk(self, route: str, kwargs: dict[str, Any]) -> Any:
+    async def _invoke_sdk(self, route: str, kwargs: dict[str, Any]) -> object:
         if route == ROUTE_MESSAGES:
             return await litellm.anthropic.messages.acreate(**kwargs)
         if route == ROUTE_CHAT:
@@ -616,10 +627,10 @@ class ModelEndpoint:
         model = self._cost_model(kwargs)
         try:
             response = await self._invoke_sdk(route, kwargs)
-        except Exception as e:
+        except SDK_ERRORS as e:
             verbose_logger.debug("harness endpoint: SDK call failed: %s", type(e).__name__)
             return self._error(e)
-        if kwargs.get("stream"):
+        if kwargs.get("stream") and isinstance(response, AsyncIterable):
             return self._responses.StreamingResponse(
                 self._sdk_stream(route, response, model), media_type=SSE_MEDIA_TYPE
             )
@@ -628,7 +639,7 @@ class ModelEndpoint:
         self._record(model, input_tokens, output_tokens, hidden_cost(response))
         return self._json(data)
 
-    async def _sdk_stream(self, route: str, iterator: Any, model: str | None) -> AsyncIterator[bytes]:
+    async def _sdk_stream(self, route: str, iterator: AsyncIterable[object], model: str | None) -> AsyncIterator[bytes]:
         encode = STREAM_ENCODERS[route]
         parser = SSEUsageParser()
         try:
@@ -639,7 +650,7 @@ class ModelEndpoint:
             trailer = STREAM_TRAILERS.get(route)
             if trailer:
                 yield trailer
-        except Exception as e:
+        except SDK_ERRORS as e:
             message = sanitize(str(e), self._secrets())
             yield f"event: error\ndata: {json.dumps(error_body(e, message))}\n\n".encode()
         finally:
