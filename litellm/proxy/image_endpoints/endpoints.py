@@ -320,9 +320,11 @@ async def image_edit_api(
                 detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
             )
 
-    # Ensure prompt exists in data (default to None for models that don't require it)
+    # Ensure prompt and image exist in data (default to None for models that don't require them)
     if "prompt" not in data:
         data["prompt"] = None
+    if "image" not in data:
+        data["image"] = None
 
     data["model"] = (
         model
