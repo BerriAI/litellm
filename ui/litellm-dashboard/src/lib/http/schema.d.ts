@@ -13858,6 +13858,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/roi-calculator/connections/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Roi Calculator Connections */
+        post: operations["test_roi_calculator_connections_roi_calculator_connections_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/identity-map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Roi Calculator Identity Map */
+        put: operations["update_roi_calculator_identity_map_roi_calculator_identity_map_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Report */
+        get: operations["get_roi_calculator_report_roi_calculator_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Repositories */
+        get: operations["get_roi_calculator_repositories_roi_calculator_repositories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Settings */
+        get: operations["get_roi_calculator_settings_roi_calculator_settings_get"];
+        /** Update Roi Calculator Settings */
+        put: operations["update_roi_calculator_settings_roi_calculator_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/setup/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Roi Calculator Setup */
+        post: operations["reset_roi_calculator_setup_roi_calculator_setup_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Sync Status */
+        get: operations["get_roi_calculator_sync_status_roi_calculator_sync_get"];
+        put?: never;
+        /** Start Roi Calculator Sync */
+        post: operations["start_roi_calculator_sync_roi_calculator_sync_post"];
+        /** Cancel Roi Calculator Sync */
+        delete: operations["cancel_roi_calculator_sync_roi_calculator_sync_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/router/fields": {
         parameters: {
             query?: never;
@@ -21734,6 +21856,58 @@ export interface paths {
          *     (exactly one required).
          */
         delete: operations["delete_tool_policy_override_v1_tool__tool_name__overrides_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agent Traces */
+        get: operations["list_agent_traces_v1_traces_get"];
+        put?: never;
+        /** Ingest Otlp Traces */
+        post: operations["ingest_otlp_traces_v1_traces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/{trace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace */
+        get: operations["get_agent_trace_v1_traces__trace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/{trace_id}/spans/{span_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Span */
+        get: operations["get_agent_trace_span_v1_traces__trace_id__spans__span_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -33507,6 +33681,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -33535,6 +33711,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -33619,6 +33797,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -33746,6 +33926,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -39691,6 +39873,286 @@ export interface components {
                     [key: string]: unknown;
                 };
             } | null;
+        };
+        /** ROIEstimateResponse */
+        ROIEstimateResponse: {
+            /**
+             * Cached
+             * @default false
+             */
+            cached: boolean;
+            /** Effort Basis */
+            effort_basis?: string | null;
+            /** Evidence Source */
+            evidence_source?: string | null;
+            /** Hours */
+            hours: number | null;
+            /** Model */
+            model?: string | null;
+            /** Reasoning */
+            reasoning: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "estimated" | "needs_review" | "error";
+        };
+        /** ROIIdentityMapResponse */
+        ROIIdentityMapResponse: {
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            report: components["schemas"]["ROISummaryResponse"] | null;
+        };
+        /** ROIIdentityMapUpdate */
+        ROIIdentityMapUpdate: {
+            /** Email */
+            email: string | null;
+            /** Github Login */
+            github_login: string;
+        };
+        /** ROIMetricsResponse */
+        ROIMetricsResponse: {
+            /** Cohort People */
+            cohort_people: number;
+            /** Cost Per Hour */
+            cost_per_hour: number | null;
+            /** Estimated Prs */
+            estimated_prs: number;
+            /** Excluded Spend */
+            excluded_spend: number;
+            /** Hours Per Dollar */
+            hours_per_dollar: number | null;
+            /** Matched Prs */
+            matched_prs: number;
+            /** Matched Spend */
+            matched_spend: number;
+            /** Merged Prs */
+            merged_prs: number;
+            /** Output Hours */
+            output_hours: number;
+            /** Pending Prs */
+            pending_prs: number;
+            /** People With Prs */
+            people_with_prs: number;
+            /** Total Output Hours */
+            total_output_hours: number;
+            /** Total Spend */
+            total_spend: number;
+        };
+        /** ROIPersonResponse */
+        ROIPersonResponse: {
+            /** Cost Per Hour */
+            cost_per_hour: number | null;
+            /** Eligible */
+            eligible: boolean;
+            /** Email */
+            email: string;
+            /** Estimated Prs */
+            estimated_prs: number;
+            /** Hours */
+            hours: number;
+            /** Id */
+            id: string;
+            /** Logins */
+            logins: string[];
+            /** Match Methods */
+            match_methods: string[];
+            /** Pending Prs */
+            pending_prs: number;
+            /** Prs */
+            prs: number;
+            /** Spend */
+            spend: number | null;
+        };
+        /** ROIPullResponse */
+        ROIPullResponse: {
+            /** Additions */
+            additions: number;
+            /** Cache Key */
+            cache_key?: string | null;
+            /** Changed Files */
+            changed_files: number;
+            /** Commit Count */
+            commit_count: number;
+            /** Deletions */
+            deletions: number;
+            /** Email */
+            email: string;
+            /** Emails */
+            emails: string[];
+            estimate: components["schemas"]["ROIEstimateResponse"];
+            /** Head Sha */
+            head_sha: string;
+            /** Incomplete Metadata */
+            incomplete_metadata: boolean;
+            /** Login */
+            login: string;
+            /** Match Method */
+            match_method: string;
+            /** Matched */
+            matched: boolean;
+            /** Merged At */
+            merged_at: string;
+            /** Number */
+            number: number;
+            /** Profile Email */
+            profile_email: string;
+            /** Repo */
+            repo: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        };
+        /** ROIReportResponse */
+        ROIReportResponse: {
+            report: components["schemas"]["ROISummaryResponse"] | null;
+        };
+        /** ROIRepositoriesResponse */
+        ROIRepositoriesResponse: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Repositories */
+            repositories: components["schemas"]["ROIRepository"][];
+        };
+        /** ROIRepository */
+        ROIRepository: {
+            /** Archived */
+            archived: boolean;
+            /** Name */
+            name: string;
+            /** Visibility */
+            visibility: string;
+        };
+        /** ROISettingsResponse */
+        ROISettingsResponse: {
+            /** Available Models */
+            available_models: string[];
+            /** Backfill Days */
+            backfill_days: number;
+            /** Default Prompt */
+            default_prompt: string;
+            /** Estimator Model */
+            estimator_model: string;
+            /** Estimator Prompt */
+            estimator_prompt: string;
+            /** Github Api Url */
+            github_api_url: string;
+            /** Has Estimator Key */
+            has_estimator_key: boolean;
+            /** Has Github Token */
+            has_github_token: boolean;
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            /** Ready */
+            ready: boolean;
+            /** Repos */
+            repos: string[];
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
+        };
+        /** ROISettingsUpdate */
+        ROISettingsUpdate: {
+            /** Backfill Days */
+            backfill_days?: number | null;
+            /** Estimator Key */
+            estimator_key?: string | null;
+            /** Estimator Model */
+            estimator_model?: string | null;
+            /** Estimator Prompt */
+            estimator_prompt?: string | null;
+            /** Github Api Url */
+            github_api_url?: string | null;
+            /** Github Token */
+            github_token?: string | null;
+            /** Repos */
+            repos?: string[] | null;
+            /** Update Interval Minutes */
+            update_interval_minutes?: number | null;
+        };
+        /** ROISummaryResponse */
+        ROISummaryResponse: {
+            /** Effort Basis */
+            effort_basis: string | null;
+            /** End */
+            end: string;
+            /** Estimator Model */
+            estimator_model: string;
+            /** Estimator Prompt */
+            estimator_prompt: string;
+            /** Id */
+            id: string | null;
+            metrics: components["schemas"]["ROIMetricsResponse"];
+            /** Mode */
+            mode: string;
+            /** People */
+            people: components["schemas"]["ROIPersonResponse"][];
+            /** Pulls */
+            pulls: components["schemas"]["ROIPullResponse"][];
+            /** Repos */
+            repos: string[];
+            /** Start */
+            start: string;
+            /** Synced At */
+            synced_at: string;
+            /** Trend */
+            trend: components["schemas"]["ROITrendResponse"][];
+            /** Warnings */
+            warnings: string[];
+        };
+        /** ROISyncStatus */
+        ROISyncStatus: {
+            /** Done */
+            done: number;
+            /**
+             * Elapsed Seconds
+             * @default 0
+             */
+            elapsed_seconds: number;
+            /** Error */
+            error: string | null;
+            /** Estimated */
+            estimated: number;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Needs Attention */
+            needs_attention: number;
+            /** Next Update */
+            next_update?: string | null;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "idle" | "spend" | "repositories" | "estimates" | "complete" | "cancelled" | "error";
+            /** Remaining Seconds */
+            remaining_seconds?: number | null;
+            /** Reused */
+            reused: number;
+            /** Running */
+            running: boolean;
+            /** Stage */
+            stage: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Total */
+            total: number;
+        };
+        /** ROITrendResponse */
+        ROITrendResponse: {
+            /** Date */
+            date: string;
+            /** Hours */
+            hours: number;
+            /** Prs */
+            prs: number;
+            /** Spend */
+            spend: number;
         };
         /**
          * RankingOptions
@@ -47338,6 +47800,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -47366,6 +47830,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -47450,6 +47916,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -47577,6 +48045,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -65649,6 +66119,255 @@ export interface operations {
             };
         };
     };
+    test_roi_calculator_connections_roi_calculator_connections_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+        };
+    };
+    update_roi_calculator_identity_map_roi_calculator_identity_map_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ROIIdentityMapUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIIdentityMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_report_roi_calculator_report_get: {
+        parameters: {
+            query?: {
+                mode?: "live" | "demo";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_repositories_roi_calculator_repositories_get: {
+        parameters: {
+            query?: {
+                query?: string;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_settings_roi_calculator_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+        };
+    };
+    update_roi_calculator_settings_roi_calculator_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ROISettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_roi_calculator_setup_roi_calculator_setup_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_sync_status_roi_calculator_sync_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
+    start_roi_calculator_sync_roi_calculator_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
+    cancel_roi_calculator_sync_roi_calculator_sync_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
     get_router_fields_router_fields_get: {
         parameters: {
             query?: never;
@@ -75811,6 +76530,128 @@ export interface operations {
             header?: never;
             path: {
                 tool_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_traces_v1_traces_get: {
+        parameters: {
+            query?: {
+                /** @description Window start, unix ms. Default: 24h ago */
+                start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_otlp_traces_v1_traces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_agent_trace_v1_traces__trace_id__get: {
+        parameters: {
+            query?: {
+                trace_ref?: string;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
+        parameters: {
+            query?: {
+                trace_ref?: string;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+                span_id: string;
             };
             cookie?: never;
         };

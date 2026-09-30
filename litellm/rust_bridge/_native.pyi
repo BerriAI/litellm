@@ -11,6 +11,7 @@ from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
+from litellm.rust_bridge.traces import DecodedSpan
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -19,6 +20,17 @@ class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
+
+def trace_decode_otlp(
+    body: bytes, content_type: str | None, content_encoding: str | None, max_decompressed_bytes: int
+) -> list[DecodedSpan]: ...
+
+@final
+class NativeTraceStorage:
+    def __new__(cls, database: str, url: str, reader_url: str | None = None) -> NativeTraceStorage: ...
+    def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> Future[None]: ...
+    def insert_rows(self, table: str, rows: Sequence[Mapping[str, JsonValue]]) -> Future[None]: ...
+    def query(self, sql: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Future[str]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -314,6 +326,7 @@ __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
     "NativeDiagnosticProcessor",
+    "NativeTraceStorage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -338,6 +351,7 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "trace_decode_otlp",
     "transcription",
 ]
 

@@ -49395,6 +49395,1327 @@
       }
     }
   },
+  "roi_calculator": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ROIEstimateResponse": {
+          "properties": {
+            "cached": {
+              "default": false,
+              "title": "Cached",
+              "type": "boolean"
+            },
+            "effort_basis": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Effort Basis"
+            },
+            "evidence_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Evidence Source"
+            },
+            "hours": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hours"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            },
+            "reasoning": {
+              "title": "Reasoning",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "estimated",
+                "needs_review",
+                "error"
+              ],
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "hours",
+            "reasoning"
+          ],
+          "title": "ROIEstimateResponse",
+          "type": "object"
+        },
+        "ROIIdentityMapResponse": {
+          "properties": {
+            "identity_map": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Identity Map",
+              "type": "object"
+            },
+            "report": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ROISummaryResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "report",
+            "identity_map"
+          ],
+          "title": "ROIIdentityMapResponse",
+          "type": "object"
+        },
+        "ROIIdentityMapUpdate": {
+          "properties": {
+            "email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Email"
+            },
+            "github_login": {
+              "title": "Github Login",
+              "type": "string"
+            }
+          },
+          "required": [
+            "github_login",
+            "email"
+          ],
+          "title": "ROIIdentityMapUpdate",
+          "type": "object"
+        },
+        "ROIMetricsResponse": {
+          "properties": {
+            "cohort_people": {
+              "title": "Cohort People",
+              "type": "integer"
+            },
+            "cost_per_hour": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost Per Hour"
+            },
+            "estimated_prs": {
+              "title": "Estimated Prs",
+              "type": "integer"
+            },
+            "excluded_spend": {
+              "title": "Excluded Spend",
+              "type": "number"
+            },
+            "hours_per_dollar": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Hours Per Dollar"
+            },
+            "matched_prs": {
+              "title": "Matched Prs",
+              "type": "integer"
+            },
+            "matched_spend": {
+              "title": "Matched Spend",
+              "type": "number"
+            },
+            "merged_prs": {
+              "title": "Merged Prs",
+              "type": "integer"
+            },
+            "output_hours": {
+              "title": "Output Hours",
+              "type": "number"
+            },
+            "pending_prs": {
+              "title": "Pending Prs",
+              "type": "integer"
+            },
+            "people_with_prs": {
+              "title": "People With Prs",
+              "type": "integer"
+            },
+            "total_output_hours": {
+              "title": "Total Output Hours",
+              "type": "number"
+            },
+            "total_spend": {
+              "title": "Total Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "matched_spend",
+            "output_hours",
+            "total_spend",
+            "total_output_hours",
+            "excluded_spend",
+            "cost_per_hour",
+            "hours_per_dollar",
+            "merged_prs",
+            "estimated_prs",
+            "matched_prs",
+            "cohort_people",
+            "people_with_prs",
+            "pending_prs"
+          ],
+          "title": "ROIMetricsResponse",
+          "type": "object"
+        },
+        "ROIPersonResponse": {
+          "properties": {
+            "cost_per_hour": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost Per Hour"
+            },
+            "eligible": {
+              "title": "Eligible",
+              "type": "boolean"
+            },
+            "email": {
+              "title": "Email",
+              "type": "string"
+            },
+            "estimated_prs": {
+              "title": "Estimated Prs",
+              "type": "integer"
+            },
+            "hours": {
+              "title": "Hours",
+              "type": "number"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "logins": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Logins",
+              "type": "array"
+            },
+            "match_methods": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Match Methods",
+              "type": "array"
+            },
+            "pending_prs": {
+              "title": "Pending Prs",
+              "type": "integer"
+            },
+            "prs": {
+              "title": "Prs",
+              "type": "integer"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spend"
+            }
+          },
+          "required": [
+            "id",
+            "email",
+            "logins",
+            "spend",
+            "hours",
+            "prs",
+            "estimated_prs",
+            "pending_prs",
+            "match_methods",
+            "eligible",
+            "cost_per_hour"
+          ],
+          "title": "ROIPersonResponse",
+          "type": "object"
+        },
+        "ROIPullResponse": {
+          "properties": {
+            "additions": {
+              "title": "Additions",
+              "type": "integer"
+            },
+            "cache_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cache Key"
+            },
+            "changed_files": {
+              "title": "Changed Files",
+              "type": "integer"
+            },
+            "commit_count": {
+              "title": "Commit Count",
+              "type": "integer"
+            },
+            "deletions": {
+              "title": "Deletions",
+              "type": "integer"
+            },
+            "email": {
+              "title": "Email",
+              "type": "string"
+            },
+            "emails": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Emails",
+              "type": "array"
+            },
+            "estimate": {
+              "$ref": "#/components/schemas/ROIEstimateResponse"
+            },
+            "head_sha": {
+              "title": "Head Sha",
+              "type": "string"
+            },
+            "incomplete_metadata": {
+              "title": "Incomplete Metadata",
+              "type": "boolean"
+            },
+            "login": {
+              "title": "Login",
+              "type": "string"
+            },
+            "match_method": {
+              "title": "Match Method",
+              "type": "string"
+            },
+            "matched": {
+              "title": "Matched",
+              "type": "boolean"
+            },
+            "merged_at": {
+              "title": "Merged At",
+              "type": "string"
+            },
+            "number": {
+              "title": "Number",
+              "type": "integer"
+            },
+            "profile_email": {
+              "title": "Profile Email",
+              "type": "string"
+            },
+            "repo": {
+              "title": "Repo",
+              "type": "string"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "url": {
+              "title": "Url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "repo",
+            "number",
+            "title",
+            "url",
+            "login",
+            "emails",
+            "profile_email",
+            "merged_at",
+            "head_sha",
+            "additions",
+            "deletions",
+            "changed_files",
+            "commit_count",
+            "incomplete_metadata",
+            "estimate",
+            "email",
+            "match_method",
+            "matched"
+          ],
+          "title": "ROIPullResponse",
+          "type": "object"
+        },
+        "ROIReportResponse": {
+          "properties": {
+            "report": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ROISummaryResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "report"
+          ],
+          "title": "ROIReportResponse",
+          "type": "object"
+        },
+        "ROIRepositoriesResponse": {
+          "properties": {
+            "has_more": {
+              "title": "Has More",
+              "type": "boolean"
+            },
+            "page": {
+              "title": "Page",
+              "type": "integer"
+            },
+            "repositories": {
+              "items": {
+                "$ref": "#/components/schemas/ROIRepository"
+              },
+              "title": "Repositories",
+              "type": "array"
+            }
+          },
+          "required": [
+            "repositories",
+            "page",
+            "has_more"
+          ],
+          "title": "ROIRepositoriesResponse",
+          "type": "object"
+        },
+        "ROIRepository": {
+          "properties": {
+            "archived": {
+              "title": "Archived",
+              "type": "boolean"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "visibility": {
+              "title": "Visibility",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "visibility",
+            "archived"
+          ],
+          "title": "ROIRepository",
+          "type": "object"
+        },
+        "ROISettingsResponse": {
+          "properties": {
+            "available_models": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Available Models",
+              "type": "array"
+            },
+            "backfill_days": {
+              "title": "Backfill Days",
+              "type": "integer"
+            },
+            "default_prompt": {
+              "title": "Default Prompt",
+              "type": "string"
+            },
+            "estimator_model": {
+              "title": "Estimator Model",
+              "type": "string"
+            },
+            "estimator_prompt": {
+              "title": "Estimator Prompt",
+              "type": "string"
+            },
+            "github_api_url": {
+              "title": "Github Api Url",
+              "type": "string"
+            },
+            "has_estimator_key": {
+              "title": "Has Estimator Key",
+              "type": "boolean"
+            },
+            "has_github_token": {
+              "title": "Has Github Token",
+              "type": "boolean"
+            },
+            "identity_map": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Identity Map",
+              "type": "object"
+            },
+            "ready": {
+              "title": "Ready",
+              "type": "boolean"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "update_interval_minutes": {
+              "title": "Update Interval Minutes",
+              "type": "number"
+            }
+          },
+          "required": [
+            "github_api_url",
+            "repos",
+            "estimator_model",
+            "estimator_prompt",
+            "backfill_days",
+            "update_interval_minutes",
+            "has_estimator_key",
+            "identity_map",
+            "has_github_token",
+            "default_prompt",
+            "available_models",
+            "ready"
+          ],
+          "title": "ROISettingsResponse",
+          "type": "object"
+        },
+        "ROISettingsUpdate": {
+          "additionalProperties": false,
+          "properties": {
+            "backfill_days": {
+              "anyOf": [
+                {
+                  "maximum": 3650.0,
+                  "minimum": 1.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Backfill Days"
+            },
+            "estimator_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estimator Key"
+            },
+            "estimator_model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estimator Model"
+            },
+            "estimator_prompt": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estimator Prompt"
+            },
+            "github_api_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Github Api Url"
+            },
+            "github_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Github Token"
+            },
+            "repos": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repos"
+            },
+            "update_interval_minutes": {
+              "anyOf": [
+                {
+                  "maximum": 43200.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Update Interval Minutes"
+            }
+          },
+          "title": "ROISettingsUpdate",
+          "type": "object"
+        },
+        "ROISummaryResponse": {
+          "properties": {
+            "effort_basis": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Effort Basis"
+            },
+            "end": {
+              "title": "End",
+              "type": "string"
+            },
+            "estimator_model": {
+              "title": "Estimator Model",
+              "type": "string"
+            },
+            "estimator_prompt": {
+              "title": "Estimator Prompt",
+              "type": "string"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/ROIMetricsResponse"
+            },
+            "mode": {
+              "title": "Mode",
+              "type": "string"
+            },
+            "people": {
+              "items": {
+                "$ref": "#/components/schemas/ROIPersonResponse"
+              },
+              "title": "People",
+              "type": "array"
+            },
+            "pulls": {
+              "items": {
+                "$ref": "#/components/schemas/ROIPullResponse"
+              },
+              "title": "Pulls",
+              "type": "array"
+            },
+            "repos": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Repos",
+              "type": "array"
+            },
+            "start": {
+              "title": "Start",
+              "type": "string"
+            },
+            "synced_at": {
+              "title": "Synced At",
+              "type": "string"
+            },
+            "trend": {
+              "items": {
+                "$ref": "#/components/schemas/ROITrendResponse"
+              },
+              "title": "Trend",
+              "type": "array"
+            },
+            "warnings": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Warnings",
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "mode",
+            "start",
+            "end",
+            "synced_at",
+            "repos",
+            "estimator_model",
+            "estimator_prompt",
+            "warnings",
+            "effort_basis",
+            "metrics",
+            "people",
+            "pulls",
+            "trend"
+          ],
+          "title": "ROISummaryResponse",
+          "type": "object"
+        },
+        "ROISyncStatus": {
+          "properties": {
+            "done": {
+              "title": "Done",
+              "type": "integer"
+            },
+            "elapsed_seconds": {
+              "default": 0,
+              "title": "Elapsed Seconds",
+              "type": "integer"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "estimated": {
+              "title": "Estimated",
+              "type": "integer"
+            },
+            "finished_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Finished At"
+            },
+            "needs_attention": {
+              "title": "Needs Attention",
+              "type": "integer"
+            },
+            "next_update": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Update"
+            },
+            "phase": {
+              "enum": [
+                "idle",
+                "spend",
+                "repositories",
+                "estimates",
+                "complete",
+                "cancelled",
+                "error"
+              ],
+              "title": "Phase",
+              "type": "string"
+            },
+            "remaining_seconds": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Remaining Seconds"
+            },
+            "reused": {
+              "title": "Reused",
+              "type": "integer"
+            },
+            "running": {
+              "title": "Running",
+              "type": "boolean"
+            },
+            "stage": {
+              "title": "Stage",
+              "type": "string"
+            },
+            "started_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Started At"
+            },
+            "total": {
+              "title": "Total",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "running",
+            "phase",
+            "stage",
+            "done",
+            "total",
+            "estimated",
+            "reused",
+            "needs_attention",
+            "error"
+          ],
+          "title": "ROISyncStatus",
+          "type": "object"
+        },
+        "ROITrendResponse": {
+          "properties": {
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "hours": {
+              "title": "Hours",
+              "type": "number"
+            },
+            "prs": {
+              "title": "Prs",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "date",
+            "spend",
+            "hours",
+            "prs"
+          ],
+          "title": "ROITrendResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/roi-calculator/connections/test": {
+        "post": {
+          "operationId": "test_roi_calculator_connections_roi_calculator_connections_test_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Test Roi Calculator Connections",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/identity-map": {
+        "put": {
+          "operationId": "update_roi_calculator_identity_map_roi_calculator_identity_map_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ROIIdentityMapUpdate"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROIIdentityMapResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Roi Calculator Identity Map",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/report": {
+        "get": {
+          "operationId": "get_roi_calculator_report_roi_calculator_report_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "mode",
+              "required": false,
+              "schema": {
+                "default": "live",
+                "enum": [
+                  "live",
+                  "demo"
+                ],
+                "title": "Mode",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROIReportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Roi Calculator Report",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/repositories": {
+        "get": {
+          "operationId": "get_roi_calculator_repositories_roi_calculator_repositories_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "default": "",
+                "maxLength": 200,
+                "title": "Query",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "page",
+              "required": false,
+              "schema": {
+                "default": 1,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Page",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROIRepositoriesResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Roi Calculator Repositories",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/settings": {
+        "get": {
+          "operationId": "get_roi_calculator_settings_roi_calculator_settings_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Roi Calculator Settings",
+          "tags": [
+            "roi_calculator"
+          ]
+        },
+        "put": {
+          "operationId": "update_roi_calculator_settings_roi_calculator_settings_put",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ROISettingsUpdate"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Roi Calculator Settings",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/setup/reset": {
+        "post": {
+          "operationId": "reset_roi_calculator_setup_roi_calculator_setup_reset_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Reset Roi Calculator Setup",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      },
+      "/roi-calculator/sync": {
+        "delete": {
+          "operationId": "cancel_roi_calculator_sync_roi_calculator_sync_delete",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISyncStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Cancel Roi Calculator Sync",
+          "tags": [
+            "roi_calculator"
+          ]
+        },
+        "get": {
+          "operationId": "get_roi_calculator_sync_status_roi_calculator_sync_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISyncStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Roi Calculator Sync Status",
+          "tags": [
+            "roi_calculator"
+          ]
+        },
+        "post": {
+          "operationId": "start_roi_calculator_sync_roi_calculator_sync_post",
+          "responses": {
+            "202": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ROISyncStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Start Roi Calculator Sync",
+          "tags": [
+            "roi_calculator"
+          ]
+        }
+      }
+    }
+  },
   "scim": {
     "components": {
       "schemas": {

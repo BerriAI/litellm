@@ -44,8 +44,9 @@ class ConfigParam:
 class ConfigRepository:
     """Repository for config database operations."""
 
-    def __init__(self, prisma_client: PrismaClient | None):
+    def __init__(self, prisma_client: PrismaClient | None, *, use_writer: bool = False):
         self._prisma_client: Final = prisma_client
+        self._use_writer: Final = use_writer
 
     @property
     def prisma_client(self) -> PrismaClient:
@@ -55,7 +56,8 @@ class ConfigRepository:
 
     @property
     def _config_table(self) -> _ConfigTable:
-        return cast(_ConfigTable, self.prisma_client.db.litellm_config)
+        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        return cast(_ConfigTable, database.litellm_config)
 
     @property
     def table(self) -> _ConfigTable:
