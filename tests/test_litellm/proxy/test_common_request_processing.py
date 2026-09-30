@@ -4256,6 +4256,34 @@ class TestStreamCloseOnDisconnect:
 
         assert upstream.aclosed
 
+    async def test_async_streaming_data_generator_closes_the_guardrail_chain_on_client_disconnect(
+        self,
+    ):
+        cleanup_ran = []
+
+        async def guarded_chain(**_kwargs):
+            try:
+                yield {"type": "chunk"}
+                yield {"type": "chunk"}
+            finally:
+                cleanup_ran.append(True)
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = guarded_chain
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        await gen.__anext__()
+        await gen.aclose()
+
+        assert cleanup_ran == [True]
+
     async def test_async_streaming_data_generator_redacts_internal_details_on_error(
         self,
     ):

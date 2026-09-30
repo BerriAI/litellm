@@ -267,6 +267,13 @@ def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
 
 
+async def _close_guarded_stream(stream: object) -> None:
+    if not isinstance(stream, AsyncGenerator):
+        return
+    with anyio.CancelScope(shield=True):
+        await stream.aclose()
+
+
 def resolve_litellm_call_id(client_call_id: str | None) -> str:
     if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
         return client_call_id
@@ -3903,13 +3910,14 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected = False
         delivered_chunk = False
         recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
+        guarded_stream: Final = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        )
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-            ):
+            async for chunk in guarded_stream:
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
@@ -3965,6 +3973,7 @@ class ProxyBaseLLMRequestProcessing:
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
+            await _close_guarded_stream(guarded_stream)
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,

@@ -2,6 +2,7 @@ import json
 import os
 import signal
 import socket
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -15,8 +16,9 @@ from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import group_members, owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
+from pydantic import JsonValue
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -1297,3 +1299,143 @@ def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway,
             for response in responses:
                 assert response.status_code == 200, response.text
                 assert response.headers["content-type"].startswith("text/event-stream"), response.text
+
+
+def _openai_stream_frame(identity: str, delta: dict[str, str], finish: str | None = None) -> bytes:
+    payload: Final = {
+        "id": identity,
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+    return b"data: " + json.dumps(payload).encode() + b"\n\n"
+
+
+def _detect_only_post_call_config(tmp_path: Path, identity: str, policy_url: str) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": identity,
+            "litellm_params": {
+                "guardrail": "generic_guardrail_api",
+                "mode": "post_call",
+                "default_on": True,
+                "api_base": policy_url,
+                "api_key": "synthetic-guardrail-key",
+                "streaming_end_of_stream_only": True,
+            },
+        }
+    ]
+    path: Final = tmp_path / "detect-only-post-call.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def _read_content_then_disconnect(candidate: Gateway, model: str, secret: str, before_close: threading.Event) -> str:
+    body: Final = {"model": model, "messages": [{"role": "user", "content": "synthetic prompt"}], "stream": True}
+    with candidate.client.stream(
+        "POST", "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {candidate.key}"}
+    ) as response:
+        assert response.status_code == 200, response.read()
+        for line in response.iter_lines():
+            if secret in line:
+                assert before_close.wait(timeout=10), "The disconnect precondition was never reached"
+                return line
+    raise AssertionError("The stream ended before the client received the streamed content")
+
+
+def _response_scans(policy: Wire) -> tuple[dict[str, JsonValue], ...]:
+    bodies: Final = tuple(object_value(json.loads(request.body)) for request in policy.drain())
+    return tuple(body for body in bodies if body["input_type"] == "response")
+
+
+def _post_call_guardrail_entries(model: str, identity: str) -> tuple[dict[str, JsonValue], ...]:
+    rows: Final = eventually(
+        lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    entries: Final = object_value(rows[0]["metadata"]).get("guardrail_information") or []
+    assert isinstance(entries, list), rows
+    return tuple(
+        entry
+        for entry in (object_value(value) for value in entries)
+        if entry.get("guardrail_name") == identity and entry.get("guardrail_mode") == "post_call"
+    )
+
+
+def test_client_disconnect_mid_stream_still_scans_the_content_it_already_received(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    secret: Final = "synthetic-leaked-secret-" + identity
+    upstream_gate: Final = threading.Event()
+    frames: Final = (
+        _openai_stream_frame(identity, {"role": "assistant", "content": secret}),
+        _openai_stream_frame(identity, {}, finish="stop"),
+        b"data: [DONE]\n\n",
+    )
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+    with (
+        wire_server(guardrail) as policy,
+        wire_server(
+            lambda request: Reply(content_type="text/event-stream", chunks=frames, gate_after_first=upstream_gate)
+        ) as upstream,
+    ):
+        config: Final = _detect_only_post_call_config(tmp_path, identity, policy.url)
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1", api_key="synthetic-openai-key")
+            client_has_content: Final = threading.Event()
+            client_has_content.set()
+            try:
+                received: Final = _read_content_then_disconnect(candidate, model, secret, client_has_content)
+            finally:
+                upstream_gate.set()
+            assert secret in received, received
+            scans: Final = eventually(lambda: _response_scans(policy), lambda values: len(values) == 1, seconds=20)
+            assert secret in "".join(scans[0]["texts"]), scans
+            entries: Final = _post_call_guardrail_entries(model, identity)
+            assert [entry["guardrail_status"] for entry in entries] == ["success"], entries
+
+
+def test_client_disconnect_while_end_of_stream_scan_is_in_flight_still_records_the_verdict(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    secret: Final = "synthetic-leaked-secret-" + identity
+    scan_started: Final = threading.Event()
+    scan_released: Final = threading.Event()
+    frames: Final = (
+        _openai_stream_frame(identity, {"role": "assistant", "content": secret}),
+        _openai_stream_frame(identity, {}, finish="stop"),
+        b"data: [DONE]\n\n",
+    )
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == "/beta/litellm_basic_guardrail_api", request.target
+        if json.loads(request.body)["input_type"] == "response":
+            scan_started.set()
+            assert scan_released.wait(timeout=30), "The in-flight scan was never released"
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+
+    with (
+        wire_server(guardrail) as policy,
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=frames)) as upstream,
+    ):
+        config: Final = _detect_only_post_call_config(tmp_path, identity, policy.url)
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=upstream.url + "/v1", api_key="synthetic-openai-key")
+            try:
+                received: Final = _read_content_then_disconnect(candidate, model, secret, scan_started)
+            finally:
+                scan_released.set()
+            assert secret in received, received
+            entries: Final = _post_call_guardrail_entries(model, identity)
+            assert [entry["guardrail_status"] for entry in entries] == ["success"], entries
+            scans: Final = _response_scans(policy)
+            assert len(scans) == 1 and secret in "".join(scans[0]["texts"]), scans

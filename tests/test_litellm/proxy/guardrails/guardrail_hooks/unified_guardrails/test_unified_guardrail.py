@@ -1,9 +1,11 @@
 """Tests for unified guardrail."""
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 
+import anyio
 import pytest
 
 import litellm
@@ -2107,6 +2109,115 @@ class _ScanCountingGuardrail(CustomGuardrail):
             },
         )
         return inputs
+
+
+class _GatedScanGuardrail(_ScanCountingGuardrail):
+    """End-of-stream scan that holds until released, recording scans that finished."""
+
+    def __init__(self):
+        super().__init__(end_of_stream_only=True)
+        self.scan_started = anyio.Event()
+        self.scan_released = anyio.Event()
+        self.finished_scans = 0
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.scan_started.set()
+        await self.scan_released.wait()
+        recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        self.finished_scans += 1
+        return recorded
+
+
+class TestStreamingClientDisconnectScan:
+    """A client that reads streamed content and then disconnects must not skip
+    the end-of-stream scan of what it already received."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self, monkeypatch):
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @staticmethod
+    def _guarded_stream(guardrail, upstream):
+        return UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=upstream,
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}},
+        )
+
+    @pytest.mark.asyncio
+    async def test_closing_after_released_content_still_scans_it(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
+
+        async def upstream():
+            yield _stream_chunk("synthetic secret")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = await stream.__anext__()
+        await stream.aclose()
+
+        assert _delta_text(received) == "synthetic secret"
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_upstream_cancellation_after_released_content_still_scans_it(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
+
+        async def upstream():
+            yield _stream_chunk("synthetic secret")
+            raise asyncio.CancelledError()
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = await stream.__anext__()
+        with pytest.raises(asyncio.CancelledError):
+            await stream.__anext__()
+
+        assert _delta_text(received) == "synthetic secret"
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_before_any_content_is_released_does_not_scan(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True, buffer_until_moderated=True)
+        upstream_started = anyio.Event()
+
+        async def upstream():
+            yield _stream_chunk("withheld")
+            upstream_started.set()
+            await anyio.sleep_forever()
+            yield _stream_chunk("never", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(stream.__anext__)
+            await upstream_started.wait()
+            task_group.cancel_scope.cancel()
+
+        assert guardrail.scans == ()
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_end_of_stream_scan_lets_the_scan_finish(self):
+        guardrail = _GatedScanGuardrail()
+
+        async def upstream():
+            yield _stream_chunk("synthetic secret")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        async def consume(scope_ready):
+            with anyio.CancelScope() as scope:
+                scope_ready.append(scope)
+                async for _item in self._guarded_stream(guardrail, upstream()):
+                    pass
+
+        scopes = []
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(consume, scopes)
+            await guardrail.scan_started.wait()
+            scopes[0].cancel()
+            await anyio.sleep(0)
+            guardrail.scan_released.set()
+
+        assert guardrail.finished_scans == 1
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret tail"]], guardrail.scans
 
 
 def _responses_delta(sequence_number, text):

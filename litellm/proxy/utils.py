@@ -2752,8 +2752,9 @@ class ProxyLogging:
     ) -> AsyncGenerator[_T, None]:
         upstream: Final = _UpstreamStreamBoundary(response)
         try:
-            async for chunk in hook(response=upstream):
-                yield chunk
+            async with contextlib.aclosing(hook(response=upstream)) as guarded:
+                async for chunk in guarded:
+                    yield chunk
         except Exception as e:
             if e is not upstream.failure:
                 enrich_http_exception_with_guardrail_context(e, callback)
@@ -3937,6 +3938,7 @@ class ProxyLogging:
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
+        guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
                 if resolved_callback.guardrail_name in pipeline_gated_names:
@@ -3979,6 +3981,7 @@ class ProxyLogging:
                 hook,
                 request_data=request_data,
             )
+            guarded_layers.append(current_response)
 
         pipeline_translation: Final = (
             resolve_endpoint_translation(user_api_key_dict, None) if post_call_pipelines else None
@@ -3991,6 +3994,7 @@ class ProxyLogging:
                 pipelines=post_call_pipelines,
                 translation=pipeline_translation,
             )
+            guarded_layers.append(current_response)
 
         served_chunks: Final[list[object]] = []  # mutable-ok: accumulates while yielding to the client
         try:
@@ -3998,6 +4002,7 @@ class ProxyLogging:
                 served_chunks.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
+            await ProxyLogging._close_guarded_layers(guarded_layers)
             ProxyLogging._record_served_stream_output(request_data, served_chunks)
             raise
         except Exception as e:
@@ -4077,6 +4082,11 @@ class ProxyLogging:
 
         for buffered_item in buffered:
             yield buffered_item
+
+    @staticmethod
+    async def _close_guarded_layers(layers: Sequence[AsyncGenerator[object, None]]) -> None:
+        for layer in reversed(layers):
+            await layer.aclose()
 
     @staticmethod
     def _record_served_stream_output(request_data: Mapping[str, object], served_chunks: Sequence[object]) -> None:
