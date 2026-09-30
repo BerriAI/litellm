@@ -74,7 +74,7 @@ class TestTopxAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="gpt-6-sol",
+            model="gpt-6.1-sol",
             custom_llm_provider=None,
             api_base=TOPXAI_BASE_URL,
             api_key=None,
@@ -123,7 +123,7 @@ class TestTopxAIProviderConfig:
             assert str(request.url) == f"{expected_base}/responses"
             assert request.headers["Authorization"] == "Bearer sk-topxai-test"
             payload: Final = json.loads(request.content)
-            assert payload["model"] == "gpt-6-sol"
+            assert payload["model"] == "gpt-6.1-sol"
             assert payload["input"] == "Reply with OK"
             return httpx.Response(
                 200,
@@ -131,7 +131,7 @@ class TestTopxAIProviderConfig:
                     "id": "resp_topxai_test",
                     "object": "response",
                     "created_at": 1,
-                    "model": "gpt-6-sol",
+                    "model": "gpt-6.1-sol",
                     "status": "completed",
                     "output": [
                         {
@@ -148,7 +148,7 @@ class TestTopxAIProviderConfig:
 
         with httpx.Client(transport=httpx.MockTransport(respond)) as client:
             response: Final = litellm.responses(
-                model="topxai/gpt-6-sol",
+                model="topxai/gpt-6.1-sol",
                 input="Reply with OK",
                 api_base=api_base,
                 client=HTTPHandler(client=client),
@@ -179,12 +179,12 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-09-28)
+    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-09-30)
     TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5",
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
-        "topxai/gpt-6-sol",
+        "topxai/gpt-6.1-sol",
         "topxai/gpt-6-astra",
         "topxai/grok-4.7",
         "topxai/kimi-k3",
@@ -198,18 +198,18 @@ class TestTopxAIModelMetadata:
         "topxai/claude-sonnet-5",
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
-        "topxai/gpt-6-sol",
+        "topxai/gpt-6.1-sol",
         "topxai/gpt-6-astra",
         "topxai/kimi-k3",
     )
     # The catalogue publishes no output limit for these
     NO_OUTPUT_LIMIT_MODELS: Final = ("topxai/grok-4.7",)
-    # First premium token and output multiplier, verified 2026-09-28:
-    # https://ai.topxea.com/pricing/gpt-6-sol
+    # First premium token and output multiplier, verified 2026-09-30:
+    # https://ai.topxea.com/pricing/gpt-6.1-sol
     # https://ai.topxea.com/pricing/gpt-6-astra
     # https://ai.topxea.com/pricing/grok-4.7
     TIERED_MODELS: Final = (
-        ("topxai/gpt-6-sol", 272_001, 1.5),
+        ("topxai/gpt-6.1-sol", 272_001, 1.5),
         ("topxai/gpt-6-astra", 272_001, 1.5),
         ("topxai/grok-4.7", 200_000, 2.0),
     )
