@@ -321,6 +321,98 @@ func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
 	}
 }
 
+func TestUpdateKeyOmitsEmptyTeamID(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "sk-test"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	if _, err := client.UpdateKey(&Key{Key: "sk-test"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if _, present := captured["team_id"]; present {
+		t.Errorf("update payload contains empty team_id: %v", captured["team_id"])
+	}
+
+	if _, err := client.UpdateKey(&Key{Key: "sk-test", TeamID: "team-1"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if captured["team_id"] != "team-1" {
+		t.Errorf("team_id = %v, want team-1", captured["team_id"])
+	}
+}
+
+func TestResourceKeyTeamChangesConverge(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		priorTeam      string
+		configuredTeam interface{}
+		wantTeam       string
+		wantPresent    bool
+		wantNull       bool
+	}{
+		{name: "teamless"},
+		{name: "remove", priorTeam: "team-1", wantPresent: true, wantNull: true},
+		{name: "blank", priorTeam: "team-1", configuredTeam: "", wantPresent: true, wantNull: true},
+		{name: "assign", configuredTeam: "team-1", wantTeam: "team-1", wantPresent: true},
+		{name: "move", priorTeam: "team-1", configuredTeam: "team-2", wantTeam: "team-2", wantPresent: true},
+		{name: "retain", priorTeam: "team-1", configuredTeam: "team-1", wantTeam: "team-1", wantPresent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storedTeam := tc.priorTeam
+			updates := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if req.URL.Path == "/key/update" {
+					updates++
+					var payload map[string]interface{}
+					if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					value, present := payload["team_id"]
+					if present != tc.wantPresent || (present && (value == nil) != tc.wantNull) {
+						t.Errorf("team_id = %#v, present = %v; want present = %v, null = %v", value, present, tc.wantPresent, tc.wantNull)
+					}
+					if present {
+						storedTeam, _ = value.(string)
+					}
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"key":  "hash-1",
+					"info": map[string]interface{}{"team_id": storedTeam, "key_alias": "test"},
+				})
+			}))
+			defer srv.Close()
+			res := resourceKey()
+			priorData := newKeyResourceData(t, map[string]interface{}{"team_id": tc.priorTeam, "key_alias": "test", "max_budget": 10.0})
+			priorData.SetId("hash-1")
+			config := terraform.NewResourceConfigRaw(map[string]interface{}{"team_id": tc.configuredTeam, "key_alias": "test", "max_budget": 25.0})
+			diff, err := res.Diff(context.Background(), priorData.State(), config, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, diags := res.Apply(context.Background(), priorData.State(), diff, NewClient(srv.URL, "test-key", true))
+			if diags.HasError() {
+				t.Fatalf("apply failed: %v", diags)
+			}
+			if updates != 1 || storedTeam != tc.wantTeam || state.Attributes["team_id"] != tc.wantTeam {
+				t.Fatalf("updates = %d, stored team = %q, state team = %q; want %q", updates, storedTeam, state.Attributes["team_id"], tc.wantTeam)
+			}
+			nextDiff, err := res.Diff(context.Background(), state, config, nil)
+			if err != nil || (nextDiff != nil && !nextDiff.Empty()) {
+				t.Fatalf("subsequent plan not clean: diff = %v, error = %v", nextDiff, err)
+			}
+		})
+	}
+}
+
 func TestResourceKeyUpdateFailureKeepsPriorState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
