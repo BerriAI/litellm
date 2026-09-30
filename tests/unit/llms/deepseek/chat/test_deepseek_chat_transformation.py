@@ -799,3 +799,33 @@ class TestDeepSeekThinkingModeAndReasoningContent:
         transformed_assistant = result["messages"][1]
         assert transformed_assistant["reasoning_content"] == "subtract 1 from both sides"
         assert "provider_specific_fields" not in transformed_assistant
+
+    def test_is_default_reasoning_model_unmapped_model_falls_back(self):
+        assert self.config._is_default_reasoning_model("nonexistent-unmapped-model-xyz") is False
+
+    def test_thinking_mode_active_handles_disabled_and_invalid_payloads(self):
+        assert (
+            self.config._thinking_mode_active(
+                "deepseek-reasoner", {"thinking": {"type": "disabled"}}
+            )
+            is False
+        )
+        assert (
+            self.config._thinking_mode_active(
+                "deepseek-reasoner", {"thinking": {"type": "unknown_type"}}
+            )
+            is False
+        )
+        assert (
+            self.config._thinking_mode_active(
+                "deepseek-reasoner", {"thinking": "invalid_string"}
+            )
+            is False
+        )
+        assert (
+            self.config._thinking_mode_active(
+                "deepseek-reasoner", {"thinking": True}
+            )
+            is False
+        )
+
