@@ -1234,6 +1234,54 @@ def test_azure_base_model_inherits_service_tier_pricing_for_registration_and_pay
         litellm.get_model_info.cache_clear()
 
 
+@pytest.mark.parametrize(
+    ("model_info_base_model", "params_base_model", "model", "expected"),
+    (
+        pytest.param(
+            "azure/lit9058-model-info-base",
+            "azure/lit9058-params-base",
+            "azure/lit9058-deployment-alias",
+            "azure/lit9058-model-info-base",
+            id="model-info-base-model-wins",
+        ),
+        pytest.param(
+            None,
+            "azure/lit9058-params-base",
+            "azure/lit9058-deployment-alias",
+            "azure/lit9058-params-base",
+            id="params-base-model-fallback",
+        ),
+        pytest.param(
+            None,
+            None,
+            "azure/lit9058-deployment-alias",
+            "azure/lit9058-deployment-alias",
+            id="model-fallback",
+        ),
+        pytest.param(
+            "",
+            "azure/lit9058-params-base",
+            "azure/lit9058-deployment-alias",
+            "azure/lit9058-params-base",
+            id="empty-model-info-base-model-falls-through",
+        ),
+    ),
+)
+def test_cost_map_backend_model_uses_canonical_model_precedence(
+    model_info_base_model: str | None,
+    params_base_model: str | None,
+    model: str,
+    expected: str,
+) -> None:
+    deployment: Final = Deployment(
+        model_name="azure/lit9058-cost-map-backend",
+        litellm_params=LiteLLM_Params(model=model, base_model=params_base_model),
+        model_info=ModelInfo(id="lit9058-cost-map-backend", base_model=model_info_base_model),
+    )
+
+    assert Router._cost_map_backend_model(deployment) == expected
+
+
 def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
     """Direct unit test of the helper: an entry carrying only an
     off_peak_pricing block inherits the backend model's built-in base token
