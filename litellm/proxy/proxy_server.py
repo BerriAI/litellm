@@ -11332,14 +11332,8 @@ class ProxyStartupEvent:
         from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
 
         manager: Final = litellm.logging_callback_manager
-        for callbacks in (
-            litellm.callbacks,
-            litellm.success_callback,
-            litellm.failure_callback,
-            litellm._async_success_callback,
-            litellm._async_failure_callback,
-        ):
-            manager.remove_callbacks_by_type(callbacks, ClickHouseSpendLogger)
+        for callback in manager.get_custom_loggers_for_type(ClickHouseSpendLogger):
+            manager.remove_callback_from_all_lists(callback)
         tracing_endpoints.receiver = None
         settings: Final = general_settings.get("tracing")
         if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
