@@ -83,7 +83,8 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/(dashboard)/hooks/teams/useTeams")>()),
   useTeam: vi.fn(),
 }));
 
@@ -233,7 +234,7 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { teamKeys, teamsTableKeys, useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -1144,6 +1145,26 @@ describe("TeamInfoView", () => {
           }),
         );
       });
+    });
+
+    it("invalidates the cached team list and team detail queries after saving team settings", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"] }));
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+      const tableKey = teamsTableKeys.list({ page: 1, limit: 10 });
+      const detailKey = teamKeys.detail("123");
+      testQueryClient.setQueryData(tableKey, { teams: [], total: 0 });
+      testQueryClient.setQueryData(detailKey, { team_id: "123" });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(testQueryClient.getQueryState(tableKey)?.isInvalidated).toBe(true));
+      expect(testQueryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
     });
 
     const openSettingsEditorForTeam = async (

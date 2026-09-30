@@ -4,7 +4,7 @@ import { fetchMCPServers } from "@/components/networking";
 import { MCPServer } from "@/components/mcp_tools/types";
 import useAuthorized from "../useAuthorized";
 
-const mcpServersKeys = createQueryKeys("mcpServers");
+export const mcpServersKeys = createQueryKeys("mcpServers");
 
 export const useMCPServers = (teamId?: string | null) => {
   const { accessToken } = useAuthorized();
