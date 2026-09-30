@@ -3,6 +3,7 @@ import time
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,6 +21,7 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
     recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
+    recover_key_owner_from_daily_spend,
 )
 from litellm.proxy.utils import hash_token
 
@@ -664,3 +666,91 @@ async def test_attach_user_details_claims_no_team_for_a_multi_team_user_session_
 
     assert "team_id" not in attached["cli-session-bob"]
     assert attached["cli-session-bob"]["user_email"] == "bob@example.com"
+
+
+def _daily_spend_owner_row(api_key: str, first_owner: str, last_owner: str) -> dict[str, str]:
+    return {"api_key": api_key, "first_owner": first_owner, "last_owner": last_owner}
+
+
+def _daily_spend_transaction(mock_prisma: MagicMock, query_raw: AsyncMock) -> MagicMock:
+    transaction: Final = MagicMock()
+    transaction.execute_raw = AsyncMock(return_value=0)
+    transaction.query_raw = query_raw
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return transaction
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_keeps_a_unanimous_owner():
+    key: Final = "hashed-jwt-digest-a"
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-a")]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {key: "owner-a"}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_drops_conflicting_owners():
+    key: Final = "hashed-jwt-digest-b"
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-b")]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_skips_empty_input():
+    mock_prisma: Final = MagicMock()
+    transaction: Final = _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, frozenset())
+
+    assert dict(result) == {}
+    transaction.query_raw.assert_not_awaited()
+    mock_prisma.db.tx.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_returns_empty_on_prisma_error():
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("db down")))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {"hashed-jwt-digest-c"})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_names_no_owner_when_the_lookup_hits_the_statement_timeout():
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(
+        mock_prisma, AsyncMock(side_effect=PrismaError("canceling statement due to statement timeout"))
+    )
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {"hashed-jwt-digest-d"})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_bounds_the_lookup_with_a_statement_timeout():
+    key: Final = "hashed-jwt-digest-e"
+    mock_prisma: Final = MagicMock()
+    transaction: Final = _daily_spend_transaction(
+        mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-a")])
+    )
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {key: "owner-a"}
+    assert [name for name, _, _ in transaction.mock_calls] == ["execute_raw", "query_raw"]
+    transaction.execute_raw.assert_awaited_once_with(
+        f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
+    )
+    assert mock_prisma.db.tx.call_args.kwargs["timeout"] == timedelta(
+        milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
+    )
