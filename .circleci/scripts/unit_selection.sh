@@ -144,6 +144,7 @@ legacy_paths() {
       echo tests/unit/proxy/test_proxy_token_counter.py
       echo tests/unit/proxy/test_server_root_path.py ;;
     proxy-db-proxy-server-core)
+      echo tests/unit/proxy/test__lazy_features.py
       echo tests/unit/proxy/test_aproxy_startup.py
       echo tests/unit/proxy/test_proxy_server.py ;;
     proxy-db-proxy-utils) echo tests/unit/proxy/test_proxy_utils.py ;;
