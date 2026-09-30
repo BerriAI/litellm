@@ -225,10 +225,10 @@ tests:
             name: REDIS_CLUSTER_NODES
             value: '[{"host":"$(REDIS_HOST)","port":6379}]'
       - equal:
-          path: spec.template.spec.containers[0].env[8].name
+          path: spec.template.spec.containers[0].env[10].name
           value: REDIS_HOST
       - equal:
-          path: spec.template.spec.containers[0].env[11].name
+          path: spec.template.spec.containers[0].env[13].name
           value: REDIS_CLUSTER_NODES
 
   - it: gateway gets REDIS_URL from urlKey without discrete Redis env

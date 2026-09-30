@@ -1,4 +1,4 @@
-{{- if .Values.backend.enabled }}
+{{- if include "litellm.backend.render" . }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,8 +6,15 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: backend
+  {{- with .Values.backend.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.backend.service.type }}
+  {{- with include "litellm.service.extras" .Values.backend.service }}
+  {{- . | nindent 2 }}
+  {{- end }}
   ports:
     - port: {{ .Values.backend.service.port }}
       targetPort: http

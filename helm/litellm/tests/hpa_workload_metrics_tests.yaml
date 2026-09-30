@@ -201,6 +201,50 @@ tests:
               scrapeTimeout: 10s
               scheme: http
 
+  - it: carries litellm-helm annotations, relabelings and namespaceSelector onto the ServiceMonitor
+    template: gateway/servicemonitor.yaml
+    release:
+      namespace: llm
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.metricsServer.enabled: true
+      gateway.serviceMonitor.annotations:
+        team: platform
+      gateway.serviceMonitor.relabelings:
+        - targetLabel: node
+          sourceLabels: [__meta_kubernetes_pod_node_name]
+          action: replace
+      gateway.serviceMonitor.namespaceSelector.matchNames:
+        - llm
+        - shared
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            team: platform
+      - equal:
+          path: spec.endpoints[0].relabelings
+          value:
+            - targetLabel: node
+              sourceLabels: [__meta_kubernetes_pod_node_name]
+              action: replace
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value:
+            - llm
+            - shared
+
+  - it: renders no ServiceMonitor annotations or relabelings by default
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.metricsServer.enabled: true
+    asserts:
+      - notExists:
+          path: metadata.annotations
+      - notExists:
+          path: spec.endpoints[0].relabelings
+
   - it: honours a custom scrape interval
     template: gateway/servicemonitor.yaml
     set:

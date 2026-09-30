@@ -12,7 +12,7 @@
 # Post-PR: only ~1–2 fit under tpm_limit=100, rest return 429.
 #
 # Setup (separate terminal):
-#   kubectl port-forward -n litellm svc/yassin-veks-litellm-helm 4000:4000
+#   kubectl port-forward -n litellm svc/litellm-gateway 4000:4000
 #
 # Run:
 #   bash scripts/tpm_headline_test.sh
