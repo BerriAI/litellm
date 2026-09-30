@@ -5,16 +5,23 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
+import json
 import os
+from collections.abc import Callable, Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -22,6 +29,8 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
+from litellm.types.llms.anthropic import AllAnthropicMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
 from litellm.types.utils import Choices, Message
 
 
@@ -719,6 +728,287 @@ class TestStructuredMessagesInResponse:
 
         assert "structured_messages" not in guardrailed_inputs
         assert guardrailed_inputs["texts"] == ["[REDACTED]"]
+
+
+_SSN: Final = "123-45-6789"
+
+
+def _image_part() -> ChatCompletionImageObject:
+    return {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+
+
+GuardrailAnswer = Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]]
+
+
+def _guardrail_answering(answer: GuardrailAnswer) -> GenericGuardrailAPI:
+    def serve(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=answer(json.loads(request.content)))
+
+    return GenericGuardrailAPI(
+        api_base="https://guardrail.test/beta/litellm_basic_guardrail_api",
+        guardrail_name="pii-masker",
+        event_hook="pre_call",
+        default_on=True,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(serve)),
+    )
+
+
+def _masked(text: str) -> str:
+    return text.replace(_SSN, "[SSN]")
+
+
+def _echo_every_row_and_mask_texts(request_json: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {
+        "action": "GUARDRAIL_INTERVENED",
+        "structured_messages": request_json["structured_messages"],
+        "texts": [_masked(text) for text in request_json["texts"]],
+    }
+
+
+def _echo_first_row_and_mask_the_rest(request_json: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    first_row, *other_rows = request_json["structured_messages"]
+    return {
+        "action": "GUARDRAIL_INTERVENED",
+        "structured_messages": [first_row, *({**row, "content": _masked(row["content"])} for row in other_rows)],
+    }
+
+
+def _masked_part(part: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {**part, "text": _masked(part["text"])} if part["type"] == "text" else part
+
+
+def _masked_row(row: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    content: Final = row["content"]
+    if isinstance(content, str):
+        return {**row, "content": _masked(content)}
+    return {**row, "content": [_masked_part(part) for part in content]}
+
+
+def _mask_every_row_and_text(request_json: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {
+        "action": "GUARDRAIL_INTERVENED",
+        "texts": [_masked(text) for text in request_json["texts"]],
+        "structured_messages": [_masked_row(row) for row in request_json["structured_messages"]],
+    }
+
+
+def _guarded_text_part() -> Mapping[str, JsonValue]:
+    return {"type": "guarded_text", "text": "keep this guarded"}
+
+
+def _pdf_document_part() -> Mapping[str, JsonValue]:
+    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}}
+
+
+def _nested(depth: int) -> JsonValue:
+    return {"leaf": "x"} if depth == 0 else {"nested": _nested(depth - 1)}
+
+
+async def _llm_bound_messages(guardrail: GenericGuardrailAPI, messages: list[AllMessageValues]) -> object:
+    data: Final = await OpenAIChatCompletionsHandler().process_input_messages(
+        data={"model": "gpt-5.6", "messages": messages}, guardrail_to_apply=guardrail
+    )
+    return data["messages"]
+
+
+async def _structured_messages_posted_for(rows: list[AllMessageValues]) -> list[JsonValue]:
+    posted: Final[list[JsonValue]] = []  # mutable-ok: records what the endpoint received
+
+    def record(request_json: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+        posted.append(request_json["structured_messages"])
+        return {"action": "NONE"}
+
+    await _guardrail_answering(record).apply_guardrail(
+        inputs={"texts": ["hi"], "structured_messages": rows}, request_data={}, input_type="request"
+    )
+    return posted
+
+
+async def _llm_bound_anthropic_messages(
+    guardrail: GenericGuardrailAPI, messages: list[AllAnthropicMessageValues]
+) -> object:
+    data: Final = await AnthropicMessagesHandler().process_input_messages(
+        data={"model": "claude-opus-5-5", "max_tokens": 64, "messages": messages}, guardrail_to_apply=guardrail
+    )
+    return data["messages"]
+
+
+class TestEchoedRowsReachingTheLLM:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("messages", "expected"),
+        [
+            (
+                [{"role": "user", "content": [{"type": "text", "text": f"my ssn is {_SSN}"}, _image_part()]}],
+                [{"role": "user", "content": [{"type": "text", "text": "my ssn is [SSN]"}, _image_part()]}],
+            ),
+            (
+                [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": [{"type": "text", "text": f"ssn {_SSN}"}, _image_part()]},
+                    {"role": "user", "content": f"again {_SSN}"},
+                ],
+                [
+                    {"role": "system", "content": "You are helpful."},
+                    {"role": "user", "content": [{"type": "text", "text": "ssn [SSN]"}, _image_part()]},
+                    {"role": "user", "content": "again [SSN]"},
+                ],
+            ),
+            (
+                [{"role": "user", "content": f"my ssn is {_SSN}"}],
+                [{"role": "user", "content": "my ssn is [SSN]"}],
+            ),
+        ],
+        ids=["multipart", "multipart_among_string_rows", "string_only"],
+    )
+    async def test_every_row_echoed_applies_the_masked_texts(
+        self, messages: list[AllMessageValues], expected: list[AllMessageValues]
+    ) -> None:
+        guardrail: Final = _guardrail_answering(_echo_every_row_and_mask_texts)
+
+        llm_bound: Final = await _llm_bound_messages(guardrail, messages)
+
+        assert llm_bound == expected, "an unchanged echo of every row must leave the rewrite to texts"
+
+    @pytest.mark.asyncio
+    async def test_every_anthropic_content_block_row_echoed_applies_the_masked_texts(self) -> None:
+        guardrail: Final = _guardrail_answering(_echo_every_row_and_mask_texts)
+
+        llm_bound: Final = await _llm_bound_anthropic_messages(
+            guardrail,
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": f"my ssn is {_SSN}"}, {"type": "text", "text": "ok"}],
+                }
+            ],
+        )
+
+        assert llm_bound == [
+            {"role": "user", "content": [{"type": "text", "text": "my ssn is [SSN]"}, {"type": "text", "text": "ok"}]}
+        ], "an unchanged echo of every content block row must leave the rewrite to texts"
+
+    @pytest.mark.asyncio
+    async def test_an_echoed_multipart_row_is_restored_to_the_callers_row(self) -> None:
+        guardrail: Final = _guardrail_answering(_echo_first_row_and_mask_the_rest)
+
+        llm_bound: Final = await _llm_bound_messages(
+            guardrail,
+            [
+                {"role": "user", "name": "pat", "content": [{"type": "text", "text": "what is this?"}, _image_part()]},
+                {"role": "user", "content": f"my ssn is {_SSN}"},
+            ],
+        )
+
+        assert llm_bound == [
+            {"role": "user", "name": "pat", "content": [{"type": "text", "text": "what is this?"}, _image_part()]},
+            {"role": "user", "content": "my ssn is [SSN]"},
+        ], "the echoed row must keep the caller's keys the request model drops"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unvalidated_part", [_guarded_text_part, _pdf_document_part], ids=["guarded_text", "pdf_document"]
+    )
+    async def test_a_row_holding_a_part_the_request_model_rejects_is_masked(
+        self, unvalidated_part: Callable[[], Mapping[str, JsonValue]]
+    ) -> None:
+        guardrail: Final = _guardrail_answering(_mask_every_row_and_text)
+
+        llm_bound: Final = await _llm_bound_messages(
+            guardrail,
+            [
+                {"role": "user", "content": [{"type": "text", "text": f"my ssn is {_SSN}"}, unvalidated_part()]},
+                {"role": "user", "content": f"also {_SSN}"},
+            ],
+        )
+
+        assert llm_bound == [
+            {"role": "user", "content": [{"type": "text", "text": "my ssn is [SSN]"}, unvalidated_part()]},
+            {"role": "user", "content": "also [SSN]"},
+        ], "the guardrail must see the whole row so its masking of it reaches the LLM"
+
+    @pytest.mark.asyncio
+    async def test_an_echoed_row_holding_a_part_the_request_model_rejects_is_restored_to_the_callers_row(
+        self,
+    ) -> None:
+        guardrail: Final = _guardrail_answering(_echo_first_row_and_mask_the_rest)
+
+        llm_bound: Final = await _llm_bound_messages(
+            guardrail,
+            [
+                {"role": "user", "name": "pat", "content": [{"type": "text", "text": "hi"}, _guarded_text_part()]},
+                {"role": "user", "content": f"my ssn is {_SSN}"},
+            ],
+        )
+
+        assert llm_bound == [
+            {"role": "user", "name": "pat", "content": [{"type": "text", "text": "hi"}, _guarded_text_part()]},
+            {"role": "user", "content": "my ssn is [SSN]"},
+        ], "the echoed row must keep the caller's keys the request model drops"
+
+    @pytest.mark.asyncio
+    async def test_rows_the_request_model_accepts_are_posted_as_it_dumps_them(self) -> None:
+        posted: Final = await _structured_messages_posted_for(
+            [
+                {
+                    "role": "user",
+                    "name": "pat",
+                    "content": [
+                        {"type": "text", "text": "hi"},
+                        {**_image_part(), "cache_control": {"type": "ephemeral"}},
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                            "index": 0,
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+            ]
+        )
+
+        assert posted == [
+            [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}, _image_part()]},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+            ]
+        ], "rows the request model dumps in full must reach the guardrail exactly as before"
+
+    @pytest.mark.asyncio
+    async def test_a_row_holding_a_part_the_request_model_rejects_is_posted_with_the_callers_content(self) -> None:
+        posted: Final = await _structured_messages_posted_for(
+            [{"role": "user", "name": "pat", "content": [{"type": "text", "text": "hi"}, _pdf_document_part()]}]
+        )
+
+        assert posted == [[{"role": "user", "content": [{"type": "text", "text": "hi"}, _pdf_document_part()]}]], (
+            "only the content the request model emptied is taken from the caller, the row keys stay as dumped"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_deeply_nested_part_the_proxy_accepts_is_posted_in_full(self) -> None:
+        deep_document: Final = {"type": "document", "source": _nested(300)}
+
+        posted: Final = await _structured_messages_posted_for(
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}, deep_document]}]
+        )
+
+        assert posted == [[{"role": "user", "content": [{"type": "text", "text": "hi"}, deep_document]}]], (
+            "content nested as deep as the proxy's own JSON parser allows must still reach the guardrail"
+        )
 
 
 class TestImageSupport:
