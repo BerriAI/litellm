@@ -74,7 +74,17 @@ OPENCODE_ISOLATION_ENV: Final[Mapping[str, str]] = {
 }
 
 MANAGED_CONFIG_KEYS: Final = frozenset(
-    {"provider", "model", "small_model", "permission", "tools", "enabled_providers", "disabled_providers"}
+    {
+        "provider",
+        "model",
+        "small_model",
+        "permission",
+        "tools",
+        "enabled_providers",
+        "disabled_providers",
+        # plugins run arbitrary code as the host user; runs always use --pure
+        "plugin",
+    }
 )
 AGENT_MANAGED_KEYS: Final = frozenset({"permission", "tools", "model"})
 
@@ -140,7 +150,7 @@ class OpenCodeStreamState:
     step_texts: list[str] = field(default_factory=list)
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
+def _as_dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
@@ -165,7 +175,7 @@ def _tool_events(part: Mapping[str, Any]) -> list[Event]:
     return [call, ToolResult(id=call_id, output=text, is_error=native == "invalid")]
 
 
-def _error_message(error: Any) -> str:
+def _error_message(error: object) -> str:
     if not isinstance(error, dict):
         return str(error or "opencode reported an error")
     data = error.get("data")
@@ -334,7 +344,18 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
     ) -> HarnessTurnRequest:
         options: OpenCodeOptions = self.get_options(ctx)
         model = ctx.model or (ctx.endpoint.model if ctx.endpoint else None)
-        argv = [OPENCODE_BINARY, "run", "--format", "json", "--thinking", "-m", f"{OPENCODE_PROVIDER_ID}/{model}"]
+        # --pure: never load plugins. A repo's .opencode/plugin/*.js would otherwise run as the
+        # host user at startup, before any tool permission applies.
+        argv = [
+            OPENCODE_BINARY,
+            "run",
+            "--pure",
+            "--format",
+            "json",
+            "--thinking",
+            "-m",
+            f"{OPENCODE_PROVIDER_ID}/{model}",
+        ]
         if options.agent:
             argv += ["--agent", options.agent]
         if native_session_id:
