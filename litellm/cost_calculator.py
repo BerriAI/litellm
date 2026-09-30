@@ -2008,7 +2008,6 @@ def response_cost_calculator(
         else:
             if isinstance(response_object, BaseModel):
                 if hasattr(response_object, "_hidden_params"):
-                    response_object._hidden_params["optional_params"] = optional_params
                     provider_response_cost: Final = get_response_cost_from_hidden_params(response_object._hidden_params)
                     if provider_response_cost is not None:
                         return provider_response_cost
