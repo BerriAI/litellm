@@ -1,6 +1,7 @@
 """ClickHouse-backed trace store: batched span writes and scoped reads."""
 
 import base64
+import binascii
 import json
 from datetime import datetime, timezone
 from typing import Any, Final
@@ -30,38 +31,28 @@ _SCOPE_OTEL: Final = (
     "(empty({team_ids:Array(String)}) OR TeamId IN {team_ids:Array(String)})"
     " AND ({api_key_hash:String} = '' OR ApiKeyHash = {api_key_hash:String})"
 )
+_TRACE_REF_SQL: Final = "hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId)))"
 LIST_TRACES_SQL: Final = f"""
-SELECT t.TraceId AS trace_id, ifNull(any(t.RootName), '') AS name, any(t.ServiceName) AS service,
-       ifNull(any(t.RootInput), '') AS input_preview, ifNull(any(t.RootStatus), '') AS status,
-       toUnixTimestamp64Milli(any(t.StartTs)) AS start_ms,
-       dateDiff('millisecond', any(t.StartTs), any(t.EndTs)) AS duration_ms,
-       any(t.SpanCount) AS span_count, length(any(t.AgentNames)) AS agent_count,
-       any(t.AgentCount) AS agent_invocations,
-       any(t.LlmCount) AS llm_calls, any(t.ToolCount) AS tool_calls,
-       any(t.InputTokens) AS input_tokens, any(t.OutputTokens) AS output_tokens,
-       any(t.Models) AS models, any(t.ErrorCount) AS error_count
-FROM (
-    SELECT TeamId, TraceId, min(StartTs) AS StartTs, max(EndTs) AS EndTs,
-           any(ServiceName) AS ServiceName, anyLast(a.RootName) AS RootName,
-           anyLast(a.RootInput) AS RootInput,
-           anyLast(a.RootStatus) AS RootStatus,
-           sum(SpanCount) AS SpanCount, sum(AgentCount) AS AgentCount, sum(LlmCount) AS LlmCount,
-           sum(ToolCount) AS ToolCount, sum(ErrorCount) AS ErrorCount, sum(InputTokens) AS InputTokens,
-           sum(OutputTokens) AS OutputTokens, groupUniqArrayArray(Models) AS Models,
-           groupUniqArrayArray(AgentNames) AS AgentNames
-    FROM {AGENT_TRACES_BY_KEY_TABLE} AS a
-    WHERE (empty({{team_ids:Array(String)}}) OR TeamId IN {{team_ids:Array(String)}})
-      AND ({{api_key_hash:String}} = '' OR ApiKeyHash = {{api_key_hash:String}})
-    GROUP BY TeamId, TraceId
-    HAVING StartTs >= fromUnixTimestamp64Milli({{start_ms:Int64}})
-       AND StartTs < fromUnixTimestamp64Milli({{end_ms:Int64}})
-       AND (({{cursor_ms:Int64}} = 0) OR (toUnixTimestamp64Milli(StartTs), TraceId)
-            < ({{cursor_ms:Int64}}, {{cursor_trace_id:String}}))
-    ORDER BY StartTs DESC, TraceId DESC
-    LIMIT {{limit:UInt32}}
-) AS t
-GROUP BY t.TraceId
-ORDER BY start_ms DESC, t.TraceId DESC
+SELECT TraceId AS trace_id, {_TRACE_REF_SQL} AS trace_ref,
+       ifNull(any(RootName), '') AS name, any(ServiceName) AS service,
+       ifNull(any(RootInput), '') AS input_preview, ifNull(any(RootStatus), '') AS status,
+       toUnixTimestamp64Milli(min(StartTs)) AS start_ms,
+       dateDiff('millisecond', min(StartTs), max(EndTs)) AS duration_ms,
+       sum(SpanCount) AS span_count, length(groupUniqArrayArray(AgentNames)) AS agent_count,
+       sum(AgentCount) AS agent_invocations,
+       sum(LlmCount) AS llm_calls, sum(ToolCount) AS tool_calls,
+       sum(InputTokens) AS input_tokens, sum(OutputTokens) AS output_tokens,
+       groupUniqArrayArray(Models) AS models, sum(ErrorCount) AS error_count
+FROM {AGENT_TRACES_BY_KEY_TABLE}
+WHERE (empty({{team_ids:Array(String)}}) OR TeamId IN {{team_ids:Array(String)}})
+  AND ({{api_key_hash:String}} = '' OR ApiKeyHash = {{api_key_hash:String}})
+GROUP BY TeamId, ApiKeyHash, TraceId
+HAVING min(StartTs) >= fromUnixTimestamp64Milli({{start_ms:Int64}})
+   AND min(StartTs) < fromUnixTimestamp64Milli({{end_ms:Int64}})
+   AND ({{cursor_ms:Int64}} = 0 OR (toUnixTimestamp64Milli(min(StartTs)), trace_ref)
+        < ({{cursor_ms:Int64}}, {{cursor_trace_id:String}}))
+ORDER BY start_ms DESC, trace_ref DESC
+LIMIT {{limit:UInt32}}
 """
 
 TRACE_SPANS_SQL: Final = f"""
@@ -74,6 +65,7 @@ SELECT o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name
        o.LiteLLMRequestId AS litellm_request_id
 FROM {OTEL_TRACES_TABLE} AS o
 WHERE o.TraceId = {{trace_id:String}} AND {_SCOPE_OTEL}
+  AND ({{trace_ref:String}} = '' OR {_TRACE_REF_SQL} = {{trace_ref:String}})
 ORDER BY o.Timestamp
 LIMIT 1 BY o.SpanId
 """
@@ -82,6 +74,7 @@ SPAN_DETAIL_SQL: Final = f"""
 SELECT SpanId AS span_id, Input AS input, Output AS output, SpanAttributes AS attributes
 FROM {OTEL_TRACES_TABLE}
 WHERE TraceId = {{trace_id:String}} AND SpanId = {{span_id:String}} AND {_SCOPE_OTEL}
+  AND ({{trace_ref:String}} = '' OR {_TRACE_REF_SQL} = {{trace_ref:String}})
 LIMIT 1
 """
 
@@ -93,8 +86,21 @@ def encode_cursor(start_ms: int, trace_id: str) -> str:
 def decode_cursor(cursor: str | None) -> tuple[int, str]:
     if not cursor:
         return 0, ""
-    start_ms, trace_id = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-    return int(start_ms), str(trace_id)
+    try:
+        value: Final = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+        if (
+            not isinstance(value, list)
+            or len(value) != 2
+            or not isinstance(value[0], int)
+            or isinstance(value[0], bool)
+            or value[0] <= 0
+            or not isinstance(value[1], str)
+            or not value[1]
+        ):
+            raise ValueError("Invalid trace cursor")
+        return value[0], value[1]
+    except (ValueError, UnicodeError, binascii.Error) as error:
+        raise ValueError("Invalid trace cursor") from error
 
 
 def _iso(ms: int) -> str:
@@ -108,6 +114,7 @@ def _status(code: str) -> SpanStatus:
 def trace_summary_from_row(row: dict[str, Any]) -> TraceSummary:
     return TraceSummary(
         trace_id=row["trace_id"],
+        trace_ref=row.get("trace_ref", ""),
         name=row["name"],
         service=row["service"],
         input_preview=row["input_preview"],
@@ -147,7 +154,9 @@ def span_from_row(row: dict[str, Any], trace_start_ns: int) -> Span:
 
 def _parent_agent_of(span: Span, by_id: dict[str, Span]) -> str | None:
     parent_id = span["parent_span_id"]
-    while parent_id is not None and parent_id in by_id:
+    visited: Final = {span["span_id"]}
+    while parent_id is not None and parent_id in by_id and parent_id not in visited:
+        visited.add(parent_id)
         parent = by_id[parent_id]
         if parent["type"] == "agent" and parent["name"] != span["name"]:
             return parent["name"]
@@ -186,7 +195,7 @@ def agent_nodes(spans: list[Span]) -> list[AgentNode]:
     return list(agents.values())
 
 
-def trace_from_rows(trace_id: str, rows: list[dict[str, Any]]) -> Trace | None:
+def trace_from_rows(trace_id: str, rows: list[dict[str, Any]], trace_ref: str = "") -> Trace | None:
     if not rows:
         return None
     trace_start_ns: Final = min(int(r["start_ns"]) for r in rows)
@@ -198,6 +207,7 @@ def trace_from_rows(trace_id: str, rows: list[dict[str, Any]]) -> Trace | None:
     return Trace(
         summary=TraceSummary(
             trace_id=trace_id,
+            trace_ref=trace_ref,
             name=root["name"],
             service=rows[0]["service"],
             input_preview=root["input_preview"],
@@ -248,15 +258,17 @@ class ClickHouseTraceStore:
                 "limit": limit,
             },
         )
-        next_cursor = encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_id"]) if len(rows) == limit else None
+        next_cursor = encode_cursor(int(rows[-1]["start_ms"]), rows[-1]["trace_ref"]) if len(rows) == limit else None
         return TracePage(data=[trace_summary_from_row(r) for r in rows], next_cursor=next_cursor)
 
-    async def get_trace(self, trace_id: str, scope: TraceScope) -> Trace | None:
-        rows = await self.storage.query(TRACE_SPANS_SQL, {**scope, "trace_id": trace_id})
-        return trace_from_rows(trace_id, rows)
+    async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
+        rows = await self.storage.query(TRACE_SPANS_SQL, {**scope, "trace_id": trace_id, "trace_ref": trace_ref})
+        return trace_from_rows(trace_id, rows, trace_ref)
 
-    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope) -> SpanDetail | None:
-        rows = await self.storage.query(SPAN_DETAIL_SQL, {**scope, "trace_id": trace_id, "span_id": span_id})
+    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
+        rows = await self.storage.query(
+            SPAN_DETAIL_SQL, {**scope, "trace_id": trace_id, "span_id": span_id, "trace_ref": trace_ref}
+        )
         if not rows:
             return None
         return SpanDetail(

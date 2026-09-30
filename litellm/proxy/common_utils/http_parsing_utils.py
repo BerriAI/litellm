@@ -155,7 +155,11 @@ async def _read_request_body(request: Request | None) -> dict:
         _request_headers: Final[dict] = _safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
+        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES or (
+            request.scope.get("path") == "/v1/traces"
+            and request.scope.get("method") == "POST"
+            and _request_headers.get("content-encoding", "").lower() == "gzip"
+        ):
             parsed_body = _parse_binary_body(await request.body())
         elif _is_form_content_type(content_type):
             try:

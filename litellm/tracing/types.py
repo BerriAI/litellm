@@ -11,7 +11,7 @@ A trace is one agent run. It's made of spans (agent / llm / tool / chain / frame
 
 from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 SpanType = Literal["agent", "llm", "tool", "chain", "framework"]
 SpanStatus = Literal["ok", "error", "unset"]
@@ -47,6 +47,7 @@ class AgentNode(TypedDict):
 
 class TraceSummary(TypedDict):
     trace_id: str
+    trace_ref: ReadOnly[NotRequired[str]]
     name: str
     service: str
     input_preview: str

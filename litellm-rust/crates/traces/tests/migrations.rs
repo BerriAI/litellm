@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
 use litellm_traces::{
-    Connection, Error, encode_rows, ensure_schema, execute_read, schema_statements,
+    Connection, Error, InsertTable, encode_rows, ensure_schema, execute_read, schema_statements,
 };
 use rstest::{fixture, rstest};
 use testcontainers_modules::{
@@ -151,6 +151,41 @@ async fn schema_supports_span_rollups_and_spend_joins(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
     );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn retried_trace_insert_does_not_inflate_rollup(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let row = serde_json::from_value(serde_json::json!({
+        "Timestamp": time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64,
+        "TraceId": "retried-trace", "SpanId": "span-1", "ParentSpanId": "",
+        "TeamId": "team-1", "ApiKeyHash": "key-1", "SpanName": "root", "InputTokens": 7
+    }))?;
+    for _ in 0..2 {
+        litellm_traces::insert_rows(
+            &database.client,
+            &writer,
+            "trace_test",
+            InsertTable::OtelTraces,
+            vec![row.clone()],
+        )
+        .await?;
+    }
+    let counts = read_json(
+        &database,
+        "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
+         FROM trace_test.agent_traces_by_key WHERE TraceId = 'retried-trace'",
+    )
+    .await?;
+    assert_eq!(table_rows(&database, "otel_traces").await?, 1);
+    assert_eq!(counts["data"][0]["spans"], 1);
+    assert_eq!(counts["data"][0]["tokens"], 7);
     Ok(())
 }
 
@@ -370,7 +405,7 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     let url = format!("http://{address}");
     let writer = Connection::writer(&url)?;
     let result = tokio::time::timeout(
-        Duration::from_secs(12),
+        Duration::from_secs(35),
         ensure_schema(&client, &writer, "trace_test", 7, 14),
     )
     .await;

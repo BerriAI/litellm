@@ -118,4 +118,4 @@ async def test_reads_delegate_to_store():
     tracing = TraceReceiver(store)
     scope: TraceScope = {"team_ids": ["team-research"], "api_key_hash": ""}
     assert await tracing.get_trace("t1", scope) is None
-    store.get_trace.assert_awaited_once_with("t1", scope)
+    store.get_trace.assert_awaited_once_with("t1", scope, "")

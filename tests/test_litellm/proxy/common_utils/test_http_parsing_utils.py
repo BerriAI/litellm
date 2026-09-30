@@ -1,4 +1,5 @@
 import io
+import gzip
 import json
 from typing import get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,12 +31,12 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 
 
-def _starlette_request(body: bytes, content_type: str) -> Request:
+def _starlette_request(body: bytes, content_type: str, path: str = "/v1/messages", content_encoding: str = "") -> Request:
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/v1/messages",
-        "headers": [(b"content-type", content_type.encode())],
+        "path": path,
+        "headers": [(b"content-type", content_type.encode()), (b"content-encoding", content_encoding.encode())],
         "query_string": b"",
     }
     chunks = iter((body,))
@@ -81,6 +82,14 @@ async def test_protobuf_body_is_not_parsed_as_json(content_type):
 
     assert await _read_request_body(request) == {}
     assert await request.body() == body  # body is still readable by the endpoint
+
+
+@pytest.mark.asyncio
+async def test_gzipped_json_trace_body_survives_auth_pre_read():
+    body = gzip.compress(b'{"resourceSpans": []}')
+    request = _starlette_request(body, "application/json", "/v1/traces", "gzip")
+    assert await _read_request_body(request) == {}
+    assert await request.body() == body
 
 
 @pytest.mark.asyncio

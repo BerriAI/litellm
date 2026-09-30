@@ -113,6 +113,22 @@ def test_llm_input_output_are_normalized_messages(rows_by_name):
     assert output["tool_calls"][0]["name"]
 
 
+@pytest.mark.parametrize("completion", ["{}", '{"generations": []}', '{"generations": [[{}]]}'])
+def test_incomplete_langsmith_completion_preserves_the_export(completion):
+    span = _span(
+        "ChatOpenAI",
+        b"\x03" * 8,
+        b"\x02" * 8,
+        langsmith__span__kind="llm",
+        gen_ai__prompt='{"messages": [[{"kwargs": {"type": "human", "content": "hi"}}]]}',
+        gen_ai__completion=completion,
+    )
+    rows = decode_otlp(_export(span, scope="langsmith"), "application/x-protobuf")
+    assert len(rows) == 1
+    assert json.loads(rows[0]["Input"])[0]["content"] == "hi"
+    assert rows[0]["Output"] == completion
+
+
 def test_task_tool_output_is_subagent_final_message_text(rows_by_name):
     task = rows_by_name["task"]
     assert json.loads(task["Input"])["subagent_type"] == "researcher"

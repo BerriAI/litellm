@@ -20,7 +20,7 @@ from litellm.tracing import (
     TraceReceiver,
     TracingPayloadTooLargeError,
 )
-from litellm.tracing.decode import encode_otlp_response
+from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
 from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
 
 router = APIRouter(tags=["agent tracing"])
@@ -84,10 +84,12 @@ async def ingest_otlp_traces(
             content_encoding=request.headers.get("content-encoding"),
             tenant=tenant_for(user_api_key_dict),
         )
-    except RuntimeError:
-        raise HTTPException(status_code=503, headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)})
     except TracingPayloadTooLargeError as e:
         raise HTTPException(status_code=413, detail=str(e))
+    except InvalidOTLPPayloadError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError:
+        raise HTTPException(status_code=503, headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)})
     body, media_type = encode_otlp_response(content_type)
     return Response(content=body, media_type=media_type)
 
@@ -100,20 +102,24 @@ async def list_agent_traces(
     cursor: Annotated[str | None, Query()] = None,
 ) -> TracePage:
     now_ms: Final = int(time.time() * 1000)
-    return await get_receiver().list_traces(
-        scope=scope_for(user_api_key_dict),
-        start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
-        end_ms=end_ms if end_ms is not None else now_ms,
-        cursor=cursor,
-    )
+    try:
+        return await get_receiver().list_traces(
+            scope=scope_for(user_api_key_dict),
+            start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
+            end_ms=end_ms if end_ms is not None else now_ms,
+            cursor=cursor,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("/v1/traces/{trace_id}", response_model=None)
 async def get_agent_trace(
     trace_id: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    trace_ref: Annotated[str, Query()] = "",
 ) -> Trace:
-    trace: Final = await get_receiver().get_trace(trace_id, scope_for(user_api_key_dict))
+    trace: Final = await get_receiver().get_trace(trace_id, scope_for(user_api_key_dict), trace_ref)
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
     return trace
@@ -124,8 +130,9 @@ async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    trace_ref: Annotated[str, Query()] = "",
 ) -> SpanDetail:
-    span: Final = await get_receiver().get_span(trace_id, span_id, scope_for(user_api_key_dict))
+    span: Final = await get_receiver().get_span(trace_id, span_id, scope_for(user_api_key_dict), trace_ref)
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")
     return span

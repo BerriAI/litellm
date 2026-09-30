@@ -24,7 +24,7 @@ from litellm.constants import (
 )
 from litellm.integrations.clickhouse.schema import ensure_schema
 from litellm.rust_bridge.traces import TraceStorage
-from litellm.tracing.decode import decode_otlp
+from litellm.tracing.decode import InvalidOTLPPayloadError, OTLPPayloadTooLargeError, decode_otlp
 from litellm.tracing.store import ClickHouseTraceStore
 from litellm.tracing.types import (
     SpanDetail,
@@ -94,11 +94,14 @@ class TraceReceiver:
         """Decode an OTLP trace export and store its authenticated spans."""
         if len(body) > OTLP_MAX_BODY_BYTES:
             raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
-        rows: Final = (
-            await asyncio.to_thread(decode_otlp, body, content_type, content_encoding)
-            if len(body) > OTLP_OFFLOAD_DECODE_BYTES
-            else decode_otlp(body, content_type, content_encoding)
-        )
+        try:
+            rows: Final = (
+                await asyncio.to_thread(decode_otlp, body, content_type, content_encoding)
+                if len(body) > OTLP_OFFLOAD_DECODE_BYTES
+                else decode_otlp(body, content_type, content_encoding)
+            )
+        except OTLPPayloadTooLargeError as error:
+            raise TracingPayloadTooLargeError(str(error)) from error
         try:
             await self.store.insert_spans([tenant.stamp(r) for r in rows])
         except OverflowError as error:
@@ -110,8 +113,8 @@ class TraceReceiver:
     async def list_traces(self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None) -> TracePage:
         return await self.store.list_traces(scope, start_ms, end_ms, cursor)
 
-    async def get_trace(self, trace_id: str, scope: TraceScope) -> Trace | None:
-        return await self.store.get_trace(trace_id, scope)
+    async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
+        return await self.store.get_trace(trace_id, scope, trace_ref)
 
-    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope) -> SpanDetail | None:
-        return await self.store.get_span(trace_id, span_id, scope)
+    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
+        return await self.store.get_span(trace_id, span_id, scope, trace_ref)

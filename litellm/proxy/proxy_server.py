@@ -1523,7 +1523,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize agent tracing
-    await ProxyStartupEvent._init_tracing(general_settings)
+    asyncio.create_task(ProxyStartupEvent._init_tracing(general_settings))
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -11326,8 +11326,13 @@ class ProxyStartupEvent:
         settings = general_settings.get("tracing") or {}
         if settings.get("store") != "clickhouse":
             return
-        tracing = TraceReceiver.from_env()
-        await tracing.start()
+        try:
+            tracing: Final = TraceReceiver.from_env()
+            await tracing.start()
+        except (KeyError, OSError, RuntimeError, ValueError) as error:
+            tracing_endpoints.receiver = None
+            verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
+            return
         tracing_endpoints.receiver = tracing
         verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
 

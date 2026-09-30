@@ -206,6 +206,16 @@ def test_parent_agent_skips_same_name_ancestors():
     assert nodes["researcher"]["invocations"] == 2
 
 
+def test_parent_agent_stops_at_cyclic_parents():
+    rows = [
+        _row("self", "self", "researcher", "agent", "researcher"),
+        _row("first", "second", "researcher", "agent", "researcher"),
+        _row("second", "first", "researcher", "agent", "researcher"),
+    ]
+    spans = [span_from_row(row, T0) for row in rows]
+    assert agent_nodes(spans)[0]["parent_agent"] is None
+
+
 def test_agent_nodes_ignores_spans_of_unknown_agents():
     spans = [span_from_row(_row("t", "", "tool", "tool", "ghost"), T0)]
     assert agent_nodes(spans) == []
@@ -219,6 +229,12 @@ def test_cursor_round_trip():
     assert decode_cursor(cursor) == (1790742989377, "4bad42b84e9de3ba46fc870185f8f023")
     assert decode_cursor(None) == (0, "")
     assert decode_cursor("") == (0, "")
+
+
+@pytest.mark.parametrize("cursor", ["abc", "bm90LWpzb24=", "WzEsIDJd", "WzAsICJ0Il0="])
+def test_invalid_cursor_is_rejected(cursor):
+    with pytest.raises(ValueError, match="Invalid trace cursor"):
+        decode_cursor(cursor)
 
 
 def test_trace_summary_from_row():
@@ -251,6 +267,7 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     client = MagicMock()
     row = {
         "trace_id": "t2",
+        "trace_ref": "ref2",
         "name": "a",
         "service": "s",
         "input_preview": "",
@@ -266,20 +283,20 @@ async def test_list_traces_sets_next_cursor_on_full_page():
         "output_tokens": 0,
         "models": [],
     }
-    client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "start_ms": 900}])
+    client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "trace_ref": "ref1", "start_ms": 900}])
     store = ClickHouseTraceStore(client)
     scope: TraceScope = {"team_ids": ["team-a"], "api_key_hash": ""}
 
     page = await store.list_traces(scope, 0, 2000, limit=2)
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
     assert page["next_cursor"] is not None
-    assert decode_cursor(page["next_cursor"]) == (900, "t1")
+    assert decode_cursor(page["next_cursor"]) == (900, "ref1")
     params = client.query.call_args.args[1]
     assert params["team_ids"] == ["team-a"] and params["limit"] == 2 and params["cursor_ms"] == 0
 
     page = await store.list_traces(scope, 0, 2000, cursor=page["next_cursor"], limit=3)
     assert page["next_cursor"] is None
-    assert client.query.call_args.args[1]["cursor_trace_id"] == "t1"
+    assert client.query.call_args.args[1]["cursor_trace_id"] == "ref1"
 
 
 @pytest.mark.asyncio

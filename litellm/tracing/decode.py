@@ -43,6 +43,14 @@ _LC_ROLES: Final = {"human": "user", "ai": "assistant", "system": "system", "too
 _OPENINFERENCE_TYPES: Final[dict[str, SpanType]] = {"AGENT": "agent", "LLM": "llm", "TOOL": "tool"}
 
 
+class InvalidOTLPPayloadError(ValueError):
+    pass
+
+
+class OTLPPayloadTooLargeError(OverflowError):
+    pass
+
+
 # ---------------------------------------------------------------- decode
 
 
@@ -56,7 +64,13 @@ def _truncate(value: str) -> str:
 
 def decode_otlp(body: bytes, content_type: str | None = None, content_encoding: str | None = None) -> list[SpanRow]:
     """Decode an OTLP trace export and normalize every span."""
-    return [_span_row(span) for span in native_decode_otlp(body, content_type, content_encoding, OTLP_MAX_BODY_BYTES)]
+    try:
+        spans: Final = native_decode_otlp(body, content_type, content_encoding, OTLP_MAX_BODY_BYTES)
+    except OverflowError as error:
+        raise OTLPPayloadTooLargeError(str(error)) from error
+    except ValueError as error:
+        raise InvalidOTLPPayloadError(str(error)) from error
+    return [_span_row(span) for span in spans]
 
 
 def _exception_message(span: DecodedSpan) -> str:
@@ -146,10 +160,18 @@ def _langsmith_io(row: SpanRow, attributes: Mapping[str, str]) -> None:
     if row["ObservationType"] == "llm" and isinstance(completion, dict):
         messages = prompt_payload.get("messages") or [[]]
         batch = messages[0] if messages and isinstance(messages[0], list) else messages
-        row["Input"] = json.dumps([_lc_message(m) for m in batch])
-        generation = completion["generations"][0][0]["message"]["kwargs"]
-        row["Output"] = json.dumps(_lc_message({"kwargs": generation}))
-        row["LiteLLMRequestId"] = (generation.get("response_metadata") or {}).get("id") or ""
+        row["Input"] = json.dumps([_lc_message(m) for m in batch if isinstance(m, dict)]) if isinstance(batch, list) else ""
+        generations: Final = completion.get("generations")
+        first: Final = generations[0] if isinstance(generations, list) and generations else None
+        item: Final = first[0] if isinstance(first, list) and first else None
+        message: Final = item.get("message") if isinstance(item, dict) else None
+        generation: Final = message.get("kwargs") if isinstance(message, dict) else None
+        if isinstance(generation, dict):
+            row["Output"] = json.dumps(_lc_message({"kwargs": generation}))
+            metadata: Final = generation.get("response_metadata")
+            row["LiteLLMRequestId"] = metadata.get("id", "") if isinstance(metadata, dict) else ""
+        else:
+            row["Output"] = attributes.get("gen_ai.completion", "")
         return
     if row["ObservationType"] == "tool":
         output = (completion or {}).get("output", completion) if isinstance(completion, dict) else completion

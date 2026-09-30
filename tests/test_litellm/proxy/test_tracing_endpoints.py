@@ -140,7 +140,7 @@ def test_get_trace_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
     assert response.json() == trace
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ["team-research"], "api_key_hash": ""})
+    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ["team-research"], "api_key_hash": ""}, "")
 
 
 def test_get_span_404_and_200(client, receiver):
@@ -149,7 +149,22 @@ def test_get_span_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1/spans/s1")
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
-    receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ["team-research"], "api_key_hash": ""})
+    receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ["team-research"], "api_key_hash": ""}, "")
+
+
+def test_trace_detail_passes_scoped_reference(client, receiver):
+    receiver.get_trace.return_value = {"summary": {"trace_id": "t1"}, "agents": [], "spans": []}
+    assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
+    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ["team-research"], "api_key_hash": ""}, "run-one")
+
+
+def test_invalid_export_and_cursor_are_client_errors(client, receiver):
+    from litellm.tracing.decode import InvalidOTLPPayloadError
+
+    receiver.ingest.side_effect = InvalidOTLPPayloadError("invalid OTLP trace payload")
+    assert client.post("/v1/traces", content=b"broken").status_code == 400
+    receiver.list_traces.side_effect = ValueError("Invalid trace cursor")
+    assert client.get("/v1/traces?cursor=broken").status_code == 400
 
 
 def test_teamless_key_without_token_gets_403_on_reads(client, receiver):

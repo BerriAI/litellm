@@ -129,6 +129,9 @@ pub fn trace_decode_otlp<'py>(
                 max_decompressed_bytes,
             )
         })
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        .map_err(|error| match error {
+            litellm_traces::DecodeError::TooLarge => PyOverflowError::new_err(error.to_string()),
+            _ => PyValueError::new_err(error.to_string()),
+        })?;
     litellm_host_python::Pythonized(spans).into_pyobject(py)
 }

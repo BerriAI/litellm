@@ -58,6 +58,7 @@ pub async fn insert_rows(
             ),
         )
         .append_pair("async_insert", "1")
+        .append_pair("async_insert_deduplicate", "1")
         .append_pair("wait_for_async_insert", "1")
         .append_pair("date_time_input_format", "best_effort");
     let response = client
