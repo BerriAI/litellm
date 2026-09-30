@@ -308,6 +308,7 @@ if TYPE_CHECKING:
         CachingHandlerResponse,
         LLMCachingHandler,
     )
+    from litellm.harness.types import Harness
     from litellm.integrations.custom_logger import CustomLogger
 
     # Type stubs for lazy-loaded functions and classes
@@ -385,6 +386,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.google_genai.transformation import (
         BaseGoogleGenAIGenerateContentConfig,
     )
+    from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
     from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
     from litellm.llms.base_llm.image_generation.transformation import (
         BaseImageGenerationConfig,
@@ -399,8 +401,6 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
     from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
     from litellm.llms.base_llm.sandbox.transformation import BaseSandboxConfig
-    from litellm.harness.types import Harness
-    from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
     from litellm.llms.base_llm.text_to_speech.transformation import (
         BaseTextToSpeechConfig,
