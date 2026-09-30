@@ -9,9 +9,15 @@ from litellm.rust_bridge.loader import get_native_bridge
 class NativeTraces(Protocol):
     def trace_encode_rows(self, rows: Sequence[Mapping[str, JsonValue]]) -> str: ...
 
-    def trace_schema_statements(
-        self, database: str, trace_retention_days: int, spend_log_retention_days: int
-    ) -> list[str]: ...
+    def trace_ensure_schema(
+        self,
+        url: str,
+        database: str,
+        user: str,
+        password: str,
+        trace_retention_days: int,
+        spend_log_retention_days: int,
+    ) -> Awaitable[None]: ...
 
     def trace_query(
         self,
@@ -36,8 +42,15 @@ def _native() -> NativeTraces:
     return cast(NativeTraces, native)
 
 
-def schema_statements(database: str, trace_retention_days: int, spend_log_retention_days: int) -> list[str]:
-    return _native().trace_schema_statements(database, trace_retention_days, spend_log_retention_days)
+async def ensure_schema(
+    url: str,
+    database: str,
+    user: str,
+    password: str,
+    trace_retention_days: int,
+    spend_log_retention_days: int,
+) -> None:
+    await _native().trace_ensure_schema(url, database, user, password, trace_retention_days, spend_log_retention_days)
 
 
 async def query(

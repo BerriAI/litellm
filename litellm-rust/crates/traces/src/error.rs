@@ -10,6 +10,8 @@ pub enum Error {
     EmptySql,
     #[error("ClickHouse query failed with HTTP status {0}")]
     QueryFailed(u16),
+    #[error("ClickHouse schema setup failed with HTTP status {0}")]
+    SchemaFailed(u16),
     #[error("ClickHouse query exceeded the response size limit")]
     ResponseTooLarge,
     #[error("ClickHouse returned an invalid or failed JSON query response")]

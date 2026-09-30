@@ -14,6 +14,7 @@ fn map_error(error: Error) -> PyErr {
         }
         Error::InvalidUrl
         | Error::QueryFailed(_)
+        | Error::SchemaFailed(_)
         | Error::ResponseTooLarge
         | Error::InvalidResponse
         | Error::Transport => PyRuntimeError::new_err(error.to_string()),
@@ -21,16 +22,31 @@ fn map_error(error: Error) -> PyErr {
 }
 
 #[pyfunction]
-pub fn trace_schema_statements(
-    py: Python<'_>,
+pub fn trace_ensure_schema<'py>(
+    py: Python<'py>,
+    url: &str,
     database: String,
+    user: &str,
+    password: &str,
     trace_retention_days: u32,
     spend_log_retention_days: u32,
-) -> PyResult<Vec<String>> {
-    py.detach(|| {
-        litellm_traces::schema_statements(&database, trace_retention_days, spend_log_retention_days)
-    })
-    .map_err(map_error)
+) -> PyResult<Bound<'py, PyAny>> {
+    let connection = Connection::writer(url, user, password).map_err(map_error)?;
+    let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+    litellm_host_python::run_async(
+        py,
+        async move {
+            litellm_traces::ensure_schema(
+                &client,
+                &connection,
+                &database,
+                trace_retention_days,
+                spend_log_retention_days,
+            )
+            .await
+        },
+        map_error,
+    )
 }
 
 #[pyfunction]
