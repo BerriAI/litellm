@@ -1,308 +1,256 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Copy } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { ArrowLeft, Check, Circle, Copy } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { ButtonGroup } from "@/components/ui/button-group";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import { agentTraceCall } from "../../networking";
-import { AgentGraph } from "./AgentGraph";
-import { SpanDetail } from "./SpanDetail";
+import { agentTraceCall, getProxyBaseUrl } from "../../networking";
+import { DetailPane } from "./DetailPane";
 import { SpanTree } from "./SpanTree";
-import { AgentTracePill, SpanStatusBadge } from "./TracePills";
-import { TraceSteps } from "./TraceSteps";
+import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
 import {
-  buildVisibleTree,
+  buildTreeRows,
   firstErrorSpan,
-  flattenTree,
   fmtMs,
-  fmtTok,
-  revealSpan,
-  spanRowIds,
-  stepsFromSpans,
-  subtreeStats,
-  traceHasErrors,
-  type TreeUiState,
+  GROUP_PAGE_SIZE,
+  revealSpanInState,
+  traceDisplayName,
 } from "./traceUtils";
-import { stepSelection, useTraceNavigation } from "./useTraceNavigation";
 
-export type TraceViewMode = "steps" | "tree" | "graph";
+/** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
+export const agentHandoffText = (traceId: string, spanId?: string | null): string => {
+  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}`;
+  const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
+  return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
+};
 
-interface TraceDrawerProps {
-  open: boolean;
-  traceId: string | null;
-  /** Span to select on open (e.g. a child LLM row was clicked in the table). */
-  initialSpanId?: string | null;
-  accessToken: string;
-  onClose: () => void;
-}
+const INITIAL_STATE: SpanTreeState = {
+  hideFramework: true,
+  collapsedSpanIds: new Set(),
+  expandedGroupIds: new Set(),
+  groupRevealCounts: {},
+};
 
-const DRAWER_WIDTH = "min(1180px, 80vw)";
-const MODES: { id: TraceViewMode; label: string }[] = [
-  { id: "steps", label: "Steps" },
-  { id: "tree", label: "Tree" },
-  { id: "graph", label: "Graph" },
-];
-const EMPTY_UI: TreeUiState = { collapsed: new Set(), groupShown: {} };
-
-interface InitialView {
-  mode: TraceViewMode;
-  selectedId: string | null;
-}
-
-/** Errors open on the first failed span in the Tree; otherwise the Steps narrative. */
-export function initialTraceView(trace: Trace, initialSpanId?: string | null): InitialView {
-  if (initialSpanId && trace.spans.some((s) => s.span_id === initialSpanId)) {
-    return { mode: "steps", selectedId: initialSpanId };
+/** First failed span if the run has errors (with its tree path opened), otherwise the root agent. */
+export function initialRunSelection(trace: Trace): { selectedId: string; state: SpanTreeState } {
+  const failed = firstErrorSpan(trace.spans);
+  if (!failed || failed.parent_span_id === null) {
+    const root = trace.spans.find((s) => s.parent_span_id === null);
+    return { selectedId: root?.span_id ?? "", state: INITIAL_STATE };
   }
-  if (traceHasErrors(trace)) {
-    const failed = firstErrorSpan(trace.spans);
-    if (failed) return { mode: "tree", selectedId: failed.span_id };
-  }
-  const firstStep = stepsFromSpans(trace.spans)[0]?.span ?? trace.spans[0];
-  return { mode: "steps", selectedId: firstStep?.span_id ?? null };
+  return { selectedId: failed.span_id, state: revealSpanInState(trace.spans, INITIAL_STATE, failed.span_id) };
 }
 
-/** Tree state with the initially selected span (e.g. the first failure) scrolled into reach. */
-function initialTreeUi(trace: Trace, selectedId: string | null): TreeUiState {
-  if (!selectedId) return EMPTY_UI;
-  const { children } = buildVisibleTree(trace.spans, false);
-  return revealSpan(children, subtreeStats(trace.spans), EMPTY_UI, selectedId);
-}
+const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
+  const next = new Set(set);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
+};
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function CopyForAgent({ traceId }: { traceId: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timeout = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
   return (
-    <div className="bg-background px-4 py-2.5">
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-0.5 text-[15px] font-semibold">
-        {value} {sub && <small className="text-[11px] font-normal text-muted-foreground">{sub}</small>}
-      </div>
-    </div>
+    <Button
+      variant="outline"
+      size="xs"
+      className="shrink-0 gap-1.5 rounded-[4px] font-mono text-[10px] shadow-none"
+      onClick={async () => setCopied(await copyToClipboard(agentHandoffText(traceId), "Command copied"))}
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+      {copied ? "Command copied" : "Copy for agent"}
+    </Button>
   );
 }
 
-export function TraceStats({ trace }: { trace: Trace }) {
+function Stat({ label, value, error = false }: { label: string; value: string; error?: boolean }) {
+  return (
+    <span className={cn("shrink-0", error && "text-destructive")}>
+      <span className="text-muted-foreground/70">{label} </span>
+      {value}
+    </span>
+  );
+}
+
+function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
   const { summary } = trace;
+  const failed = summary.error_count > 0;
   return (
-    <div aria-label="Trace stats" className="grid grid-cols-3 gap-px border-b bg-border sm:grid-cols-4 lg:grid-cols-5">
-      <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
-      <Stat label="Agents" value={String(summary.agent_count)} />
-      <Stat label="LLM calls" value={String(summary.llm_calls)} sub={summary.models.join(", ")} />
-      <Stat label="Tool calls" value={String(summary.tool_calls)} />
-      <Stat
-        label="Tokens"
-        value={fmtTok(summary.input_tokens + summary.output_tokens)}
-        sub={`${fmtTok(summary.input_tokens)} in · ${fmtTok(summary.output_tokens)} out`}
-      />
-    </div>
-  );
-}
-
-interface TraceBodyProps {
-  trace: Trace;
-  accessToken: string;
-  initialSpanId?: string | null;
-}
-
-function TraceBody({ trace, accessToken, initialSpanId }: TraceBodyProps) {
-  const [initial] = useState(() => initialTraceView(trace, initialSpanId));
-  const [mode, setMode] = useState<TraceViewMode>(initial.mode);
-  const [selectedId, setSelectedId] = useState<string | null>(initial.selectedId);
-  const [showFramework, setShowFramework] = useState(false);
-  const [ui, setUi] = useState<TreeUiState>(() => initialTreeUi(trace, initial.selectedId));
-
-  const { children, visibleCount } = useMemo(
-    () => buildVisibleTree(trace.spans, showFramework),
-    [trace.spans, showFramework],
-  );
-  const stats = useMemo(() => subtreeStats(trace.spans), [trace.spans]);
-  const rows = useMemo(() => flattenTree(children, stats, ui), [children, stats, ui]);
-  const steps = useMemo(() => stepsFromSpans(trace.spans), [trace.spans]);
-  const selectedSpan = useMemo(
-    () => trace.spans.find((s) => s.span_id === selectedId) ?? null,
-    [trace.spans, selectedId],
-  );
-
-  const order = useMemo(
-    () => (mode === "steps" ? steps.map((s) => s.span.span_id) : spanRowIds(rows)),
-    [mode, steps, rows],
-  );
-  const handleStep = useCallback(
-    (delta: number) => setSelectedId((current) => stepSelection(order, current, delta)),
-    [order],
-  );
-  useTraceNavigation(mode !== "graph", handleStep);
-
-  const toggleCollapse = useCallback((spanId: string) => {
-    setUi((prev) => {
-      const collapsed = new Set(prev.collapsed);
-      if (collapsed.has(spanId)) collapsed.delete(spanId);
-      else collapsed.add(spanId);
-      return { ...prev, collapsed };
-    });
-  }, []);
-  const showGroup = useCallback((key: string, shown: number) => {
-    setUi((prev) => ({ ...prev, groupShown: { ...prev.groupShown, [key]: shown } }));
-  }, []);
-  const openInvocation = useCallback(
-    (spanId: string) => {
-      setUi((prev) => revealSpan(children, stats, prev, spanId));
-      setSelectedId(spanId);
-      setMode("tree");
-    },
-    [children, stats],
-  );
-  const changeMode = useCallback(
-    (next: TraceViewMode) => {
-      if (next === "tree" && selectedId) setUi((prev) => revealSpan(children, stats, prev, selectedId));
-      setMode(next);
-    },
-    [children, stats, selectedId],
-  );
-
-  return (
-    <div className="grid min-h-0 flex-1 grid-cols-1 overflow-auto md:grid-cols-[minmax(360px,46%)_1fr] md:overflow-hidden">
-      <div className="flex max-h-[55vh] min-h-0 flex-col border-b md:max-h-none md:border-r md:border-b-0">
-        <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-          <ButtonGroup aria-label="Trace view">
-            {MODES.map((m) => (
-              <Button
-                key={m.id}
-                size="xs"
-                variant={mode === m.id ? "secondary" : "outline"}
-                aria-pressed={mode === m.id}
-                onClick={() => changeMode(m.id)}
-              >
-                {m.label}
-              </Button>
-            ))}
-          </ButtonGroup>
-          {mode === "tree" && (
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-              <Checkbox checked={showFramework} onCheckedChange={(checked) => setShowFramework(checked === true)} />
-              Show framework spans
-            </label>
-          )}
-          <span className="ml-auto text-xs text-muted-foreground">
-            {mode === "tree" ? `${visibleCount} of ${trace.spans.length} spans` : `${steps.length} steps`}
-          </span>
-        </div>
-        {mode === "steps" && <TraceSteps steps={steps} selectedId={selectedId} onSelect={setSelectedId} />}
-        {mode === "tree" && (
-          <SpanTree
-            rows={rows}
-            traceDurationMs={trace.summary.duration_ms}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onToggleCollapse={toggleCollapse}
-            onGroupShow={showGroup}
-          />
-        )}
-        {mode === "graph" && <AgentGraph agents={trace.agents} spans={trace.spans} onOpenInvocation={openInvocation} />}
+    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card px-2">
+      <button
+        type="button"
+        onClick={onBack}
+        className="grid size-7 shrink-0 place-items-center rounded-[4px] text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-label="Back to runs"
+      >
+        <ArrowLeft className="size-4" />
+      </button>
+      <Circle className={cn("size-2 shrink-0 fill-current", failed ? "text-destructive" : "text-muted-foreground")} />
+      <h1 className="shrink-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
+      <span className="flex min-w-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
+        <span className="truncate">{summary.trace_id}</span>
+        <button
+          type="button"
+          aria-label="Copy trace ID"
+          className="shrink-0 hover:text-foreground"
+          onClick={() => void copyToClipboard(summary.trace_id, "Trace ID copied")}
+        >
+          <Copy className="size-3" />
+        </button>
+      </span>
+      <div className="flex min-w-0 items-center gap-4 font-mono text-[11px] text-foreground tabular-nums">
+        <Stat label="duration" value={fmtMs(summary.duration_ms)} />
+        <Stat label="steps" value={summary.span_count.toLocaleString()} />
+        {failed && <Stat label="failed" value={summary.error_count.toLocaleString()} error />}
       </div>
-      {selectedSpan ? (
-        <SpanDetail
-          key={selectedSpan.span_id}
-          accessToken={accessToken}
-          traceId={trace.summary.trace_id}
-          span={selectedSpan}
-        />
-      ) : (
-        <div className="p-5 text-sm text-muted-foreground">Select a span to see its details.</div>
+      <div className="ml-auto">
+        <CopyForAgent traceId={summary.trace_id} />
+      </div>
+    </header>
+  );
+}
+
+/** Tree + detail pane for one loaded run, with J/K/arrow keyboard navigation. */
+function RunBody({ trace, accessToken }: { trace: Trace; accessToken: string }) {
+  const initial = useMemo(() => initialRunSelection(trace), [trace]);
+  const [state, setState] = useState<SpanTreeState>(initial.state);
+  const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
+  const [detailOpen, setDetailOpen] = useState(true);
+
+  const rows = useMemo(() => buildTreeRows(trace.spans, state), [trace, state]);
+  const selectedRow: TreeRow | undefined = rows.find((row) => row.id === selectedId) ?? rows[0];
+
+  const select = useCallback((id: string) => {
+    setSelectedId(id);
+    setDetailOpen(true);
+  }, []);
+  const toggleSpan = useCallback(
+    (id: string) => setState((prev) => ({ ...prev, collapsedSpanIds: toggle(prev.collapsedSpanIds, id) })),
+    [],
+  );
+  const toggleGroup = useCallback(
+    (id: string) => setState((prev) => ({ ...prev, expandedGroupIds: toggle(prev.expandedGroupIds, id) })),
+    [],
+  );
+  const loadMore = useCallback(
+    (groupId: string) =>
+      setState((prev) => ({
+        ...prev,
+        groupRevealCounts: {
+          ...prev.groupRevealCounts,
+          [groupId]: (prev.groupRevealCounts[groupId] ?? GROUP_PAGE_SIZE) + GROUP_PAGE_SIZE,
+        },
+      })),
+    [],
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.target as HTMLElement | null)?.matches("input, textarea, [role='combobox']")) return;
+      const index = rows.findIndex((row) => row.id === selectedRow?.id);
+      const row = rows[index];
+      if (event.key === "Escape" && detailOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        setDetailOpen(false);
+        return;
+      }
+      if (["j", "J", "ArrowDown"].includes(event.key)) {
+        event.preventDefault();
+        const next = rows[Math.min(rows.length - 1, index + 1)];
+        if (next) select(next.id);
+      } else if (["k", "K", "ArrowUp"].includes(event.key)) {
+        event.preventDefault();
+        const next = rows[Math.max(0, index - 1)];
+        if (next) select(next.id);
+      } else if (event.key === "ArrowLeft" && row) {
+        if (row.kind === "span" && row.hasChildren && !row.collapsed) toggleSpan(row.id);
+        if (row.kind === "group" && row.expanded) toggleGroup(row.id);
+      } else if (event.key === "ArrowRight" && row) {
+        if (row.kind === "span" && row.hasChildren && row.collapsed) toggleSpan(row.id);
+        if (row.kind === "group" && !row.expanded) toggleGroup(row.id);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup]);
+
+  return (
+    <div
+      className={cn(
+        "grid min-h-0 flex-1",
+        detailOpen
+          ? "grid-cols-1 grid-rows-2 lg:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)] lg:grid-rows-1 2xl:grid-cols-[minmax(0,2fr)_minmax(420px,1fr)]"
+          : "grid-cols-1",
+      )}
+    >
+      <SpanTree
+        rows={rows}
+        spanCount={trace.summary.span_count}
+        totalMs={trace.summary.duration_ms}
+        selectedId={selectedRow?.id ?? selectedId}
+        hideFramework={state.hideFramework}
+        onSelect={select}
+        onToggleHideFramework={(hideFramework) => setState((prev) => ({ ...prev, hideFramework }))}
+        onToggleSpan={toggleSpan}
+        onToggleGroup={toggleGroup}
+        onLoadMore={loadMore}
+      />
+      {detailOpen && (
+        <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
       )}
     </div>
   );
 }
 
-function TraceHeader({ trace, onClose }: { trace: Trace; onClose: () => void }) {
-  const { summary } = trace;
-  return (
-    <div className="border-b px-5 pt-3.5 pb-3">
-      <div className="flex flex-wrap items-center gap-2.5">
-        <AgentTracePill label="Agent trace" />
-        <SheetTitle className="text-base font-semibold">{summary.name}</SheetTitle>
-        <span className="flex-1" />
-        <span className="hidden text-xs text-muted-foreground sm:inline">
-          <kbd className="rounded border px-1 font-mono">J</kbd> /{" "}
-          <kbd className="rounded border px-1 font-mono">K</kbd> to move
-        </span>
-        <Button variant="outline" size="xs" onClick={onClose}>
-          Close <kbd className="font-mono text-muted-foreground">Esc</kbd>
-        </Button>
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <SpanStatusBadge status={traceHasErrors(trace) ? "error" : "ok"} />
-        <span>
-          service <b className="font-mono font-medium text-foreground">{summary.service}</b>
-        </span>
-        <span>·</span>
-        <span className="font-mono">trace {summary.trace_id}</span>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Copy trace id"
-          onClick={() => void copyToClipboard(summary.trace_id)}
-        >
-          <Copy />
-        </Button>
-        <span>·</span>
-        <span>{new Date(summary.start_time).toLocaleString()}</span>
-      </div>
-    </div>
-  );
+interface RunViewProps {
+  traceId: string;
+  accessToken: string;
+  onBack: () => void;
 }
 
-/** Right-side drawer for one agent trace: header, stats strip, Steps / Tree / Graph views and span details. */
-export function TraceDrawer({ open, traceId, initialSpanId, accessToken, onClose }: TraceDrawerProps) {
-  const traceQueryOptions = {
+/** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
+export function RunView({ traceId, accessToken, onBack }: RunViewProps) {
+  const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, accessToken],
-    queryFn: () => agentTraceCall(accessToken, traceId as string),
-    enabled: open && traceId !== null,
+    queryFn: () => agentTraceCall(accessToken, traceId),
     staleTime: 30_000,
-  };
-  const traceQuery = useQuery(traceQueryOptions);
+  });
   const trace = traceQuery.data;
 
+  if (traceQuery.isLoading) {
+    return (
+      <div role="status" aria-label="Loading trace" className="flex h-[60vh] items-center justify-center">
+        <UiLoadingSpinner className="size-6 text-muted-foreground" />
+      </div>
+    );
+  }
+  if (traceQuery.isError || !trace) {
+    return (
+      <div className="p-6 text-[12px]">
+        <h1 className="mb-2 text-[13px] font-medium">Could not load trace</h1>
+        <span className="text-muted-foreground">{traceQuery.error?.message ?? "Unknown error"}</span>
+      </div>
+    );
+  }
   return (
-    <Sheet open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-      <SheetContent
-        side="right"
-        showCloseButton={false}
-        className="gap-0 overflow-hidden p-0 data-[side=right]:w-screen data-[side=right]:sm:max-w-none md:data-[side=right]:w-(--trace-drawer-width)"
-        style={{ "--trace-drawer-width": DRAWER_WIDTH } as React.CSSProperties}
-      >
-        {traceQuery.isLoading && (
-          <div role="status" aria-label="Loading trace" className="flex h-full items-center justify-center">
-            <SheetTitle className="sr-only">Loading trace</SheetTitle>
-            <UiLoadingSpinner className="size-8 text-primary" />
-          </div>
-        )}
-        {traceQuery.isError && (
-          <div className="p-6 text-sm text-destructive">
-            <SheetTitle className="mb-2">Could not load trace</SheetTitle>
-            {traceQuery.error.message}
-          </div>
-        )}
-        {trace && (
-          <div className="flex h-full min-h-0 flex-col">
-            <TraceHeader trace={trace} onClose={onClose} />
-            <TraceStats trace={trace} />
-            <TraceBody
-              key={`${trace.summary.trace_id}:${initialSpanId ?? ""}`}
-              trace={trace}
-              accessToken={accessToken}
-              initialSpanId={initialSpanId}
-            />
-          </div>
-        )}
-      </SheetContent>
-    </Sheet>
+    <div
+      className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-background"
+      data-testid="run-view"
+    >
+      <RunHeader trace={trace} onBack={onBack} />
+      <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} />
+    </div>
   );
 }
