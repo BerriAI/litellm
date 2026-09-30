@@ -1,0 +1,14 @@
+-- CreateIndex (CONCURRENTLY)
+--
+-- Covering index for the session-grouped /spend/logs/ui listing. The page,
+-- count, and representative queries all GROUP BY
+-- COALESCE(NULLIF(session_id, ''), request_id), api_key over a startTime
+-- window; with only the plain startTime index they aggregate full heap rows
+-- (hundreds of KB each from messages/response), which is the 40s+ page load.
+-- This index makes those window scans index-only.
+--
+-- CREATE INDEX CONCURRENTLY cannot run inside a transaction, so this
+-- migration must stay a single statement (see
+-- 20260415120000_health_check_latest_per_model_index for the full
+-- disclaimer).
+CREATE INDEX CONCURRENTLY IF NOT EXISTS "LiteLLM_SpendLogs_session_window_idx" ON "LiteLLM_SpendLogs"("startTime", session_id, request_id, api_key, status);
