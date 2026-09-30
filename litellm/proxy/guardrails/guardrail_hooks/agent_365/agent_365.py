@@ -508,7 +508,7 @@ class Agent365Guardrail(CustomGuardrail):
                         return Unavailable(
                             detail=(
                                 f"Entra rejected the gateway's own Agent 365 credentials ({error.misconfigured}); "
-                                "check the guardrail's client_id, client_secret and resource_app_id"
+                                "check the guardrail's client_id and client_secret"
                             ),
                             fail_open=self.unreachable_fallback == "fail_open",
                         )

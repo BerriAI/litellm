@@ -1280,6 +1280,9 @@ class TestPreflightCallerSignIn:
         assert isinstance(verdict, Unavailable)
         assert verdict.fail_open is False
         assert "bad client_secret" in verdict.detail
+        assert "resource_app_id" not in verdict.detail, (
+            "the field was removed from the config; do not tell admins to check it"
+        )
 
     @pytest.mark.asyncio
     async def test_endpoint_unreachable_fail_open_is_unavailable(self):
