@@ -138,6 +138,13 @@ class AlertingHangingRequestCheck:
             # flag so the entry is skipped on later ticks; one alert per hang,
             # with the existing TTL still handling cleanup
             hanging_request_data.alerted = True
+            # InMemoryCache returns read-isolated mutable values. Persist the
+            # state transition explicitly so the next checker tick observes
+            # that this request has already been alerted.
+            await self.hanging_request_cache.async_set_cache(
+                key=request_id,
+                value=hanging_request_data,
+            )
 
         return
 
