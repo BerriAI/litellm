@@ -103,6 +103,77 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    send_images: bool | None = Field(
+        default=None,
+        description=(
+            "If False, the top-level images field is not sent, and every inline image_url part in "
+            "structured_messages keeps its place but has its URL replaced by '[omitted]'. File, "
+            "audio and video parts are still sent as they are. Saves payload size for guardrails "
+            "that only inspect text. The guardrail cannot replace the caller's images: a rewritten "
+            "message gets the caller's image back in each part still holding '[omitted]', and a "
+            "rewrite that changes or moves an image part is rejected. Defaults to True in "
+            "GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
+    exclude_payload_fields: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Top-level guardrail request fields to leave out of the payload, e.g. "
+            "['request_headers', 'tools'], for guardrails that do not use them. Unknown fields "
+            "are ignored with a warning at init, and input_type and litellm_call_id are always "
+            "sent. A field that is not sent (texts, structured_messages, images or tools) cannot "
+            "be rewritten by the guardrail response."
+        ),
+    )
+
+    max_messages: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "If set and a request has more than N structured_messages, only the last N are sent, "
+            "and texts is rebuilt from the text of those N messages. Calls without "
+            "structured_messages, such as embeddings, rerank or an LLM response, are not affected. "
+            "images and tool_calls are not windowed. Bounds payload size when the whole conversation "
+            "is re-sent every turn, but the system prompt and early turns fall out of the window. "
+            "For block-only or observe-only guardrails: on a windowed call BLOCKED still applies, "
+            "but any rewrite the guardrail returns fails the call. A failed request or response is "
+            "rejected with an error, and a failed stream is cut off after the chunks already sent."
+        ),
+    )
+
+    max_text_chars: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "If set, every text in texts and in structured_messages content is cut to this many "
+            "characters before sending, so a caller can put content the guardrail never sees after "
+            "the first N characters. For block-only or observe-only guardrails: when any text was "
+            "cut, BLOCKED still applies, but any rewrite the guardrail returns fails the call, with "
+            "the same errors as max_messages."
+        ),
+    )
+
+    strip_patterns: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Regexes whose matches are removed from every text in texts and in structured_messages "
+            "content before sending, e.g. volatile boilerplate the guardrail does not need. Roles, "
+            "ids, tool calls, tools and metadata are never touched. A caller can hide content from "
+            "the guardrail by wrapping it in something a pattern matches. For block-only or "
+            "observe-only guardrails: when any text was stripped, BLOCKED still applies, but any "
+            "rewrite the guardrail returns fails the call, with the same errors as max_messages. "
+            "An invalid regex raises at init. Patterns use the regex package and run against "
+            "caller requests and LLM responses alike. Each pattern removes at most 64 matches per "
+            "text. Per guardrail call, only the first 100,000 characters of distinct text are "
+            "stripped and stripping stops after 0.1 seconds. A text past either limit is sent "
+            "unstripped in full with a warning. Stripping runs on the worker's event loop, so a slow "
+            "pattern blocks that worker, and every request on it, for up to 0.1 seconds per "
+            "guardrail call. Keep patterns linear-time: no nested quantifiers such as (a+)+ and no "
+            "lazy match up to a closing delimiter such as <!--.*?-->."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
@@ -159,7 +230,7 @@ def coerce_stream_holdback_value(value: Any) -> int:
         return 0
 
 
-def structured_messages_from_response(value: object) -> Sequence[AllMessageValues] | None:
+def structured_messages_from_json(value: object) -> Sequence[AllMessageValues] | None:
     if not isinstance(value, list):
         return None
     if not all(isinstance(message, Mapping) and isinstance(message.get("role"), str) for message in value):
@@ -212,5 +283,5 @@ class GenericGuardrailAPIResponse:
             images=data.get("images"),
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
-            structured_messages=structured_messages_from_response(data.get("structured_messages")),
+            structured_messages=structured_messages_from_json(data.get("structured_messages")),
         )
