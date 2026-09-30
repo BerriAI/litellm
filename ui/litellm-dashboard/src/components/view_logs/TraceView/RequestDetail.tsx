@@ -23,6 +23,8 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
   const [drawerOpen, setDrawerOpen] = useState(false);
   const spanStartMs = traceStartMs + span.start_offset_ms;
   const logQuery = useSpanRequestLog(accessToken, span.litellm_request_id, spanStartMs, drawerOpen);
+  const lookupDone = drawerOpen && logQuery.isSuccess;
+  const logNotFound = lookupDone && logQuery.data === null;
 
   if (span.type !== "llm") {
     return (
@@ -75,7 +77,7 @@ export function RequestDetail({ span, accessToken, traceStartMs }: RequestDetail
           Open request log <ArrowUpRight className="size-3" />
         </Button>
       )}
-      {drawerOpen && logQuery.isSuccess && logQuery.data === null && (
+      {logNotFound && (
         <p className="mt-2 font-mono text-[11px] text-muted-foreground">No request log found for this call.</p>
       )}
       <LogDetailsDrawer
