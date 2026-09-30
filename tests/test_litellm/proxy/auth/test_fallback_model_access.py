@@ -1,7 +1,9 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from litellm import Router
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_EndUserTable, UserAPIKeyAuth
 from litellm.proxy.auth.fallback_model_access import (
     RouterFallbackAccessCheck,
     is_model_authorized_for_token,
@@ -77,6 +79,30 @@ async def test_enforced_check_authorizes_the_key_carried_in_request_metadata(met
 @pytest.mark.asyncio
 async def test_enforced_check_does_not_restrict_requests_without_a_key():
     assert await ENFORCED(model="secret-model", request_kwargs={"metadata": {}}, llm_router=_router())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "expected"), [("secret-model", False), ("open-model", True)])
+async def test_enforced_check_applies_customer_model_allowlist(
+    monkeypatch: pytest.MonkeyPatch, model: str, expected: bool
+) -> None:
+    from litellm.proxy.auth import auth_checks
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(
+        auth_checks,
+        "get_end_user_object",
+        AsyncMock(return_value=LiteLLM_EndUserTable(user_id="customer-1", blocked=False, models=["open-model"])),
+    )
+
+    token = UserAPIKeyAuth(api_key="unrestricted", end_user_id="customer-1")
+    request_kwargs = {"metadata": {"user_api_key_auth": token}}
+
+    assert await ENFORCED(model=model, request_kwargs=request_kwargs, llm_router=_router()) is expected
 
 
 @pytest.mark.asyncio

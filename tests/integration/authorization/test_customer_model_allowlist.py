@@ -82,3 +82,31 @@ def test_customer_models_allowlist_does_not_widen_key_model_access(gateway: Gate
         assert _chat(gateway, key, key_model, customer=customer).status_code == 200
         denied: Final = _chat(gateway, key, customer_only, customer=customer)
         assert _denial_type(denied) == "key_model_access_denied", denied.text
+
+
+def test_customer_models_allowlist_rejects_disallowed_client_fallback(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        allowed: Final = scenario.model()
+        disallowed: Final = scenario.model()
+        key: Final = scenario.key(models=[allowed, disallowed])
+        customer: Final = _customer(scenario, models=[allowed])
+
+        with httpx.Client(trust_env=False) as upstream:
+            upstream.get(f"{gateway.upstream_url}/__observations").raise_for_status()
+            denied: Final = gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": allowed,
+                    "messages": [{"role": "user", "content": "customer fallback allowlist"}],
+                    "user": customer,
+                    "fallbacks": [disallowed],
+                },
+                key=key,
+            )
+            assert _denial_type(denied) == "customer_model_access_denied", denied.text
+            assert "not in the allowed models for this customer" in denied.text, denied.text
+
+            observed: Final = upstream.get(f"{gateway.upstream_url}/__observations")
+            observed.raise_for_status()
+            assert object_value(observed.json())["requests"] == [], observed.text

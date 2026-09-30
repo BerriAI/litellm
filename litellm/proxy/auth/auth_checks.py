@@ -149,7 +149,7 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template
+from .auth_utils import get_model_from_request, get_request_route_template, request_fallback_model_names
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1091,6 +1091,16 @@ async def common_checks(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                 object_type="customer",
             )
+            for fallback_model in request_fallback_model_names(request_body):
+                _can_object_call_model(
+                    model=fallback_model,
+                    llm_router=llm_router,
+                    models=end_user_object.models,
+                    team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+                    team_id=valid_token.team_id if valid_token else None,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                    object_type="customer",
+                )
 
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
     with tracer.trace("litellm.proxy.auth.common_checks.run_project_checks"):
@@ -4965,6 +4975,52 @@ async def can_key_call_model(
         raise
 
 
+async def _check_customer_model_access_for_resolved_model(
+    model: str,
+    valid_token: UserAPIKeyAuth,
+    llm_router: litellm.Router | None,
+) -> None:
+    if valid_token.end_user_id is None:
+        return
+
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return
+
+    try:
+        customer_object: Final = await get_end_user_object(
+            end_user_id=valid_token.end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            token_end_user_max_budget=valid_token.end_user_max_budget,
+        )
+    except ProxyException:
+        raise
+    except Exception as e:  # noqa: BLE001  # This optional lookup follows the main auth path's best-effort behavior
+        verbose_proxy_logger.debug("Unable to fetch customer for resolved model authorization. Error - %s", e)
+        return
+
+    if customer_object is None or not customer_object.models:
+        return
+
+    _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=customer_object.models,
+        team_model_aliases=valid_token.team_model_aliases,
+        team_id=valid_token.team_id,
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+        object_type="customer",
+    )
+
+
 async def can_key_call_resolved_model(
     model: str,
     llm_model_list: Sequence[object] | None,
@@ -5058,6 +5114,12 @@ async def can_key_call_resolved_model(
                 llm_router=llm_router,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
+
+    await _check_customer_model_access_for_resolved_model(
+        model=model,
+        valid_token=valid_token,
+        llm_router=llm_router,
+    )
 
 
 def can_org_access_model(

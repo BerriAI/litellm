@@ -81,11 +81,11 @@ from litellm.proxy.auth.auth_utils import (
     get_request_route,
     get_request_route_template,
     is_invalid_virtual_key_error,
-    iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
+    request_fallback_model_names,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
@@ -3631,13 +3631,7 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        fallback_names: Final = tuple(
-            name
-            for target in iter_request_fallback_targets(request_data)
-            if (name := _fallback_target_model_name(target)) is not None
-        )
-
-        for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
+        for _name in request_fallback_model_names(request_data):
             await can_key_call_model(
                 model=_name,
                 llm_model_list=llm_model_list,
@@ -3649,16 +3643,6 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
                 user_model=None,
             )
-
-
-def _fallback_target_model_name(target: object) -> str | None:
-    if isinstance(target, str):
-        return target
-    if isinstance(target, dict):
-        model: Final = target.get("model")
-        if isinstance(model, str):
-            return model
-    return None
 
 
 async def _run_post_custom_auth_checks(
