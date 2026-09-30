@@ -3,6 +3,7 @@ import json
 from collections.abc import Awaitable
 from typing import Final, Literal, Protocol, TypeAlias
 
+import httpx
 from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -174,7 +175,7 @@ class Estimator:
             if choice.finish_reason not in (None, "stop") or choice.message.content is None:
                 raise ValueError("incomplete estimator response")
             result: Final = ROIEstimatorResult.model_validate_json(extract_classifier_json(choice.message.content))
-        except Exception:
+        except (httpx.HTTPError, ValueError, IndexError):
             raise SourceError(
                 "The estimator did not return valid hours and reasoning. Check the selected model and prompt."
             ) from None

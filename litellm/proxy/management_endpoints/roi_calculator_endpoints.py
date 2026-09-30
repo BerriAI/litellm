@@ -256,7 +256,9 @@ def _gateway_http_client() -> AsyncHTTPHandler:
 
     return get_async_httpx_client(
         llm_provider="roi_calculator",
-        params={"transport": _gateway_transport(app), "timeout": 180, "follow_redirects": False},
+        params=TypeAdapter(dict[str, object]).validate_python(
+            MappingProxyType({"transport": _gateway_transport(app), "timeout": 180, "follow_redirects": False})
+        ),
     )
 
 
@@ -425,7 +427,7 @@ async def get_roi_calculator_sync_status(
     settings: Final = await _load_settings(repository)
     report: Final = await _load_report(repository)
     next_update: Final = _next_update(settings, status, report)
-    return status.model_copy(update={"next_update": next_update.isoformat() if next_update else None})
+    return status.model_copy(update=MappingProxyType({"next_update": next_update.isoformat() if next_update else None}))
 
 
 @router.post(
@@ -512,10 +514,10 @@ async def update_roi_calculator_identity_map(
     new_email: Final = normalize_email(update.email)
     if not login or (update.email is not None and not new_email):
         raise HTTPException(status_code=422, detail="Enter a GitHub login and a valid email address.")
-    identity_map: Final[Mapping[str, str]] = MappingProxyType(
-        {key: value for key, value in current.identity_map.items() if update.email is None and key != login}
+    identity_map: Final[Mapping[str, str]] = (
+        MappingProxyType({key: value for key, value in current.identity_map.items() if key != login})
         if update.email is None
-        else {**current.identity_map, login: new_email}
+        else MappingProxyType({**current.identity_map, login: new_email})
     )
     settings: Final = ROISettings(
         github_api_url=current.github_api_url,
@@ -622,9 +624,11 @@ async def reset_roi_calculator_setup(
     try:
         current: Final = await _load_settings(repository)
         stored: Final = await _load_stored_settings(repository)
-        settings: Final = current.model_copy(update={"repos": ()})
+        settings: Final = current.model_copy(update=MappingProxyType({"repos": ()}))
         await _save_settings(repository, settings, stored.github_token, stored.estimator_key)
         await store.clear_report()
         return _public_settings(settings)
     finally:
-        await store.finish(owner, status.model_copy(update={"running": False, "phase": "idle", "stage": "Idle"}))
+        await store.finish(
+            owner, status.model_copy(update=MappingProxyType({"running": False, "phase": "idle", "stage": "Idle"}))
+        )

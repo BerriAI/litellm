@@ -1,6 +1,6 @@
-import json
 from datetime import datetime
-from typing import Final, Protocol, cast
+from types import MappingProxyType
+from typing import Final, Protocol, cast  # noqa: TID251 - PrismaWrapper dynamically delegates database methods
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -11,9 +11,15 @@ _SYNC_KEY: Final = "roi_calculator_sync"
 _REPORT_KEY: Final = "roi_calculator_report"
 
 
+class _SyncState(BaseModel):
+    owner: str
+    status: ROISyncStatus
+    cancel: bool = False
+
+
 class _StateRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    param_value: dict[str, object]
+    param_value: _SyncState
     expired: bool = False
     last_run_at: datetime
 
@@ -38,7 +44,7 @@ class SyncStore:
                  AND ($3::text::double precision = 0 OR "LiteLLM_Config".last_run_at <= NOW() - $3::text::double precision * INTERVAL '1 minute')
                RETURNING param_name""",
             _SYNC_KEY,
-            json.dumps({"owner": owner, "status": status.model_dump(), "cancel": False}),
+            _SyncState(owner=owner, status=status).model_dump_json(),
             str(scheduled_interval),
         )
         return bool(rows)
@@ -75,9 +81,12 @@ class SyncStore:
                    DELETE FROM "LiteLLM_Config" cached
                    WHERE starts_with(cached.param_name, 'roi_calculator_pull_')
                      AND EXISTS (SELECT 1 FROM owned) AND $4::text IS NOT NULL
-                     AND NOT EXISTS (
+                     AND EXISTS (
                          SELECT 1 FROM jsonb_array_elements($4::jsonb->'pulls') pull
-                         WHERE cached.param_name = 'roi_calculator_pull_' || (pull->>'cache_key')
+                         WHERE pull->>'url' = cached.param_value->>'url'
+                           AND pull->'estimate'->>'status' = 'estimated'
+                           AND pull->>'cache_key' IS NOT NULL
+                           AND cached.param_name <> 'roi_calculator_pull_' || (pull->>'cache_key')
                      )
                )
                UPDATE "LiteLLM_Config" SET param_value = jsonb_set(param_value, '{status}', $3::jsonb),
@@ -101,16 +110,18 @@ class SyncStore:
         )
         if not rows:
             return None
-        status: Final = ROISyncStatus.model_validate(rows[0].param_value["status"])
+        status: Final = rows[0].param_value.status
         if rows[0].expired and status.running:
             return status.model_copy(
-                update={
-                    "running": False,
-                    "phase": "error",
-                    "finished_at": rows[0].last_run_at.isoformat(),
-                    "stage": "Sync interrupted",
-                    "error": "The worker stopped responding. Run analysis again to resume saved estimates.",
-                }
+                update=MappingProxyType(
+                    {
+                        "running": False,
+                        "phase": "error",
+                        "finished_at": rows[0].last_run_at.isoformat(),
+                        "stage": "Sync interrupted",
+                        "error": "The worker stopped responding. Run analysis again to resume saved estimates.",
+                    }
+                )
             )
         return status
 

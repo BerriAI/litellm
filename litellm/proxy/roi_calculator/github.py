@@ -9,7 +9,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
+)
 from litellm.proxy.roi_calculator.analytics import normalize_email
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROIPullCommit, ROIPullEvidence, ROIPullFile, ROISettings
@@ -273,7 +275,7 @@ async def _fetch_page(
     )
     try:
         parsed: Final[tuple[_T, ...]] = adapter.validate_python(response.json())
-    except Exception:
+    except ValueError:
         raise SourceError(error_message) from None
     return parsed, 'rel="next"' in response.headers.get("link", "")
 
@@ -325,11 +327,9 @@ class GitHub:
             else MappingProxyType({"Accept": "application/vnd.github+json"})
         )
         self._api_url: Final = settings.github_api_url.rstrip("/")
-        client_params: Final[dict[str, object]] = {
-            "timeout": 45,
-            "follow_redirects": False,
-            **({"transport": transport} if transport is not None else {}),
-        }
+        client_params: Final = TypeAdapter(dict[str, object]).validate_python(
+            MappingProxyType({"timeout": 45, "follow_redirects": False, "transport": transport})
+        )
         self.client: Final[httpx.AsyncClient] = (
             client
             if client is not None
@@ -395,8 +395,8 @@ class GitHub:
             later_matches, later_has_more = await search_pages(github_page + 1, pages_remaining - 1)
             return (*matches, *later_matches), later_has_more
 
-        matches, has_more = await search_pages(first_github_page, _REPOSITORY_SEARCH_PAGES)
-        return _repository_values(matches), has_more
+        matches, search_has_more = await search_pages(first_github_page, _REPOSITORY_SEARCH_PAGES)
+        return _repository_values(matches), search_has_more
 
     async def test_repositories(self, repos: tuple[str, ...]) -> None:
         for repo in repos:
@@ -439,7 +439,7 @@ class GitHub:
         )
         try:
             detail: Final = _PullDetail.model_validate(detail_response.json())
-        except Exception:
+        except ValueError:
             raise SourceError("GitHub returned unexpected pull request details.") from None
         login: Final = detail.user.login if detail.user and detail.user.login else "deleted-user"
 
@@ -510,7 +510,7 @@ class GitHub:
                 return ""
             profile: Final = _GitHubUserProfile.model_validate(response.json())
             return normalize_email(profile.email)
-        except Exception:
+        except (httpx.HTTPError, ValueError):
             return ""
 
     async def _commit_metadata(
@@ -585,7 +585,7 @@ class GitHub:
             connection: Final = pull_request.commits
         except SourceError:
             raise
-        except Exception:
+        except ValueError:
             raise SourceError("GitHub returned unexpected commit metadata.") from None
         new_commits: Final[tuple[ROIPullCommit, ...]] = tuple(
             _graphql_commit_evidence(node) for node in connection.nodes

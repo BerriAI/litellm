@@ -53,10 +53,10 @@ class _DailySpendTable(Protocol):
     async def group_by(
         self,
         *,
-        by: list[Literal["user_id", "date"]],
-        sum: dict[str, object],
-        where: dict[str, object],
-        order: dict[str, object],
+        by: Sequence[Literal["user_id", "date"]],
+        sum: Mapping[str, object],
+        where: Mapping[str, object],
+        order: Mapping[str, object],
     ) -> Sequence[Mapping[str, object]]: ...
 
 
@@ -121,18 +121,18 @@ async def read_spend(
 
     database: Final = prisma_client.db
     daily_table: Final = database.litellm_dailyuserspend
-    group_by: Final[list[Literal["user_id", "date"]]] = [
-        "user_id",
-        "date",
-    ]
-    sums: Final[dict[str, object]] = {"spend": True, "api_requests": True}
-    date_filter: Final[dict[str, object]] = {
-        "date": {
-            "gte": start.isoformat(),
-            "lte": end.isoformat(),
-        }
-    }
-    order: Final[dict[str, object]] = {"date": "asc"}
+    group_by: Final = TypeAdapter(list[Literal["user_id", "date"]]).validate_python(("user_id", "date"))
+    sums: Final = _JSON_OBJECT_ADAPTER.validate_python(MappingProxyType({"spend": True, "api_requests": True}))
+    date_filter: Final = _JSON_OBJECT_ADAPTER.validate_python(
+        MappingProxyType(
+            {
+                "date": _JSON_OBJECT_ADAPTER.validate_python(
+                    MappingProxyType({"gte": start.isoformat(), "lte": end.isoformat()})
+                )
+            }
+        )
+    )
+    order: Final = _JSON_OBJECT_ADAPTER.validate_python(MappingProxyType({"date": "asc"}))
     groups: Final = _DAILY_SPEND_GROUPS.validate_python(
         await daily_table.group_by(
             by=group_by,
@@ -309,6 +309,20 @@ class SyncManager:
             await self._coordinator.finish(self._owner, self.status)
         return True
 
+    async def _heartbeat(
+        self, task: asyncio.Task[object] | None, coordinator: SyncCoordinator | None, owner: str
+    ) -> None:
+        if coordinator is None or task is None:
+            return
+        try:
+            while True:
+                await asyncio.sleep(1)
+                if not await coordinator.heartbeat(owner, self.status):
+                    task.cancel()
+                    return
+        except Exception:  # noqa: BLE001 - any coordination failure must stop a worker before its lease expires
+            task.cancel()
+
     async def _run(
         self,
         settings: ROISettings,
@@ -320,21 +334,7 @@ class SyncManager:
         coordinator: SyncCoordinator | None,
         owner: str,
     ) -> None:
-        task: Final = asyncio.current_task()
-
-        async def heartbeat() -> None:
-            if coordinator is None or task is None:
-                return
-            try:
-                while True:
-                    await asyncio.sleep(1)
-                    if not await coordinator.heartbeat(owner, self.status):
-                        task.cancel()
-                        return
-            except Exception:
-                task.cancel()
-
-        monitor: Final = asyncio.create_task(heartbeat())
+        monitor: Final = asyncio.create_task(self._heartbeat(asyncio.current_task(), coordinator, owner))
         github: Final = self._github_factory(settings, github_transport)
         try:
             end: Final = self._clock().date()
@@ -384,13 +384,17 @@ class SyncManager:
                 ):
                     profile: Final = await github.profile_email(cached_pull["login"])
                     cached_record: Final = TypeAdapter(ROIPullRecord).validate_python(
-                        {
-                            **self._cached_record(cached_pull),
-                            "profile_email": profile,
-                            "emails": tuple(
-                                sorted(frozenset(email for email in (*cached_pull["commit_emails"], profile) if email))
-                            ),
-                        }
+                        MappingProxyType(
+                            {
+                                **self._cached_record(cached_pull),
+                                "profile_email": profile,
+                                "emails": tuple(
+                                    sorted(
+                                        frozenset(email for email in (*cached_pull["commit_emails"], profile) if email)
+                                    )
+                                ),
+                            }
+                        )
                     )
                     self._update_estimate_progress(cached_record["estimate"])
                     return index, cached_record
@@ -453,7 +457,7 @@ class SyncManager:
                 warnings=(),
             )
             await github.close()
-            report_json: Final[dict[str, object]] = _JSON_OBJECT_ADAPTER.validate_python(
+            report_json: Final[Mapping[str, object]] = _JSON_OBJECT_ADAPTER.validate_python(
                 _REPORT_ADAPTER.dump_python(report, mode="json")
             )
             monitor.cancel()
@@ -482,7 +486,7 @@ class SyncManager:
             raise
         except SourceError as exc:
             self._update_status(phase="error", stage="Sync failed", error=str(exc))
-        except Exception:
+        except Exception:  # noqa: BLE001 - background job boundary records a safe failure for every source error
             self._update_status(
                 phase="error",
                 stage="Sync failed",
@@ -505,7 +509,10 @@ class SyncManager:
                 if coordinator is not None and self._status.phase != "complete":
                     await coordinator.finish(owner, self.status)
 
-    def _update_status(self, **update: Unpack[_StatusUpdate]) -> None:
+    def _update_status(
+        self,
+        **update: Unpack[_StatusUpdate],  # kwargs-ok: Unpack preserves the typed status update contract
+    ) -> None:
         status: Final = ROISyncStatus.model_validate(MappingProxyType({**self._status.model_dump(), **update}))
         self._status = status
 
@@ -515,7 +522,7 @@ class SyncManager:
             return None
         try:
             return _REPORT_ADAPTER.validate_python(parameter.param_value)
-        except Exception:
+        except ValueError:
             return None
 
     def _cached_record(self, pull: ROIPullRecord) -> ROIPullRecord:

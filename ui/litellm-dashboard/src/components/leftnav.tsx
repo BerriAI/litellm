@@ -24,6 +24,7 @@ import {
 import {
   Activity,
   BarChart3,
+  Calculator,
   Bell,
   Blocks,
   Bot,
@@ -218,7 +219,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "roi-calculator",
         page: "roi-calculator",
-        icon: <BarChart3 {...ICON} />,
+        icon: <Calculator {...ICON} />,
         roles: all_admin_roles,
         label: (
           <span className="flex items-center gap-2">
