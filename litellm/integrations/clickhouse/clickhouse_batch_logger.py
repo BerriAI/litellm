@@ -41,7 +41,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
         super().__init__(
             flush_lock=asyncio.Lock(),
             batch_size=CLICKHOUSE_BATCH_SIZE,
-            flush_interval=CLICKHOUSE_FLUSH_INTERVAL_SECONDS,  # type: ignore[arg-type]
+            flush_interval=CLICKHOUSE_FLUSH_INTERVAL_SECONDS,
             **kwargs,
         )
         try:

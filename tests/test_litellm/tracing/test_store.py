@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 
+from litellm.tracing.types import TraceScope
 from litellm.tracing.store import (
     ClickHouseTraceStore,
     agent_nodes,
@@ -267,16 +268,16 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     }
     client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "start_ms": 900}])
     store = ClickHouseTraceStore(client)
-    scope = {"team_ids": ["team-a"], "api_key_hash": ""}
+    scope: TraceScope = {"team_ids": ["team-a"], "api_key_hash": ""}
 
-    page = await store.list_traces(scope, 0, 2000, limit=2)  # type: ignore[arg-type]
+    page = await store.list_traces(scope, 0, 2000, limit=2)
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
     assert page["next_cursor"] is not None
     assert decode_cursor(page["next_cursor"]) == (900, "t1")
     params = client.query.call_args.args[1]
     assert params["team_ids"] == ["team-a"] and params["limit"] == 2 and params["cursor_ms"] == 0
 
-    page = await store.list_traces(scope, 0, 2000, cursor=page["next_cursor"], limit=3)  # type: ignore[arg-type]
+    page = await store.list_traces(scope, 0, 2000, cursor=page["next_cursor"], limit=3)
     assert page["next_cursor"] is None
     assert client.query.call_args.args[1]["cursor_trace_id"] == "t1"
 
@@ -286,10 +287,10 @@ async def test_get_span_not_found_and_found():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
     store = ClickHouseTraceStore(client)
-    scope = {"team_ids": [], "api_key_hash": ""}
-    assert await store.get_span("t", "s", scope) is None  # type: ignore[arg-type]
+    scope: TraceScope = {"team_ids": [], "api_key_hash": ""}
+    assert await store.get_span("t", "s", scope) is None
     client.query = AsyncMock(return_value=[{"span_id": "s", "input": "i", "output": "o", "attributes": {"k": "v"}}])
-    assert await store.get_span("t", "s", scope) == {  # type: ignore[arg-type]
+    assert await store.get_span("t", "s", scope) == {
         "span_id": "s",
         "input": "i",
         "output": "o",

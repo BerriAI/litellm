@@ -16,6 +16,7 @@ from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, ScopeSpans, Sp
 
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing import receiver as receiver_module
+from litellm.tracing.types import TraceScope
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -115,6 +116,6 @@ async def test_empty_export_writes_nothing():
 async def test_reads_delegate_to_store():
     store = _fake_store()
     tracing = TraceReceiver(store)
-    scope = {"team_ids": ["team-research"], "api_key_hash": ""}
-    assert await tracing.get_trace("t1", scope) is None  # type: ignore[arg-type]
+    scope: TraceScope = {"team_ids": ["team-research"], "api_key_hash": ""}
+    assert await tracing.get_trace("t1", scope) is None
     store.get_trace.assert_awaited_once_with("t1", scope)

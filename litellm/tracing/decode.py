@@ -132,8 +132,8 @@ def _langsmith_type(row: SpanRow, attributes: Mapping[str, str]) -> SpanType:
     name = row["SpanName"]
     if not row["ParentSpanId"] or name == attributes.get("langsmith.metadata.lc_agent_name"):
         return "agent"
-    if kind in ("llm", "tool"):
-        return kind  # type: ignore[return-value]
+    if kind == "llm" or kind == "tool":
+        return kind
     if name.endswith(_FRAMEWORK_SUFFIXES):
         return "framework"
     return "chain"
