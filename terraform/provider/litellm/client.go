@@ -220,15 +220,13 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	return c.parseKeyResponse(resp)
 }
 
-// keyTokenForAlias lists keys by exact alias. An empty token means no match.
-// More than one exact match is an error so refresh does not guess.
 func (c *Client) keyTokenForAlias(alias string) (string, error) {
 	query := url.Values{}
 	query.Set("key_alias", alias)
 	query.Set("return_full_object", "true")
 	query.Set("page", "1")
 	query.Set("size", "2")
-	resp, err := c.sendRequest("GET", "/key/list?"+query.Encode(), nil)
+	resp, err := c.sendRequest("GET", fmt.Sprintf("%s?%s", endpointKeyList, query.Encode()), nil)
 	if err != nil {
 		return "", err
 	}

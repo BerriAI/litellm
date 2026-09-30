@@ -495,8 +495,6 @@ func validateKeyRotationConfig(d *schema.ResourceData) error {
 	return nil
 }
 
-// The proxy recomputes key_rotation_at only when auto_rotate and rotation_interval
-// arrive together, so a change to either one sends both while rotation stays on.
 func applyKeyRotation(d *schema.ResourceData, key *Key, onlyIfChanged bool) {
 	autoRotate, autoSet := configuredBool(d, "auto_rotate")
 	interval, intervalSet := configuredString(d, "rotation_interval")
@@ -532,8 +530,6 @@ func configuredString(d *schema.ResourceData, name string) (string, bool) {
 	return raw.AsString(), true
 }
 
-// adoptRotatedKey runs after the stored token 404s. The alias in state is the
-// identity that survives regeneration; a pending config change is ignored.
 func adoptRotatedKey(c *Client, d *schema.ResourceData) (*Key, error) {
 	alias := d.Get("key_alias").(string)
 	if alias == "" {

@@ -26,7 +26,6 @@ func newKeyResourceData(t *testing.T, raw map[string]interface{}) *schema.Resour
 	if diff == nil {
 		diff = &terraform.InstanceDiff{Attributes: map[string]*terraform.ResourceAttrDiff{}}
 	}
-	// The protocol apply path sets RawConfig; the legacy Diff used here does not.
 	diff.RawConfig = keyRawConfig(raw)
 	data, err := schema.InternalMap(resourceKey().Schema).Data(nil, diff)
 	if err != nil {
