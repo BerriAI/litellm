@@ -571,6 +571,7 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
                     )
 
 
+@pytest.mark.timeout(180)
 def test_K4_proxy_restart_after_fifteen_responses_records_lost_ids(
     gateway: Gateway,
     tmp_path: Path,
