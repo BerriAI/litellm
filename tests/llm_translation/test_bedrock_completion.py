@@ -11,12 +11,14 @@ from dotenv import load_dotenv
 import litellm.types
 
 load_dotenv()
+import contextlib
 import io
 import json
 
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from typing import NoReturn
 
 import litellm
 from litellm import (
@@ -51,17 +53,16 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
-def test_completion_bedrock_claude_completion_auth():
+def test_completion_bedrock_claude_completion_auth(monkeypatch):
     print("calling bedrock claude completion params auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         response = completion(
@@ -73,12 +74,7 @@ def test_completion_bedrock_claude_completion_auth():
             aws_secret_access_key=aws_secret_access_key,
             aws_region_name=aws_region_name,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -165,17 +161,16 @@ def test_completion_bedrock_guardrails(streaming):
 # test_completion_bedrock_claude_2_1_completion_auth()
 
 
-def test_completion_bedrock_claude_external_client_auth():
+def test_completion_bedrock_claude_external_client_auth(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.delenv("AWS_REGION_NAME")
 
     try:
         import boto3
@@ -197,12 +192,7 @@ def test_completion_bedrock_claude_external_client_auth():
             temperature=0.1,
             aws_bedrock_client=bedrock,
         )
-        # Add any assertions here to check the response
         print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -874,16 +864,15 @@ async def test_bedrock_custom_prompt_template():
         mock_client_post.assert_called_once()
 
 
-def test_completion_bedrock_external_client_region():
+def test_completion_bedrock_external_client_region(monkeypatch):
     print("\ncalling bedrock claude external client auth")
-    import os
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
     aws_region_name = "us-east-1"
 
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
 
     client = HTTPHandler()
 
@@ -918,13 +907,55 @@ def test_completion_bedrock_external_client_region():
             assert "us-east-1" in mock_client_post.call_args.kwargs["url"]
 
             mock_client_post.assert_called_once()
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
     except RateLimitError:
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def _bedrock_call_rate_limited(*args: object, **kwargs: object) -> NoReturn:
+    raise RateLimitError(
+        "Too many requests",
+        llm_provider="bedrock",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    )
+
+
+def _bedrock_call_unavailable(*args: object, **kwargs: object) -> NoReturn:
+    raise ServiceUnavailableError(
+        "Bedrock is unable to process your request.",
+        llm_provider="bedrock",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    )
+
+
+@pytest.mark.parametrize(
+    "auth_test",
+    [
+        test_completion_bedrock_claude_completion_auth,
+        test_completion_bedrock_claude_external_client_auth,
+        test_completion_bedrock_external_client_region,
+    ],
+)
+@pytest.mark.parametrize(
+    "failing_completion", [_bedrock_call_rate_limited, _bedrock_call_unavailable]
+)
+def test_bedrock_auth_tests_restore_aws_env_after_a_failed_call(
+    monkeypatch, auth_test, failing_completion
+):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "key-id-before-the-test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-before-the-test")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    monkeypatch.setitem(globals(), "completion", failing_completion)
+
+    with pytest.MonkeyPatch.context() as auth_test_env, contextlib.suppress(
+        pytest.fail.Exception
+    ):
+        auth_test(auth_test_env)
+
+    assert os.environ["AWS_ACCESS_KEY_ID"] == "key-id-before-the-test"
+    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "secret-before-the-test"
+    assert os.environ["AWS_REGION_NAME"] == "us-west-2"
 
 
 def test_bedrock_tool_calling():
