@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -43,32 +42,6 @@ def require_harness(harness: object) -> Harness:
     raise TypeError(
         f"harness must be a litellm.harness.Harness member, got {type(harness).__name__} {harness!r}.{hint}"
     )
-
-
-@dataclass(frozen=True)
-class Gateway:
-    """A LiteLLM AI Gateway the harness sends every model call through."""
-
-    api_base: str
-    api_key: str
-
-    def __post_init__(self) -> None:
-        if not self.api_base.strip():
-            raise ValueError("Gateway.api_base is empty")
-        if not self.api_key.strip():
-            raise ValueError("Gateway.api_key is empty")
-        object.__setattr__(self, "api_base", self.api_base.strip().rstrip("/"))
-
-    @classmethod
-    def from_env(cls) -> Gateway | None:
-        """Build from LITELLM_PROXY_API_BASE and LITELLM_PROXY_API_KEY, or None if unset."""
-        api_base = (os.environ.get("LITELLM_PROXY_API_BASE") or "").strip()
-        api_key = (os.environ.get("LITELLM_PROXY_API_KEY") or "").strip()
-        if not api_base:
-            return None
-        if not api_key:
-            raise ValueError("LITELLM_PROXY_API_BASE is set but LITELLM_PROXY_API_KEY is empty")
-        return cls(api_base=api_base, api_key=api_key)
 
 
 @dataclass(frozen=True)
