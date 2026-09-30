@@ -30,6 +30,7 @@ Endpoint: TypeAlias = Literal["chat", "messages", "responses"]
 Mode: TypeAlias = Literal["pre_call", "during_call", "post_call", "logging_only"]
 Scope: TypeAlias = Literal["streaming", "non_streaming"]
 MatrixScope: TypeAlias = Scope | None
+LoggingPhase: TypeAlias = Literal["request", "response"]
 Endpoints: Final[tuple[Endpoint, ...]] = ("chat", "messages", "responses")
 Modes: Final[tuple[Mode, ...]] = ("pre_call", "during_call", "post_call", "logging_only")
 Scopes: Final[tuple[MatrixScope, ...]] = ("streaming", "non_streaming", None)
@@ -39,6 +40,7 @@ F1_BLOCKED_WORD: Final = "streamscope-mcp-blocked-word"
 F3_STREAM_BLOCKED_WORD: Final = "matrix-f3-stream-block"
 F3_NON_STREAM_BLOCKED_WORD: Final = "matrix-f3-non-stream-block"
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+LOGGING_PHASE: Final = TypeAdapter(LoggingPhase)
 
 
 def _json(value: object) -> bytes:
@@ -578,6 +580,12 @@ def _rail_scans(rows: Sequence[Request], rail_name: str, marker: str) -> tuple[R
     )
 
 
+def _logging_phases(rows: Sequence[Request]) -> tuple[str, ...]:
+    return tuple(
+        sorted(LOGGING_PHASE.validate_python(JSON_OBJECT.validate_json(request.body)["input_type"]) for request in rows)
+    )
+
+
 @dataclass(slots=True)
 class _SinkRowsAccumulator:
     sink: Wire
@@ -593,16 +601,11 @@ def _logging_only_scans(
     marker: str,
     rail: str,
     barrier: str,
-    expected_scans: int,
 ) -> tuple[Request, ...]:
     accumulator: Final = _SinkRowsAccumulator(sink)
     eventually(
         accumulator.drain,
-        lambda rows: (
-            len(_rail_scans(rows, rail, marker)) >= expected_scans
-            if expected_scans
-            else bool(_rail_scans(rows, barrier, marker))
-        ),
+        lambda rows: bool(_rail_scans(rows, barrier, marker)),
         seconds=70,
     )
     return _rail_scans(accumulator.rows, rail, marker)
@@ -612,6 +615,10 @@ def _scope_scan_count(scope: MatrixScope, streamed: bool) -> int:
     if scope is None or scope == "both":
         return 1
     return int((scope == "streaming") == streamed)
+
+
+def _expected_logging_phases(scope: MatrixScope, streamed: bool) -> tuple[str, ...]:
+    return ("request", "response") if _scope_scan_count(scope, streamed) else ()
 
 
 def _spend_row_for_call(call_id: str, content: bytes) -> dict[str, JsonValue]:
@@ -642,14 +649,12 @@ def _cell_rows(
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, provider_rows, response.text)
     _spend_row_for_call(call_id, response.content)
-    expected_scans: Final = _scope_scan_count(scope, streamed)
     sink_rows: Final = (
         _logging_only_scans(
             rig.sink,
             marker,
             rail,
             rig.rails["z_logging_only_barrier"],
-            expected_scans,
         )
         if mode == "logging_only"
         else _rail_scans(rig.sink.drain(), rail, marker)
@@ -678,10 +683,14 @@ def _run_matrix_cell(
     assert PROVIDER_TEXT in response.text and marker in response.text, response.text
     provider_rows, sink_rows = _cell_rows(rig, marker, response, mode, streamed, scope, call_id, rail)
     assert len(provider_rows) == 1, (marker, provider_rows, response.text)
-    expected_scans: Final = _scope_scan_count(scope, streamed)
     if mode == "logging_only":
-        assert bool(sink_rows) == bool(expected_scans), (marker, sink_rows, response.text)
+        assert _logging_phases(sink_rows) == _expected_logging_phases(scope, streamed), (
+            marker,
+            sink_rows,
+            response.text,
+        )
     else:
+        expected_scans: Final = _scope_scan_count(scope, streamed)
         assert len(sink_rows) == expected_scans, (marker, sink_rows, response.text)
 
 
