@@ -307,8 +307,6 @@ describe("Request ID column", () => {
     );
 
     await user.hover(screen.getByText("chatcmpl-9"));
-    // fireEvent rather than user.click: jsdom has no layout, so moving the pointer off the trigger
-    // closes the tooltip before the click lands. The browser keeps it open while the popup is hovered.
     fireEvent.click(await screen.findByRole("button", { name: "Copy x-litellm-call-id" }));
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("call-uuid-9");

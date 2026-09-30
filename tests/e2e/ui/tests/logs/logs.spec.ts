@@ -125,7 +125,7 @@ test.describe("Logs page", () => {
     );
     await tooltip.getByRole("button", { name: "Copy x-litellm-call-id" }).click();
     if (await page.evaluate(() => window.isSecureContext)) {
-      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(callId);
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(callId);
     }
 
     await row.click();
