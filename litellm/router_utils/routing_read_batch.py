@@ -10,7 +10,9 @@ the usage slice to the strategy, so selection does not read again.
 
 import asyncio
 import itertools
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -144,10 +146,28 @@ class RoutingPrefetch:
         return None
 
 
+_active_routing_read_batch: Final[ContextVar["RoutingReadBatch | None"]] = ContextVar(
+    "routing_read_batch", default=None
+)
+
+
 class RoutingReadBatch:
     def __init__(self, usage_selector: LowestTPMLoggingHandler_v2 | None) -> None:
         self.usage_selector: Final = usage_selector
         self.prefetched_usage: PrefetchedUsage | None = None
+
+    @staticmethod
+    @contextmanager
+    def scoped(batch: "RoutingReadBatch | None") -> Iterator[None]:
+        token: Final = _active_routing_read_batch.set(batch)
+        try:
+            yield
+        finally:
+            _active_routing_read_batch.reset(token)
+
+    @staticmethod
+    def active() -> "RoutingReadBatch | None":
+        return _active_routing_read_batch.get()
 
     @staticmethod
     def for_strategy(strategy: str | None, selector: object) -> "RoutingReadBatch | None":
