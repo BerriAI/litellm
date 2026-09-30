@@ -27,6 +27,7 @@ from _openinference_support import (
     _chat_tool_call,
     _collect_marker_spans,
     _json_object,
+    _matching_marker_span,
     _messages_caller_raw_stream,
     _messages_caller_response,
     _normalize_chat_caller_stream,
@@ -297,14 +298,7 @@ def test_arize_otel_v2_f2_slow_sink_does_not_deadlock(gateway: Gateway, tmp_path
             timer.cancel()
             if timer.ident is not None:
                 timer.join(timeout=5)
-    requests: Final = rig.destination.drain()
-    spans: Final = tuple(
-        attributes
-        for attributes in _spans(requests)
-        if attributes.get("openinference.span.kind") == "LLM"
-        and attributes.get("litellm.metadata.trace_marker") == marker
-    )
-    assert len(spans) == 1, spans
+    _matching_marker_span(rig.destination, marker)
 
 
 def test_arize_otel_v2_f3_one_proxy_worker_can_die(gateway: Gateway, tmp_path: Path) -> None:

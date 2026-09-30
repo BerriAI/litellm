@@ -561,55 +561,65 @@ def _matching_marker_spans(requests: tuple[Request, ...], marker: str) -> Iterat
             yield attributes
 
 
+def _single_span(spans: tuple[dict[str, str], ...]) -> dict[str, str]:
+    assert len(spans) == 1, spans
+    return spans[0]
+
+
 def _matching_span(destination: Wire, response_id: str) -> dict[str, str]:
-    return eventually(
+    spans: Final = eventually(
         lambda: tuple(_matching_llm_spans(destination.drain(), response_id)),
-        lambda spans: len(spans) == 1,
+        bool,
         seconds=30,
-    )[0]
+    )
+    return _single_span(spans)
 
 
 def _matching_marker_span(destination: Wire, marker: str) -> dict[str, str]:
-    return eventually(
+    spans: Final = eventually(
         lambda: tuple(_matching_marker_spans(destination.drain(), marker)),
-        lambda spans: len(spans) == 1,
+        bool,
         seconds=30,
-    )[0]
+    )
+    return _single_span(spans)
 
 
 def _matching_output_value_span(destination: Wire, marker: str) -> dict[str, str]:
-    return eventually(
+    spans: Final = eventually(
         lambda: tuple(
             attributes
             for attributes in _spans(destination.drain())
             if attributes.get("openinference.span.kind") == "LLM" and marker in attributes.get("output.value", "")
         ),
-        lambda spans: len(spans) == 1,
+        bool,
         seconds=30,
-    )[0]
+    )
+    return _single_span(spans)
 
 
 def _matching_genai_marker_span(destination: Wire, marker: str) -> dict[str, str]:
-    return eventually(
+    spans: Final = eventually(
         lambda: tuple(
             attributes
             for attributes in _spans(destination.drain())
             if attributes.get("gen_ai.operation.name") == "chat" and marker in attributes.values()
         ),
-        lambda spans: len(spans) == 1,
+        bool,
         seconds=30,
-    )[0]
+    )
+    return _single_span(spans)
 
 
 def _matching_any_marker_span(destination: Wire, marker: str) -> dict[str, str]:
     def matches(requests: tuple[Request, ...]) -> tuple[dict[str, str], ...]:
         return tuple(attributes for attributes in _spans(requests) if marker in attributes.values())
 
-    return eventually(
+    spans: Final = eventually(
         lambda: matches(destination.drain()),
-        lambda spans: len(spans) == 1,
+        bool,
         seconds=30,
-    )[0]
+    )
+    return _single_span(spans)
 
 
 def _collect_marker_spans(
@@ -632,6 +642,20 @@ def _collect_marker_spans(
         current: Final = eventually(lambda: matches(destination.drain()), bool, seconds=timeout_seconds)
         combined: Final = (*previous, *current)
         return combined if complete(combined) else collect(combined)
+
+    return collect(())
+
+
+def _llm_spans_through_marker(destination: Wire, marker: str) -> tuple[dict[str, str], ...]:
+    def llm_spans(requests: tuple[Request, ...]) -> tuple[dict[str, str], ...]:
+        return tuple(
+            attributes for attributes in _spans(requests) if attributes.get("openinference.span.kind") == "LLM"
+        )
+
+    def collect(previous: tuple[dict[str, str], ...]) -> tuple[dict[str, str], ...]:
+        current: Final = eventually(lambda: llm_spans(destination.drain()), bool, seconds=30)
+        combined: Final = (*previous, *current)
+        return combined if any(marker in attributes.values() for attributes in combined) else collect(combined)
 
     return collect(())
 
