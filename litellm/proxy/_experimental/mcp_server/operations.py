@@ -6,7 +6,7 @@ import types
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, NoReturn, TypeAlias, overload
+from typing import Any, Final, Literal, NoReturn, TypeAlias, overload
 
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
@@ -439,6 +439,7 @@ async def _dispatch_virtual_mcp_tool(
 async def _get_allowed_mcp_servers_from_mcp_server_names(
     mcp_servers: Sequence[str] | None,
     allowed_mcp_servers: list[MCPServer],
+    client_ip: str | None = None,
 ) -> list[MCPServer]:
     """
     Get the filtered MCP servers from the MCP server names.
@@ -455,10 +456,12 @@ async def _get_allowed_mcp_servers_from_mcp_server_names(
     # Filter servers based on mcp_servers parameter if provided
     if mcp_servers is not None:
         for server_or_group in mcp_servers:
-            if (scoped := _scoped_server(server_or_group, allowed_mcp_servers)) is not None:
+            scoped = _scoped_server(server_or_group, allowed_mcp_servers, client_ip)
+            if isinstance(scoped, str):
+                verbose_logger.debug("MCP scope name %s names a server the caller does not hold", server_or_group)
+            elif scoped is not None:
                 filtered_server[scoped.server_id] = scoped
-
-            if scoped is None:
+            else:
                 try:
                     access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                         [server_or_group]
@@ -495,14 +498,16 @@ def _server_answers_to(server: MCPServer, name: str) -> bool:
     return server_answers_to_name(server, name)
 
 
-def _scoped_server(name: str, allowed_mcp_servers: Sequence[MCPServer]) -> MCPServer | None:
-    """The granted server a scoped ``name`` selects: the registry's ``get_mcp_server_answering_to`` pick when
-    the caller holds it, so the router agrees with the connect preflight and discovery, and none when the
-    registry names a server the caller does not hold. Names the registry cannot place fall back to the first
-    granted server answering to them."""
-    registry_pick: Final = global_mcp_server_manager.get_mcp_server_answering_to(name)
+def _scoped_server(
+    name: str, allowed_mcp_servers: Sequence[MCPServer], client_ip: str | None
+) -> MCPServer | Literal["denied"] | None:
+    """The granted server a scoped ``name`` selects: the registry's ``get_mcp_server_answering_to`` pick, made
+    with the same ``client_ip`` the connect preflight and discovery use, when the caller holds it. ``"denied"``
+    when the registry names a server the caller does not hold, so the name is not retried as an access group.
+    ``None`` when the registry cannot place the name, after trying the granted servers answering to it."""
+    registry_pick: Final = global_mcp_server_manager.get_mcp_server_answering_to(name, client_ip=client_ip)
     if registry_pick is not None:
-        return next((s for s in allowed_mcp_servers if s.server_id == registry_pick.server_id), None)
+        return next((s for s in allowed_mcp_servers if s.server_id == registry_pick.server_id), "denied")
     return next((s for s in allowed_mcp_servers if s and _server_answers_to(s, name)), None)
 
 
@@ -684,6 +689,7 @@ async def _get_allowed_mcp_servers(
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
+            client_ip=client_ip,
         )
 
     return allowed_mcp_servers
@@ -2431,6 +2437,7 @@ async def call_mcp_tool(
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
+            client_ip=client_ip,
         )
         if mcp_servers and not allowed_mcp_servers:
             await raise_denied_scoped_mcp_access(

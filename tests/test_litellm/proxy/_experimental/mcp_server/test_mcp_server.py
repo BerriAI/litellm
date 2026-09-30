@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
@@ -8624,6 +8624,74 @@ async def test_scoped_router_selects_the_server_the_connect_preflight_resolves(a
 
 
 @pytest.mark.asyncio
+async def test_scoped_name_of_an_ungranted_server_is_not_retried_as_an_access_group():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    private = MCPServer(server_id="p-id", name="p", server_name="p", alias="shared", transport=MCPTransport.http)
+    member = MCPServer(server_id="m-id", name="m", server_name="m", transport=MCPTransport.http)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({"p-id": private, "m-id": member})
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["m-id"],
+        ) as groups:
+            denied = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["shared"], allowed_mcp_servers=[member]
+            )
+            unknown = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["team"], allowed_mcp_servers=[member]
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert denied == [], "a denied server name must not widen to an access group of the same name"
+    assert [s.server_id for s in unknown] == ["m-id"]
+    assert groups.await_args_list == [call(["team"])]
+
+
+@pytest.mark.asyncio
+async def test_scoped_router_hides_a_private_server_from_an_external_ip_like_the_connect_preflight():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    private = MCPServer(
+        server_id="p-id",
+        name="p",
+        server_name="p",
+        alias="gh",
+        transport=MCPTransport.http,
+        available_on_public_internet=False,
+    )
+    public = MCPServer(server_id="u-id", name="u", server_name="u", alias="Gh", transport=MCPTransport.http)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({"p-id": private, "u-id": public})
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            external = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["gh"], allowed_mcp_servers=[public], client_ip="203.0.113.7"
+            )
+            internal = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["gh"], allowed_mcp_servers=[public], client_ip=None
+            )
+        assert global_mcp_server_manager.get_mcp_server_answering_to("gh", client_ip="203.0.113.7") is None
+        assert global_mcp_server_manager.get_mcp_server_answering_to("gh", client_ip=None) is private
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert [s.server_id for s in external] == ["u-id"], "the router must apply the connect preflight's IP filter"
+    assert internal == []
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_from_mcp_server_names_mixed_known_and_unknown():
     """
     Mixed scope (one valid + one unknown) returns only the resolved server,
@@ -9470,7 +9538,7 @@ async def test_call_tool_with_legacy_db_m2m_server_resolves_oauth2_flow():
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers_from_mcp_server_names",
-            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers: allowed_mcp_servers),
+            new=AsyncMock(side_effect=lambda mcp_servers, allowed_mcp_servers, client_ip=None: allowed_mcp_servers),
         ),
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])

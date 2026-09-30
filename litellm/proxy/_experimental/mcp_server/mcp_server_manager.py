@@ -7202,10 +7202,14 @@ class MCPServerManager:
     def get_mcp_server_answering_to(self, name: str, client_ip: str | None = None) -> MCPServer | None:
         """The one server a ``/mcp/{name}`` segment denotes, shared by the connect preflight, the scoped
         router, and RFC 9728 discovery so all three name the same server: the exact ``get_mcp_server_by_name``
-        priority first, then the same priority case-insensitively, then any prefix form routing accepts."""
+        priority first, then the exact ``server_id``, then the name priority case-insensitively, then any prefix
+        form routing accepts."""
         exact: Final = self.get_mcp_server_by_name(name, client_ip=client_ip)
         if exact is not None:
             return exact
+        by_id: Final = self.get_mcp_server_by_id(name, client_ip=client_ip)
+        if by_id is not None:
+            return by_id
         requested: Final = name.lower()
         servers: Final = tuple(self.get_registry().values())
         identifiers: Final[tuple[Callable[[MCPServer], str | None], ...]] = (

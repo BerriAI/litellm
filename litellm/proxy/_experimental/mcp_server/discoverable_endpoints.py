@@ -528,12 +528,6 @@ def _resolve_mcp_server_by_name_or_id(lookup: str, client_ip: str | None) -> MCP
         global_mcp_server_manager,
     )
 
-    by_name: Final = global_mcp_server_manager.get_mcp_server_by_name(lookup, client_ip=client_ip)
-    if by_name is not None:
-        return by_name
-    by_id: Final = global_mcp_server_manager.get_mcp_server_by_id(lookup, client_ip=client_ip)
-    if by_id is not None:
-        return by_id
     return global_mcp_server_manager.get_mcp_server_answering_to(lookup, client_ip=client_ip)
 
 

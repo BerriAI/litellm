@@ -6253,6 +6253,34 @@ class TestMCPServerManager:
         assert manager.get_mcp_server_answering_to("gh") is by_alias
         assert manager.get_mcp_server_answering_to("GH") is by_alias
 
+    @pytest.mark.parametrize("pinned_first", [True, False], ids=["pinned-id-listed-first", "alias-listed-first"])
+    def test_answering_to_and_discovery_agree_on_a_pinned_id_that_another_alias_case_folds_to(self, pinned_first):
+        from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        pinned = MCPServer(server_id="foo", name="pinned", server_name="pinned", transport=MCPTransport.http)
+        by_alias = MCPServer(
+            server_id="b-id",
+            name="b",
+            server_name="b",
+            alias="Foo",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        registry = {"foo": pinned, "b-id": by_alias} if pinned_first else {"b-id": by_alias, "foo": pinned}
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.registry.update(registry)
+        try:
+            for name in ("foo", "Foo", "FOO"):
+                connected = global_mcp_server_manager.get_mcp_server_answering_to(name)
+                discovered = discoverable_endpoints._resolve_mcp_server_by_name_or_id(name, client_ip=None)
+                assert discovered is connected, name
+            assert global_mcp_server_manager.get_mcp_server_answering_to("foo") is pinned
+            assert global_mcp_server_manager.get_mcp_server_answering_to("Foo") is by_alias
+            assert global_mcp_server_manager.get_mcp_server_answering_to("FOO") is by_alias
+        finally:
+            global_mcp_server_manager.registry.clear()
+
     def test_remove_server_drops_only_its_own_tool_mapping_rows(self):
         manager = self._manager_with_deepwiki_and_huggingface()
 

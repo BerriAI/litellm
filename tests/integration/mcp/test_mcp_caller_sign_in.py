@@ -24,12 +24,32 @@ ADD: Final = {"a": 2, "b": 3}
 ACCEPT: Final = {"Accept": "application/json, text/event-stream"}
 
 
-def _rpc(gateway: Gateway, path: str, key: str, headers: dict[str, str]) -> httpx.Response:
+def _rpc(
+    gateway: Gateway,
+    path: str,
+    key: str,
+    headers: dict[str, str],
+    method: str = "initialize",
+    params: Mapping[str, object] = INITIALIZE,
+) -> httpx.Response:
     return gateway.client.post(
         path,
-        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": INITIALIZE},
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params)},
         headers={"x-litellm-api-key": key, **ACCEPT, **headers},
     )
+
+
+def _sse_data(response: httpx.Response) -> str:
+    return next(line[5:].strip() for line in response.text.splitlines() if line.startswith("data:"))
+
+
+def _advertised(gateway: Gateway, segment: str) -> tuple[int, tuple[str, ...], object]:
+    response: Final = gateway.client.get(f"/.well-known/oauth-protected-resource/mcp/{segment}")
+    document: Final = response.json()
+    issuers: Final = tuple(
+        str(issuer).removesuffix(f"/{segment}") for issuer in document.get("authorization_servers", ())
+    )
+    return response.status_code, issuers, document.get("scopes_supported")
 
 
 def _sign_in_config(guardrail_params: dict[str, object], path: Path) -> Path:
@@ -113,6 +133,53 @@ def test_alias_first_lookup_wins_over_a_server_whose_name_matches_the_alias(gate
             )
             names: Final = {tool["name"] for tool in body["result"]["tools"]}
             assert any(name.endswith("add") for name in names), names
+
+
+def test_exact_name_wins_over_a_case_folded_config_alias_for_connect_discovery_and_calls(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with mcp_peer() as obo_peer, mcp_peer() as math_peer:
+        stem: Final = "gh" + uuid.uuid4().hex[:6]
+        cased: Final = stem.capitalize()
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["mcp_servers"] = {
+            stem + "_obo": {
+                "alias": stem,
+                "transport": "http",
+                "url": obo_peer.url,
+                "auth_type": "oauth2_token_exchange",
+                "token_exchange_endpoint": "http://127.0.0.1:9/token",
+                "credentials": {"client_id": "obo-client", "client_secret": "obo-secret"},
+            }
+        }
+        path: Final = tmp_path / "case-collision.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            by_name: Final = register_mcp(scenario, math_peer, cased)
+            key: Final = scenario.key(object_permission={"mcp_servers": [by_name]})
+
+            init: Final = _rpc(candidate, f"/mcp/{cased}", key, {})
+            assert init.status_code == 200, init.text
+            listed: Final = _rpc(candidate, f"/mcp/{cased}", key, {}, method="tools/list")
+            assert listed.status_code == 200, listed.text
+            tools: Final = json.loads(_sse_data(listed))["result"]["tools"]
+            add: Final = next(tool["name"] for tool in tools if tool["name"].endswith("add"))
+            called: Final = _rpc(
+                candidate, f"/mcp/{cased}", key, {}, method="tools/call", params={"name": add, "arguments": ADD}
+            )
+            assert called.status_code == 200, called.text
+            assert json.loads(_sse_data(called))["result"]["content"][0]["text"] == "5", called.text
+            assert len(tool_calls(math_peer.drain())) == 1
+            assert tool_calls(obo_peer.drain()) == ()
+            assert _advertised(candidate, cased) == _advertised(candidate, by_name)
+
+            challenged: Final = _rpc(candidate, f"/mcp/{stem}", key, {})
+            assert challenged.status_code == 401, challenged.text
+            assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{stem}"' in challenged.headers.get(
+                "www-authenticate", ""
+            )
+            assert _advertised(candidate, stem) == _advertised(candidate, stem + "_obo")
+            assert _advertised(candidate, stem) != _advertised(candidate, cased)
 
 
 def test_jwt_signer_verifies_the_bearer_that_admitted_the_call(gateway: Gateway, tmp_path: Path) -> None:
