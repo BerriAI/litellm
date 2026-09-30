@@ -39,5 +39,4 @@ CREATE TABLE IF NOT EXISTS {database}.spend_logs
 )
 ENGINE = ReplacingMergeTree(end_time)
 PARTITION BY toYYYYMM(start_time)
-ORDER BY (team_id, toDateTime(start_time), request_id)
-TTL toDateTime(start_time) + INTERVAL {spend_log_retention_days} DAY
+ORDER BY (team_id, start_time, request_id)

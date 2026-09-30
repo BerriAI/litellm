@@ -1,13 +1,17 @@
 use litellm_http::Client;
+use std::time::Duration;
 
 use crate::Connection;
 use crate::Error;
 
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/0001_otel_traces.sql"),
     include_str!("../migrations/0002_agent_traces.sql"),
     include_str!("../migrations/0003_agent_traces_mv.sql"),
     include_str!("../migrations/0004_spend_logs.sql"),
+    include_str!("../migrations/0005_otel_traces_ttl.sql"),
+    include_str!("../migrations/0006_agent_traces_ttl.sql"),
+    include_str!("../migrations/0007_spend_logs_ttl.sql"),
 ];
 
 pub fn schema_statements(
@@ -49,6 +53,7 @@ pub async fn ensure_schema(
     for statement in schema_statements(database, trace_retention_days, spend_log_retention_days)? {
         let response = client
             .post(connection.url().clone())
+            .timeout(Duration::from_secs(10))
             .body(statement)
             .send()
             .await

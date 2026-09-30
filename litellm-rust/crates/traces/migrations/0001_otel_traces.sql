@@ -44,5 +44,4 @@ CREATE TABLE IF NOT EXISTS {database}.otel_traces
 ENGINE = MergeTree
 PARTITION BY toDate(Timestamp)
 ORDER BY (TeamId, ServiceName, toDateTime(Timestamp), TraceId)
-TTL toDateTime(Timestamp) + INTERVAL {trace_retention_days} DAY
 SETTINGS ttl_only_drop_parts = 1
