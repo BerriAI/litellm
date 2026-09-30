@@ -292,9 +292,8 @@ class GenericGuardrailAPI(CustomGuardrail):
             if value is not None:
                 result_metadata[field_name] = value
 
-        # handle user_api_key_token = user_api_key_hash
-        if metadata_dict.get("user_api_key_token") is not None:
-            result_metadata["user_api_key_hash"] = metadata_dict.get("user_api_key_token")
+        if litellm_metadata.get("user_api_key_token") is not None and "user_api_key_hash" not in result_metadata:
+            result_metadata["user_api_key_hash"] = litellm_metadata["user_api_key_token"]
 
         verbose_proxy_logger.debug(
             "Generic Guardrail API: Extracted user metadata: %s",

@@ -10,6 +10,9 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrail,
     GraySwanGuardrailAPIError,
 )
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+    _apply_authenticated_identity_to_litellm_metadata,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -566,31 +569,26 @@ def test_prepare_payload_includes_litellm_metadata(
     assert payload["litellm_metadata"]["user_api_key_team_id"] == "team-456"
 
 
-def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
-    """Verify _ensure_litellm_metadata populates litellm_metadata."""
-    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-        _ensure_litellm_metadata,
-    )
-
+def test_missing_litellm_metadata_is_populated_from_user_api_key_dict() -> None:
     user_auth = UserAPIKeyAuth(user_id="u1", team_id="t1", api_key="sk-test-hashed")
     data: dict = {}
 
-    _ensure_litellm_metadata(data, user_auth)
+    _apply_authenticated_identity_to_litellm_metadata(data, user_auth)
 
     assert "litellm_metadata" in data
     assert data["litellm_metadata"]["user_api_key_user_id"] == "u1"
     assert data["litellm_metadata"]["user_api_key_team_id"] == "t1"
 
 
-def test_ensure_litellm_metadata_noop_when_already_present() -> None:
-    """Verify _ensure_litellm_metadata does not overwrite existing litellm_metadata."""
-    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-        _ensure_litellm_metadata,
-    )
+def test_existing_litellm_metadata_keeps_its_keys_but_takes_the_authenticated_identity() -> None:
+    user_auth = UserAPIKeyAuth(user_id="auth-user", key_alias="auth-alias", team_id="auth-team")
+    bucket: dict = {"existing": "value", "user_api_key_alias": "batch-worker", "user_api_key_team_id": "team-exempt"}
+    data: dict = {"litellm_metadata": bucket}
 
-    user_auth = UserAPIKeyAuth(user_id="should-not-appear")
-    data: dict = {"litellm_metadata": {"existing": "value"}}
+    _apply_authenticated_identity_to_litellm_metadata(data, user_auth)
 
-    _ensure_litellm_metadata(data, user_auth)
-
-    assert data["litellm_metadata"] == {"existing": "value"}
+    assert data["litellm_metadata"] is bucket
+    assert bucket["existing"] == "value"
+    assert bucket["user_api_key_alias"] == "auth-alias"
+    assert bucket["user_api_key_team_id"] == "auth-team"
+    assert bucket["user_api_key_user_id"] == "auth-user"

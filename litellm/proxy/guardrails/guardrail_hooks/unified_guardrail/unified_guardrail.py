@@ -20,7 +20,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation, StreamingScanKey
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     MCP_GUARDRAIL_CALL_TYPES,
@@ -35,10 +37,6 @@ if TYPE_CHECKING:
     # Imported lazily at runtime (inside the streaming hook) to avoid a
     # module-level cyclic import with litellm.integrations.custom_guardrail.
     from litellm.integrations.custom_guardrail import ModifyResponseException
-    from litellm.llms.base_llm.guardrail_translation.base_translation import (
-        BaseTranslation,
-        StreamingScanKey,
-    )
 
 # Call types that stream JSON-RPC events (A2A); guardrail HTTPException is emitted as in-stream error
 A2A_CALL_TYPES: Final = (CallTypes.asend_message, CallTypes.send_message)
@@ -57,7 +55,7 @@ class _EndpointTranslation(Protocol):
     def process_output_streaming_response(self) -> "Callable[..., Awaitable[object]]": ...
 
     @property
-    def get_streaming_scan_key(self) -> "Callable[[Sequence[object]], StreamingScanKey | None]": ...
+    def get_streaming_scan_key(self) -> Callable[[Sequence[object]], StreamingScanKey | None]: ...
 
     @property
     def build_block_sse_chunks(self) -> "Callable[..., Sequence[bytes] | None]": ...
@@ -72,7 +70,7 @@ def _as_endpoint_translation(translation: _EndpointTranslation) -> _EndpointTran
 
 def resolve_endpoint_translation(
     user_api_key_dict: UserAPIKeyAuth, first_response_item: object | None
-) -> "tuple[str, BaseTranslation] | None":
+) -> tuple[str, BaseTranslation] | None:
     """
     Resolve the endpoint guardrail translation for a streamed response: the
     request route wins, falling back to inferring the call type from the first
@@ -109,7 +107,7 @@ def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
     return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
 
 
-def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
+def _is_redundant_scan(scan_key: StreamingScanKey | None, last_scan_key: StreamingScanKey | None) -> bool:
     if scan_key is None:
         return False
     return scan_key == last_scan_key or scan_key.has_nothing_to_scan
@@ -156,16 +154,19 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     }
 
 
-def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
-    if "litellm_metadata" not in data:
-        from litellm.llms.base_llm.guardrail_translation.base_translation import (
-            BaseTranslation,
-        )
+_PROXY_ENRICHED_IDENTITY_FIELDS: Final = frozenset({"user_api_key_auth_metadata"})
 
-        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            data["litellm_metadata"] = user_metadata
+
+def _apply_authenticated_identity_to_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    existing: Final = data.get("litellm_metadata")
+    if isinstance(existing, dict):
+        identity: Final = LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)
+        existing.update({key: value for key, value in identity.items() if key not in _PROXY_ENRICHED_IDENTITY_FIELDS})
+        existing.pop("user_api_key_token", None)
+        return
+    user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+    if user_metadata:
+        data["litellm_metadata"] = user_metadata
 
 
 class UnifiedLLMGuardrails(CustomLogger):
@@ -227,7 +228,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
-        _ensure_litellm_metadata(data, user_api_key_dict)
+        _apply_authenticated_identity_to_litellm_metadata(data, user_api_key_dict)
 
         data = await endpoint_translation.process_input_messages(
             data=data,
@@ -273,7 +274,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation: Final = _as_endpoint_translation(mappings[CallTypes(call_type)]())
 
-        _ensure_litellm_metadata(data, user_api_key_dict)
+        _apply_authenticated_identity_to_litellm_metadata(data, user_api_key_dict)
 
         return await endpoint_translation.process_input_messages(
             data=data,
@@ -406,7 +407,7 @@ class UnifiedLLMGuardrails(CustomLogger):
     @staticmethod
     def _resolve_transform_call_type(
         user_api_key_dict: UserAPIKeyAuth,
-        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+        mappings: Mapping[CallTypes, type[BaseTranslation]],
     ) -> str | None:
         """Resolve the call type for the incremental_diff path, or None if the
         route is unresolvable / unsupported.
@@ -669,7 +670,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type: str,
         sampling_rate: int,
         end_of_stream_only: bool,
-        mappings: Mapping[CallTypes, type["BaseTranslation"]],
+        mappings: Mapping[CallTypes, type[BaseTranslation]],
     ) -> AsyncGenerator[object, None]:
         """Emit guardrail text transformations as new deltas on the stream.
 

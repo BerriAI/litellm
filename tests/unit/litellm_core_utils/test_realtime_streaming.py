@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
@@ -16,7 +17,10 @@ from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import GraySwanGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 
 
@@ -3550,3 +3554,112 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
 
     assert [call.args[0] for call in backend_ws.send.await_args_list] == [b"\x00\x01", '{"type":"endStream"}']
     provider_config.pace_backend_send.assert_awaited_once_with(b"\x00\x01")
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcript_guardrail_receives_authenticated_identity(monkeypatch: pytest.MonkeyPatch):
+    received_request_data = []
+
+    class IdentityRecordingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            received_request_data.append(request_data)
+            return inputs
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            IdentityRecordingGuardrail(
+                guardrail_name="identity_recorder",
+                event_hook=GuardrailEventHooks.realtime_input_transcription,
+                default_on=True,
+            )
+        ],
+    )
+    key = UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app", team_id="team-prod")
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock(), user_api_key_dict=key)
+
+    blocked = await streaming.run_realtime_guardrails("hello there")
+
+    assert blocked is False
+    assert len(received_request_data) == 1
+    identity = received_request_data[0]["litellm_metadata"]
+    assert identity["user_api_key_alias"] == "prod-app"
+    assert identity["user_api_key_team_id"] == "team-prod"
+    assert identity["user_api_key_hash"] == key.api_key
+
+
+@pytest.mark.asyncio
+async def test_realtime_grayswan_payload_carries_only_identity(monkeypatch: pytest.MonkeyPatch):
+    vendor_payloads: list[dict[str, object]] = []
+
+    def vendor(request: httpx.Request) -> httpx.Response:
+        vendor_payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"violation": 0.0, "violated_rules": []})
+
+    grayswan = GraySwanGuardrail(
+        guardrail_name="grayswan",
+        api_key="test-key",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    grayswan.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(vendor))
+    monkeypatch.setattr(litellm, "callbacks", [grayswan])
+    key = UserAPIKeyAuth(
+        api_key="sk-real-caller-key",
+        key_alias="prod-app",
+        team_id="team-prod",
+        organization_metadata={"logging": [{"callback_vars": {"langfuse_secret_key": "SECRET-ORG"}}]},
+        jwt_claims={"email": "alice@corp.example", "name": "Alice Smith"},
+        team_member={"user_id": "alice", "user_email": "alice@corp.example", "role": "admin"},
+    )
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock(), user_api_key_dict=key)
+
+    await streaming.run_realtime_guardrails("hello there", event_hooks=[GuardrailEventHooks.pre_call])
+
+    assert len(vendor_payloads) == 1
+    vendor_metadata = vendor_payloads[0]["litellm_metadata"]
+    assert vendor_metadata["user_api_key_alias"] == "prod-app"
+    assert vendor_metadata["user_api_key_team_id"] == "team-prod"
+    serialized = json.dumps(vendor_metadata)
+    for leaked in ("SECRET-ORG", "Alice Smith", "alice@corp.example"):
+        assert leaked not in serialized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sdk_value",
+    [
+        pytest.param({"key_alias": "forged", "team_id": "team-exempt"}, id="dict"),
+        pytest.param({"spend": "not-a-number"}, id="malformed-dict"),
+        pytest.param("sk-raw-string", id="string"),
+    ],
+)
+async def test_realtime_guardrail_gets_no_identity_from_non_auth_sdk_value(
+    monkeypatch: pytest.MonkeyPatch, sdk_value: object
+):
+    received_request_data: list[dict[str, object]] = []
+
+    class IdentityRecordingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            received_request_data.append(request_data)
+            return inputs
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            IdentityRecordingGuardrail(
+                guardrail_name="identity_recorder",
+                event_hook=GuardrailEventHooks.realtime_input_transcription,
+                default_on=True,
+            )
+        ],
+    )
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock(), user_api_key_dict=sdk_value)
+
+    blocked = await streaming.run_realtime_guardrails("hello there")
+
+    assert blocked is False
+    assert len(received_request_data) == 1
+    assert not [key for key in received_request_data[0]["litellm_metadata"] if key.startswith("user_api_key")]
