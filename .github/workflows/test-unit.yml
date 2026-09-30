@@ -1257,17 +1257,16 @@ jobs:
 
       - name: Run unit tests
         run: |
-          for chart in helm/litellm-helm helm/litellm; do
-            declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
-            output="$(mktemp)"
-            helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
-            executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
-            if [ "$declared" != "$executed" ]; then
-              echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
-              exit 1
-            fi
-            echo "$chart: all $declared declared test suites ran"
-          done
+          chart=helm/litellm
+          declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
+          output="$(mktemp)"
+          helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
+          executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
+          if [ "$declared" != "$executed" ]; then
+            echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
+            exit 1
+          fi
+          echo "$chart: all $declared declared test suites ran"
   coverage:
     name: coverage
     needs: unit

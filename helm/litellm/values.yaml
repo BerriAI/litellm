@@ -1,9 +1,63 @@
 # LiteLLM helm chart values
+#
+# Two deployment modes, both from the single image below:
+#
+#   componentized (default): `gateway.enabled`, `backend.enabled` and
+#     `ui.enabled` each render their own Deployment, Service, HPA and PDB, so
+#     the LLM data plane, the management API and the static dashboard scale
+#     independently. Their containers run `args: [gateway|backend|ui, ...]`.
+#
+#   monolith: `monolith.enabled: true` renders ONE Deployment and Service
+#     running the full proxy (`args: [proxy, ...]`): gateway routes,
+#     management routes and the Admin UI served by the proxy itself. The
+#     gateway, backend and ui Deployments and Services are not rendered and
+#     the Ingress sends every path to the monolith Service. The monolith is
+#     configured through the `gateway.*` values (config, resources, probes,
+#     securityContext, hpa, pdb, keda, collector, metricsServer, volumes,
+#     env), so a monolith install only flips this flag. See `monolith` below
+#     for the precedence rules.
 
 nameOverride: ""
 fullnameOverride: ""
 
+# The one image every container in this chart runs: gateway, backend, ui,
+# monolith, the migrations Job, the metrics and collector sidecars and the
+# Helm test pod. Its entrypoint dispatches on the first container argument
+# (proxy, gateway, backend, ui, migrations, metrics, collector), which is why
+# the templates only ever set `args` and never `command`: overriding the
+# entrypoint would drop the wrappers it applies (ddtrace, Prometheus
+# multiprocess dir cleanup). `tag` defaults to the chart's appVersion. When
+# `digest` is set the image renders as `repository:tag@digest`, so the tag is
+# informational and the digest pins the bytes. Also mirrored at
+# docker.litellm.ai/berriai/litellm.
+image:
+  repository: ghcr.io/berriai/litellm
+  tag: ""
+  pullPolicy: IfNotPresent
+  digest: ""
+
 imagePullSecrets: []
+
+# Monolith mode. When enabled the chart renders a single Deployment named
+# `<release>-litellm` running `args: [proxy, --port, 4000, --config,
+# /app/config/config.yaml]` (the --config pair only when gateway.config.create
+# is true) plus `extraArgs`, and a Service of the same name. Precedence when
+# this is on:
+#   - gateway.enabled / backend.enabled / ui.enabled are ignored: no
+#     component Deployment, Service, HPA, PDB or ServiceMonitor is rendered
+#   - every `backend.*` and `ui.*` value is ignored, including their
+#     ServiceAccounts; the monolith runs as serviceAccounts.gateway
+#   - every `gateway.*` value applies to the monolith pod instead of a gateway
+#     pod: config, numWorkers, resources, probes, securityContext,
+#     hpa / keda / pdb, metricsServer, collector, volumes, env, scheduling
+#   - ingress.extraPaths entries keep their `service` field but every path,
+#     built in or extra, targets the monolith Service
+#   - the migrations Job renders exactly as in componentized mode
+monolith:
+  enabled: false
+  # Extra CLI arguments appended after the chart's own proxy arguments, e.g.
+  # ["--detailed_debug"] or ["--run_granian"].
+  extraArgs: []
 
 # Optional Ingress wiring the three component Services behind a single L7
 # entrypoint. Required when serving the static UI bundle over the network.
@@ -82,10 +136,8 @@ serviceAccounts:
 # LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...). Disable if your
 # pipeline runs migrations out-of-band.
 #
-# Uses a dedicated `litellm-migrations` image (prisma CLI + the migration
-# files from `litellm-proxy-extras`) instead of the backend image, so the
-# Job doesn't drag in the rest of the proxy and doesn't run `prisma
-# generate` — the migration engine doesn't need the generated client.
+# Runs the shared image with `args: [migrations]`, which the entrypoint
+# dispatches to the prisma migration runner without importing the proxy.
 migrationJob:
   enabled: true
   # Which controller is responsible for running the Job.
@@ -146,8 +198,18 @@ migrationJob:
   # pod. Same shape as gateway.podSecurityContext / gateway.securityContext.
   podSecurityContext: {}
   securityContext: {}
+  # Extra labels and annotations on the Job object itself.
+  jobLabels: {}
+  jobAnnotations: {}
   # Extra pod labels on the Job pod, merged into the chart's common labels.
   podLabels: {}
+  # Annotations on the Job pod, e.g. sidecar.istio.io/inject: "false" so an
+  # injected sidecar cannot keep the pod running after the migration exits.
+  annotations: {}
+  # Override the container command and args. The default runs the image
+  # entrypoint with `migrations`; a command with no args clears the args.
+  command: []
+  args: []
   # Additional volumes on the Job pod and volumeMounts on its container, e.g.
   # the writable scratch space a read-only root filesystem needs.
   volumes: []
@@ -159,21 +221,26 @@ migrationJob:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  image:
-    repository: ghcr.io/berriai/litellm-migrations
-    tag: ""              # defaults to .Chart.AppVersion
-    pullPolicy: IfNotPresent
+  # Extra init containers and sidecars on the Job pod, rendered through `tpl`.
+  extraInitContainers: []
+  extraContainers: []
   # Extra env appended to the migration container. The migration entrypoint
   # uses the v2 resolver by default (no diff-and-force recovery — avoids the
   # schema thrashing seen during rolling deploys). To opt back into the v1
   # resolver, append `- name: USE_V2_MIGRATION_RESOLVER` / `value: "false"`.
   extraEnv: []
 
-# Required: a master key used by gateway + backend to mint/verify proxy tokens.
-# Must reference an existing Secret.
+# Master key used by the proxy to mint and verify virtual keys. Reference an
+# existing Secret through `secretName` / `secretKey`, or set `generate: true`
+# and leave `secretName` empty to have the chart create
+# `<release>-litellm-masterkey` with a random `sk-...` key under `secretKey`.
+# The generated Secret is looked up on upgrade so the key never rotates by
+# accident (`helm template` cannot look anything up and renders a fresh key
+# each time; that is expected). The chart never accepts an inline key.
 masterKey:
   secretName: litellm-master-key-secret              # name of a Secret containing the master key
   secretKey: master-key
+  generate: false
 
 # Optional: enterprise billable-request metering. When enabled, the gateway and
 # backend count successful requests to inference, MCP, and A2A endpoints and push
@@ -194,7 +261,8 @@ billingMetrics:
   caSecretName: ""                                    # existing Secret holding ca.crt
   exportIntervalMs: ""                                # push cadence; the proxy defaults to 60000
 
-# External Postgres connection. 
+# Postgres connection. The chart ships no database; point `writer` at your
+# own PostgreSQL (managed or self hosted) and its credentials Secret.
 database:
   writer:
     host: ""
@@ -250,23 +318,22 @@ database:
     maxDbConnections: 20
     maxClientConn: 1000
 
-# Optional Redis. Leave host empty to disable.
+# Redis is the proxy's coordination store: cross-pod tpm/rpm rate limits,
+# spend tracking, and the pod lock manager. The chart emits REDIS_HOST /
+# REDIS_PORT / REDIS_PASSWORD, which the proxy picks up through its
+# coordination Redis env fallback. Response caching is separate and off unless
+# you enable it in `proxy_config.litellm_settings.cache`.
 #
-# This is the proxy's coordination store: cross-pod tpm/rpm rate limits, spend
-# tracking, and the pod lock manager. The chart emits REDIS_HOST / REDIS_PORT /
-# REDIS_PASSWORD, which the proxy picks up through its coordination Redis env
-# fallback. Response caching is separate and off unless you enable it in
-# `proxy_config.litellm_settings.cache`.
+# Set `host` (and `passwordSecret.name` when auth is required). Set
+# `cluster: true` for Redis Cluster mode (AWS ElastiCache Cluster, self-hosted
+# Redis Cluster): the chart emits REDIS_CLUSTER_NODES from `host` / `port` as
+# the single seed and the client discovers the rest from CLUSTER SLOTS. The
+# chart ships no Redis of its own.
 #
 # For full control, define `general_settings.coordination_redis` in
 # `proxy_config` (host/port/password/username/url/ssl/startup_nodes/
 # sentinel_nodes/sentinel_password/service_name, each accepting os.environ/VAR
 # refs). An explicit block overrides these env vars.
-#
-# Set `cluster: true` for Redis Cluster mode (e.g. AWS ElastiCache Cluster,
-# self-hosted Redis Cluster). The chart emits REDIS_CLUSTER_NODES from
-# `host` / `port` as the single seed; the cluster client discovers the
-# remaining nodes from CLUSTER SLOTS at startup.
 redis:
   cluster: false
   host: ""
@@ -275,12 +342,17 @@ redis:
     name: "" # Leave empty for auth-less Redis
     passwordKey: password
 
+# Arbitrary extra Kubernetes manifests rendered verbatim with the release,
+# e.g. a NetworkPolicy or an ExternalSecret the proxy needs.
+extraResources: []
+
 # ---------- gateway (LLM data plane) ----------
+# In monolith mode this whole block configures the monolith pod instead.
 gateway:
   enabled: true
   logLevel: INFO
-  # Number of uvicorn worker processes per gateway pod. Sets NUM_WORKERS,
-  # consumed by the gateway image entrypoint. Default is 1.
+  # Number of worker processes per pod. Sets NUM_WORKERS, read by the gateway
+  # launcher and by the proxy's --num_workers default. Default is 1.
   numWorkers: 1
   extraEnv: [] # Add extra environment variables to the gateway
   envConfigMaps: [] # Add extra environment variables to the gateway from config maps
@@ -299,7 +371,6 @@ gateway:
   # scrape never runs on an inference worker. Adds a `metrics` port to the pod
   # and a dedicated ClusterIP `<gateway>-metrics` Service; point your scrape
   # config at it. The port has no virtual-key auth: keep it off public ingress.
-  # Needs the gateway image v1.101.0 or newer.
   metricsServer:
     enabled: false
     port: 4001
@@ -317,8 +388,13 @@ gateway:
   serviceMonitor:
     enabled: false
     labels: {}
+    annotations: {}
     interval: 15s
     scrapeTimeout: 10s
+    relabelings: []
+    # Empty scrapes the release namespace.
+    namespaceSelector:
+      matchNames: []
   # Opt-in `collector` sidecar (same image, `python -m litellm.proxy.collector`)
   # that runs the post-response spend pipeline (cost calculation, spend logs,
   # spend counters, budget reservation reconciliation) so the uvicorn workers
@@ -355,13 +431,13 @@ gateway:
     # ContainerResource metric of the `gateway` container only, so the
     # sidecar's CPU never drives inference replicas. Needs Kubernetes 1.30+.
     scaleOnGatewayContainerCpu: true
-  image:
-    repository: ghcr.io/berriai/litellm-gateway
-    tag: ""              # defaults to .Chart.AppVersion
-    pullPolicy: IfNotPresent
   service:
     type: ClusterIP
     port: 4000
+    annotations: {}
+    # For LoadBalancer Services on clusters with several load balancer
+    # implementations.
+    loadBalancerClass: ""
   resources:
     requests:
       cpu: "1"
@@ -435,6 +511,41 @@ gateway:
     # counted when a response completes, so TPS trails long streams.
     targetRequestsPerSecond: ""
     targetTokensPerSecond: ""
+  # KEDA ScaledObject as an alternative to the HPA above. Mutually exclusive
+  # with hpa.enabled (two autoscalers on one Deployment fight each other), so
+  # set `hpa.enabled: false` when turning this on. Needs KEDA installed in the
+  # cluster. `triggers` are rendered verbatim; the two optional Prometheus
+  # workload targets below add prometheus triggers on the same counters the
+  # HPA workload metrics use, scraped through the metrics Service (enable
+  # metricsServer and serviceMonitor).
+  keda:
+    enabled: false
+    minReplicaCount: 1
+    maxReplicaCount: 10
+    pollingInterval: 30
+    cooldownPeriod: 300
+    # Rendered on the ScaledObject, e.g. autoscaling.keda.sh/paused-replicas: "2"
+    # to pause scaling at a fixed replica count
+    scaledObject:
+      annotations: {}
+    # Optional; rendered verbatim under spec.advanced
+    advanced: {}
+    # Optional; rendered under spec.fallback. A missing `failureThreshold`
+    # defaults to 3 and a missing `replicas` to maxReplicaCount, as in litellm-helm.
+    fallback: {}
+    # Custom triggers, rendered verbatim, e.g.
+    #   - type: cpu
+    #     metricType: Utilization
+    #     metadata:
+    #       value: "70"
+    triggers: []
+    prometheus:
+      # Prometheus server URL, required when either workload target is set.
+      serverAddress: ""
+      # Per pod averages, same units as hpa.targetRequestsPerSecond /
+      # hpa.targetTokensPerSecond. Empty leaves the trigger out.
+      targetRequestsPerSecond: ""
+      targetTokensPerSecond: ""
   # PodDisruptionBudget for the gateway pods. Set exactly one of
   # `minAvailable` / `maxUnavailable` (minAvailable wins if both are set;
   # enabling without either falls back to `maxUnavailable: 1`). Disabled by
@@ -444,6 +555,13 @@ gateway:
     enabled: false
     minAvailable: ""
     maxUnavailable: ""
+  # Extra annotations and labels on the Deployment object itself (not the
+  # pods), e.g. for a GitOps controller or a reloader.
+  deploymentAnnotations: {}
+  deploymentLabels: {}
+  # Seconds a new pod must be ready before the rollout treats it as
+  # available. Empty inherits the Kubernetes default of 0.
+  minReadySeconds: ""
   podAnnotations: {}
   # Extra pod labels, merged into the chart's selector labels. Do not
   # re-declare `app.kubernetes.io/name` / `instance` / `component` here: they
@@ -470,7 +588,16 @@ gateway:
   # egress proxy. Rendered through `tpl`, so entries may reference chart
   # values and release metadata.
   extraContainers: []
+  # Init containers, rendered through `tpl` the same way.
+  extraInitContainers: []
   # Container lifecycle hooks (postStart / preStop) for the gateway container.
+  #
+  # Prefer the proxy's /health/drain preStop hook over a fixed `sleep`: it
+  # marks the pod NotReady and blocks only until in-flight requests finish
+  # (bounded by GRACEFUL_SHUTDOWN_TIMEOUT). It is off by default; enable it
+  # with general_settings.enable_drain_endpoint: true and, when the health
+  # port is reachable from other pods, set general_settings.drain_endpoint_token
+  # and send the same value on the X-Drain-Token header from the hook.
   lifecycle: {}
   # Grace period the kubelet allows between SIGTERM and SIGKILL. Leave empty
   # to inherit the Kubernetes default of 30s. Set it a few seconds above the
@@ -500,13 +627,11 @@ backend:
   volumes: []
   # Additional volumeMounts on the backend container.
   volumeMounts: []
-  image:
-    repository: ghcr.io/berriai/litellm-backend
-    tag: ""
-    pullPolicy: IfNotPresent
   service:
     type: ClusterIP
     port: 4001
+    annotations: {}
+    loadBalancerClass: ""
   resources:
     requests:
       cpu: "1"
@@ -543,12 +668,16 @@ backend:
     enabled: false
     minAvailable: ""
     maxUnavailable: ""
+  deploymentAnnotations: {}
+  deploymentLabels: {}
+  minReadySeconds: ""
   podAnnotations: {}
   # Same shape as the gateway blocks of the same name.
   podLabels: {}
   podSecurityContext: {}
   securityContext: {}
   extraContainers: []
+  extraInitContainers: []
   lifecycle: {}
   terminationGracePeriodSeconds: ""
   nodeSelector: {}
@@ -568,13 +697,11 @@ ui:
   volumes: []
   # Additional volumeMounts on the ui container.
   volumeMounts: []
-  image:
-    repository: ghcr.io/berriai/litellm-ui
-    tag: ""
-    pullPolicy: IfNotPresent
   service:
     type: ClusterIP
     port: 3000
+    annotations: {}
+    loadBalancerClass: ""
   # The dashboard expects to know where to reach the backend API. Set this to
   # the externally-routable URL (typically the ingress host + /api or similar).
   backendUrl: ""
@@ -611,17 +738,19 @@ ui:
     enabled: false
     minAvailable: ""
     maxUnavailable: ""
+  deploymentAnnotations: {}
+  deploymentLabels: {}
+  minReadySeconds: ""
   podAnnotations: {}
   # Same shape as the gateway blocks of the same name. The nginx runtime
   # writes its pid, cache, and proxy temp files under /tmp, so it boots as
   # any (arbitrary, non-root) uid; `securityContext.readOnlyRootFilesystem:
-  # true` here needs an emptyDir volume mounted over /tmp. Images before
-  # the /tmp move instead need emptyDirs over /var/cache/nginx and /run to
-  # run as a non-root uid at all.
+  # true` here needs an emptyDir volume mounted over /tmp.
   podLabels: {}
   podSecurityContext: {}
   securityContext: {}
   extraContainers: []
+  extraInitContainers: []
   lifecycle: {}
   terminationGracePeriodSeconds: ""
   nodeSelector: {}
@@ -632,6 +761,25 @@ ui:
 
 lens:
   library: true
+
+# Optional: bundled LiteAdmin worker. Renders one Deployment, Service and PVC
+# running the shared image with `args: ["--admin-agent"]`, and points the pod
+# that serves the /liteadmin routes (the backend in componentized mode, the
+# monolith in monolith mode) at it via LITELLM_ADMIN_AGENT_URL.
+liteadmin:
+  enabled: false
+  existingSecret: ""
+  gatewayUrl: ""
+  model: ""
+  readOnly: false
+  storageSize: 1Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
 
 lensWorker:
   retainResources: false

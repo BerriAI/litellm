@@ -38,7 +38,7 @@ tests:
       gateway.metricsServer.enabled: true
       gateway.metricsServer.port: 4101
       gateway.service.type: LoadBalancer
-      gateway.image.tag: v1.101.0
+      image.tag: v1.101.0
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -58,14 +58,12 @@ tests:
         template: gateway/deployment.yaml
       - equal:
           path: spec.template.spec.containers[1].image
-          value: ghcr.io/berriai/litellm-gateway:v1.101.0
+          value: ghcr.io/berriai/litellm:v1.101.0
         template: gateway/deployment.yaml
       - equal:
-          path: spec.template.spec.containers[1].command
+          path: spec.template.spec.containers[1].args
           value:
-            - python
-            - -m
-            - litellm.proxy.prometheus_metrics_server
+            - metrics
             - --port
             - "4101"
         template: gateway/deployment.yaml
