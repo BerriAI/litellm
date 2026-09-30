@@ -7,5 +7,6 @@
   "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::a server with two per-user variables reports the remaining gap until both are saved",
   "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::a server without per-user variables shows no credential row",
   "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::clearing credentials for a server deleted underneath the modal reports the failure without losing the page",
-  "tests/e2e/ui/tests/integrationCritical/costOptimizationModelGroups.spec.ts::cache leakage by model merges a deployment's resolved and requested model names into its model group"
+  "tests/e2e/ui/tests/integrationCritical/costOptimizationModelGroups.spec.ts::cache leakage by model merges a deployment's resolved and requested model names into its model group",
+  "tests/e2e/ui/tests/integrationCritical/logsDrawerCredentialCanary.spec.ts::the Logs drawer renders the stored request without the deployment api_key"
 ]

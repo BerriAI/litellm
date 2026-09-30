@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_host_python::{from_py, json_object_field, run_async_value, run_sync_value, to_py};
+use litellm_host_python::{from_py, json_object_field, to_py};
 use litellm_secrets::{
     KeyManagementSettings, KeyManagementSystem, Secret, SecretManager, load_native_manager,
     read_secret_from_python_manager,
@@ -10,7 +10,10 @@ use litellm_secrets_types::PythonSecretRead;
 use pyo3::{
     exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
     prelude::*,
+    types::PyDict,
 };
+
+use crate::execution::{run_async_value, run_sync_value};
 
 #[derive(Clone, PartialEq)]
 struct Configuration {
@@ -44,10 +47,18 @@ impl NativeSecretManager {
         let system = configuration.system;
         let settings = configuration.settings.clone();
         let enterprise_enabled = configuration.enterprise_enabled;
+        let http_config = crate::http::call_config(py, &PyDict::new(py), false)?;
         let backend = run_sync_value(py, async move {
-            load_native_manager(system, settings, environment, enterprise_enabled)
-                .await
-                .map_err(|error| PyValueError::new_err(error.to_string()))
+            load_native_manager(
+                crate::http::pool(),
+                &http_config,
+                system,
+                settings,
+                environment,
+                enterprise_enabled,
+            )
+            .await
+            .map_err(|error| PyValueError::new_err(error.to_string()))
         })?;
         Ok(Self {
             backend,

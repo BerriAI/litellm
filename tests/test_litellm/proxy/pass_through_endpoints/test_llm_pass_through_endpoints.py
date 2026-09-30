@@ -24,7 +24,7 @@ from starlette.datastructures import FormData
 
 import litellm
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
+from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,

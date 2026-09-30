@@ -2650,7 +2650,7 @@ async def test_retrieved_content_protected_when_mcp_tool_name_is_truncated(guard
     the OpenAI-translated view the guardrail scans, dropping the suffix. The call
     id read from the request's own Anthropic tool_use (never truncated) still
     pairs the retrieved row so it is held back."""
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         truncate_tool_name,
     )
 
