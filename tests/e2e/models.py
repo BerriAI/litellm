@@ -949,9 +949,14 @@ class GuardrailEntityMatch(BaseModel):
     end: int
 
 
+class GuardrailModeRecord(BaseModel):
+    tags: dict[str, str | list[str]] | None = None
+    default: str | list[str] | None = None
+
+
 class GuardrailRunRecord(BaseModel):
     guardrail_name: str | None = None
-    guardrail_mode: str | None = None
+    guardrail_mode: str | list[str] | GuardrailModeRecord | None = None
     guardrail_status: str | None = None
     guardrail_provider: str | None = None
     masked_entity_count: dict[str, int] | None = None
@@ -1485,7 +1490,7 @@ class TeamInfoResponse(BaseModel):
 
 class TeamMemberAddBody(BaseModel):
     team_id: str
-    member: TeamMemberEntry
+    member: TeamMemberEntry | list[TeamMemberEntry]
 
 
 class TeamMemberDeleteBody(BaseModel):

@@ -3358,7 +3358,7 @@
         "supports_function_calling": true
     },
     "azure_ai/claude-haiku-4-5": {
-        "deprecation_date": "2026-10-19",
+        "deprecation_date": "2026-11-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -3378,10 +3378,11 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/claude-opus-4-5": {
-        "deprecation_date": "2026-10-19",
+        "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -3402,7 +3403,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/claude-opus-4-6": {
         "deprecation_date": "2027-02-02",
@@ -3640,7 +3642,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-5": {
-        "deprecation_date": "2026-10-19",
+        "deprecation_date": "2026-11-15",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -3660,7 +3662,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/claude-sonnet-5": {
         "deprecation_date": "2027-06-30",
@@ -30721,6 +30724,7 @@
         "output_cost_per_image": 0.08
     },
     "gemini/veo-3.1-fast-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -30737,6 +30741,7 @@
         ]
     },
     "gemini/veo-3.1-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -30752,6 +30757,7 @@
         ]
     },
     "gemini/veo-3.1-lite-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -32912,10 +32918,13 @@
     "gpt-image-2.5-flare": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,
+        "cache_read_input_token_cost_batches": 6.25e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
         "mode": "image_generation",
         "input_cost_per_image_token": 8e-06,
+        "input_cost_per_image_token_batches": 4e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "output_cost_per_image_token": 3e-05,
         "supported_endpoints": [
             "/v1/images/generations",
@@ -32944,10 +32953,13 @@
     "gpt-image-2.5-sunburst": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,
+        "cache_read_input_token_cost_batches": 6.25e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
         "mode": "image_generation",
         "input_cost_per_image_token": 8e-06,
+        "input_cost_per_image_token_batches": 4e-06,
+        "input_cost_per_token_batches": 2.5e-06,
         "output_cost_per_image_token": 3e-05,
         "supported_endpoints": [
             "/v1/images/generations",
@@ -38611,6 +38623,7 @@
     },
     "mistral/zai-glm-5-2": {
         "cache_read_input_token_cost": 1.4e-07,
+        "deprecation_date": "2026-10-31",
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 1048576,
@@ -38741,6 +38754,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4-0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.004,
         "ocr_cost_per_page_batches": 0.002,
@@ -60890,6 +60904,7 @@
         "supports_vision": true
     },
     "mistral/labs-leanstral-1-5": {
+        "deprecation_date": "2026-09-30",
         "input_cost_per_token": 0.0,
         "litellm_provider": "mistral",
         "max_input_tokens": 262144,
@@ -61611,13 +61626,16 @@
     },
     "fireworks_ai/nemotron-lightning-3p5-30b-a3b": {
         "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_priority": 1.25e-08,
         "input_cost_per_token": 5e-08,
+        "input_cost_per_token_priority": 6.25e-08,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
+        "output_cost_per_token_priority": 2.5e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -61627,13 +61645,16 @@
     },
     "fireworks_ai/nemotron-3-ultra-nvfp4": {
         "cache_read_input_token_cost": 1.2e-07,
+        "cache_read_input_token_cost_priority": 1.5e-07,
         "input_cost_per_token": 6e-07,
+        "input_cost_per_token_priority": 7.5e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 2.4e-06,
+        "output_cost_per_token_priority": 3e-06,
         "source": "https://api.fireworks.ai/v1/serverless/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -61663,13 +61684,16 @@
     },
     "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b": {
         "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_priority": 1.25e-08,
         "input_cost_per_token": 5e-08,
+        "input_cost_per_token_priority": 6.25e-08,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
+        "output_cost_per_token_priority": 2.5e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -61679,13 +61703,16 @@
     },
     "fireworks_ai/accounts/fireworks/models/nemotron-3-ultra-nvfp4": {
         "cache_read_input_token_cost": 1.2e-07,
+        "cache_read_input_token_cost_priority": 1.5e-07,
         "input_cost_per_token": 6e-07,
+        "input_cost_per_token_priority": 7.5e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 262144,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 2.4e-06,
+        "output_cost_per_token_priority": 3e-06,
         "source": "https://api.fireworks.ai/v1/serverless/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -64595,13 +64622,16 @@
     },
     "fireworks_ai/accounts/fireworks/routers/glm-5p3-us": {
         "cache_read_input_token_cost": 3.9e-07,
+        "cache_read_input_token_cost_priority": 4.875e-07,
         "input_cost_per_token": 2.1e-06,
+        "input_cost_per_token_priority": 2.625e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6.6e-06,
+        "output_cost_per_token_priority": 8.25e-06,
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -64630,13 +64660,16 @@
     },
     "fireworks_ai/glm-5p3-us": {
         "cache_read_input_token_cost": 3.9e-07,
+        "cache_read_input_token_cost_priority": 4.875e-07,
         "input_cost_per_token": 2.1e-06,
+        "input_cost_per_token_priority": 2.625e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6.6e-06,
+        "output_cost_per_token_priority": 8.25e-06,
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -64720,12 +64753,15 @@
     },
     "fireworks_ai/accounts/fireworks/routers/glm-5p3-flash-us": {
         "cache_read_input_token_cost": 4.5e-08,
+        "cache_read_input_token_cost_priority": 5.625e-08,
         "input_cost_per_token": 2.25e-07,
+        "input_cost_per_token_priority": 2.8125e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 7.5e-07,
+        "output_cost_per_token_priority": 9.375e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_response_schema": true,
@@ -64751,12 +64787,15 @@
     },
     "fireworks_ai/glm-5p3-flash-us": {
         "cache_read_input_token_cost": 4.5e-08,
+        "cache_read_input_token_cost_priority": 5.625e-08,
         "input_cost_per_token": 2.25e-07,
+        "input_cost_per_token_priority": 2.8125e-07,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 7.5e-07,
+        "output_cost_per_token_priority": 9.375e-07,
         "source": "https://docs.fireworks.ai/serverless/pricing",
         "supports_function_calling": true,
         "supports_response_schema": true,
@@ -77752,11 +77791,14 @@
     },
     "fireworks_ai/accounts/fireworks/models/ember-1": {
         "cache_read_input_token_cost": 3e-07,
+        "cache_read_input_token_cost_priority": 3.75e-07,
         "input_cost_per_token": 3e-06,
+        "input_cost_per_token_priority": 3.75e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_priority": 1.875e-05,
         "source": "https://api.fireworks.ai/v1/serverless/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -79624,5 +79666,33 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
+    },
+    "vertex_ai/gemini-3.8-flash-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 9e-06,
+        "output_cost_per_token": 9e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "vertex_ai/gemini-3.8-flash-lite-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 6e-06,
+        "output_cost_per_token": 6e-06,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
     }
 }

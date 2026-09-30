@@ -12,7 +12,7 @@ def encode_image(image_path):
 
 
 # Path to your image
-image_path = "litellm/proxy/logo.jpg"
+image_path = "litellm/proxy/logo.png"
 
 # Getting the Base64 string
 base64_image = encode_image(image_path)
@@ -27,7 +27,7 @@ response = client.responses.create(
                 {"type": "input_text", "text": "what color is the image"},
                 {
                     "type": "input_image",
-                    "image_url": f"data:image/jpeg;base64,{base64_image}",
+                    "image_url": f"data:image/png;base64,{base64_image}",
                 },
             ],
         }
