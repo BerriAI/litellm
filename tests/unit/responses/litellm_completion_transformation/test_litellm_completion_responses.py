@@ -1655,6 +1655,46 @@ class TestContentTypeTransformation:
             )
         )
 
+    def test_trailing_empty_assistant_merge_does_not_reintroduce_empty_text(self):
+        """Merge after tool_calls must not wrap content="" as an empty text part.
+
+        History: assistant text + function_call, then assistant output_text="".
+        The content transform yields "", but _merged_trailing_assistant_message
+        used to turn that back into {"type":"text","text":""} beside prior text.
+        """
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "earlier text"}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup",
+                    "arguments": "{}",
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": ""}],
+                },
+            ],
+            responses_api_request={},
+            replay_reasoning=True,
+        )
+        assistant_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "assistant"]
+        assert assistant_msgs, messages
+        for msg in assistant_msgs:
+            content = msg.get("content")
+            if isinstance(content, list):
+                assert not any(
+                    isinstance(part, dict) and part.get("type") == "text" and part.get("text") == ""
+                    for part in content
+                ), msg
+            assert content != [{"type": "text", "text": ""}]
+
     def test_encrypted_content_blocks_preserved_as_text(self):
         """
         OpenAI Responses agent messages can include encrypted_content blocks.
