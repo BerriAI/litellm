@@ -55,11 +55,11 @@ def test_run_creates_file_and_reports_cost(
 def test_stream_event_order(
     harness: Harness, gateway: Gateway, workspace: Path
 ) -> None:
-    (workspace / "numbers.txt").write_text("1\n2\n3\n")
+    (workspace / "secret.txt").write_text("The secret word is ZEBRA.\n")
     events = list(
         litellm.harness.stream(
             harness,
-            "Read numbers.txt and reply with the sum of the numbers in it. Reply with just the number.",
+            "Read secret.txt and reply with just the secret word in it.",
             sandbox=sandbox.local(workspace),
             model=model_for(harness),
             gateway=gateway,
@@ -71,7 +71,7 @@ def test_stream_event_order(
     assert sum(isinstance(e, Done) for e in events) == 1
     assert any(isinstance(e, Text) for e in events)
     assert any(isinstance(e, ToolCall) for e in events)
-    assert "6" in events[-1].result.text
+    assert "zebra" in events[-1].result.text.lower()
 
 
 @pytest.mark.parametrize("harness", harness_params())
