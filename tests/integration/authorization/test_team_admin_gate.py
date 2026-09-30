@@ -414,6 +414,8 @@ def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route,
     team: Final = org_team if caller in ORG_CALLERS else shared
     with team.gateway.scenario() as scenario:
         s: Final = replace(team, scenario=scenario)
+        if route.name == "team_update_budget_permitted":
+            s.gateway.post("/team/update", {"team_id": s.team_id, "max_budget": 5})
         if route.permission:
             scenario.cleanups.enter_context(team_admin_permissions(s.gateway, (route.permission,)))
         call: Final = route.call(s)
@@ -421,5 +423,9 @@ def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route,
         assert response.status_code == route.expected(caller), (
             f"{caller} {call.method} {call.path}: {response.status_code} {response.text}"
         )
+        if route.name == "team_update_budget_permitted":
+            assert read_rows(
+                'SELECT max_budget FROM "LiteLLM_TeamTable" WHERE team_id = %s', (s.team_id,)
+            ) == [{"max_budget": 4.0 if response.status_code == 200 else 5.0}]
         if response.status_code == 200 and route.cleanup is not None:
             route.cleanup(s, object_value(response.json()))
