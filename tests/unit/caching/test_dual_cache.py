@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 import uuid
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -134,6 +135,35 @@ def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
     assert second_result is None
     assert mock_redis.batch_get_cache.call_count == 2
     assert "shared_a" not in dual_cache.last_redis_batch_access_time
+
+
+def test_reserve_redis_batch_reads_reserves_memory_misses_and_can_be_rolled_back():
+    mock_redis: Final = MagicMock(spec=RedisCache)
+    dual_cache: Final = DualCache(
+        in_memory_cache=InMemoryCache(),
+        redis_cache=mock_redis,
+        default_redis_batch_cache_expiry=10,
+    )
+    dual_cache.in_memory_cache.set_cache("memory_key", "memory_value")
+
+    reserved, previous_access_times = dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"])
+
+    assert reserved == ["missing_key"]
+    assert previous_access_times == {"missing_key": None}
+    assert dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"]) == ([], {})
+
+    dual_cache._rollback_redis_batch_key_reservations(previous_access_times)
+
+    assert dual_cache.reserve_redis_batch_reads(["memory_key", "missing_key"]) == (
+        ["missing_key"],
+        {"missing_key": None},
+    )
+
+
+def test_reserve_redis_batch_reads_returns_empty_without_redis():
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(), redis_cache=None)
+
+    assert dual_cache.reserve_redis_batch_reads(["missing_key"]) == ([], {})
 
 
 def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throttled():
