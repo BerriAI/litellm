@@ -553,7 +553,10 @@ class DualCache(BaseCache):
         effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
         if self.in_memory_cache is not None:
             await self.in_memory_cache.async_set_cache(key, value, ttl=effective_ttl)
-        return batch.set(key, value, effective_ttl)
+        redis_ttl = self.default_redis_ttl if ttl is None else ttl
+        if redis_ttl is None:
+            redis_ttl = effective_ttl
+        return batch.set(key, value, redis_ttl)
 
     # async_batch_set_cache
     async def async_set_cache_pipeline(
