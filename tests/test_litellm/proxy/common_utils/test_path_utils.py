@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from litellm.proxy.common_utils.path_utils import join_within, safe_filename, safe_join, try_safe_join
+from litellm.proxy.common_utils.path_utils import is_within, join_within, safe_filename, safe_join, try_safe_join
 
 
 class TestSafeJoin:
@@ -42,7 +42,7 @@ class TestSafeFilename:
             safe_filename("..")
 
     def test_empty_rejected(self):
-        with pytest.raises(ValueError, match='Empty or unsafe filename'):
+        with pytest.raises(ValueError, match="Empty or unsafe filename"):
             safe_filename("")
 
 
@@ -51,6 +51,23 @@ def test_try_safe_join_returns_none_instead_of_raising(tmp_path):
     assert inside is not None and inside.startswith(os.path.realpath(str(tmp_path)))
     assert try_safe_join(str(tmp_path), "..", "escaped.yaml") is None
     assert try_safe_join(str(tmp_path), "bad\x00name") is None
+
+
+def test_is_within_resolves_symlinks_before_checking(tmp_path):
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("x")
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "inside.yaml").write_text("x")
+    (folder / "out_link.yaml").symlink_to(outside)
+    (folder / "in_link.yaml").symlink_to(folder / "inside.yaml")
+
+    assert is_within(str(folder / "inside.yaml"), str(folder))
+    assert is_within(str(folder / "in_link.yaml"), str(folder))
+    assert is_within(str(folder), str(folder))
+    assert not is_within(str(folder / "out_link.yaml"), str(folder))
+    assert not is_within(str(folder / ".." / "outside.yaml"), str(folder))
+    assert not is_within(str(tmp_path / "folder_sibling.yaml"), str(folder))
 
 
 def test_join_within_keeps_symlinks_but_rejects_traversal(tmp_path):

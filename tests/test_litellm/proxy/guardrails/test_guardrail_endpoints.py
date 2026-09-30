@@ -32,6 +32,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     reject_guardrail_submission,
     update_guardrail,
 )
+from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
@@ -2676,7 +2677,7 @@ async def test_test_custom_code_endpoint_reports_a_system_exit_as_an_execution_e
 
 @pytest.mark.asyncio
 async def test_get_category_yaml_returns_bundled_category_and_its_file_type():
-    result = await get_category_yaml("harmful_self_harm")
+    result = await get_category_yaml("harmful_self_harm", roots=DATA_ROOTS)
     assert result["category_name"] == "harmful_self_harm"
     assert result["file_type"] == "yaml"
     assert yaml.safe_load(result["yaml_content"])["category_name"] == "harmful_self_harm"
@@ -2684,7 +2685,7 @@ async def test_get_category_yaml_returns_bundled_category_and_its_file_type():
 
 @pytest.mark.asyncio
 async def test_get_category_yaml_reports_json_file_type():
-    result = await get_category_yaml("harm_toxic_abuse")
+    result = await get_category_yaml("harm_toxic_abuse", roots=DATA_ROOTS)
     assert result["file_type"] == "json"
     json.loads(result["yaml_content"])
 
@@ -2692,12 +2693,38 @@ async def test_get_category_yaml_reports_json_file_type():
 @pytest.mark.asyncio
 async def test_get_category_yaml_rejects_traversal_with_400():
     with pytest.raises(HTTPException) as exc:
-        await get_category_yaml("../../etc/passwd")
+        await get_category_yaml("../../etc/passwd", roots=DATA_ROOTS)
     assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
 async def test_get_category_yaml_unknown_category_is_404():
     with pytest.raises(HTTPException) as exc:
-        await get_category_yaml("no_such_category_anywhere")
+        await get_category_yaml("no_such_category_anywhere", roots=DATA_ROOTS)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_category_yaml_refuses_a_symlink_pointing_outside_the_category_folders(tmp_path):
+    secret = tmp_path / "secret.txt"
+    secret.write_text("db_password: hunter2\n")
+    categories = tmp_path / "legacy" / "categories"
+    categories.mkdir(parents=True)
+    (categories / "escape.yaml").symlink_to(secret)
+
+    with pytest.raises(HTTPException) as exc:
+        await get_category_yaml("escape", roots=(*DATA_ROOTS, str(tmp_path / "legacy")))
+    assert exc.value.status_code == 400
+    assert "hunter2" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_category_yaml_serves_a_symlink_that_stays_inside_a_category_folder(tmp_path):
+    categories = tmp_path / "legacy" / "categories"
+    categories.mkdir(parents=True)
+    (categories / "real.yaml").write_text('category_name: "real"\nkeywords: []\n')
+    (categories / "alias.yaml").symlink_to(categories / "real.yaml")
+
+    result = await get_category_yaml("alias", roots=(*DATA_ROOTS, str(tmp_path / "legacy")))
+    assert result["file_type"] == "yaml"
+    assert yaml.safe_load(result["yaml_content"])["category_name"] == "real"

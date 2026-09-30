@@ -6,7 +6,11 @@ from unittest.mock import patch
 import pytest
 
 import litellm
-from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_DIR, LEGACY_DATA_DIR as INSTALLED_LEGACY_DATA_DIR
+from litellm.proxy.guardrails.content_filter_data import (
+    CATEGORIES_DIR,
+    DATA_DIR,
+    LEGACY_DATA_DIR as INSTALLED_LEGACY_DATA_DIR,
+)
 
 LEGACY_DATA_DIR = "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter"
 
@@ -89,9 +93,7 @@ class TestContentFilterPathTraversal:
         guardrail.category_keywords = {}
         guardrail.always_block_category_keywords = {}
         guardrail.conditional_categories = {}
-        guardrail._load_categories(
-            [{"category": "foo/../../etc/passwd", "enabled": True}]
-        )
+        guardrail._load_categories([{"category": "foo/../../etc/passwd", "enabled": True}])
         assert "foo/../../etc/passwd" not in guardrail.loaded_categories
 
     def test_assert_within_data_roots_blocks_parent_traversal(self):
@@ -111,22 +113,6 @@ class TestContentFilterPathTraversal:
         valid_file = str(tmp_path / "test.yaml")
         # Should not raise
         ContentFilterGuardrail._assert_within_data_roots(valid_file, (categories_dir,))
-
-    def test_assert_within_data_roots_commonpath_raises_valueerror(self, tmp_path):
-        """Cover the except-ValueError branch (Windows cross-drive paths)."""
-        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
-            ContentFilterGuardrail,
-        )
-
-        categories_dir = str(tmp_path)
-        valid_file = str(tmp_path / "test.yaml")
-        with patch(
-            "os.path.commonpath", side_effect=ValueError("Paths on different drives")
-        ):
-            with pytest.raises(
-                ValueError, match="outside the allowed categories directory"
-            ):
-                ContentFilterGuardrail._assert_within_data_roots(valid_file, (categories_dir,))
 
     def test_resolve_category_file_path_direct_join_hit(self):
         """Cover the first-join-attempt success branch (lines 383-384)."""
@@ -187,9 +173,7 @@ class TestContentFilterPathTraversal:
         external_file = tmp_path / "external_categories.yaml"
         external_file.write_text("category_name: test\n")
 
-        with patch.dict(
-            _os.environ, {"LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS": "true"}
-        ):
+        with patch.dict(_os.environ, {"LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS": "true"}):
             # Should return the path without raising ValueError.
             result = guardrail._resolve_category_file_path(str(external_file))
         assert result == str(external_file)
@@ -252,8 +236,12 @@ class TestLegacyPackageRootStaysSearchable:
 
     def test_custom_category_file_relative_to_legacy_root_resolves(self, legacy_root, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
-        resolved = _fresh_guardrail()._resolve_category_file_path("categories/custom_legacy.yaml", (DATA_DIR, legacy_root))
-        assert os.path.realpath(resolved) == os.path.realpath(os.path.join(legacy_root, "categories", "custom_legacy.yaml"))
+        resolved = _fresh_guardrail()._resolve_category_file_path(
+            "categories/custom_legacy.yaml", (DATA_DIR, legacy_root)
+        )
+        assert os.path.realpath(resolved) == os.path.realpath(
+            os.path.join(legacy_root, "categories", "custom_legacy.yaml")
+        )
 
     def test_bundled_root_wins_when_both_roots_hold_the_name(self, legacy_root):
         resolved = _fresh_guardrail()._resolve_category_file_path(
@@ -321,7 +309,9 @@ class TestLegacyPackageRootStaysSearchable:
         roots = (DATA_DIR, legacy_root)
         custom = find_category_file("custom_legacy", roots)
         bundled = find_category_file("harmful_self_harm", roots)
-        assert custom is not None and os.path.samefile(custom, os.path.join(legacy_root, "categories", "custom_legacy.yaml"))
+        assert custom is not None and os.path.samefile(
+            custom, os.path.join(legacy_root, "categories", "custom_legacy.yaml")
+        )
         assert bundled is not None and os.path.samefile(bundled, os.path.join(CATEGORIES_DIR, "harmful_self_harm.yaml"))
         assert find_category_file("no_such_category_anywhere", roots) is None
 

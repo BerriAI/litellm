@@ -46,6 +46,13 @@ def try_safe_join(base_dir: str, *parts: str) -> str | None:
         return None
 
 
+def is_within(path: str, base_dir: str) -> bool:
+    """True when path, with symlinks resolved, is base_dir or sits inside it."""
+    base: Final = os.path.realpath(base_dir)
+    resolved: Final = os.path.realpath(path)
+    return resolved.startswith(base + os.sep) or resolved == base
+
+
 def join_within(base_dir: str, *parts: str) -> str | None:
     """Join without following symlinks; None when the joined path leaves base_dir.
 

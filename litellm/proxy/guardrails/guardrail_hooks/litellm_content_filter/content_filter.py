@@ -29,7 +29,7 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.path_utils import try_safe_join
+from litellm.proxy.common_utils.path_utils import is_within, try_safe_join
 from litellm.proxy.guardrails.content_filter_data import (
     CATEGORIES_DIR,
     DATA_DIR,
@@ -373,18 +373,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         }
 
     @staticmethod
-    def _is_within_dir(path: str, directory: str) -> bool:
-        resolved: Final = os.path.realpath(path)
-        allowed: Final = os.path.realpath(directory)
-        try:
-            return os.path.commonpath([resolved, allowed]) == allowed
-        except ValueError:
-            return False
-
-    @classmethod
-    def _assert_within_data_roots(cls, path: str, roots: tuple[str, ...]) -> None:
+    def _assert_within_data_roots(path: str, roots: tuple[str, ...]) -> None:
         """Raise ValueError unless path sits inside one of the category data roots."""
-        if not any(cls._is_within_dir(path, root) for root in roots):
+        if not any(is_within(path, root) for root in roots):
             raise ValueError(
                 f"Category file path '{path}' is outside the allowed categories directory ({', '.join(roots)})"
             )
