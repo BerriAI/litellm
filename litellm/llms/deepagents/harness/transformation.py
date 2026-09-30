@@ -127,7 +127,7 @@ def recursion_limit(ctx: SessionContext) -> int:
     return DEEPAGENTS_DEFAULT_RECURSION_LIMIT
 
 
-def content_text(content: Any) -> str:
+def content_text(content: object) -> str:
     """Plain text of a LangChain message content (str or content blocks)."""
     if isinstance(content, str):
         return content
@@ -137,11 +137,11 @@ def content_text(content: Any) -> str:
     return "".join(parts)
 
 
-def _is_text_block(block: Any) -> bool:
+def _is_text_block(block: object) -> bool:
     return isinstance(block, str) or (isinstance(block, dict) and block.get("type") == "text")
 
 
-def reasoning_text(message: Any) -> str:
+def reasoning_text(message: object) -> str:
     """Reasoning deltas from additional_kwargs or reasoning/thinking content blocks."""
     extra = getattr(message, "additional_kwargs", None) or {}
     reasoning = extra.get("reasoning_content")
@@ -150,14 +150,14 @@ def reasoning_text(message: Any) -> str:
     content = getattr(message, "content", None)
     if not isinstance(content, list):
         return ""
-    parts: list[str] = []
-    for block in content:
-        if isinstance(block, dict) and block.get("type") in ("reasoning", "thinking"):
-            parts.append(str(block.get("reasoning") or block.get("thinking") or ""))
-    return "".join(parts)
+    return "".join(
+        str(block.get("reasoning") or block.get("thinking") or "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") in ("reasoning", "thinking")
+    )
 
 
-def stream_events(message: Any) -> list[Event]:
+def stream_events(message: object) -> list[Event]:
     """Text / Reasoning deltas for one streamed message chunk."""
     if getattr(message, "type", None) not in ("AIMessageChunk", "ai"):
         return []
@@ -183,7 +183,7 @@ def tool_call_event(call: Mapping[str, Any]) -> ToolCall:
     )
 
 
-def update_events(update: Any, skip_tools: frozenset[str]) -> list[Event]:
+def update_events(update: object, skip_tools: frozenset[str]) -> list[Event]:
     """ToolCall / ToolResult events from one `updates` stream chunk (node -> state delta)."""
     if not isinstance(update, Mapping):
         return []
@@ -199,7 +199,7 @@ def update_events(update: Any, skip_tools: frozenset[str]) -> list[Event]:
     return events
 
 
-def _message_events(message: Any, skip_tools: frozenset[str]) -> list[Event]:
+def _message_events(message: object, skip_tools: frozenset[str]) -> list[Event]:
     kind = getattr(message, "type", None)
     if kind == "ai":
         calls = getattr(message, "tool_calls", None) or []
@@ -215,7 +215,7 @@ def _message_events(message: Any, skip_tools: frozenset[str]) -> list[Event]:
     return []
 
 
-def interrupts_in(update: Any) -> list[Any]:
+def interrupts_in(update: object) -> list[Any]:
     if not isinstance(update, Mapping):
         return []
     found = update.get("__interrupt__")
@@ -231,7 +231,7 @@ def final_ai_text(messages: Sequence[Any]) -> str:
     return ""
 
 
-def structured_json(value: Any) -> str | None:
+def structured_json(value: object) -> str | None:
     if value is None:
         return None
     dump = getattr(value, "model_dump_json", None)
@@ -240,7 +240,7 @@ def structured_json(value: Any) -> str | None:
     return json.dumps(value, default=str)
 
 
-def approval_requests(interrupt_value: Any) -> list[Mapping[str, Any]]:
+def approval_requests(interrupt_value: object) -> list[Mapping[str, Any]]:
     """action_requests of a HumanInTheLoopMiddleware interrupt payload."""
     if not isinstance(interrupt_value, Mapping):
         return []
