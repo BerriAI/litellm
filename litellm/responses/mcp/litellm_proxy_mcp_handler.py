@@ -289,9 +289,8 @@ class LiteLLM_Proxy_MCP_Handler:
                                     _user_has_admin_view,
                                 )
 
-                                granted: Final = granted_toolsets or granted_toolset_ids
                                 if not _user_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
-                                    await granted(user_api_key_auth)
+                                    await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
                                 ):
                                     verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
                                     continue

@@ -8301,10 +8301,10 @@ class TestUserSubjectTeamUnion:
             self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]),
             patch.object(global_mcp_server_manager, "resolve_toolset_tool_permissions", resolve),
         ):
-            servers = await MCPRequestHandler._resolve_admitted_subject_servers(pinned)
-            tools = await MCPRequestHandler._resolve_admitted_subject_tools("srv1", pinned)
-            unpinned_servers = await MCPRequestHandler._resolve_admitted_subject_servers(auth)
-            unpinned_tools = await MCPRequestHandler._resolve_admitted_subject_tools("srv1", auth)
+            servers = await MCPRequestHandler.resolve_admitted_subject_servers(pinned)
+            tools = await MCPRequestHandler.resolve_admitted_subject_tools("srv1", pinned)
+            unpinned_servers = await MCPRequestHandler.resolve_admitted_subject_servers(auth)
+            unpinned_tools = await MCPRequestHandler.resolve_admitted_subject_tools("srv1", auth)
         assert servers == ["srv1"]
         assert tools == ["add"]
         assert set(unpinned_servers) == {"srv1", "srv2", "srv3"}
