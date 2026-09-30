@@ -4211,6 +4211,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None = None,
+        connected_as: str | None = None,
     ) -> None:
         """Mint an exchange-backed server's upstream credential at the transport edge.
 
@@ -4247,14 +4248,16 @@ class MCPServerManager:
                 )
 
                 if subject_token is None and caller_sign_in_for(server, user_api_key_auth) is not None:
-                    raise_token_exchange_challenge(server, root_path=get_request_root_path())
+                    raise_token_exchange_challenge(server, root_path=get_request_root_path(), connected_as=connected_as)
                 return
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
         spec: Final = _to_server_spec_fail_closed(resolved_server)
         if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
         if subject_token is None and isinstance(spec.config, TokenExchangeConfig):
-            raise_token_exchange_challenge(resolved_server, root_path=get_request_root_path())
+            raise_token_exchange_challenge(
+                resolved_server, root_path=get_request_root_path(), connected_as=connected_as
+            )
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
@@ -4264,6 +4267,7 @@ class MCPServerManager:
                         resolved_server,
                         root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
+                        connected_as=connected_as,
                     )
                 raise_public(err)
 

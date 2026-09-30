@@ -194,7 +194,16 @@ def _make_guardrail(
 
 
 def _default_fallback_guardrail(handler: FakeHandler, exchanger: StubTokenExchanger | None = None) -> Agent365Guardrail:
-    return _make_guardrail(handler, exchanger=exchanger)
+    return Agent365Guardrail(
+        guardrail_name="agent-365-guard",
+        tenant_id="tenant-abc",
+        client_id="client-xyz",
+        client_secret="secret-123",
+        async_handler=handler,
+        token_exchanger=exchanger if exchanger is not None else StubTokenExchanger(_obo_ok()),
+        event_hook="pre_mcp_call",
+        default_on=True,
+    )
 
 
 def _server(**overrides: Any) -> MCPServer:
@@ -320,11 +329,16 @@ class TestInitializeGuardrail:
             agent_id="yaml-agent",
         )
         handler: Final = FakeHandler([_allow_response()])
+        exchanger: Final = StubTokenExchanger(_obo_ok())
         with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-            initialize_guardrail(params, {"guardrail_name": "a365-stale"}, async_handler=handler)
+            guardrail: Final = initialize_guardrail(
+                params, {"guardrail_name": "a365-stale"}, async_handler=handler, token_exchanger=exchanger
+            )
         assert "ignoring api_base, resource_app_id, agent_id" in caplog.text
-        guardrail: Final = _make_guardrail(handler)
         await _run(guardrail, _mcp_data())
+        _, server, config = exchanger.calls[0]
+        assert server.resource == AGENT_365_PROD_API_BASE
+        assert config.scopes == (f"{AGENT_365_PROD_RESOURCE_APP_ID}/{AGENT_365_SCOPE_NAME}",)
         evaluate_call: Final = handler.calls[0]
         assert evaluate_call.url == EVALUATE_URL
         assert evaluate_call.json["agentId"] == "my-agent-key"

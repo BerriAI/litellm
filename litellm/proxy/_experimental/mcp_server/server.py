@@ -1763,6 +1763,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     user_api_key_auth=user_api_key_auth,
                     raw_headers=raw_headers,
+                    connected_as=server_name,
                 )
 
             # Pass-through OAuth: when the admin has opted a server into

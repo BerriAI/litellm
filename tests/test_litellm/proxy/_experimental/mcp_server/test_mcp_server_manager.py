@@ -2931,6 +2931,31 @@ class TestMCPServerManager:
         assert "resource_metadata" in www_authenticate
 
     @pytest.mark.asyncio
+    async def test_preflight_rejected_subject_challenge_names_the_connected_segment(self):
+        """A subject rejected on ``/mcp/<server_id>`` must point resource_metadata at that same
+        segment, the way the sign-in preflight does, so the client's discovery fetch resolves."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_unauthorized("subject token rejected by the IdP"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-segment")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer rejected-subject"},
+                user_api_key_auth=None,
+                connected_as=server.server_id,
+            )
+        headers = exc_info.value.headers or {}
+        www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+        assert f"/.well-known/oauth-protected-resource/mcp/{server.server_id}" in www_authenticate, www_authenticate
+
+    @pytest.mark.asyncio
     async def test_preflight_token_exchange_maps_gateway_fault_to_public_status(self):
         """A gateway-fault CredError (e.g. invalid_client) must surface its public status (500)
         from the preflight, not the OBO 401 challenge and not an empty-success session."""
