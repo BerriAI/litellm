@@ -60856,6 +60856,27 @@
         "supports_sampling_params": false,
         "supports_vision": true
     },
+    "impossibl/anthropic/claude-opus-5-5": {
+        "cache_creation_input_token_cost": 5e-06,
+        "cache_creation_input_token_cost_above_1hr": 8e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "prompt_cache_min_tokens": 512,
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_vision": true,
+        "thinking_always_on": true
+    },
     "impossibl/anthropic/claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -60912,6 +60933,27 @@
         "supports_reasoning": true,
         "supports_sampling_params": false,
         "supports_vision": true
+    },
+    "impossibl/anthropic/claude-sonnet-5-5": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "prompt_cache_min_tokens": 512,
+        "supports_adaptive_thinking": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_vision": true,
+        "thinking_always_on": true
     },
     "impossibl/deepseek/deepseek-v3-2": {
         "input_cost_per_token": 5.8e-07,
@@ -61053,6 +61095,24 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "impossibl/google/gemini-3-pro-image": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "impossibl",
+        "mode": "image_generation",
+        "output_cost_per_token": 0.00012,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "impossibl/google/gemini-3.1-flash-image": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "impossibl",
+        "mode": "image_generation",
+        "output_cost_per_token": 6e-05,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "impossibl/google/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5000000000000002e-08,
         "input_cost_per_audio_token": 5e-07,
@@ -61069,6 +61129,15 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "impossibl/google/gemini-3.1-flash-lite-image": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "impossibl",
+        "mode": "image_generation",
+        "output_cost_per_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
     },
     "impossibl/google/gemini-3.1-flash-tts-preview": {
         "input_cost_per_token": 1e-06,
@@ -61178,6 +61247,27 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "impossibl/google/gemini-3.8-flash-tts": {
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "impossibl",
+        "mode": "audio_speech",
+        "output_cost_per_token": 2e-05,
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "impossibl/google/gemini-embedding-2": {
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "output_vector_size": 3072,
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
     "impossibl/google/gemini-robotics-er-2-preview": {
         "cache_read_input_token_cost": 2.0000000000000002e-07,
         "input_cost_per_token": 2e-06,
@@ -61203,6 +61293,19 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_vision": true
+    },
+    "impossibl/meituan/longcat-2.0": {
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1048756,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": false
     },
     "impossibl/meta/llama-3.3-70b": {
         "input_cost_per_token": 7.1e-07,
@@ -61296,6 +61399,20 @@
         "supports_pdf_input": true,
         "supports_vision": true
     },
+    "impossibl/moonshotai/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
     "impossibl/moonshotai/kimi-k3": {
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -61310,6 +61427,19 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "impossibl/nvidia/nemotron-3-ultra-550b-a55b": {
+        "cache_read_input_token_cost": 1.2e-07,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
     },
     "impossibl/nvidia/nemotron-3.5-lightning": {
         "cache_read_input_token_cost": 1e-08,
@@ -61770,6 +61900,66 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "impossibl/openai/gpt-6-luna": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "impossibl/openai/gpt-6-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "impossibl/openai/gpt-6.1-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
     "impossibl/openai/gpt-image-2": {
         "input_cost_per_token": 5e-06,
         "litellm_provider": "impossibl",
@@ -61913,6 +62103,35 @@
             "/v1/embeddings"
         ]
     },
+    "impossibl/openai/whisper-large-v3": {
+        "input_cost_per_second": 3.083e-05,
+        "litellm_provider": "impossibl",
+        "mode": "audio_transcription",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true
+    },
+    "impossibl/openai/whisper-large-v3-turbo": {
+        "input_cost_per_second": 1.111e-05,
+        "litellm_provider": "impossibl",
+        "mode": "audio_transcription",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true
+    },
+    "impossibl/qwen/qwen3-embedding-8b": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 40960,
+        "max_tokens": 40960,
+        "mode": "embedding",
+        "output_cost_per_token": 0,
+        "supported_endpoints": [
+            "/v1/embeddings"
+        ]
+    },
     "impossibl/qwen/qwen3.6-flash": {
         "cache_read_input_token_cost": 5.0000000000000004e-08,
         "cache_read_input_token_cost_above_256k_tokens": 2.0000000000000002e-07,
@@ -61929,6 +62148,29 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true
+    },
+    "impossibl/qwen/qwen3.7-flash": {
+        "cache_creation_input_token_cost": 3.8e-08,
+        "cache_creation_input_token_cost_above_256k_tokens": 2.5e-07,
+        "cache_creation_input_token_cost_above_32k_tokens": 1.25e-07,
+        "cache_read_input_token_cost": 6e-09,
+        "cache_read_input_token_cost_above_256k_tokens": 4e-08,
+        "cache_read_input_token_cost_above_32k_tokens": 2e-08,
+        "input_cost_per_token": 3e-08,
+        "input_cost_per_token_above_256k_tokens": 2e-07,
+        "input_cost_per_token_above_32k_tokens": 1e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.3e-07,
+        "output_cost_per_token_above_256k_tokens": 8e-07,
+        "output_cost_per_token_above_32k_tokens": 4e-07,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
     },
     "impossibl/qwen/qwen3.7-max": {
         "cache_read_input_token_cost": 5e-07,
@@ -61989,6 +62231,21 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "impossibl/qwen/qwen3.8-flash": {
+        "cache_creation_input_token_cost": 2e-07,
+        "cache_read_input_token_cost": 1.6e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.7e-07,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
     "impossibl/qwen/qwen3.8-max": {
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_read_input_token_cost": 2.5e-07,
@@ -62044,6 +62301,33 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_vision": true
+    },
+    "impossibl/thinkingmachines/inkling-small": {
+        "cache_read_input_token_cost": 1.16e-07,
+        "input_cost_per_token": 5.8e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 65536,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 1.44e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "impossibl/thinkingmachines/inkling-small-256k": {
+        "cache_read_input_token_cost": 2.32e-07,
+        "input_cost_per_token": 1.16e-06,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 2.89e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_vision": true
     },
     "impossibl/xai/grok-4.20-0309-non-reasoning": {
@@ -62152,6 +62436,23 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "impossibl/xai/grok-4.7": {
+        "cache_read_input_token_cost": 5e-07,
+        "cache_read_input_token_cost_above_200k_tokens": 1e-06,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 500000,
+        "max_output_tokens": 500000,
+        "max_tokens": 500000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 1.2e-05,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
     "impossibl/xai/grok-build-0.1": {
         "cache_read_input_token_cost": 2.0000000000000002e-07,
         "cache_read_input_token_cost_above_200k_tokens": 4.0000000000000003e-07,
@@ -62168,6 +62469,15 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_vision": true
+    },
+    "impossibl/xai/grok-stt-1.0": {
+        "input_cost_per_second": 2.778e-05,
+        "litellm_provider": "impossibl",
+        "mode": "audio_transcription",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true
     },
     "impossibl/xai/grok-voice-tts-1.0": {
         "input_cost_per_character": 1.5e-05,
@@ -62191,6 +62501,19 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "impossibl/xiaomi/mimo-v2.5-pro": {
+        "cache_read_input_token_cost": 4e-09,
+        "input_cost_per_token": 4.35e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1024000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-07,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
     },
     "impossibl/zai/glm-4.5": {
         "cache_read_input_token_cost": 1.1e-07,
@@ -62296,19 +62619,6 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true
     },
-    "impossibl/zai/glm-5.2-fast": {
-        "cache_read_input_token_cost": 2.1e-07,
-        "input_cost_per_token": 2.1000000000000002e-06,
-        "litellm_provider": "impossibl",
-        "max_input_tokens": 1040000,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 6.5999999999999995e-06,
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true
-    },
     "impossibl/zai/glm-5.3": {
         "cache_read_input_token_cost": 2.6e-07,
         "input_cost_per_token": 1.4e-06,
@@ -62318,6 +62628,19 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
+    },
+    "impossibl/zai/glm-5.3-fast": {
+        "cache_read_input_token_cost": 3.9e-07,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 6.6e-06,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true
@@ -62333,6 +62656,20 @@
         "output_cost_per_token": 5e-07,
         "supports_function_calling": true,
         "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "impossibl/zai/glm-5.3-flashx": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "input_cost_per_token": 3.7e-07,
+        "litellm_provider": "impossibl",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-06,
+        "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_vision": true
