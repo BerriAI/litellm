@@ -3,10 +3,10 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final
 
-from litellm.rust_bridge.traces import query as query_traces
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.rust_bridge.traces import query as query_traces
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])

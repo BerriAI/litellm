@@ -1,8 +1,7 @@
 from typing import Final
 
-from litellm.rust_bridge.traces import schema_statements
-
 from litellm.integrations.clickhouse.clickhouse_client import ClickHouseClient
+from litellm.rust_bridge.traces import schema_statements
 
 OTEL_TRACES_TABLE: Final = "otel_traces"
 AGENT_TRACES_TABLE: Final = "agent_traces"
