@@ -572,6 +572,23 @@ async def test_reused_profile_preserves_email_only_when_lookup_fails(profile_sta
     assert report["pulls"][0]["profile_email"] == expected
     assert report["pulls"][0]["emails"] == ((expected,) if expected else ())
     assert summarize(report, MappingProxyType({}))["metrics"]["cost_per_hour"] == (None if profile_status == 200 else 3)
+    repository.values = MappingProxyType(
+        {key: value for key, value in repository.values.items() if key != "roi_calculator_report"}
+    )
+
+    def unavailable_profile(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/alice":
+            return httpx.Response(503)
+        return baseline.handle_request(request)
+
+    restarted: Final = SyncManager(clock=_fixed_now)
+    assert await restarted.start(
+        _settings(), repository, _spend_reader(), unexpected_completion, httpx.MockTransport(unavailable_profile)
+    )
+    await _wait_until_finished(restarted)
+    subsequent: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert subsequent["pulls"][0]["profile_email"] == expected
+    assert subsequent["pulls"][0]["emails"] == ((expected,) if expected else ())
 
 
 @pytest.mark.asyncio

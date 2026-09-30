@@ -313,6 +313,15 @@ def _processed_records(processed: tuple[_ProcessedPull, ...]) -> Mapping[int, RO
     return MappingProxyType({item.position: item.record for item in processed})
 
 
+async def _cache_estimated_pull(repository: _ReportRepository, key: str | None, record: ROIPullRecord) -> None:
+    if key is None or record["estimate"]["status"] != "estimated":
+        return
+    await repository.set_param(
+        "roi_calculator_pull_" + key,
+        _JSON_OBJECT_ADAPTER.validate_python(TypeAdapter(ROIPullRecord).dump_python(record, mode="json")),
+    )
+
+
 class SyncManager:
     def __init__(
         self,
@@ -497,6 +506,7 @@ class SyncManager:
                             }
                         )
                     )
+                    await _cache_estimated_pull(repository, key, cached_record)
                     self._update_estimate_progress(cached_record["estimate"])
                     return _ProcessedPull(index, cached_record)
                 try:
@@ -521,13 +531,7 @@ class SyncManager:
                 )
                 fetched_key: Final = cache_key(settings, context, repo, evidence_item)
                 record: Final = self._report_record(evidence, estimate, fetched_key)
-                if fetched_key is not None and estimate["status"] == "estimated":
-                    await repository.set_param(
-                        "roi_calculator_pull_" + fetched_key,
-                        _JSON_OBJECT_ADAPTER.validate_python(
-                            TypeAdapter(ROIPullRecord).dump_python(record, mode="json")
-                        ),
-                    )
+                await _cache_estimated_pull(repository, fetched_key, record)
                 self._update_estimate_progress(estimate)
                 return _ProcessedPull(index, record)
 
