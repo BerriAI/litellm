@@ -3,6 +3,8 @@ import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from hashlib import sha256
 from itertools import chain
 from typing import Final
 
@@ -34,7 +36,16 @@ INSERT_SPEND_LOG: Final = (
     " VALUES (%s, 'acompletion', %s, %s::timestamp, %s::timestamp, %s)"
 )
 DELETE_SPEND_LOG: Final = 'DELETE FROM "LiteLLM_SpendLogs" WHERE request_id = %s'
+INSERT_SPEND_LOG_ROW: Final = (
+    'INSERT INTO "LiteLLM_SpendLogs" (request_id, call_type, api_key, "startTime", "endTime", metadata, team_id, "user")'
+    " VALUES (%s, 'acompletion', %s, %s::timestamp, %s::timestamp, %s, %s, %s)"
+)
+DELETE_SPEND_LOG_ROWS: Final = 'DELETE FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)'
+DELETE_KEY_ROW: Final = 'DELETE FROM "LiteLLM_VerificationToken" WHERE token = %s'
+DELETE_ARCHIVED_KEY_ROW: Final = 'DELETE FROM "LiteLLM_DeletedVerificationToken" WHERE token = %s'
 LOCK_TABLE: Final = sql.SQL("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")
+SPEND_LOGS_TABLE: Final = "LiteLLM_SpendLogs"
+FIRST_SPEND_LOG_AT: Final = datetime(2026, 2, 3, 12, 0, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +76,10 @@ def user_with_an_email(scenario: Scenario) -> tuple[str, str]:
 
 def key_no_key_table_holds() -> str:
     return f"integration-ownerless-{uuid.uuid4().hex}"
+
+
+def digest_no_key_table_holds() -> str:
+    return sha256(uuid.uuid4().bytes).hexdigest()
 
 
 def activity_of_key(
@@ -146,6 +161,56 @@ def spend_log_naming_only_an_alias(request_id: str, api_key: str, started: str, 
     finally:
         with psycopg.connect(os.environ["DATABASE_URL"]) as connection:
             connection.execute(DELETE_SPEND_LOG, (request_id,))
+
+
+@dataclass(frozen=True, slots=True)
+class SpendLogRow:
+    started: str
+    metadata: JsonValue = None
+    team_id: str | None = None
+    user: str | None = None
+
+
+def started_at(index: int) -> str:
+    return (FIRST_SPEND_LOG_AT + timedelta(seconds=index)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def nameless_rows(count: int, first_index: int = 0) -> tuple[SpendLogRow, ...]:
+    return tuple(SpendLogRow(started_at(first_index + offset), {}) for offset in range(count))
+
+
+def named_row(index: int, alias: str) -> SpendLogRow:
+    return SpendLogRow(started_at(index), {"user_api_key_alias": alias})
+
+
+@contextmanager
+def spend_logs_of_key(
+    api_key: str, rows: Sequence[SpendLogRow], *, database_url: str | None = None
+) -> Iterator[tuple[str, ...]]:
+    request_ids: Final = tuple(f"integration-{uuid.uuid4().hex}" for _ in rows)
+    with psycopg.connect(database_url or os.environ["DATABASE_URL"]) as connection:
+        connection.cursor().executemany(
+            INSERT_SPEND_LOG_ROW,
+            tuple(
+                (request_id, api_key, row.started, row.started, Jsonb(row.metadata), row.team_id, row.user)
+                for request_id, row in zip(request_ids, rows, strict=True)
+            ),
+        )
+    try:
+        yield request_ids
+    finally:
+        delete_spend_logs(request_ids, database_url=database_url)
+
+
+def delete_spend_logs(request_ids: Sequence[str], *, database_url: str | None = None) -> None:
+    with psycopg.connect(database_url or os.environ["DATABASE_URL"]) as connection:
+        connection.execute(DELETE_SPEND_LOG_ROWS, (list(request_ids),))
+
+
+def purge_key_from_the_key_tables(digest: str, *, database_url: str | None = None) -> None:
+    with psycopg.connect(database_url or os.environ["DATABASE_URL"]) as connection:
+        connection.execute(DELETE_KEY_ROW, (digest,))
+        connection.execute(DELETE_ARCHIVED_KEY_ROW, (digest,))
 
 
 @contextmanager
