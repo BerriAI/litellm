@@ -242,7 +242,26 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
-            effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            if isinstance(reasoning, dict) and isinstance(effort, str) and effort in ("none", "minimal", "low"):
+                from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+                if OpenAIGPT5Config._is_reasoning_effort_level_explicitly_disabled(lookup_name, effort):
+                    if drop_params or litellm.drop_params:
+                        remaining: Final = {key: value for key, value in reasoning.items() if key != "effort"}
+                        if remaining:
+                            params["reasoning"] = remaining
+                        else:
+                            params.pop("reasoning", None)
+                        effort = None
+                    else:
+                        raise litellm.UnsupportedParamsError(
+                            message=(
+                                f"reasoning.effort={effort} is not supported for {model}. "
+                                "To drop unsupported params set `litellm.drop_params = True`"
+                            ),
+                            status_code=400,
+                        )
             supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
             effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
 
