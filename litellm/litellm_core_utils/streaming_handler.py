@@ -1110,11 +1110,10 @@ class CustomStreamWrapper:
         completion_obj: dict[str, Any],
     ) -> _ProviderChunkResult:
         response_obj: dict[str, Any] = {}
-        if (
-            isinstance(chunk, ModelResponseStream)
-            and self.custom_llm_provider is not None
-            and self.custom_llm_provider in litellm._custom_providers
-        ):
+        is_registered_custom_provider: Final = (
+            self.custom_llm_provider is not None and self.custom_llm_provider in litellm._custom_providers
+        )
+        if isinstance(chunk, ModelResponseStream) and is_registered_custom_provider:
             _has_content: Final = bool(
                 chunk.choices
                 and chunk.choices[0].delta is not None
@@ -1133,10 +1132,19 @@ class CustomStreamWrapper:
                 chunk.choices[0].finish_reason = None
             return _ProviderChunkEarlyReturn(chunk)
 
+        is_generic_chunk: Final = isinstance(chunk, dict) and generic_chunk_has_all_required_fields(chunk=chunk)
         if (
             isinstance(chunk, dict)
-            and generic_chunk_has_all_required_fields(chunk=chunk)  # check if chunk is a generic streaming chunk
-        ) or (self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers):
+            and not is_generic_chunk
+            and (chunk.keys() <= _GCHUNK_FIELDS or is_registered_custom_provider)
+        ):
+            partial_chunk_usage: Final = chunk.get("usage")
+            if isinstance(partial_chunk_usage, dict):
+                model_response.usage = litellm.Usage(**partial_chunk_usage)
+                return _ProviderChunkParsed(cast(dict[str, object], chunk))
+            return _ProviderChunkEarlyReturn(None)
+
+        if is_generic_chunk:
             if self.received_finish_reason is not None:
                 _chunk_has_content: Final = isinstance(chunk, dict) and (
                     bool(chunk.get("text", ""))

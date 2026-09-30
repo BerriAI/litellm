@@ -2511,6 +2511,46 @@ def test_usage_only_chunk_not_dropped_when_finish_reason_already_set(
     assert result.usage is not None
 
 
+@pytest.mark.parametrize("custom_llm_provider", [None, "my-custom-llm"])
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param({"is_finished": False}, id="finish-state-only"),
+    ],
+)
+def test_chunk_creator_skips_incomplete_generic_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    custom_llm_provider: str | None,
+    chunk: dict[str, object],
+):
+    if custom_llm_provider is not None:
+        monkeypatch.setattr(litellm, "_custom_providers", [custom_llm_provider])
+        initialized_custom_stream_wrapper.custom_llm_provider = custom_llm_provider
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    assert result is None
+    assert initialized_custom_stream_wrapper.chunks == []
+
+
+@pytest.mark.parametrize("custom_llm_provider", [None, "my-custom-llm"])
+def test_chunk_creator_records_incomplete_usage_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    custom_llm_provider: str | None,
+):
+    if custom_llm_provider is not None:
+        monkeypatch.setattr(litellm, "_custom_providers", [custom_llm_provider])
+        initialized_custom_stream_wrapper.custom_llm_provider = custom_llm_provider
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk={"usage": {"prompt_tokens": 1}})
+
+    assert result is None
+    assert initialized_custom_stream_wrapper.chunks[-1].usage.prompt_tokens == 1
+
+
 def _run_dispatch(wrapper: CustomStreamWrapper, chunk):
     model_response = wrapper.model_response_creator()
     completion_obj = {"content": ""}
