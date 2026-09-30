@@ -39,6 +39,12 @@ class ImageContent(BaseModel):
     image_url: ImageURLContent
 
 
+class FileContent(BaseModel):
+    type_: Literal["file"] = Field(default="file", alias="type")
+    file_data: str
+    filename: str = ""
+
+
 class FunctionObj(BaseModel):
     name: str
     arguments: str
@@ -95,7 +101,7 @@ class SAPMessage(BaseModel):
 
 class SAPUserMessage(BaseModel):
     role: Literal["user"] = "user"
-    content: str | TextContent | ImageContent | list[TextContent | ImageContent]
+    content: str | TextContent | ImageContent | FileContent | list[TextContent | ImageContent | FileContent]
 
 
 class ReasoningBlock(BaseModel):
