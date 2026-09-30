@@ -8,11 +8,13 @@ import sys
 import threading
 import time
 import weakref
-from collections.abc import AsyncIterable, Callable, Iterable, Mapping
+import zlib
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import aclosing
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, Protocol, TypeAlias, TypedDict, TypeVar
 
 import certifi
 import httpx
@@ -59,6 +61,14 @@ try:
     from litellm._version import version
 except Exception:
     version = "0.0.0"
+
+try:
+    from brotli import Decompressor as _BrotliInflater
+    from brotli import error as _BrotliError
+except ImportError:
+    _BrotliInflater = None
+
+    class _BrotliError(Exception): ...
 
 
 # aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
@@ -553,6 +563,15 @@ class HTTPResponseLimitError(ValueError):
     pass
 
 
+class HTTPResponseEncodingError(HTTPResponseLimitError):
+    pass
+
+
+_WIRE_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length"})
+_ENCODED_OVERHEAD_DIVISOR: Final = 4096
+_ENCODED_OVERHEAD_BYTES: Final = 64
+
+
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
     def __init__(self, original_error, message: str | None = None, text: str | None = None):
         # Create a new error with the masked URL
@@ -603,6 +622,194 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.message = message
         self.text = text
         self.status_code = original_error.response.status_code
+
+
+def _headers_of_the_decoded_body(headers: httpx.Headers) -> httpx.Headers:
+    return httpx.Headers(
+        tuple((name, value) for name, value in headers.multi_items() if name not in _WIRE_BODY_HEADERS)
+    )
+
+
+def _encodings_of(headers: httpx.Headers) -> tuple[str, ...]:
+    declared: Final[str] = headers.get("content-encoding", "identity")
+    names: Final = tuple(name.strip().lower() for name in declared.split(",") if name.strip())
+    return tuple(name for name in names if name != "identity") or ("identity",)
+
+
+def _encoded_byte_limit(max_bytes: int) -> int:
+    return max_bytes + max_bytes // _ENCODED_OVERHEAD_DIVISOR + _ENCODED_OVERHEAD_BYTES
+
+
+def _wire_byte_limit(headers: httpx.Headers, max_bytes: int) -> int:
+    if _encodings_of(headers) == ("identity",):
+        return max_bytes
+    return _encoded_byte_limit(max_bytes)
+
+
+async def _wire_bounded(response: httpx.Response, limit: int) -> AsyncGenerator[bytes, None]:
+    async for chunk in response.aiter_raw():
+        if response.num_bytes_downloaded > limit:
+            raise HTTPResponseLimitError("Response exceeds the configured size limit")
+        yield chunk
+
+
+def _already_read_within(response: httpx.Response, max_bytes: int) -> httpx.Response:
+    if len(response.content) > max_bytes:
+        raise HTTPResponseLimitError("Response exceeds the configured size limit")
+    return httpx.Response(
+        response.status_code,
+        headers=_headers_of_the_decoded_body(response.headers),
+        content=response.content,
+        request=response.request,
+    )
+
+
+class _BoundedDecoder(Protocol):
+    def decode(self, data: bytes, max_output: int) -> bytes: ...
+
+    def finish(self) -> None:
+        """Raise httpx.DecodingError when the wire ended before the compressed stream did."""
+
+
+class _IdentityDecoder:
+    def decode(self, data: bytes, max_output: int) -> bytes:
+        return data
+
+    def finish(self) -> None:
+        return None
+
+
+class _ZlibDecoder:
+    def __init__(self, wbits: int) -> None:
+        self._inflate = zlib.decompressobj(wbits)
+        self._raw_fallback = wbits == zlib.MAX_WBITS
+
+    def _inflate_once(self, data: bytes, max_output: int) -> bytes:
+        try:
+            return self._inflate.decompress(data, max_output)
+        except zlib.error as zlib_wrapped:
+            if not self._raw_fallback:
+                raise httpx.DecodingError(str(zlib_wrapped)) from zlib_wrapped
+        self._inflate = zlib.decompressobj(-zlib.MAX_WBITS)
+        try:
+            return self._inflate.decompress(data, max_output)
+        except zlib.error as raw_deflate:
+            raise httpx.DecodingError(str(raw_deflate)) from raw_deflate
+
+    def decode(self, data: bytes, max_output: int) -> bytes:
+        def drained() -> Iterator[bytes]:
+            produced = 0  # rebind-ok: running total of the bytes yielded so far
+            pending = data  # rebind-ok: first call feeds the wire bytes, later calls feed the unconsumed tail
+            while produced < max_output and pending:
+                piece: bytes = self._inflate_once(pending, max_output - produced)
+                self._raw_fallback = False
+                produced += len(piece)
+                pending = self._inflate.unconsumed_tail
+                yield piece
+
+        return b"".join(drained())
+
+    def finish(self) -> None:
+        if not self._inflate.eof:
+            raise httpx.DecodingError("Compressed response ended before the end of the stream")
+
+
+class _BrotliDecoder:
+    def __init__(self, inflate: "_BrotliInflater") -> None:
+        self._inflate: Final = inflate
+
+    def decode(self, data: bytes, max_output: int) -> bytes:
+        def drained() -> Iterator[bytes]:
+            produced = 0  # rebind-ok: running total of the bytes yielded so far
+            pending = data  # rebind-ok: first call feeds the wire bytes, later calls drain buffered output
+            while produced < max_output:
+                try:
+                    piece: bytes = self._inflate.process(pending, output_buffer_limit=max_output - produced)
+                except _BrotliError as exc:
+                    raise httpx.DecodingError(str(exc)) from exc
+                produced += len(piece)
+                pending = b""
+                yield piece
+                if not piece or self._inflate.is_finished():
+                    return
+
+        return b"".join(drained())
+
+    def finish(self) -> None:
+        if not self._inflate.is_finished():
+            raise httpx.DecodingError("Compressed response ended before the end of the stream")
+
+
+class _CappedStage:
+    """Intermediate stage of a stacked encoding whose total output over the whole response is capped."""
+
+    def __init__(self, stage: _BoundedDecoder, cap: int) -> None:
+        self._stage: Final = stage
+        self._cap: Final = cap
+        self._produced = 0
+
+    def decode(self, data: bytes) -> bytes:
+        allowance: Final = self._cap - self._produced
+        out: Final = self._stage.decode(data, allowance + 1)
+        self._produced += len(out)
+        if len(out) > allowance:
+            raise HTTPResponseLimitError("Response exceeds the configured size limit")
+        return out
+
+    def finish(self) -> None:
+        self._stage.finish()
+
+
+class _ChainedDecoder:
+    """Undo stacked Content-Encoding values, last applied first, bounding every intermediate stage."""
+
+    def __init__(self, stages: Sequence[_BoundedDecoder], max_output: int) -> None:
+        *outer, last = stages
+        cap: Final = _encoded_byte_limit(max_output)
+        self._outer: Final = tuple(_CappedStage(stage, cap) for stage in outer)
+        self._last: Final = last
+
+    def decode(self, data: bytes, max_output: int) -> bytes:
+        passed = data  # rebind-ok: each stage's output feeds the next stage
+        for stage in self._outer:
+            passed = stage.decode(passed)
+        return self._last.decode(passed, max_output)
+
+    def finish(self) -> None:
+        for stage in self._outer:
+            stage.finish()
+        self._last.finish()
+
+
+def _bounded_decoder(headers: httpx.Headers, max_bytes: int) -> _BoundedDecoder:
+    brotli_inflater: Final = _BrotliInflater
+    factories: Final[Mapping[str, Callable[[], _BoundedDecoder]]] = MappingProxyType(
+        {
+            "identity": _IdentityDecoder,
+            "gzip": lambda: _ZlibDecoder(zlib.MAX_WBITS | 16),
+            "x-gzip": lambda: _ZlibDecoder(zlib.MAX_WBITS | 16),
+            "deflate": lambda: _ZlibDecoder(zlib.MAX_WBITS),
+            **({} if brotli_inflater is None else {"br": lambda: _BrotliDecoder(brotli_inflater())}),
+        }
+    )
+    encodings: Final = _encodings_of(headers)
+    if any(name not in factories for name in encodings):
+        raise HTTPResponseEncodingError(
+            "Response size limits require an identity, gzip, deflate, or br encoded response"
+        )
+    stages: Final = tuple(factories[name]() for name in reversed(encodings))
+    return stages[0] if len(stages) == 1 else _ChainedDecoder(stages, max_bytes)
+
+
+async def _decoded_within(response: httpx.Response, wire: AsyncGenerator[bytes, None], max_bytes: int) -> bytes:
+    decoder: Final = _bounded_decoder(response.headers, max_bytes)
+    with BytesIO() as body:
+        async for chunk in wire:
+            body.write(decoder.decode(chunk, max_bytes + 1 - body.tell()))
+            if body.tell() > max_bytes:
+                raise HTTPResponseLimitError("Response exceeds the configured size limit")
+        decoder.finish()
+        return body.getvalue()
 
 
 class AsyncHTTPHandler:
@@ -780,17 +987,17 @@ class AsyncHTTPHandler:
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            if response.headers.get("content-encoding", "identity").lower() != "identity":
-                raise HTTPResponseLimitError("Response size limits require an uncompressed response")
-            if int(response.headers.get("content-length", "0")) > max_bytes:
+            if response.is_stream_consumed:
+                return _already_read_within(response, max_bytes)
+            wire_limit: Final = _wire_byte_limit(response.headers, max_bytes)
+            if int(response.headers.get("content-length", "0")) > wire_limit:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
-            with BytesIO() as body:
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    if body.tell() + len(chunk) > max_bytes:
-                        raise HTTPResponseLimitError("Response exceeds the configured size limit")
-                    body.write(chunk)
+            async with aclosing(_wire_bounded(response, wire_limit)) as wire:
                 return httpx.Response(
-                    response.status_code, headers=response.headers, content=body.getvalue(), request=response.request
+                    response.status_code,
+                    headers=_headers_of_the_decoded_body(response.headers),
+                    content=await _decoded_within(response, wire, max_bytes),
+                    request=response.request,
                 )
         finally:
             await response.aclose()

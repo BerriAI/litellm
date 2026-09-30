@@ -1,11 +1,14 @@
 import asyncio
 import gc
+import gzip
 import io
 import os
 import pathlib
 import ssl
 import threading
+import tracemalloc
 import weakref
+import zlib
 from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -21,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
     AsyncHTTPHandler,
     HTTPHandler,
+    HTTPResponseLimitError,
     MaskedHTTPStatusError,
     _get_httpx_client,
     get_ssl_configuration,
@@ -1439,7 +1443,6 @@ async def test_connection_error_retry_forwards_content(method: str):
         await handler.close()
 
 
-
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
@@ -1570,9 +1573,7 @@ def private_ca_tls_upstream(tmp_path: pathlib.Path):
     ca_pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_pem = tmp_path / "key.pem"
     key_pem.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     )
 
     class OkTlsHandler(BaseHTTPRequestHandler):
@@ -1747,8 +1748,11 @@ async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_
     handler = AsyncHTTPHandler()
     try:
         response = await handler.get(
-            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
-            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+            "https://example.com/spec.json?original=1",
+            max_response_bytes=100,
+            follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"},
+            timeout=2.0,
         )
     finally:
         await handler.close()
@@ -1771,6 +1775,266 @@ async def test_bounded_get_stops_redirect_loops(respx_mock, monkeypatch):
     finally:
         await handler.close()
     assert route.call_count == 11
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_decodes_a_compressed_body_and_reports_the_decoded_length(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document = b"benign document text\n" * 40
+    compressed = gzip.compress(document)
+    respx_mock.get("https://cdn.example/notes.txt").respond(
+        200, content=compressed, headers={"content-encoding": "gzip", "content-length": str(len(compressed))}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get("https://cdn.example/notes.txt", max_response_bytes=len(document))
+    finally:
+        await handler.close()
+    assert response.content == document
+    assert "content-encoding" not in response.headers
+    assert response.headers["content-length"] == str(len(document))
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_reads_a_compressed_body_whose_wire_length_exceeds_the_cap(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document = bytes(range(256))
+    compressed = gzip.compress(document)
+    assert len(compressed) > len(document)
+    respx_mock.get("https://cdn.example/blob.bin").respond(
+        200, content=compressed, headers={"content-encoding": "gzip", "content-length": str(len(compressed))}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get("https://cdn.example/blob.bin", max_response_bytes=len(document))
+    finally:
+        await handler.close()
+    assert response.content == document
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_caps_the_decoded_size_of_a_compressed_body(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    compressed = gzip.compress(b"0" * 200_000)
+    assert len(compressed) < 50_000
+    respx_mock.get("https://cdn.example/bomb.txt").respond(
+        200, content=compressed, headers={"content-encoding": "gzip", "content-length": str(len(compressed))}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/bomb.txt", max_response_bytes=50_000)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_caps_the_wire_bytes_of_a_compressed_body_that_decodes_to_nothing(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    padded = gzip.compress(b"hello") + b"\x00" * 100_000
+    respx_mock.get("https://cdn.example/padded.txt").respond(200, content=padded, headers={"content-encoding": "gzip"})
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/padded.txt", max_response_bytes=1024)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_serves_a_body_the_transport_already_read(monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    card: Final = {"data": [{"id": "served", "max_model_len": 8192}]}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=card)
+
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        response = await handler.get("https://one.test/v1/models", max_response_bytes=2 * 1024 * 1024)
+    finally:
+        await handler.close()
+    assert response.json() == card
+    assert response.headers["content-length"] == str(len(response.content))
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_bounds_an_already_read_body_on_its_decoded_length(monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document: Final = b"0" * 4096
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=gzip.compress(document), headers={"content-encoding": "gzip"})
+
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        served = await handler.get("https://cdn.example/notes.txt", max_response_bytes=len(document))
+        assert served.content == document
+        assert "content-encoding" not in served.headers
+        assert served.headers["content-length"] == str(len(document))
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/notes.txt", max_response_bytes=len(document) - 1)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "compress"),
+    [("gzip", gzip.compress), ("deflate", zlib.compress), ("br", None)],
+)
+async def test_bounded_get_never_inflates_a_compressed_body_past_the_cap(
+    respx_mock, monkeypatch, encoding: str, compress: Callable[[bytes], bytes] | None
+):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    inflated: Final = 64 * 1024 * 1024
+    cap: Final = 1024 * 1024
+    bomb: Final = (compress or pytest.importorskip("brotli").compress)(b"\0" * inflated)
+    assert len(bomb) < cap
+
+    class WireStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield bomb
+
+    respx_mock.get("https://cdn.example/bomb").respond(200, stream=WireStream(), headers={"content-encoding": encoding})
+    handler = AsyncHTTPHandler()
+    tracemalloc.start()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/bomb", max_response_bytes=cap)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        await handler.close()
+    assert peak < 4 * cap, f"decoder materialized {peak} bytes for a {cap} byte cap"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "compress"),
+    [("gzip", gzip.compress), ("deflate", zlib.compress), ("br", None)],
+)
+async def test_bounded_get_decodes_a_compressed_body_under_the_cap_and_rejects_a_truncated_one(
+    respx_mock, monkeypatch, encoding: str, compress: Callable[[bytes], bytes] | None
+):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document: Final = b"line %d of the notes\n" * 2000 % tuple(range(2000))
+    wire: Final = (compress or pytest.importorskip("brotli").compress)(document)
+    for name, body in (("whole", wire), ("cut", wire[: len(wire) // 2])):
+        respx_mock.get(f"https://cdn.example/{name}").respond(200, content=body, headers={"content-encoding": encoding})
+    handler = AsyncHTTPHandler()
+    try:
+        served = await handler.get("https://cdn.example/whole", max_response_bytes=len(document))
+        assert served.content == document
+        with pytest.raises(httpx.DecodingError, match="ended before the end of the stream"):
+            await handler.get("https://cdn.example/cut", max_response_bytes=len(document))
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_undoes_stacked_encodings_and_still_caps_the_decoded_size(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document: Final = b"line %d of the notes\n" * 2000 % tuple(range(2000))
+    stacked: Final = zlib.compress(gzip.compress(document))
+    bomb: Final = gzip.compress(gzip.compress(b"\0" * (64 * 1024 * 1024)))
+    assert len(bomb) < 1024
+
+    class WireStream(httpx.AsyncByteStream):
+        def __init__(self, body: bytes) -> None:
+            self.body: Final = body
+
+        async def __aiter__(self):
+            yield self.body
+
+    for name, body, encoding in (("doc", stacked, "gzip, deflate"), ("bomb", bomb, "gzip, gzip")):
+        respx_mock.get(f"https://cdn.example/{name}").respond(
+            200, stream=WireStream(body), headers={"content-encoding": encoding}
+        )
+    handler = AsyncHTTPHandler()
+    tracemalloc.start()
+    try:
+        served = await handler.get("https://cdn.example/doc", max_response_bytes=len(document))
+        assert served.content == document
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/bomb", max_response_bytes=1024 * 1024)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        await handler.close()
+    assert peak < 4 * 1024 * 1024, f"stacked decoder materialized {peak} bytes for a 1 MiB cap"
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_counts_stacked_intermediate_bytes_across_wire_chunks(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    cap: Final = 1024 * 1024
+    outer: Final = zlib.compressobj(wbits=zlib.MAX_WBITS | 16)
+    empty_stored_block: Final = b"\x00\x00\x00\xff\xff"
+    hollow: Final = zlib.compress(b"")[:2] + empty_stored_block * (8 * 180 * 1024) + zlib.compress(b"")[2:]
+    assert zlib.decompress(hollow) == b""
+    segment: Final = len(hollow) // 8 + 1
+    assert segment < cap < len(hollow)
+    wire_chunks: Final = tuple(
+        outer.compress(hollow[start : start + segment]) + outer.flush(zlib.Z_SYNC_FLUSH)
+        for start in range(0, len(hollow), segment)
+    ) + (outer.flush(),)
+
+    class WireStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in wire_chunks:
+                yield chunk
+
+    respx_mock.get("https://cdn.example/hollow").respond(
+        200, stream=WireStream(), headers={"content-encoding": "deflate, gzip"}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/hollow", max_response_bytes=cap)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_refuses_an_encoding_it_cannot_decode_under_the_cap(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    class WireStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"\x28\xb5\x2f\xfd"
+
+    respx_mock.get("https://cdn.example/zst").respond(200, stream=WireStream(), headers={"content-encoding": "zstd"})
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="identity, gzip, deflate, or br"):
+            await handler.get("https://cdn.example/zst", max_response_bytes=1024)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_rejects_a_declared_compressed_length_over_the_wire_limit(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    consumed = []
+
+    class RecordingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            consumed.append(True)
+            yield b""
+
+    respx_mock.get("https://cdn.example/big.gz").respond(
+        200, headers={"content-encoding": "gzip", "content-length": "1000000"}, stream=RecordingStream()
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/big.gz", max_response_bytes=1024)
+    finally:
+        await handler.close()
+    assert consumed == []
 
 
 @pytest.mark.asyncio
