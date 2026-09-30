@@ -1,0 +1,73 @@
+name: litellm-lens
+
+# LiteLLM Lens: agent tracing + insights.
+# Usage: OPENAI_API_KEY=sk-... docker compose -f docker-compose.lens.yml up
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: sk-1234
+      LITELLM_SALT_KEY: sk-lens-salt-key
+      DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      CLICKHOUSE_URL: http://default:lens@clickhouse:8123
+      CLICKHOUSE_READER_URL: http://default:lens@clickhouse:8123
+      CLICKHOUSE_DATABASE: litellm
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    configs:
+      - source: lens_config
+        target: /app/config.yaml
+    ports:
+      - "${LITELLM_PORT:-4000}:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.9.6.6
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: lens
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "lens", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+configs:
+  lens_config:
+    content: |
+      model_list:
+        - model_name: gpt-4o
+          litellm_params:
+            model: openai/gpt-4o
+            api_key: os.environ/OPENAI_API_KEY
+      general_settings:
+        master_key: os.environ/LITELLM_MASTER_KEY
+        tracing:
+          store: clickhouse
+
+volumes:
+  postgres_data:
+  clickhouse_data:
