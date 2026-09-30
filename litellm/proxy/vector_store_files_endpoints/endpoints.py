@@ -41,16 +41,16 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 
-def _provider_file_id_from_managed_cursor(cursor: str | None) -> str | None:
-    if cursor is None:
+def _provider_file_id_from_managed_id(managed_file_id: str | None) -> str | None:
+    if managed_file_id is None:
         return None
 
-    decoded_id: Final = is_base64_encoded_unified_id(cursor)
+    decoded_id: Final = is_base64_encoded_unified_id(managed_file_id)
     if not decoded_id:
-        return cursor
+        return managed_file_id
 
     match: Final = re.search(r"(?:^|;)llm_output_file_id,([^;]+)", decoded_id)
-    return match.group(1).strip() if match else cursor
+    return match.group(1).strip() if match else managed_file_id
 
 
 def _with_provider_file_id_cursors(
@@ -58,7 +58,7 @@ def _with_provider_file_id_cursors(
 ) -> Mapping[str, str | None]:
     return MappingProxyType(
         {
-            key: (_provider_file_id_from_managed_cursor(value) if key in {"after", "before"} else value)
+            key: (_provider_file_id_from_managed_id(value) if key in {"after", "before"} else value)
             for key, value in query_params.items()
         }
     )
@@ -120,7 +120,14 @@ async def _with_managed_file_list_ids(
         provider_file_ids=provider_file_ids,
         user_api_key_dict=user_api_key_dict,
     )
-    return _with_managed_file_ids(response, id_map)
+    round_trippable_id_map: Final = MappingProxyType(
+        {
+            provider_file_id: managed_file_id
+            for provider_file_id, managed_file_id in id_map.items()
+            if _provider_file_id_from_managed_id(managed_file_id) == provider_file_id
+        }
+    )
+    return _with_managed_file_ids(response, round_trippable_id_map)
 
 
 async def _update_request_data_with_managed_file_id(

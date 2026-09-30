@@ -75,9 +75,13 @@ class ManagedFileIdResolverStub:
         )
 
 
-def _unified_file_id() -> str:
+def _unified_file_id(provider_file_id: str = RAW_FILE_ID) -> str:
     unified = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-        "application/json", "victim-unified-id", "gpt-4o-mini", RAW_FILE_ID, "gpt-4o-mini-id"
+        "application/json",
+        "victim-unified-id",
+        "gpt-4o-mini",
+        provider_file_id,
+        "gpt-4o-mini-id",
     )
     return base64.urlsafe_b64encode(unified.encode()).decode().rstrip("=")
 
@@ -162,6 +166,46 @@ async def test_vector_store_file_list_maps_owned_ids_and_preserves_raw_ids(
         provider_file_ids=tuple(dict.fromkeys(provider_ids)),
         user_api_key_dict=CALLER,
     )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_only_maps_round_trippable_ids() -> None:
+    managed_file_id: Final = _unified_file_id("file-model-a")
+    provider_response: Final[VectorStoreFileListResponse] = {
+        "object": "list",
+        "data": [
+            _vector_store_file_row("file-model-a"),
+            _vector_store_file_row("file-model-b"),
+        ],
+        "first_id": "file-model-a",
+        "last_id": "file-model-b",
+        "has_more": False,
+    }
+    resolver: Final = AsyncMock(
+        return_value={
+            "file-model-a": managed_file_id,
+            "file-model-b": managed_file_id,
+        }
+    )
+    managed_files_obj: Final = ManagedFileIdResolverStub(resolver=resolver)
+
+    response: Final = await _with_managed_file_list_ids(
+        response=provider_response,
+        managed_files_obj=managed_files_obj,
+        user_api_key_dict=CALLER,
+    )
+
+    expected_response: Final[VectorStoreFileListResponse] = {
+        "object": "list",
+        "data": [
+            _vector_store_file_row(managed_file_id),
+            _vector_store_file_row("file-model-b"),
+        ],
+        "first_id": managed_file_id,
+        "last_id": "file-model-b",
+        "has_more": False,
+    }
+    assert response == expected_response
 
 
 def test_vector_store_file_list_translates_managed_cursors_and_preserves_raw_after() -> (
