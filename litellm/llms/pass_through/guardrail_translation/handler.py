@@ -20,7 +20,9 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
 
-_PROXY_OWNED_PAYLOAD_KEYS: Final = frozenset({"metadata", "litellm_metadata", "litellm_logging_obj"})
+_PROXY_OWNED_PAYLOAD_KEYS: Final = frozenset(
+    {"metadata", "litellm_metadata", "litellm_logging_obj", "proxy_server_request"}
+)
 
 
 class PassThroughEndpointHandler(BaseTranslation):
