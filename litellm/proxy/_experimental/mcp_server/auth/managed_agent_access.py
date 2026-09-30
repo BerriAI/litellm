@@ -55,11 +55,10 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
         return []
     try:
         granted: Final = await MCPRequestHandler.get_agent_tool_permissions_for_server(server_id, auth)
-        capped: Final = await MCPRequestHandler._apply_agent_caller_tool_ceiling(granted, server_id, auth)
-        own: Final = list(capped) if capped is not None else None
+        own: Final = await MCPRequestHandler._apply_agent_caller_tool_ceiling(granted, server_id, auth)
         context: Final = auth.managed_agent_context
         if context is None or context.mode == "autonomous":
-            return own
+            return None if own is None else sorted(own)
         if context.user_id is None:
             return []
         human: Final = await _delegated_resource_subject(context.user_id)
@@ -68,7 +67,7 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
         )
         if own is None:
             return human_tools
-        return own if human_tools is None else sorted(frozenset(own).intersection(human_tools))
+        return sorted(own) if human_tools is None else sorted(frozenset(own).intersection(human_tools))
     except Exception:  # noqa: BLE001  # Authorization boundary: every unresolved policy must deny access
         raise_identity_failure(
             AgentIdentityFailure(code="policy_unavailable", message="Agent tool policy is unavailable")
