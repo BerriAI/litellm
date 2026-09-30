@@ -356,6 +356,27 @@ class TestLLMTech:
         assert provider == "llmtech"
         assert api_base == "https://api.llmtech.eu/v1"
 
+    def test_llmtech_endpoint_detection_key_source(self, monkeypatch):
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        monkeypatch.setenv("LLMTECH_API_KEY", "env-key")
+
+        _, _, api_key, _ = get_llm_provider(
+            model="nvidia/Qwen3.8-27B-NVFP4",
+            custom_llm_provider=None,
+            api_base="https://api.llmtech.eu/v1",
+            api_key=None,
+        )
+        assert api_key == "env-key"
+
+        _, _, api_key, _ = get_llm_provider(
+            model="nvidia/Qwen3.8-27B-NVFP4",
+            custom_llm_provider=None,
+            api_base="https://api.llmtech.eu/v1",
+            api_key="client-key",
+        )
+        assert api_key == "client-key"
+
     def test_llmtech_dynamic_config(self):
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
