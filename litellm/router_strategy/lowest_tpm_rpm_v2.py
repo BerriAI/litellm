@@ -454,18 +454,15 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     def usage_counter_keys(self, healthy_deployments: list) -> tuple[list[str], list[str]]:
         """The `<id>:<model>:tpm:<HH-MM>` and `<id>:<model>:rpm:<HH-MM>` counter keys selection reads."""
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
-
-        tpm_keys: Final[list[str]] = []
-        rpm_keys: Final[list[str]] = []
-        for m in healthy_deployments:
-            if isinstance(m, dict):
-                id = m.get("model_info", {}).get(
-                    "id"
-                )  # a deployment should always have an 'id'. this is set in router.py
-                deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_keys.append(f"{id}:{deployment_name}:tpm:{current_minute}")
-                rpm_keys.append(f"{id}:{deployment_name}:rpm:{current_minute}")
-        return tpm_keys, rpm_keys
+        prefixes: Final = tuple(
+            f"{m.get('model_info', {}).get('id')}:{m.get('litellm_params', {}).get('model')}"
+            for m in healthy_deployments
+            if isinstance(m, dict)
+        )
+        return (
+            [f"{prefix}:tpm:{current_minute}" for prefix in prefixes],
+            [f"{prefix}:rpm:{current_minute}" for prefix in prefixes],
+        )
 
     async def async_get_available_deployments(
         self,
