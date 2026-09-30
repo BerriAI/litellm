@@ -66,7 +66,6 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
     NADIR_DEFAULT_API_BASE,
-    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -120,7 +119,10 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openai_like.json_loader import (
+    JSONProviderRegistry,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
+)
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
@@ -8315,7 +8317,7 @@ def speech(
             _is_async=aspeech or False,
         )
     elif custom_llm_provider == "openai" or (
-        custom_llm_provider in litellm.openai_compatible_providers
+        custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS
         and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
     ):
         if voice is None or not (isinstance(voice, str)):
