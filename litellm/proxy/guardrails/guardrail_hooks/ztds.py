@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable
 from typing import ClassVar
 
 try:
@@ -273,7 +273,7 @@ class ZTDSGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: object,
-        response: object,
+        response: AsyncIterable[object],
         request_data: dict[str, object],
     ) -> AsyncGenerator[object, None]:
         """
@@ -282,20 +282,19 @@ class ZTDSGuardrail(CustomGuardrail):
         """
         session_id = request_data.get("_ztds_session_id") if isinstance(request_data, dict) else None
         try:
-            if hasattr(response, "__aiter__"):
-                async for chunk in response:  # type: ignore[union-attr]
-                    if session_id and isinstance(session_id, str) and self.reverse_on_output:
-                        if hasattr(chunk, "choices") and chunk.choices:
-                            for choice in chunk.choices:
-                                delta = getattr(choice, "delta", None)
-                                if delta and hasattr(delta, "content") and isinstance(delta.content, str):
-                                    delta.content = self.restore_text(delta.content, session_id)
-                        elif isinstance(chunk, dict) and "choices" in chunk:
-                            for choice in chunk["choices"]:
-                                delta = choice.get("delta") if isinstance(choice, dict) else None
-                                if delta and isinstance(delta, dict) and isinstance(delta.get("content"), str):
-                                    delta["content"] = self.restore_text(delta["content"], session_id)
-                    yield chunk
+            async for chunk in response:
+                if session_id and isinstance(session_id, str) and self.reverse_on_output:
+                    if hasattr(chunk, "choices") and chunk.choices:
+                        for choice in chunk.choices:
+                            delta = getattr(choice, "delta", None)
+                            if delta and hasattr(delta, "content") and isinstance(delta.content, str):
+                                delta.content = self.restore_text(delta.content, session_id)
+                    elif isinstance(chunk, dict) and "choices" in chunk:
+                        for choice in chunk["choices"]:
+                            delta = choice.get("delta") if isinstance(choice, dict) else None
+                            if delta and isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                                delta["content"] = self.restore_text(delta["content"], session_id)
+                yield chunk
         finally:
             if session_id and isinstance(session_id, str):
                 self.zeroize_session(session_id)

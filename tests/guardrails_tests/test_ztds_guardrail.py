@@ -6,17 +6,9 @@ https://datatracker.ietf.org/doc/draft-sibiryakov-ztds-protocol/
 
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 
-try:
-    from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
-except (ImportError, ModuleNotFoundError):
-    hook_dir = Path(__file__).resolve().parents[2] / "litellm" / "proxy" / "guardrails" / "guardrail_hooks"
-    if str(hook_dir) not in sys.path:
-        sys.path.insert(0, str(hook_dir))
-    from ztds import ZTDSGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
 
 
 class MockMessage:
