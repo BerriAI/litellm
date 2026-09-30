@@ -5,7 +5,7 @@ import threading
 import time
 import types
 import unittest
-from typing import Final, Optional
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,11 +14,10 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
-from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
-
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 
 
 class TestLangfuseUsageDetails(unittest.TestCase):
@@ -370,16 +369,14 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             except Exception as e:
                 self.fail(f"_log_langfuse_v2 raised an exception: {e}")
 
-            usage_details = json.loads(
-                self.exported_generation().attributes["langfuse.observation.usage_details"]
-            )
+            usage_details = json.loads(self.exported_generation().attributes["langfuse.observation.usage_details"])
             # input is reduced by cache_read_input_tokens per Langfuse docs
             assert usage_details["input"] == 12
             assert usage_details["output"] == 21
             assert usage_details["total"] == 37
             assert usage_details["cache_read_input_tokens"] == 4
 
-    def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
+    def _build_standard_logging_payload(self, trace_id: str | None = None):
         payload = {
             "id": "payload-id",
             "call_type": "completion",
@@ -1464,7 +1461,6 @@ def test_langfuse_rest_client_survives_httpx_cache_eviction(monkeypatch):
     import weakref
 
     from litellm.caching.llm_caching_handler import LLMClientCache
-
     from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())

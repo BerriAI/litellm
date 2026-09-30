@@ -11,8 +11,6 @@ shows 0 input / 0 output while cost is still right.
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ConfigDict, TypeAdapter
-
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from lifecycle import ResourceManager
 from logging_client import (
@@ -27,6 +25,7 @@ from models import (
     KeyMetadata,
     ResponsesApiResponse,
 )
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 pytestmark = pytest.mark.e2e
 
@@ -106,6 +105,5 @@ class TestResponsesLangfuseUsage:
             f"input_tokens {response.usage.input_tokens}"
         )
         assert details.output == response.usage.output_tokens, (
-            f"usageDetails.output {details.output} must equal the proxy's "
-            f"output_tokens {response.usage.output_tokens}"
+            f"usageDetails.output {details.output} must equal the proxy's output_tokens {response.usage.output_tokens}"
         )
