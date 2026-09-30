@@ -21,6 +21,9 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+# Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
+# hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
+_BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
@@ -153,6 +156,17 @@ def coerce_numeric_form_fields(
     }
 
 
+def _parse_binary_body(body: bytes) -> dict:
+    """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
+    try:
+        parsed: Final = orjson.loads(body)
+        if isinstance(parsed, dict):
+            return parsed
+    except orjson.JSONDecodeError:
+        pass
+    return {}  # mutable-ok: auth parser returns a fresh dict per request
+
+
 async def _read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -175,7 +189,13 @@ async def _read_request_body(request: Request | None) -> dict:
         _request_headers: Final[dict] = _safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _is_form_content_type(content_type):
+        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES or (
+            request.scope.get("path") == "/v1/traces"
+            and request.scope.get("method") == "POST"
+            and _request_headers.get("content-encoding", "").lower() == "gzip"
+        ):
+            parsed_body = _parse_binary_body(await request.body())
+        elif _is_form_content_type(content_type):
             try:
                 form_data: Final = await request.form()
             except Exception as e:

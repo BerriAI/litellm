@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
 use litellm_traces::{
-    Connection, Error, encode_rows, ensure_schema, execute_read, schema_statements,
+    Connection, Error, InsertTable, encode_rows, ensure_schema, execute_read, schema_statements,
 };
 use rstest::{fixture, rstest};
 use testcontainers_modules::{
@@ -107,7 +107,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
@@ -144,7 +144,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let body = read_json(
         &database,
         "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
-         FROM trace_test.agent_traces WHERE TeamId = 'team-1' AND TraceId = 'trace-1'",
+         FROM trace_test.agent_traces_by_key WHERE TeamId = 'team-1' AND TraceId = 'trace-1'",
     )
     .await?;
     assert_eq!(
@@ -156,11 +156,90 @@ async fn schema_supports_span_rollups_and_spend_joins(
 
 #[rstest]
 #[tokio::test]
+async fn retried_trace_insert_does_not_inflate_rollup(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let row: BTreeMap<String, serde_json::Value> = serde_json::from_value(serde_json::json!({
+        "Timestamp": time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64,
+        "TraceId": "retried-trace", "SpanId": "span-1", "ParentSpanId": "",
+        "TeamId": "team-1", "ApiKeyHash": "key-1", "SpanName": "root", "InputTokens": 7
+    }))?;
+    for _ in 0..2 {
+        litellm_traces::insert_rows(
+            &database.client,
+            &writer,
+            "trace_test",
+            InsertTable::OtelTraces,
+            vec![row.clone()],
+        )
+        .await?;
+    }
+    let counts = read_json(
+        &database,
+        "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
+         FROM trace_test.agent_traces_by_key WHERE TraceId = 'retried-trace'",
+    )
+    .await?;
+    assert_eq!(table_rows(&database, "otel_traces").await?, 1);
+    assert_eq!(counts["data"][0]["spans"], 1);
+    assert_eq!(counts["data"][0]["tokens"], 7);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let rows = vec![
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": "shared-id", "SpanId": "root-one",
+            "ParentSpanId": "", "SpanName": "root-one", "Input": "private-one",
+            "ResourceAttributes": {"litellm.api_key_hash": "key-one"}
+        }))?,
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": "shared-id", "SpanId": "root-two",
+            "ParentSpanId": "", "SpanName": "root-two", "Input": "private-two",
+            "ResourceAttributes": {"litellm.api_key_hash": "key-two"}
+        }))?,
+    ];
+    insert_rows(&database, "otel_traces", rows).await?;
+    execute_write(
+        &database,
+        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+    )
+    .await?;
+    let rows = read_json(
+        &database,
+        "SELECT ApiKeyHash, any(RootInput) AS RootInput \
+         FROM trace_test.agent_traces_by_key WHERE TraceId = 'shared-id' \
+         GROUP BY ApiKeyHash ORDER BY ApiKeyHash",
+    )
+    .await?;
+    assert_eq!(
+        rows["data"],
+        serde_json::json!([
+            {"ApiKeyHash": "key-one", "RootInput": "private-one"},
+            {"ApiKeyHash": "key-two", "RootInput": "private-two"}
+        ])
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn rollup_merges_spans_across_days_without_losing_root_fields(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let day_start = time::OffsetDateTime::now_utc()
         .replace_time(time::Time::MIDNIGHT)
@@ -179,12 +258,16 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
     insert_rows(&database, "otel_traces", vec![child]).await?;
-    execute_write(&database, "OPTIMIZE TABLE trace_test.agent_traces FINAL").await?;
+    execute_write(
+        &database,
+        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+    )
+    .await?;
     let response = read_json(
         &database,
         "SELECT count() AS rows, any(RootName) AS RootName, any(RootInput) AS RootInput, \
          any(RootStatus) AS RootStatus, sum(SpanCount) AS SpanCount \
-         FROM trace_test.agent_traces",
+         FROM trace_test.agent_traces_by_key",
     )
     .await?;
     assert_eq!(
@@ -203,7 +286,7 @@ async fn spend_deduplication_preserves_subsecond_requests_and_retries(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let now_ms = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
     let base_start_time = now_ms / 1000 * 1000;
@@ -255,7 +338,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 30, 30).await?;
     let old_time = time::OffsetDateTime::now_utc() - time::Duration::days(20);
     let old_timestamp_ns = old_time.unix_timestamp_nanos() as i64;
@@ -271,6 +354,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
+    assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 1);
     ensure_schema(&database.client, &writer, "trace_test", 14, 14).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
@@ -293,10 +377,14 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     execute_write(&database, "OPTIMIZE TABLE trace_test.otel_traces FINAL").await?;
-    execute_write(&database, "OPTIMIZE TABLE trace_test.agent_traces FINAL").await?;
+    execute_write(
+        &database,
+        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+    )
+    .await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.spend_logs FINAL").await?;
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
-    assert_eq!(table_rows(&database, "agent_traces").await?, 0);
+    assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 0);
     assert_eq!(table_rows(&database, "spend_logs").await?, 0);
     let mutation_count = mutation_rows(&database).await?;
     ensure_schema(&database.client, &writer, "trace_test", 14, 14).await?;
@@ -315,9 +403,9 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     });
     let client = Client::no_redirect_for_test();
     let url = format!("http://{address}");
-    let writer = Connection::writer(&url, "default", "")?;
+    let writer = Connection::writer(&url)?;
     let result = tokio::time::timeout(
-        Duration::from_secs(12),
+        Duration::from_secs(35),
         ensure_schema(&client, &writer, "trace_test", 7, 14),
     )
     .await;

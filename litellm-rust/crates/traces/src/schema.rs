@@ -4,6 +4,8 @@ use std::time::Duration;
 use crate::Connection;
 use crate::Error;
 
+const SCHEMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 const MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/0001_otel_traces.sql"),
     include_str!("../migrations/0002_agent_traces.sql"),
@@ -50,10 +52,29 @@ pub async fn ensure_schema(
     trace_retention_days: u32,
     spend_log_retention_days: u32,
 ) -> Result<(), Error> {
+    ensure_schema_with_timeout(
+        client,
+        connection,
+        database,
+        trace_retention_days,
+        spend_log_retention_days,
+        SCHEMA_REQUEST_TIMEOUT,
+    )
+    .await
+}
+
+async fn ensure_schema_with_timeout(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    trace_retention_days: u32,
+    spend_log_retention_days: u32,
+    request_timeout: Duration,
+) -> Result<(), Error> {
     for statement in schema_statements(database, trace_retention_days, spend_log_retention_days)? {
         let response = client
             .post(connection.url().clone())
-            .timeout(Duration::from_secs(10))
+            .timeout(request_timeout)
             .body(statement)
             .send()
             .await

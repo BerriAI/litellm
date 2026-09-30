@@ -1,6 +1,7 @@
-CREATE MATERIALIZED VIEW IF NOT EXISTS {database}.agent_traces_mv TO {database}.agent_traces AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS {database}.agent_traces_by_key_mv
+TO {database}.agent_traces_by_key AS
 SELECT
-    TeamId, TraceId,
+    TeamId, ApiKeyHash, TraceId,
     min(Timestamp)                                         AS StartTs,
     max(Timestamp + toIntervalNanosecond(Duration))        AS EndTs,
     any(ServiceName)                                       AS ServiceName,
@@ -18,4 +19,4 @@ SELECT
     groupUniqArrayIf(SpanName, ObservationType = 'agent')  AS AgentNames,
     groupArrayIf(LiteLLMRequestId, LiteLLMRequestId != '') AS RequestIds
 FROM {database}.otel_traces
-GROUP BY TeamId, TraceId
+GROUP BY TeamId, ApiKeyHash, TraceId
