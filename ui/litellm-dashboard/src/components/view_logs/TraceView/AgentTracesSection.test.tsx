@@ -41,14 +41,14 @@ const renderSection = () =>
     />,
   );
 
-// A window wide enough to hold the fixture runs (2026-09-30 ~06:43 UTC) in any local timezone.
+// A UTC-pinned day around the fixture runs (2026-09-30 ~06:43 UTC), so they land in the same bucket in any timezone.
 const renderWindowed = () =>
   renderWithProviders(
     <AgentTracesSection
       accessToken="sk-test"
       isActive
-      startTime="2026-09-29T00:00"
-      endTime="2026-10-01T00:00"
+      startTime="2026-09-30T00:00Z"
+      endTime="2026-10-01T00:00Z"
       isCustomDate
       isLiveTail={false}
     />,
@@ -189,6 +189,9 @@ describe("AgentTracesSection", () => {
     const rowCount = () => screen.queryAllByTestId("agent-trace-row").length;
     const withRuns = bucketRunCounts().flatMap((count, i) => (count > 0 ? [i] : []));
     const first = withRuns[0];
+    // The pan below moves a [0, first] bracket to the far right; it must end up clear of every run.
+    expect(first).toBeGreaterThan(1);
+    expect(first).toBeLessThan(30);
 
     drag(area, 0, 1);
     expect(screen.getByTestId("timeline-selection")).toBeInTheDocument();
