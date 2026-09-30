@@ -325,9 +325,12 @@ class TestRender:
             use_color=False,
         )
 
-    def test_a_session_that_cost_more_than_its_baseline_reads_as_a_plus(self, config_dir):
-        dearer = RECORDED._replace(spend=0.50, baseline_spend=0.40)
-        assert "+25% vs Claude Opus 5" in render("m", dearer, config_dir, use_color=False)
+    @pytest.mark.parametrize("spend,delta", ((0.50, "+25%"), (0.40, "0%"), (0.4001, "0%"), (0.3999, "0%"), (0.30, "-25%")))
+    def test_rounded_cost_delta_uses_a_sign_only_for_nonzero_percentages(
+        self, config_dir: Path, spend: float, delta: str,
+    ) -> None:
+        session: Final = RECORDED._replace(spend=spend, baseline_spend=0.40)
+        assert render("m", session, config_dir, use_color=False).splitlines()[0] == f"Routed to: m  {delta} vs Claude Opus 5"
 
     def test_without_a_baseline_only_the_routed_line_shows(self, config_dir):
         assert render("m", RECORDED._replace(baseline_model=None), config_dir, False) == "Routed to: m"
@@ -339,6 +342,37 @@ class TestRender:
 
 
 class TestClaudeCodeMode:
+    @pytest.mark.parametrize("estimated_turns", (0, 1))
+    def test_current_estimates_keep_the_routed_model_and_compare_only_covered_turns(
+        self, tmp_path: Path, transcript: Path, config_dir: Path, estimated_turns: int
+    ) -> None:
+        session: Final = statusline_script._session_from_payload(
+            {
+                **RECORDED._asdict(),
+                "spend": 10.0,
+                "baseline_spend": None,
+                "savings_estimated_baseline_spend": 1.5 if estimated_turns else None,
+                "turns": 3,
+                "savings_estimated_turns": estimated_turns,
+                "savings_estimated_actual_spend": 2.0 if estimated_turns else 0.0,
+            }
+        )
+        assert session is not None
+
+        def fetch(credentials: Credentials, session_id: str) -> Fetched:
+            return Fetched(session, True)
+
+        first: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        assert first == _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
+        assert first.startswith("Routed to: claude-sonnet-5")
+        if estimated_turns:
+            assert "+33% vs Claude Opus 5 · 1 of 3 turns estimated" in first
+            assert "$2.00" in first and "$1.50" in first
+            assert "$10.00" not in first and "+567%" not in first
+        else:
+            assert "Savings unavailable" in first
+            assert "%" not in first and "$" not in first
+
     @pytest.mark.parametrize("transcript_model", ("claude-auto", "anthropic/claude-opus-5"))
     def test_the_session_names_the_routed_model_even_when_the_transcript_differs(
         self, tmp_path: Path, config_dir: Path, transcript_model: str

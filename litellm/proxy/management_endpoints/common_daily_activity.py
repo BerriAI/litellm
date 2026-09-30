@@ -12,12 +12,15 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import PTU_SENTINEL_API_KEY
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
-    attach_user_emails,
+    attach_user_details,
+    recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
+    recover_key_owner_from_daily_spend,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -114,12 +117,19 @@ class DailySpendRecord(Protocol):
     @property
     def failed_requests(self) -> int: ...
 
+    @property
+    def total_response_time_ms(self) -> int: ...
+
+    @property
+    def timed_requests(self) -> int: ...
+
 
 class _KeyMetadataDict(TypedDict, total=False):
     key_alias: ReadOnly[str | None]
     team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+    key_exists: ReadOnly[bool]
 
 
 def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str) -> KeyMetadata:
@@ -129,6 +139,7 @@ def _key_metadata(api_key_metadata: Mapping[str, _KeyMetadataDict], api_key: str
         team_id=meta.get("team_id"),
         user_id=meta.get("user_id"),
         user_email=meta.get("user_email"),
+        key_exists=meta.get("key_exists", False),
     )
 
 
@@ -162,6 +173,8 @@ class _GroupingSetsRow(SimpleNamespace):
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
+    total_response_time_ms: int | None
+    timed_requests: int | None
 
 
 class _EntityRollupRow(_GroupingSetsRow):
@@ -217,6 +230,8 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
+    existing_metrics.total_response_time_ms += record.total_response_time_ms or 0
+    existing_metrics.timed_requests += record.timed_requests or 0
     return existing_metrics
 
 
@@ -454,6 +469,17 @@ def _parse_spend_date(raw: str | None) -> datetime | None:
 _EMPTY_KEY_METADATA: Final[Mapping[str, _KeyMetadataDict]] = MappingProxyType({})
 
 
+def _metadata_with_recovered_owner(
+    metadata: Mapping[str, _KeyMetadataDict],
+    key: str,
+    owner: str,
+) -> _KeyMetadataDict:
+    current: Final = metadata.get(key)
+    if current is None:
+        return {"user_id": owner}
+    return {**current, "user_id": owner}
+
+
 async def get_api_key_metadata(
     prisma_client: PrismaClient,
     api_keys: AbstractSet[str],
@@ -473,6 +499,7 @@ async def get_api_key_metadata(
             "key_alias": k.key_alias,
             "team_id": k.team_id,
             "user_id": getattr(k, "user_id", None),
+            "key_exists": True,
         }
         for k in key_records
     }
@@ -502,11 +529,12 @@ async def get_api_key_metadata(
                 e,
             )
 
-    still_missing: Final = api_keys - frozenset(result)
+    from_session_keys: Final = await recover_cli_session_key_metadata(prisma_client, api_keys - frozenset(result))
+    still_missing: Final = api_keys - frozenset(result) - frozenset(from_session_keys)
     from_reverse_hash: Final = (
         await recover_double_hashed_key_metadata(prisma_client, still_missing) if still_missing else _EMPTY_KEY_METADATA
     )
-    after_token_recovery: Final = MappingProxyType({**result, **from_reverse_hash})
+    after_token_recovery: Final = MappingProxyType({**result, **from_session_keys, **from_reverse_hash})
     unresolved: Final = api_keys - frozenset(after_token_recovery)
     from_spend_logs: Final = (
         await recover_key_metadata_from_spend_logs(prisma_client, unresolved, spend_logs_window)
@@ -514,7 +542,19 @@ async def get_api_key_metadata(
         else _EMPTY_KEY_METADATA
     )
     combined: Final = MappingProxyType({**after_token_recovery, **from_spend_logs})
-    return await attach_user_emails(prisma_client, combined)
+    ownerless: Final = frozenset(
+        key
+        for key in api_keys
+        if not combined.get(key, {}).get("user_id") and not combined.get(key, {}).get("key_exists")
+    )
+    owners: Final = await recover_key_owner_from_daily_spend(prisma_client, ownerless)
+    metadata_with_owners: Final[Mapping[str, _KeyMetadataDict]] = MappingProxyType(
+        {
+            **combined,
+            **{key: _metadata_with_recovered_owner(combined, key, owner) for key, owner in owners.items()},
+        }
+    )
+    return await attach_user_details(prisma_client, metadata_with_owners)
 
 
 def _adjust_dates_for_timezone(
@@ -767,7 +807,9 @@ def _build_aggregated_sql_query(
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
+            SUM(failed_requests)::bigint AS failed_requests,
+            SUM(total_response_time_ms)::bigint AS total_response_time_ms,
+            SUM(timed_requests)::bigint AS timed_requests
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -846,7 +888,9 @@ def _build_entity_rollup_sql_query(
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
-            SUM(failed_requests)::bigint AS failed_requests
+            SUM(failed_requests)::bigint AS failed_requests,
+            SUM(total_response_time_ms)::bigint AS total_response_time_ms,
+            SUM(timed_requests)::bigint AS timed_requests
         FROM "{pg_table}"
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -924,7 +968,7 @@ async def _aggregate_spend_records(
         record.api_key for record in records if record.api_key and record.api_key != PTU_SENTINEL_API_KEY
     }
 
-    api_key_metadata: dict[str, _KeyMetadataDict] = {}
+    api_key_metadata: Mapping[str, _KeyMetadataDict] = MappingProxyType({})
     if api_keys:
         api_key_metadata = await get_api_key_metadata(
             prisma_client, api_keys, _spend_logs_window(frozenset(record.date for record in records))
@@ -985,6 +1029,8 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
+        total_response_time_ms=record.total_response_time_ms or 0,
+        timed_requests=record.timed_requests or 0,
     )
 
 
@@ -1122,7 +1168,7 @@ async def _aggregate_grouping_sets_records(
     """Async wrapper: fetch api_key_metadata, then dispatch on a worker thread."""
     api_keys: Final[set[str]] = {r.api_key for r in records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY}
 
-    api_key_metadata: dict[str, _KeyMetadataDict] = {}
+    api_key_metadata: Mapping[str, _KeyMetadataDict] = MappingProxyType({})
     if api_keys:
         api_key_metadata = await get_api_key_metadata(
             prisma_client, api_keys, _spend_logs_window(frozenset(r.date for r in records))
@@ -1187,8 +1233,10 @@ async def get_daily_activity(
             include_current_utc_day=include_current_utc_day,
         )
 
+        spend_table: Final[TableActions[DailySpendRecord]] = getattr(prisma_client.db, table_name)
+
         # Get total count for pagination
-        total_count: Final[int] = await getattr(prisma_client.db, table_name).count(where=where_conditions)
+        total_count: Final[int] = await spend_table.count(where=where_conditions)
 
         # Fetch paginated results.
         # ``date`` alone is not a unique sort key -- a busy tenant has many
@@ -1200,7 +1248,7 @@ async def get_daily_activity(
         # total. Adding ``id`` (the row's UUID primary key, present on both
         # LiteLLM_DailyUserSpend and LiteLLM_DailyTeamSpend) as a tiebreaker
         # gives every page a stable cursor (#30164).
-        daily_spend_data: Final[Sequence[DailySpendRecord]] = await getattr(prisma_client.db, table_name).find_many(
+        daily_spend_data: Final[Sequence[DailySpendRecord]] = await spend_table.find_many(
             where=where_conditions,
             order=[
                 {"date": "desc"},
@@ -1246,6 +1294,8 @@ async def get_daily_activity(
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
                 total_gateway_injected_caching_savings_spend=metadata_metrics.gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
+                total_response_time_ms=metadata_metrics.total_response_time_ms,
+                total_timed_requests=metadata_metrics.timed_requests,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
                 has_more=(page * page_size) < total_count,
@@ -1423,6 +1473,8 @@ async def get_daily_activity_aggregated(
                     "totals"
                 ].gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
+                total_response_time_ms=aggregated["totals"].total_response_time_ms,
+                total_timed_requests=aggregated["totals"].timed_requests,
                 page=1,
                 total_pages=1,
                 has_more=False,

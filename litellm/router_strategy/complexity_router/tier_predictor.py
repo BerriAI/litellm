@@ -108,8 +108,9 @@ class TierPrediction:
 
 
 class TierSuccessPredictor:
-    def __init__(self, artifact: TrainedTierArtifact) -> None:
+    def __init__(self, artifact: TrainedTierArtifact, *, routing_threshold: float | None = None) -> None:
         self._artifact = artifact
+        self._routing_threshold: Final = artifact.routing_threshold if routing_threshold is None else routing_threshold
         self._global: Mapping[int, TierGlobalStatistic] = MappingProxyType(
             {stat.tier: stat for stat in artifact.global_statistics}
         )
@@ -122,7 +123,7 @@ class TierSuccessPredictor:
 
     @property
     def routing_threshold(self) -> float:
-        return self._artifact.routing_threshold
+        return self._routing_threshold
 
     def predict(self, prompt: str, request_type: RequestType) -> TierPrediction:
         cohort: Final = similarity_cohort(prompt, request_type)
@@ -132,7 +133,7 @@ class TierSuccessPredictor:
             {int(tier): probability for tier, probability in zip(_TIERS, monotonic)}
         )
         required_tier: Final = next(
-            (tier for tier in _TIERS if probabilities[tier] >= self._artifact.routing_threshold),
+            (tier for tier in _TIERS if probabilities[tier] >= self.routing_threshold),
             4,
         )
         return TierPrediction(probabilities=probabilities, required_tier=required_tier)

@@ -11,14 +11,10 @@ from ...shared.reporting.models import SURFACES, CaseResult, RunStatus, SdkFunct
 from ...shared.reporting.rendering import ReportSection
 from ...shared.reporting.strategy import NotImplementedCaseSpec, SkippedCaseSpec
 from ...shared.tracing.steps import PipelineStep, trace_depths
-from .models import TraceEngine
 
 TRACE_ARTIFACT: Final = "trace"
-TRACE_PARITY_HINT: Final = (
-    "rebuild the native bridge with the trace-parity feature, e.g. `uvx maturin develop --features trace-parity`"
-)
 
-_COLORS: Final[dict[str, str]] = {"yellow": "33", "red": "31", "cyan": "36"}
+_COLORS: Final[dict[str, str]] = {"red": "31", "cyan": "36"}
 _RESET: Final = "\033[0m"
 
 
@@ -43,30 +39,23 @@ class TraceEventArtifact(BaseModel):
 class TraceArtifact(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    engine: TraceEngine = "both"
     surface: Surface
     sdk_function: SdkFunction
     scenario: str
     python: tuple[TraceEventArtifact, ...]
-    rust: tuple[TraceEventArtifact, ...]
     python_error: str | None = None
-    rust_error: str | None = None
 
     @classmethod
     def from_traces(
         cls,
         *,
-        engine: TraceEngine = "both",
         surface: Surface,
         sdk_function: SdkFunction,
         scenario: str,
         python: Sequence[PipelineStep],
-        rust: Sequence[PipelineStep],
         python_error: str | None = None,
-        rust_error: str | None = None,
     ) -> TraceArtifact:
         return cls(
-            engine=engine,
             surface=surface,
             sdk_function=sdk_function,
             scenario=scenario,
@@ -74,21 +63,14 @@ class TraceArtifact(BaseModel):
                 TraceEventArtifact(id=step.id, parent_id=step.parent_id, span=step.span, raw=step.raw)
                 for step in python
             ),
-            rust=tuple(
-                TraceEventArtifact(id=step.id, parent_id=step.parent_id, span=step.span, raw=step.raw) for step in rust
-            ),
             python_error=python_error,
-            rust_error=rust_error,
         )
 
     def python_steps(self) -> tuple[PipelineStep, ...]:
         return tuple(event.step() for event in self.python)
 
-    def rust_steps(self) -> tuple[PipelineStep, ...]:
-        return tuple(event.step() for event in self.rust)
-
     def has_errors(self) -> bool:
-        return self.python_error is not None or self.rust_error is not None
+        return self.python_error is not None
 
 
 def _split_raw(raw: str) -> tuple[str, str]:
@@ -111,34 +93,14 @@ def _python_lines(steps: tuple[PipelineStep, ...]) -> str:
     return f"{_paint('PYTHON', 'cyan')} ({len(steps)} steps)\n" + ("\n".join(lines) if lines else "(empty)")
 
 
-def _rust_lines(steps: tuple[PipelineStep, ...]) -> str:
-    depths: Final = trace_depths(steps)
-    lines: Final = tuple(
-        _paint(f"{index} {'  ' * depths[step.id]}{step.span}", "yellow") for index, step in enumerate(steps, 1)
-    )
-    return f"{_paint('RUST', 'yellow')} ({len(steps)} steps)\n" + ("\n".join(lines) if lines else "(empty)")
-
-
 def _error_lines(artifact: TraceArtifact) -> tuple[str, ...]:
-    lines: list[str] = []
-    for engine, error in (("Python", artifact.python_error), ("Rust", artifact.rust_error)):
-        if error is None:
-            continue
-        lines.append(_paint(f"{engine} error: {error}", "red"))
-        if "trace-parity feature" in error:
-            lines.append(f"hint: {TRACE_PARITY_HINT}")
-    return tuple(lines)
+    if artifact.python_error is None:
+        return ()
+    return (_paint(f"Python error: {artifact.python_error}", "red"),)
 
 
 def _render_trace(artifact: TraceArtifact) -> str:
-    traces: tuple[str, ...]
-    if artifact.engine == "python":
-        traces = (_python_lines(artifact.python_steps()),)
-    elif artifact.engine == "rust":
-        traces = (_rust_lines(artifact.rust_steps()),)
-    else:
-        traces = (_python_lines(artifact.python_steps()), _rust_lines(artifact.rust_steps()))
-    return "\n\n".join((*traces, *_error_lines(artifact)))
+    return "\n\n".join((_python_lines(artifact.python_steps()), *_error_lines(artifact)))
 
 
 def _scenario(nodeid: str) -> str:
