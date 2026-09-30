@@ -7,6 +7,7 @@ Unified Guardrail, leveraging LiteLLM's /applyGuardrail endpoint
 """
 
 import asyncio
+import contextlib
 import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Mapping, Sequence
@@ -21,6 +22,7 @@ from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
@@ -30,6 +32,7 @@ from litellm.types.utils import (
     CallTypesLiteral,
     Delta,
     ModelResponseStream,
+    StandardLoggingGuardrailInformation,
     StreamingChoices,
 )
 
@@ -109,6 +112,12 @@ def _chunk_choices(item: object) -> Sequence[object]:
 
 def _held_choices(held_chars_per_choice: Mapping[int, int]) -> frozenset[int]:
     return frozenset(idx for idx, held in held_chars_per_choice.items() if held > 0)
+
+
+def _recorded_guardrail_information(request_data: dict) -> tuple[StandardLoggingGuardrailInformation, ...]:
+    _metadata_key, metadata_bucket = get_or_create_metadata_bucket(request_data)
+    entries: Final = metadata_bucket.get("standard_logging_guardrail_information")
+    return tuple(entries) if isinstance(entries, list) else ()
 
 
 def _is_redundant_scan(scan_key: "StreamingScanKey | None", last_scan_key: "StreamingScanKey | None") -> bool:
@@ -708,6 +717,8 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         saw_tool_calls = False
         saw_text_content = False
+        tool_calls_released = False  # rebind-ok: set once a raw tool call reaches the client unscanned
+        end_of_stream_inspection_started = False  # rebind-ok: set once the end-of-stream inspection owns the verdict
 
         try:
             async for item in response:
@@ -744,6 +755,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         held_choices=_held_choices(held_chars_per_choice),
                     )
                     responses_yielded.append(tool_only)
+                    tool_calls_released = True
                     yield tool_only
                     continue
 
@@ -783,6 +795,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             # ``stream_transform_underflow`` 400 from mismatched prefixes. A shallow
             # list copy wouldn't help — the mutation is on the chunk objects
             # themselves — so we deepcopy.
+            end_of_stream_inspection_started = True
             if saw_tool_calls:
                 async for out in self._inspect_full_response_for_block(
                     endpoint_translation=endpoint_translation,
@@ -803,6 +816,37 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield out
         except _StreamTerminated:
             return
+        except (GeneratorExit, asyncio.CancelledError):
+            await self._scan_uninspected_tool_calls_after_disconnect(
+                uninspected=tool_calls_released and not end_of_stream_inspection_started,
+                endpoint_translation=endpoint_translation,
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            )
+            raise
+
+    @staticmethod
+    async def _scan_uninspected_tool_calls_after_disconnect(
+        *,
+        uninspected: bool,
+        endpoint_translation: _EndpointTranslation,
+        responses_so_far: Sequence[object],
+        guardrail_to_apply: CustomGuardrail,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,
+    ) -> None:
+        if not uninspected:
+            return
+        await UnifiedLLMGuardrails._scan_released_stream_after_disconnect(
+            endpoint_translation=endpoint_translation,
+            responses_so_far=copy.deepcopy(responses_so_far),
+            last_scan_key=None,
+            guardrail_to_apply=guardrail_to_apply,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+        )
 
     async def _emit_stream_tail(
         self,
@@ -843,14 +887,15 @@ class UnifiedLLMGuardrails(CustomLogger):
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
         try:
-            await endpoint_translation.process_output_streaming_response(
-                responses_so_far=responses_so_far,
-                guardrail_to_apply=guardrail_to_apply,
-                litellm_logging_obj=request_data.get("litellm_logging_obj"),
-                user_api_key_dict=user_api_key_dict,
-                request_data=request_data,
-                stream_transform_sink=None,
-            )
+            with anyio.CancelScope(shield=bool(responses_yielded)):
+                await endpoint_translation.process_output_streaming_response(
+                    responses_so_far=responses_so_far,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    stream_transform_sink=None,
+                )
         except ModifyResponseException as e:
             if e.original_response is None:
                 e.original_response = responses_so_far
@@ -971,24 +1016,50 @@ class UnifiedLLMGuardrails(CustomLogger):
         return self.optional_params.get(name, config_value)
 
     @staticmethod
+    def _released_chat_stream_as_ended(
+        *,
+        endpoint_translation: _EndpointTranslation,
+        responses_so_far: Sequence[object],
+        tool_calls_in_flight: bool,
+    ) -> tuple[object, ...]:
+        """Chat Completions only inspects tool calls once the stream has finished, so a stream the
+        client left mid tool call is scanned as if it ended on what the client already received"""
+        from litellm.llms.openai.chat.guardrail_translation.handler import (
+            OpenAIChatCompletionsHandler,
+        )
+
+        if not tool_calls_in_flight or not isinstance(endpoint_translation, OpenAIChatCompletionsHandler):
+            return tuple(responses_so_far)
+        terminator: Final = ModelResponseStream(
+            choices=[  # mutable-ok: ModelResponseStream drops choices passed as anything but a list
+                StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")
+            ]
+        )
+        return (*responses_so_far, terminator)
+
+    @staticmethod
     async def _scan_released_stream_after_disconnect(
         *,
-        call_type: str | None,
-        responses_so_far: list[object],
+        endpoint_translation: _EndpointTranslation,
+        responses_so_far: Sequence[object],
         last_scan_key: "StreamingScanKey | None",
         guardrail_to_apply: CustomGuardrail,
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
     ) -> None:
-        if call_type is None:
+        released_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
+        scanned: Final = UnifiedLLMGuardrails._released_chat_stream_as_ended(
+            endpoint_translation=endpoint_translation,
+            responses_so_far=responses_so_far,
+            tool_calls_in_flight=released_key is not None and released_key.tool_calls_in_flight,
+        )
+        if _is_redundant_scan(endpoint_translation.get_streaming_scan_key(scanned), last_scan_key):
             return
-        endpoint_translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
-        if _is_redundant_scan(endpoint_translation.get_streaming_scan_key(responses_so_far), last_scan_key):
-            return
+        recorded_before: Final = len(_recorded_guardrail_information(request_data))
         with anyio.CancelScope(shield=True):
             try:
                 await endpoint_translation.process_output_streaming_response(
-                    responses_so_far=responses_so_far,
+                    responses_so_far=scanned,
                     guardrail_to_apply=guardrail_to_apply,
                     litellm_logging_obj=request_data.get("litellm_logging_obj"),
                     user_api_key_dict=user_api_key_dict,
@@ -999,6 +1070,15 @@ class UnifiedLLMGuardrails(CustomLogger):
                     "UnifiedLLMGuardrails: %s scanned a stream the client disconnected from and raised %s",
                     guardrail_to_apply.guardrail_name,
                     type(e).__name__,
+                )
+                recorded_during_scan: Final = _recorded_guardrail_information(request_data)[recorded_before:]
+                if any(entry.get("guardrail_status") != "success" for entry in recorded_during_scan):
+                    return
+                guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_json_response=e,
+                    request_data=request_data,
+                    guardrail_status="guardrail_failed_to_respond",
+                    event_type=GuardrailEventHooks.post_call,
                 )
 
     async def async_post_call_streaming_iterator_hook(
@@ -1094,17 +1174,20 @@ class UnifiedLLMGuardrails(CustomLogger):
                 mappings=mappings,
             )
             if transform_call_type is not None:
-                async for transformed_item in self._run_incremental_transform_stream(
-                    guardrail_to_apply=guardrail_to_apply,
-                    response=response,
-                    request_data=request_data,
-                    user_api_key_dict=user_api_key_dict,
-                    call_type=transform_call_type,
-                    sampling_rate=sampling_rate,
-                    end_of_stream_only=end_of_stream_only,
-                    mappings=mappings,
-                ):
-                    yield transformed_item
+                async with contextlib.aclosing(
+                    self._run_incremental_transform_stream(
+                        guardrail_to_apply=guardrail_to_apply,
+                        response=response,
+                        request_data=request_data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=transform_call_type,
+                        sampling_rate=sampling_rate,
+                        end_of_stream_only=end_of_stream_only,
+                        mappings=mappings,
+                    )
+                ) as transformed:
+                    async for transformed_item in transformed:
+                        yield transformed_item
                 return
             verbose_proxy_logger.warning(
                 "UnifiedLLMGuardrails: streaming_transform_mode=incremental_diff is only supported "
@@ -1345,9 +1428,10 @@ class UnifiedLLMGuardrails(CustomLogger):
                     ):
                         yield error_item
         except (GeneratorExit, asyncio.CancelledError):
-            if chunks_yielded and not end_of_stream_scan_started:
+            translation_class: Final = None if call_type is None else mappings.get(CallTypes(call_type))
+            if chunks_yielded and not end_of_stream_scan_started and translation_class is not None:
                 await self._scan_released_stream_after_disconnect(
-                    call_type=call_type,
+                    endpoint_translation=translation_class(),
                     responses_so_far=responses_so_far,
                     last_scan_key=last_scan_key,
                     guardrail_to_apply=guardrail_to_apply,
