@@ -3,25 +3,51 @@ User repository for database operations on LiteLLM_UserTable.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final
 
-from litellm.models.user import LiteLLM_UserTable
+from pydantic import TypeAdapter
+
+from litellm.models.user import LiteLLM_UserTable, SCIMPlaceholder
 from litellm.repositories.base_repository import BaseRepository, DbRecord, record_to_dict
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma import models as prisma_models
 
 _JSON_ENCODED_COLUMNS: Final = frozenset({"metadata", "model_spend", "model_max_budget"})
+
+_SHADOWING_PLACEHOLDERS_SQL: Final = """
+SELECT p.user_id AS placeholder_user_id,
+       array_agg(r.user_id ORDER BY r.user_id) AS resolved_user_ids,
+       p.teams AS team_ids
+FROM "LiteLLM_UserTable" p
+JOIN "LiteLLM_UserTable" r
+  ON r.user_id <> p.user_id
+ AND (r.sso_user_id = p.user_id OR LOWER(r.user_email) = LOWER(p.user_id))
+WHERE p.sso_user_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM "LiteLLM_VerificationToken" k WHERE k.user_id = p.user_id)
+GROUP BY p.user_id, p.teams
+ORDER BY p.user_id
+"""
+
+_PLACEHOLDER_ROWS_ADAPTER: Final = TypeAdapter(tuple[SCIMPlaceholder, ...])
 
 
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer = use_writer
+
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
-        return self.prisma_client.db.litellm_usertable
+        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        return database.litellm_usertable
 
     @property
     def model_class(self) -> type[LiteLLM_UserTable]:
@@ -47,6 +73,31 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         records: Final = await self.find_many(where={"user_email": user_email})
         return records[0] if records else None
 
+    async def find_by_emails(self, user_emails: Sequence[str]) -> Sequence[LiteLLM_UserTable]:
+        """Every user whose email matches one of ``user_emails``, ignoring case.
+
+        A roster entry stored by email can differ in case from its user row (member_add
+        resolves emails case-insensitively), so an exact match would miss it. The list goes
+        out in slices of ``IN_LIST_CHUNK_SIZE`` so one statement stays under Postgres's
+        bind-parameter cap; ``chunked_in.find_many_in`` cannot carry the insensitive mode.
+        """
+        unique: Final = sorted(frozenset(user_emails))
+        pages: Final = tuple(
+            [
+                await self.find_many(
+                    where={  # mutable-ok: Prisma query filters are dict-shaped
+                        "user_email": {  # mutable-ok: Prisma query filters are dict-shaped
+                            # bounded-ok: sliced to IN_LIST_CHUNK_SIZE values per statement
+                            "in": unique[start : start + IN_LIST_CHUNK_SIZE],
+                            "mode": "insensitive",
+                        }
+                    }
+                )
+                for start in range(0, len(unique), IN_LIST_CHUNK_SIZE)
+            ]
+        )
+        return tuple(chain.from_iterable(pages))
+
     async def find_by_sso_id(self, sso_user_id: str) -> LiteLLM_UserTable | None:
         """Find a user by SSO ID."""
         return await self.find_by_id(sso_user_id, id_field="sso_user_id")
@@ -58,6 +109,11 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_UserTable]:
         """Find all users in a team."""
         return await self.find_many(where={"teams": {"has": team_id}})
+
+    async def find_shadowing_placeholders(self, tx: "Prisma") -> tuple[SCIMPlaceholder, ...]:
+        """Users with no SSO id and no virtual keys whose id is another user's SSO id or email."""
+        rows: Final = await tx.query_raw(_SHADOWING_PLACEHOLDERS_SQL)
+        return _PLACEHOLDER_ROWS_ADAPTER.validate_python(rows)
 
     async def count_billable_users(self) -> int:
         """Number of users that count toward the license seat limit.

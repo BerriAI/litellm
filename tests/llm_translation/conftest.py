@@ -7,6 +7,8 @@
 
 import asyncio
 import importlib
+from collections.abc import Generator
+from typing import Final
 
 import pytest
 
@@ -20,6 +22,7 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,
     emit_vcr_diagnostic_log,
+    guard_vcr_patch_points,
     install_live_call_probe,
     record_vcr_outcome,
     register_persister_if_enabled,
@@ -37,14 +40,13 @@ def fake_openai_endpoint():
 
 # Per-item respx detection (``apply_vcr_auto_marker_to_items``) handles
 # the vast majority of respx-vs-vcrpy conflicts automatically. The entries
-# below are the persister's and the WebSocket VCR's own unit-test files, which
-# exercise ``save_cassette`` / ``load_cassette`` against fakeredis and must not
-# themselves run under a live cassette context.
+# below are the persister's, the WebSocket VCR's, and the cassette patch-leak
+# guard's own unit-test files, which exercise ``save_cassette`` /
+# ``load_cassette`` against fakeredis or enter cassettes themselves and must
+# not run under a live cassette context.
 _VCR_AUTO_MARKER_SKIP_FILES = frozenset(
-    {"test_vcr_redis_persister.py", "test_ws_vcr.py"}
+    {"test_vcr_redis_persister.py", "test_ws_vcr.py", "test_vcr_leak_guard.py"}
 )
-
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 _verbose_state = VerboseReporterState()
@@ -71,6 +73,17 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
+
+@pytest.hookimpl(wrapper=True, trylast=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Generator[None, object, object]:
+    try:
+        result: Final = yield
+    except BaseException:
+        guard_vcr_patch_points(item, teardown_failed=True)
+        raise
+    guard_vcr_patch_points(item, teardown_failed=False)
+    return result
 
 
 def pytest_configure(config):
@@ -168,7 +181,6 @@ def pytest_collection_modifyitems(config, items):
     apply_vcr_auto_marker_to_items(
         items,
         skip_files=_VCR_AUTO_MARKER_SKIP_FILES,
-        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
     )
 
     custom_logger_tests = [

@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Coroutine
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -116,7 +116,7 @@ class AnthropicFilesHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout = 600.0,
         max_retries: int | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
         """
         Retrieve file content from Anthropic.
 
@@ -185,7 +185,11 @@ class AnthropicFilesHandler:
                 if not line.strip():
                     continue
 
-                anthropic_result = json.loads(line)
+                anthropic_result: object = json.loads(line)
+                if not isinstance(anthropic_result, dict):
+                    raise TypeError(
+                        f"Anthropic batch result line is not a JSON object: {type(anthropic_result).__name__}"
+                    )
                 custom_id = anthropic_result.get("custom_id", "")
                 result = anthropic_result.get("result", {})
                 result_type = result.get("type", "")

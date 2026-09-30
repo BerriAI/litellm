@@ -125,6 +125,7 @@ async def _resync_model_deployments(model_name: str) -> bool:
         )
         return proxy_server.llm_router is not None
     async with proxy_server.MODEL_RECONCILE_LOCK:
+        await proxy_server.proxy_config.get_credentials(prisma_client=prisma_client)
         proxy_server.proxy_config._add_deployment(db_models=rows)
         proxy_server.llm_model_list = router.get_model_list()
     return True
@@ -173,7 +174,10 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
     table: Final = agents_table(prisma_client)
     id_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_id": agent_id_or_name}
     name_filter: Final[LiteLLM_AgentsTableWhereUniqueInput] = {"agent_name": agent_id_or_name}
-    include_permission: Final[LiteLLM_AgentsTableInclude] = {"object_permission": True}
+    include_permission: Final[LiteLLM_AgentsTableInclude] = {
+        "object_permission": True,
+        "identity": True,
+    }
     async with AGENT_RECONCILE_LOCK:
         if _agent_from_registry(agent_id_or_name) is not None:
             return True

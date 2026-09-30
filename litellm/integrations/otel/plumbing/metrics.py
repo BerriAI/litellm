@@ -11,9 +11,10 @@ identical metrics. The attribute cardinality filter is reused from v1 by import
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final, TypeAlias
+from typing import Any, Final, Literal, Protocol, TypeAlias
 
 from opentelemetry.metrics import Histogram, Meter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -151,6 +152,29 @@ METRIC_ATTRIBUTE_CEILING: Final[frozenset[str]] = frozenset(
 BOUNDED_HIDDEN_PARAM_KEYS: Final[tuple[str, ...]] = ("model_id",)
 
 
+class _TokenUsage(TypedDict, total=False):
+    """The token counts a response's ``usage`` carries, as the recorder reads them."""
+
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+
+
+class _ResponseView(Protocol):
+    """The one read the recorder makes on a litellm response object."""
+
+    def get(self, key: Literal["usage"], /) -> _TokenUsage | None: ...
+
+
+class _MetricKwargs(TypedDict, total=False):
+    """The logging kwargs the recorder reads directly."""
+
+    call_type: ReadOnly[str | None]
+    litellm_params: ReadOnly[Mapping[str, object] | None]
+    response_cost: ReadOnly[float | None]
+    completion_start_time: ReadOnly[datetime | float | str | None]
+    api_call_start_time: ReadOnly[datetime | float | str | None]
+
+
 def resolve_error_type(kwargs: Mapping[str, Any]) -> str:
     """The ``error.type`` value for a failed request.
 
@@ -192,8 +216,8 @@ class GenAIMetricRecorder:
 
     def record(
         self,
-        kwargs: Mapping[str, Any],
-        response_obj: Any,
+        kwargs: _MetricKwargs,
+        response_obj: _ResponseView | None,
         start_time: datetime,
         end_time: datetime,
     ) -> None:
@@ -218,7 +242,7 @@ class GenAIMetricRecorder:
 
     def record_failure(
         self,
-        kwargs: Mapping[str, Any],
+        kwargs: _MetricKwargs,
         start_time: datetime,
         end_time: datetime,
     ) -> None:
@@ -342,7 +366,7 @@ class GenAIMetricRecorder:
     #  Per-metric recording
     # ------------------------------------------------------------------ #
 
-    def _record_token_usage(self, response_obj: Any, common_attrs: dict) -> None:
+    def _record_token_usage(self, response_obj: _ResponseView | None, common_attrs: dict) -> None:
         if not response_obj:
             return
         usage: Final = response_obj.get("usage")
@@ -353,7 +377,7 @@ class GenAIMetricRecorder:
         self._metrics.token_usage.record(usage.get("prompt_tokens", 0), attributes=in_attrs)
         self._metrics.token_usage.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
-    def _record_time_to_first_token(self, kwargs: Mapping[str, Any], common_attrs: dict) -> None:
+    def _record_time_to_first_token(self, kwargs: _MetricKwargs, common_attrs: dict) -> None:
         time_to_first_chunk: Final = time_to_first_chunk_seconds(kwargs)
         if time_to_first_chunk is None:
             return
@@ -361,15 +385,14 @@ class GenAIMetricRecorder:
 
     def _record_time_per_output_token(
         self,
-        kwargs: Mapping[str, Any],
-        response_obj: Any,
+        kwargs: _MetricKwargs,
+        response_obj: _ResponseView | None,
         end_time: datetime,
         duration_s: float,
         common_attrs: dict,
     ) -> None:
-        completion_tokens = None
-        if response_obj and (usage := response_obj.get("usage")):
-            completion_tokens = usage.get("completion_tokens")
+        usage: Final = response_obj.get("usage") if response_obj else None
+        completion_tokens: Final = usage.get("completion_tokens") if usage else None
         if completion_tokens is None or completion_tokens <= 0:
             return
 

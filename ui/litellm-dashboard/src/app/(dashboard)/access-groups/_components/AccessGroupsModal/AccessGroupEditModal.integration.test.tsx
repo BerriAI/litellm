@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../../tests/test-utils";
 import { AccessGroupEditModal } from "./AccessGroupEditModal";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
@@ -14,8 +14,13 @@ vi.mock("@/app/(dashboard)/hooks/agents/useAgents", () => ({
   useAgents: () => ({ data: { agents: [{ agent_id: "agent-1", agent_name: "Support Bot" }] } }),
 }));
 
+const manyServers = Array.from({ length: 20 }, (_, i) => ({
+  server_id: `srv-${i + 1}`,
+  server_name: `Server ${i + 1}`,
+}));
+
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
-  useMCPServers: () => ({ data: [{ server_id: "srv-1", server_name: "Files" }] }),
+  useMCPServers: () => ({ data: [{ server_id: "srv-1", server_name: "Files" }, ...manyServers.slice(1)] }),
 }));
 
 vi.mock("@/components/ModelSelect/ModelSelect", () => ({
@@ -42,6 +47,10 @@ const accessGroup: AccessGroupResponse = {
   access_agent_ids: ["agent-1"],
   assigned_team_ids: [],
   assigned_key_ids: [],
+  access_mcp_servers: [{ id: "srv-1", name: "Server One" }],
+  access_agents: [{ id: "agent-1", name: "Agent One" }],
+  assigned_teams: [],
+  assigned_keys: [],
   created_at: "2024-01-01T00:00:00Z",
   created_by: "user-1",
   updated_at: "2024-01-02T00:00:00Z",
@@ -158,6 +167,47 @@ describe("AccessGroupEditModal submit payload", () => {
     await user.type(nameInput, "{Enter}");
 
     expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("renders each selected MCP server as its own removable chip and drops one on remove", async () => {
+    const user = setup();
+    renderModal();
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /MCP Servers/ }));
+    const chip = await screen.findByLabelText("Files");
+    expect(chip).toHaveAttribute("data-slot", "combobox-chip");
+    expect(screen.queryByText("srv-1")).not.toBeInTheDocument();
+
+    await user.click(within(chip).getByRole("button"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_mcp_server_ids).toStrictEqual([]);
+  });
+
+  it("keeps 20 selected MCP servers as separate chips instead of one joined string", async () => {
+    const user = setup();
+    renderModal({ ...accessGroup, access_mcp_server_ids: manyServers.map((s) => s.server_id) });
+    await screen.findByDisplayValue("Engineering");
+
+    await user.click(screen.getByRole("tab", { name: /MCP Servers/ }));
+    await screen.findByLabelText("Server 20");
+    const chips = screen.getAllByLabelText(/^(Files|Server \d+)$/);
+    expect(chips).toHaveLength(20);
+    expect(chips.map((chip) => chip.textContent)).toStrictEqual([
+      "Files",
+      ...manyServers.slice(1).map((s) => s.server_name),
+    ]);
+    expect(screen.queryByText(/Server 2, Server 3/)).not.toBeInTheDocument();
+
+    await user.click(within(screen.getByLabelText("Server 7")).getByRole("button"));
+    await save(user);
+
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(variables().params.access_mcp_server_ids).toStrictEqual(
+      manyServers.map((s) => s.server_id).filter((id) => id !== "srv-7"),
+    );
   });
 
   it("sends models chosen on the Models tab", async () => {

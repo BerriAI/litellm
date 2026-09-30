@@ -10,13 +10,27 @@ import pytest
 
 
 import builtins
+import runpy
+import sys
 import types
 import urllib.parse as urlparse
 
 import uvicorn
 import yaml
+from uvicorn.config import LOOP_FACTORIES
+from uvicorn.importer import import_from_string
 
+from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+
+
+@pytest.fixture(autouse=True)
+def fork_reservation():
+    """Reserving is irreversible: it would forbid native routes in this pytest worker for good"""
+    with patch(  # test-quality-ok: process-global native state, a real reservation would poison every later test in the worker
+        "litellm.rust_bridge.fork_guard.reserve_process_for_forking"
+    ) as reserve:
+        yield reserve
 
 
 @pytest.mark.xdist_group("proxy_cli")
@@ -95,6 +109,7 @@ class TestProxyInitializationHelpers:
         assert args["app"] == "litellm.proxy.proxy_server:app"
         assert args["host"] == "localhost"
         assert args["port"] == 8000
+        assert args["server_header"] is False
 
         # Test with log_config
         args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
@@ -135,6 +150,35 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
+
+    @staticmethod
+    def _uvicorn_access_info_enabled(args: dict) -> bool:
+        import logging
+
+        loggers = tuple(logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"))
+        saved = tuple((lg, lg.handlers[:], lg.level, lg.propagate) for lg in loggers)
+        try:
+            uvicorn.Config(**args).configure_logging()
+            return logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
+        finally:
+            for lg, handlers, level, propagate in saved:
+                lg.handlers[:] = handlers
+                lg.setLevel(level)
+                lg.propagate = propagate
+
+    def test_litellm_log_error_silences_uvicorn_info_lines(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOG", "ERROR")
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_config" not in args
+        assert self._uvicorn_access_info_enabled(args) is False
+
+    def test_unset_litellm_log_keeps_uvicorn_default_info_lines(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_LOG", raising=False)
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_level" not in args
+        assert self._uvicorn_access_info_enabled(args) is True
 
     def test_installed_uvicorn_supports_worker_flags(self):
         params = inspect.signature(uvicorn.Config.__init__).parameters
@@ -461,6 +505,12 @@ class TestProxyInitializationHelpers:
         with patch("sys.platform", "linux"):
             assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
 
+    def test_selected_loop_factory_imports_on_this_interpreter(self):
+        loop_type = ProxyInitializationHelpers._get_loop_type()
+        if loop_type is None:
+            pytest.skip("uvicorn picks the loop itself on this platform")
+        assert callable(import_from_string(LOOP_FACTORIES[loop_type]))
+
     @patch.dict(os.environ, {}, clear=True)
     def test_database_url_construction_with_special_characters(self):
         # Setup environment variables with special characters that need escaping
@@ -570,6 +620,15 @@ class TestProxyInitializationHelpers:
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
 
+            result = runner.invoke(
+                run_server, ["--local", "--skip_server_startup", "--telemetry", "False"]
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            assert "Skipping server startup" in result.output
+            assert "telemetry" not in runner.invoke(run_server, ["--help"]).output
+
             # --- normal startup ---
             mock_uvicorn_run.reset_mock()
 
@@ -579,6 +638,36 @@ class TestProxyInitializationHelpers:
                 result.exit_code == 0
             ), f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
+
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False)
+    def test_script_boot_imports_the_package_proxy_server(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
+        package_proxy_server = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        sibling_proxy_server = types.ModuleType("proxy_server")
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": sibling_proxy_server, "litellm.proxy.proxy_server": package_proxy_server},
+            ),
+            patch.object(sys, "argv", ["proxy_cli.py", "--skip_server_startup"]),
+            patch.object(sys, "path", list(sys.path)),
+            pytest.raises(SystemExit) as exit_info,
+        ):
+            runpy.run_path(proxy_cli.__file__, run_name="__main__")
+
+        assert exit_info.value.code == 0
+        package_proxy_server.save_worker_config.assert_called_once()
 
     @patch("uvicorn.run")
     @patch("atexit.register")
@@ -652,6 +741,124 @@ class TestProxyInitializationHelpers:
                 assert result.exit_code == 2
                 assert "Invalid value for '--limit_concurrency'" in result.output
                 mock_uvicorn_run.assert_not_called()
+
+    @patch("uvicorn.run")
+    @patch("httpx.HTTPTransport.handle_request")
+    @patch("atexit.register")
+    @patch("subprocess.Popen")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch(  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_prometheus_metrics_port_starts_separate_metrics_process(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_popen,
+        mock_atexit_register,
+        mock_handle_request,
+        mock_uvicorn_run,
+        tmp_path,
+    ):
+        """--prometheus_metrics_port must spawn `python -m litellm.proxy.prometheus_metrics_server` on --host
+        with the shared multiproc dir, wait for its /metrics response, and only then start uvicorn. It must stay off by
+        default, refuse to share --port, and abort the proxy when the child dies before serving."""
+        import httpx
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_popen.return_value = MagicMock(pid=4242, **{"poll.return_value": None})
+        probed_urls: list[str] = []
+
+        def child_metrics(request: httpx.Request) -> httpx.Response:
+            probed_urls.append(str(request.url))
+            return httpx.Response(200, headers={"x-litellm-metrics-pid": "4242"}, content=b"")
+
+        mock_handle_request.side_effect = child_metrics
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "PROMETHEUS_METRICS_PORT")
+        }
+        clean_env["PROMETHEUS_MULTIPROC_DIR"] = str(tmp_path)
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(  # test-quality-ok: same isolation as the sibling CLI tests above
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.side_effect = lambda *a, **k: {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--host", "127.0.0.1", "--port", "4000", "--prometheus_metrics_port", "4001"],
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_popen.assert_called_once()
+            spawned = list(mock_popen.call_args.args[0])
+            assert spawned[1:3] == ["-m", "litellm.proxy.prometheus_metrics_server"]
+            assert spawned[3:] == ["--host", "127.0.0.1", "--port", "4001", "--multiproc_dir", str(tmp_path)]
+            assert probed_urls == ["http://127.0.0.1:4001/metrics"]
+            assert "Serving Prometheus metrics on 127.0.0.1:4001/metrics (pid 4242)" in result.output
+            mock_uvicorn_run.assert_called_once()
+
+            mock_popen.reset_mock()
+            mock_uvicorn_run.reset_mock()
+            mock_popen.return_value = MagicMock(pid=4243, **{"poll.return_value": 1})
+            result = runner.invoke(
+                run_server,
+                ["--local", "--port", "4000", "--prometheus_metrics_port", "4001"],
+            )
+            assert result.exit_code == 1, f"exit_code={result.exit_code}, output={result.output}"
+            assert "Prometheus metrics server exited with code 1 before serving 0.0.0.0:4001" in result.output
+            mock_uvicorn_run.assert_not_called()
+
+            mock_popen.reset_mock()
+            mock_uvicorn_run.reset_mock()
+            result = runner.invoke(run_server, ["--local"])
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_popen.assert_not_called()
+            mock_uvicorn_run.assert_called_once()
+
+            mock_uvicorn_run.reset_mock()
+            result = runner.invoke(
+                run_server,
+                ["--local", "--port", "4000", "--prometheus_metrics_port", "4000"],
+            )
+            assert result.exit_code == 2
+            assert "--prometheus_metrics_port must differ from --port" in result.output
+            mock_popen.assert_not_called()
+            mock_uvicorn_run.assert_not_called()
+
+            result = runner.invoke(
+                run_server, ["--local", "--prometheus_metrics_port", "0"]
+            )
+            assert result.exit_code == 2
+            assert "Invalid value for '--prometheus_metrics_port'" in result.output
+            mock_popen.assert_not_called()
 
     @pytest.mark.parametrize(
         "timeout_config,expected_timeout",
@@ -999,6 +1206,172 @@ class TestProxyInitializationHelpers:
                 assert appended_params["pgbouncer"] == "true"
             else:
                 assert "pgbouncer" not in appended_params
+
+    @pytest.mark.parametrize(
+        "env_value, config_value, expect_pgbouncer",
+        [
+            ("true", None, True),
+            ("1", None, True),
+            ("false", None, False),
+            (None, None, False),
+            ("true", False, True),
+            ("false", True, True),
+        ],
+    )
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_disable_prepared_statements_env_var_forwarded_to_url(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_subprocess_run,
+        env_value,
+        config_value,
+        expect_pgbouncer,
+    ):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        general_settings = {"database_url": "postgresql://test:test@localhost:5432/test"}
+        if config_value is not None:
+            general_settings["database_disable_prepared_statements"] = config_value
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
+            return_value={"general_settings": general_settings}
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "DATABASE_DISABLE_PREPARED_STATEMENTS")
+        }
+        if env_value is not None:
+            clean_env["DATABASE_DISABLE_PREPARED_STATEMENTS"] = env_value
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.append_query_params",
+                side_effect=lambda url, params: str(url),
+            ) as mock_append_query_params,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--config", "test-config.yaml", "--skip_server_startup"],
+            )
+
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            appended_params = mock_append_query_params.call_args.args[1]
+            if expect_pgbouncer:
+                assert appended_params["pgbouncer"] == "true", appended_params
+            else:
+                assert "pgbouncer" not in appended_params, appended_params
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_malformed_disable_prepared_statements_env_var_is_rejected_even_when_config_enables_it(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
+            return_value={
+                "general_settings": {
+                    "database_url": "postgresql://test:test@localhost:5432/test",
+                    "database_disable_prepared_statements": True,
+                }
+            }
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "DATABASE_DISABLE_PREPARED_STATEMENTS")
+        }
+        clean_env["DATABASE_DISABLE_PREPARED_STATEMENTS"] = "enabled"
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.append_query_params",
+                side_effect=lambda url, params: str(url),
+            ) as mock_append_query_params,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--config", "test-config.yaml", "--skip_server_startup"],
+            )
+
+            assert isinstance(result.exception, ValueError), f"exit_code={result.exit_code}, output={result.output}"
+            assert "DATABASE_DISABLE_PREPARED_STATEMENTS" in str(result.exception), result.exception
+            mock_append_query_params.assert_not_called()
 
     @patch("uvicorn.run")
     @patch("atexit.register")
@@ -1398,7 +1771,12 @@ class TestProxyInitializationHelpers:
         def capture_run(self):
             captured["options"] = dict(self.options)
 
-        with patch("gunicorn.app.base.BaseApplication.run", capture_run):
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
             ProxyInitializationHelpers._run_gunicorn_server(
                 host="127.0.0.1",
                 port=4010,
@@ -1414,6 +1792,32 @@ class TestProxyInitializationHelpers:
         assert captured["options"]["max_requests_jitter"] == 50
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_master_is_reserved_for_forking_before_it_runs(self, fork_reservation):
+        """preload forks workers from the master, so native routes are forbidden there first"""
+        pytest.importorskip("gunicorn")
+        reserved_before_run: list = []
+
+        def capture_run(self):
+            reserved_before_run.append(fork_reservation.call_args)
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4012,
+                app=MagicMock(),
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        assert [call.args for call in reserved_before_run] == [("the gunicorn master",)]
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_jitter_without_base_warns(self):
         """gunicorn path warns when jitter is set without --max_requests_before_restart"""
         pytest.importorskip("gunicorn")
@@ -1426,6 +1830,9 @@ class TestProxyInitializationHelpers:
         with (
             patch("gunicorn.app.base.BaseApplication.run", capture_run),
             patch("builtins.print") as mock_print,
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
         ):
             ProxyInitializationHelpers._run_gunicorn_server(
                 host="127.0.0.1",
@@ -1571,13 +1978,18 @@ class TestProxyInitializationHelpers:
         mock_proxy_config_instance.get_config = mock_get_config
         mock_proxy_config.return_value = mock_proxy_config_instance
 
-        mock_proxy_server_module = MagicMock(app=mock_app)
+        mock_proxy_server_module = MagicMock(
+            app=mock_app,
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=mock_key_mgmt,
+            save_worker_config=mock_save_worker_config,
+        )
 
         # Only remove DATABASE_URL and DIRECT_URL to prevent the database setup
         # code path from running. Do NOT use clear=True as it removes PATH, HOME,
         # etc., which causes imports inside run_server to break in CI (the real
-        # litellm.proxy.proxy_server import at line 820 of proxy_cli.py has heavy
-        # side effects that fail without a proper environment).
+        # litellm.proxy.proxy_server import has heavy side effects that fail
+        # without a proper environment).
         env_overrides = {
             "DATABASE_URL": "",
             "DIRECT_URL": "",
@@ -1593,18 +2005,7 @@ class TestProxyInitializationHelpers:
             with (
                 patch.dict(
                     "sys.modules",
-                    {
-                        "proxy_server": MagicMock(
-                            app=mock_app,
-                            ProxyConfig=mock_proxy_config,
-                            KeyManagementSettings=mock_key_mgmt,
-                            save_worker_config=mock_save_worker_config,
-                        ),
-                        # Also mock litellm.proxy.proxy_server to prevent the real
-                        # import at line 820 of proxy_cli.py which has heavy side
-                        # effects (FastAPI app init, logging setup, etc.)
-                        "litellm.proxy.proxy_server": mock_proxy_server_module,
-                    },
+                    {"litellm.proxy.proxy_server": mock_proxy_server_module},
                 ),
                 patch(
                     "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
@@ -1787,7 +2188,7 @@ class TestRunServerDbSetup:
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
             mock_setup_database.assert_called_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
             # Reset mocks
@@ -1802,8 +2203,68 @@ class TestRunServerDbSetup:
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=False
+                use_migrate=False, use_v2_resolver=True
             )
+
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    def test_migrations_run_when_the_prisma_cli_is_not_on_path(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        tmp_path,
+        capsys,
+    ):
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_should_update_schema.return_value = True
+        empty_bin = tmp_path / "emptybin"
+        empty_bin.mkdir()
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        clean_env["PATH"] = str(empty_bin)
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(  # test-quality-ok: same isolation as the sibling CLI tests above
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+
+        assert "prisma CLI is neither on PATH" not in capsys.readouterr().out
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=True
+        )
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -1869,7 +2330,7 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
@@ -1935,12 +2396,13 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        capsys,
     ):
-        """USE_V2_MIGRATION_RESOLVER must select the v2 resolver.
+        """USE_V2_MIGRATION_RESOLVER=true must select the v2 resolver.
 
         The Helm migrations Job runs `python litellm/proxy/prisma_migration.py`,
-        which calls run_server with a fixed argv, so a deployment has no way to
-        pass --use_v2_migration_resolver and an env var is the only route in.
+        which calls run_server with a fixed argv, so a deployment reaches the
+        resolver through the env var rather than a CLI flag.
         """
         from litellm.proxy.proxy_cli import run_server
 
@@ -1979,6 +2441,100 @@ class TestRunServerDbSetup:
 
         mock_setup_database.assert_called_once_with(
             use_migrate=True, use_v2_resolver=True
+        )
+        assert "--use_v2_migration_resolver is deprecated" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "use_legacy_flag, env_value, expected",
+        [
+            (False, None, True),
+            (False, "true", True),
+            (False, "false", False),
+            (True, None, False),
+            (True, "true", False),
+        ],
+        ids=[
+            "unset-env-defaults-to-v2",
+            "env-true-selects-v2",
+            "env-false-selects-v1",
+            "legacy-flag-selects-v1",
+            "legacy-flag-beats-env-true",
+        ],
+    )
+    def test_resolve_v2_migration_resolver(self, use_legacy_flag, env_value, expected):
+        from litellm.proxy.proxy_cli import resolve_v2_migration_resolver
+
+        assert (
+            resolve_v2_migration_resolver(
+                use_legacy_flag=use_legacy_flag, env_value=env_value
+            )
+            is expected
+        )
+
+    def test_deprecated_v2_flag_not_reported_outside_a_cli_invocation(self):
+        from litellm.proxy.proxy_cli import deprecated_v2_flag_passed_on_cli
+
+        assert deprecated_v2_flag_passed_on_cli() is False
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_legacy_resolver_flag_reaches_database_setup(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """--use_legacy_migration_resolver must reach the database setup call.
+
+        The resolver decision itself is covered mock-free above; this is the
+        one wiring check that the flag is threaded through run_server.
+        """
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+        ):
+            run_server.main(
+                [
+                    "--local",
+                    "--skip_server_startup",
+                    "--use_legacy_migration_resolver",
+                ],
+                standalone_mode=False,
+            )
+
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=False
         )
 
 
@@ -2452,6 +3008,96 @@ class TestReadReplicaConnectionParams:
         assert "DATABASE_URL_READ_REPLICA" not in captured
 
 
+class TestMaxIdleConnectionLifetimeDefault:
+    """The proxy defaults `max_idle_connection_lifetime` below common infra idle
+    timeouts so stale pooled connections are recycled instead of failing requests."""
+
+    def _config(self, tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_default_applied_to_database_and_direct_url(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            direct_url="postgresql://t:t@localhost:5432/t",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert query["max_idle_connection_lifetime"] == ["60"], env_var
+
+    def test_url_pinned_value_wins_over_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
+    def test_url_pinned_value_wins_over_config_key(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
+    def test_config_key_overrides_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_extra_connection_params_override_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {"database_extra_connection_params": {"max_idle_connection_lifetime": 120}},
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["120"]
+
+    def test_read_replica_gets_the_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["60"]
+
+    def test_replica_pinned_value_wins(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t?max_idle_connection_lifetime=200",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["200"]
+
+    def test_config_key_reaches_the_read_replica(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_idle_lifetime_params_prefers_configured_value(self):
+        from litellm.proxy.db.db_url_settings import idle_lifetime_params
+
+        assert dict(idle_lifetime_params(45)) == {"max_idle_connection_lifetime": 45}
+        assert dict(idle_lifetime_params(None)) == {"max_idle_connection_lifetime": 60}
+
+
 class TestTokenAuthCliFlags:
     """`--azure_postgresql_auth` has to reach the URL assembly the same way the env var does."""
 
@@ -2532,3 +3178,152 @@ class TestTokenAuthCliFlags:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "ENTRA_TOKEN" not in (database_url or "")
         assert toggle is None
+
+
+class TestLibpqSslParamTranslation:
+    """Prisma ignores ``sslrootcert`` and treats ``sslmode=verify-full`` as
+    ``prefer``, so the URL handed to it must carry Prisma's own strict dialect."""
+
+    @staticmethod
+    def _config(tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_libpq_url_is_translated_on_every_prisma_url(self, tmp_path):
+        libpq = "?sslmode=verify-full&sslrootcert=/certs/rds-bundle.pem"
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url=f"postgresql://t:t@localhost:5432/t{libpq}",
+            direct_url=f"postgresql://t:t@direct:5432/t{libpq}",
+            read_replica_url=f"postgresql://t:t@reader:5432/t{libpq}",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert "sslrootcert" not in query, env_var
+            assert query["sslmode"] == ["require"], env_var
+            assert query["sslcert"] == ["/certs/rds-bundle.pem"], env_var
+            assert query["sslaccept"] == ["strict"], env_var
+
+    def test_libpq_params_from_extra_connection_params_are_translated(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {
+                    "database_extra_connection_params": {
+                        "sslmode": "verify-full",
+                        "sslrootcert": "/certs/rds-bundle.pem",
+                    }
+                },
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert "sslrootcert" not in query
+        assert query["sslmode"] == ["require"]
+        assert query["sslcert"] == ["/certs/rds-bundle.pem"]
+        assert query["sslaccept"] == ["strict"]
+
+
+@pytest.mark.xdist_group("proxy_cli")
+class TestValidateConfigFlag:
+    def test_validate_config_valid_config_exits_zero(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [
+                        {
+                            "model_name": "gpt-4o",
+                            "litellm_params": {
+                                "model": "openai/gpt-4o",
+                                "api_key": "sk-fake",
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+
+        result = CliRunner().invoke(run_server, ["--config", str(config_path), "--validate_config"])
+
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        assert "config OK" in result.output
+
+    def test_validate_config_invalid_mcp_server_exits_one(self, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "mcp_servers": {
+                        "zapier": {
+                            "url": "https://example.com/mcp",
+                            "transport": "http",
+                            "per_server_oauth_discovery": "yes",
+                        }
+                    }
+                }
+            )
+        )
+
+        result = CliRunner().invoke(run_server, ["--config", str(config_path), "--validate_config"])
+
+        assert result.exit_code == 1, f"exit_code={result.exit_code}, output={result.output}"
+        assert "per_server_oauth_discovery must be a boolean" in result.output
+
+    def test_validate_config_without_config_is_usage_error(self, monkeypatch):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        result = CliRunner().invoke(run_server, ["--validate_config"])
+
+        assert result.exit_code != 0
+        assert "--validate_config requires --config" in result.output
+
+    @patch("subprocess.Popen")
+    def test_validate_config_with_ollama_model_does_not_start_ollama(self, mock_popen, tmp_path, monkeypatch):
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "model_list": [
+                        {
+                            "model_name": "gpt-4o",
+                            "litellm_params": {
+                                "model": "openai/gpt-4o",
+                                "api_key": "sk-fake",
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+
+        result = CliRunner().invoke(
+            run_server,
+            ["--config", str(config_path), "--model", "ollama/llama3", "--validate_config"],
+        )
+
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        assert "config OK" in result.output
+        mock_popen.assert_not_called()

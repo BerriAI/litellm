@@ -14,6 +14,8 @@ vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", (
       isFetchingMore: false,
       progress: { currentPage: 4, totalPages: 9 },
       cancelled: false,
+      failed: false,
+      coversRange: true,
       cancel: mockCancel,
     };
   },
@@ -25,11 +27,19 @@ vi.mock("@/components/networking", () => ({
 }));
 
 import { userDailyActivityAggregatedCall } from "@/components/networking";
-import { useDailyActivityRange } from "./useDailyActivityRange";
+import { useActivityDateRange, useDailyActivityRange } from "./useDailyActivityRange";
 
 const argsOfLastCall = () => mockUsePaginatedDailyActivity.mock.calls.at(-1)?.[0].args as unknown[];
 
 describe("useDailyActivityRange", () => {
+  it("offers date-range state without starting a daily-activity query", () => {
+    const { result } = renderHook(() => useActivityDateRange());
+
+    expect(result.current.dateValue.from).toBeInstanceOf(Date);
+    expect(result.current.dateValue.to).toBeInstanceOf(Date);
+    expect(mockUsePaginatedDailyActivity).not.toHaveBeenCalled();
+  });
+
   it("queries every user's activity for an admin", () => {
     renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
 

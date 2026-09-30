@@ -3,12 +3,13 @@ Base class across routing strategies to abstract commmon functions like batch in
 """
 
 import asyncio
+import logging
 from abc import ABC
 from typing import Final
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
-from litellm.caching.redis_cache import RedisPipelineIncrementOperation
+from litellm.caching.redis_cache import RedisPipelineIncrementOperation, log_redis_failure
 from litellm.constants import DEFAULT_REDIS_SYNC_INTERVAL
 
 
@@ -39,10 +40,24 @@ class BaseRoutingStrategy(ABC):
             self.periodic_sync_in_memory_spend_with_redis(default_sync_interval=default_sync_interval)
         )
 
+    def cancel_sync_task(self) -> None:
+        if self._sync_task is not None:
+            self._sync_task.cancel()
+
+    def retire(self) -> None:
+        self.cancel_sync_task()
+        if not self.redis_increment_operation_queue:
+            return
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._push_in_memory_increments_to_redis())
+
     async def cleanup(self):
         """Cleanup method to be called when shutting down"""
         if self._sync_task is not None:
-            self._sync_task.cancel()
+            self.cancel_sync_task()
             try:
                 await self._sync_task
             except asyncio.CancelledError:
@@ -147,7 +162,7 @@ class BaseRoutingStrategy(ABC):
                 return return_result
 
         except Exception as e:
-            verbose_router_logger.error("Error syncing in-memory cache with Redis: %s", e)
+            log_redis_failure(verbose_router_logger, logging.ERROR, "Error syncing in-memory cache with Redis", e)
             self.redis_increment_operation_queue = []
 
     def add_to_in_memory_keys_to_update(self, key: str):

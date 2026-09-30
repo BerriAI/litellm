@@ -1,6 +1,10 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -11,6 +15,7 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
@@ -27,6 +32,42 @@ else:
 
 class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: int = 1 * 60  # 1min (RPM/TPM expire key)
+
+
+_active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
+
+
+@dataclass(frozen=True)
+class PrefetchedUsage:
+    """
+    tpm/rpm counter values another read of this request already fetched from the router cache.
+
+    `values` is None when that read failed, which is what `async_batch_get_cache` returns on failure.
+    """
+
+    keys: frozenset[str]
+    values: Mapping[str, object] | None
+
+    def covers(self, keys: Sequence[str]) -> bool:
+        return self.keys.issuperset(keys)
+
+    def values_for(self, keys: Sequence[str]) -> list[object | None] | None:
+        if self.values is None:
+            return None
+        return [self.values.get(key) for key in keys]
+
+    @staticmethod
+    @contextmanager
+    def scoped(usage: "PrefetchedUsage | None") -> Iterator[None]:
+        token: Final = _active_prefetched_usage.set(usage)
+        try:
+            yield
+        finally:
+            _active_prefetched_usage.reset(token)
+
+    @staticmethod
+    def active() -> "PrefetchedUsage | None":
+        return _active_prefetched_usage.get()
 
 
 class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
@@ -209,6 +250,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update TPM/RPM usage on success
@@ -249,6 +292,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update TPM usage on success
@@ -277,7 +322,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # update cache
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             ## TPM
-            await self.router_cache.async_increment_cache(
+            await self.router_cache.async_increment_cache_post_call(
                 key=tpm_key,
                 value=total_tokens,
                 ttl=self.routing_args.ttl,
@@ -350,9 +395,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         tpm_keys: list,
-        tpm_values: list | None,
+        tpm_values: Sequence | None,
         rpm_keys: list,
-        rpm_values: list | None,
+        rpm_values: Sequence | None,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
     ) -> dict | None:
@@ -406,6 +451,19 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         else:
             return None
 
+    def usage_counter_keys(self, healthy_deployments: list) -> tuple[list[str], list[str]]:
+        """The `<id>:<model>:tpm:<HH-MM>` and `<id>:<model>:rpm:<HH-MM>` counter keys selection reads."""
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        prefixes: Final = tuple(
+            f"{m.get('model_info', {}).get('id')}:{m.get('litellm_params', {}).get('model')}"
+            for m in healthy_deployments
+            if isinstance(m, dict)
+        )
+        return (
+            [f"{prefix}:tpm:{current_minute}" for prefix in prefixes],
+            [f"{prefix}:rpm:{current_minute}" for prefix in prefixes],
+        )
+
     async def async_get_available_deployments(
         self,
         model_group: str,
@@ -416,7 +474,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         """
         Async implementation of get deployments.
 
-        Reduces time to retrieve the tpm/rpm values from cache
+        Reduces time to retrieve the tpm/rpm values from cache. A `PrefetchedUsage` scoped
+        to this request skips the cache read when it already holds its counters (see
+        `RoutingReadBatch`).
         """
         # get list of potential deployments
         verbose_router_logger.debug(
@@ -425,28 +485,16 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             healthy_deployments,
         )
 
-        dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
-
-        tpm_keys: Final = []
-        rpm_keys: Final = []
-        for m in healthy_deployments:
-            if isinstance(m, dict):
-                id = m.get("model_info", {}).get(
-                    "id"
-                )  # a deployment should always have an 'id'. this is set in router.py
-                deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_key = f"{id}:{deployment_name}:tpm:{current_minute}"
-                rpm_key = f"{id}:{deployment_name}:rpm:{current_minute}"
-
-                tpm_keys.append(tpm_key)
-                rpm_keys.append(rpm_key)
-
+        tpm_keys, rpm_keys = self.usage_counter_keys(healthy_deployments)
         combined_tpm_rpm_keys: Final = tpm_keys + rpm_keys
 
-        combined_tpm_rpm_values: Final = await self.router_cache.async_batch_get_cache(
-            keys=combined_tpm_rpm_keys
-        )  # [1, 2, None, ..]
+        prefetched_usage: Final = PrefetchedUsage.active()
+        if prefetched_usage is not None and prefetched_usage.covers(combined_tpm_rpm_keys):
+            combined_tpm_rpm_values = prefetched_usage.values_for(combined_tpm_rpm_keys)
+        else:
+            combined_tpm_rpm_values = await self.router_cache.async_batch_get_cache(
+                keys=combined_tpm_rpm_keys
+            )  # [1, 2, None, ..]
 
         if combined_tpm_rpm_values is not None:
             tpm_values = combined_tpm_rpm_values[: len(tpm_keys)]

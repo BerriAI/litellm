@@ -1,7 +1,7 @@
-from typing import Literal, Required
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 
 class GeminiTranscriptionAudioInput(TypedDict):

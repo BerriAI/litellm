@@ -1,0 +1,161 @@
+name: Issue classifier
+
+on:
+  issues:
+    types: [opened, edited]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to classify manually."
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/issue_classifier.yml
+      - .github/prompts/issue-classifier.md
+      - .github/prompts/issue-classifier.schema.json
+      - .github/issue-labels.json
+      - .github/ISSUE_TEMPLATE/bug_report.yml
+      - .github/ISSUE_TEMPLATE/feature_request.yml
+      - scripts/classify-issue.ts
+      - scripts/classify-issue.test.ts
+      - scripts/label-issue.ts
+      - scripts/label-issue.test.ts
+      - scripts/issue-labels.ts
+      - scripts/auto-close-duplicates.ts
+
+permissions: {}
+
+# Runs for one issue queue instead of cancelling, so an edit during the first run never cuts the label step short
+concurrency:
+  group: issue-classifier-${{ github.event.issue.number || github.event.inputs.issue_number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  classify-issue-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.0"
+
+      - name: Test the gate, the validation and the label step
+        run: bun test scripts/classify-issue.test.ts scripts/label-issue.test.ts
+
+  classify-issue:
+    # An edit to a labelled issue is dropped here; the script decides the rest against the live labels
+    if: >-
+      github.event_name != 'pull_request'
+      && github.repository == 'BerriAI/litellm'
+      && (
+        github.event.action != 'edited'
+        || !contains(join(github.event.issue.labels.*.name, ','), 'domain:')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      verdict: ${{ steps.classify.outputs.verdict }}
+    steps:
+      - name: Checkout scripts and prompts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: |
+            .github
+            scripts
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.0"
+
+      - name: Require the LiteLLM endpoint and model
+        env:
+          LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
+          ISSUE_CLASSIFIER_MODEL: ${{ vars.ISSUE_CLASSIFIER_MODEL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${LITELLM_API_BASE}" ]; then
+            echo "Set the LITELLM_API_BASE repo variable (e.g. https://llm.example.com) so the call routes through LiteLLM." >&2
+            exit 1
+          fi
+          if [ -z "${ISSUE_CLASSIFIER_MODEL}" ]; then
+            echo "Set the ISSUE_CLASSIFIER_MODEL repo variable to a model your LiteLLM deployment serves." >&2
+            exit 1
+          fi
+
+      # The issue is read through the API inside the script, so its text never reaches a shell
+      - name: Gate, classify and validate
+        id: classify
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          GITHUB_EVENT_ACTION: ${{ github.event.action }}
+          LITELLM_API_BASE: ${{ vars.LITELLM_API_BASE }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          ISSUE_CLASSIFIER_MODEL: ${{ vars.ISSUE_CLASSIFIER_MODEL }}
+        run: |
+          set -euo pipefail
+          bun run scripts/classify-issue.ts > classification.json
+          {
+            echo 'verdict<<CLASSIFICATION'
+            cat classification.json
+            echo 'CLASSIFICATION'
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo '### Issue classifier'
+            echo '```json'
+            cat classification.json
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Keep the verdict
+        if: steps.classify.outputs.verdict != ''
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: classification-${{ github.event.issue.number || github.event.inputs.issue_number }}
+          path: classification.json
+          retention-days: 90
+
+  label-issue:
+    needs: classify-issue
+    if: needs.classify-issue.outputs.verdict != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          sparse-checkout: |
+            .github
+            scripts
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Exact version, never latest: the next step holds an issues: write token
+          bun-version: "1.4.0"
+
+      - name: Replace the labels in each namespace
+        run: bun run scripts/label-issue.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERDICT: ${{ needs.classify-issue.outputs.verdict }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          DRY_RUN: ${{ vars.ISSUE_CLASSIFIER_ENABLED != 'true' }}

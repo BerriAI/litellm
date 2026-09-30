@@ -1,12 +1,28 @@
 import json
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+
+class _TokenizerConfigResult(TypedDict):
+    """Outcome of a tokenizer_config.json fetch, carrying the parsed document when the fetch succeeded."""
+
+    status: ReadOnly[Literal["success", "failure"]]
+    tokenizer: NotRequired[ReadOnly[object]]
+
+
+class _ChatTemplateFileResult(TypedDict):
+    """Outcome of a chat template file fetch, carrying the template body when the fetch succeeded."""
+
+    status: ReadOnly[Literal["success", "failure"]]
+    chat_template: NotRequired[ReadOnly[str]]
 
 
 def strftime_now(fmt: str) -> str:
@@ -22,7 +38,7 @@ def strftime_now(fmt: str) -> str:
     return datetime.now().strftime(fmt)
 
 
-def _get_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
+def _get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     """
     Fetch tokenizer_config.json from HuggingFace (sync)
 
@@ -45,7 +61,7 @@ def _get_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
         return {"status": "failure"}
 
 
-async def _aget_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
+async def _aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     """
     Fetch tokenizer_config.json from HuggingFace (async)
 
@@ -70,7 +86,7 @@ async def _aget_tokenizer_config(hf_model_name: str) -> dict[str, Any]:
         return {"status": "failure"}
 
 
-def _get_chat_template_file(hf_model_name: str) -> dict[str, Any]:
+def _get_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
     """
     Fetch chat template from separate .jinja file (sync)
 
@@ -98,7 +114,7 @@ def _get_chat_template_file(hf_model_name: str) -> dict[str, Any]:
     return {"status": "failure"}
 
 
-async def _aget_chat_template_file(hf_model_name: str) -> dict[str, Any]:
+async def _aget_chat_template_file(hf_model_name: str) -> _ChatTemplateFileResult:
     """
     Fetch chat template from separate .jinja file (async)
 

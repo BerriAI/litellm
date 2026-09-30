@@ -1,9 +1,14 @@
+import { describe, expect, it } from "vitest";
 import {
   buildComplexityRouterConfig,
   getPlanModeTierError,
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getHeuristicV2SuccessThresholdError,
+  getReminderMarkersError,
+  getClassifierPluginTimeoutError,
+  getClassifierReasoningEffortError,
   getMissingTiersError,
   hydrateCustomTierSet,
   getSemanticConfigError,
@@ -23,6 +28,11 @@ const tiers = {
 
 const baseParams: BuildComplexityRouterConfigParams = {
   tiers,
+  defaultModel: undefined,
+  planModeMinTier: undefined,
+  classificationExamples: undefined,
+  heuristicFirstMaxTier: undefined,
+  classificationMode: undefined,
   tierLabels: undefined,
   classifierType: "heuristic",
   classifierLlmConfig: undefined,
@@ -47,16 +57,189 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it("accepts built-in JEV defaults without an LLM classifier model", () => {
+    expect(getClassifierModelError({ classifier_type: "jev" })).toBeNull();
+  });
+
+  it.each([
+    { model: "" },
+    { model: "   " },
+    { timeout_ms: 0 },
+    { timeout_ms: 1.5 },
+    { timeout_ms: Number.NaN },
+    { circuit_breaker_cooldown_seconds: -1 },
+    { circuit_breaker_cooldown_seconds: Number.POSITIVE_INFINITY },
+  ])("rejects invalid JEV settings before saving or testing: %j", (patch) => {
+    expect(
+      getClassifierModelError({
+        classifier_type: "jev",
+        jev_classifier_config: { model: "jev-latest", timeout_ms: 3000, ...patch },
+      }),
+    ).toBe("Enter a JEV model, a positive whole-number timeout and a positive cooldown");
+  });
+
+  it.each([false, true])("serializes JEV with shared context and no LLM config, custom tiers: %s", (custom) => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "jev",
+      jevClassifierConfig: {
+        model: "jev-test",
+        timeout_ms: 4500,
+        instructions: "  Choose the configured tier  ",
+        circuit_breaker_enabled: false,
+        circuit_breaker_cooldown_seconds: 12.5,
+      },
+      classifierLlmConfig: { model: "stale", timeout_ms: 30 },
+      classificationPrompt: "stale prompt",
+      classificationExamples: "stale examples",
+      classifierContextWindowSize: 4,
+      classifierContextBudgetChars: 2000,
+      classifierContextPerTurnChars: 450,
+      classifierContextIncludeAssistantTurns: true,
+      classifierFallback: "default_model",
+      ...(custom && {
+        customTierSet: {
+          tiers: [
+            { id: "quick", name: "QUICK", definition: "Short answers", models: ["fast"] },
+            { id: "review", name: "REVIEW", definition: "Deep review", models: ["strong"] },
+          ],
+          fallback_tier_id: "quick",
+        },
+      }),
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.classifier_type).toBe("jev");
+    const expectedJevConfig = {
+      model: "jev-test",
+      timeout_ms: 4500,
+      instructions: "Choose the configured tier",
+      circuit_breaker_enabled: false,
+      circuit_breaker_cooldown_seconds: 12.5,
+    };
+    expect(config.jev_classifier_config).toEqual(expectedJevConfig);
+    expect(config.classifier_context_window_size).toBe(4);
+    expect(config.classifier_context_budget_chars).toBe(2000);
+    expect(config.classifier_context_per_turn_chars).toBe(450);
+    expect(config.classifier_context_include_assistant_turns).toBe(true);
+    expect(config).not.toHaveProperty("classifier_llm_config");
+    expect(config).not.toHaveProperty("classification_prompt");
+    expect(config).not.toHaveProperty("classification_examples");
+    if (custom) {
+      expect(config.tiers).toEqual({ QUICK: ["fast"], REVIEW: ["strong"] });
+      expect(config.fallback_tier).toBe("QUICK");
+    } else {
+      expect(config.classifier_fallback).toBe("default_model");
+      expect(config.tiers).toEqual(tiers);
+    }
+  });
+
+  it("omits blank JEV instructions and ignores stale JEV settings when saving LLM", () => {
+    const jev = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "jev",
+      jevClassifierConfig: { model: "jev-latest", timeout_ms: 3000, instructions: "  " },
+    });
+    expect(jev.jev_classifier_config).toEqual({ model: "jev-latest", timeout_ms: 3000 });
+    const llmParams: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "judge", timeout_ms: 1000 },
+      jevClassifierConfig: jev.jev_classifier_config,
+    };
+    const llm = buildComplexityRouterConfig(llmParams);
+    expect(llm).not.toHaveProperty("jev_classifier_config");
+  });
+
+  it("forwards preset references and explicit overrides without materializing absent text on create", () => {
+    const settings = {
+      efficient_profile_preset: "efficient-v1",
+      capable_profile_preset: "capable-v1",
+      harness_preset: "runtime-v1",
+      efficient_profile: "Explicit efficient override",
+      capable_profile: "Explicit capable override",
+      harness: "Explicit harness override",
+      max_quality_gap: 0.05,
+    };
+    const config = buildComplexityRouterConfig({ ...baseParams, classifierType: "llm_v2", llmV2Config: settings });
+    expect(config.llm_v2_config).toEqual(settings);
+    const { efficient_profile: _efficient, capable_profile: _capable, harness: _harness, ...refs } = settings;
+    const refConfig = buildComplexityRouterConfig({ ...baseParams, classifierType: "llm_v2", llmV2Config: refs });
+    expect(JSON.parse(JSON.stringify(refConfig)).llm_v2_config).toEqual(refs);
+  });
+
+  it.each(["capability", "llm_v2", "heuristic"] as const)(
+    "preserves explicit context-window opt-in beside forecast restrictions: %s",
+    (classifierType) => {
+      const forecast = classifierType !== "heuristic";
+      const params = {
+        ...baseParams,
+        classifierType,
+        adaptive: true,
+        enableContextWindowEscalation: true,
+        contextWindowEscalationBuffer: 0.9,
+      };
+      const config = buildComplexityRouterConfig(params);
+      expect(config.adaptive).toBe(!forecast);
+      expect(config.enable_context_window_escalation).toBe(true);
+      expect(config.context_window_escalation_buffer).toBe(0.9);
+      expect(config.escalation_keywords).toEqual(forecast ? [] : ["LITELLM ESCALATE"]);
+      for (const key of ["adaptive_weights", "adaptive_eligible", "tier_distance_penalty"]) {
+        expect(Object.hasOwn(config, key)).toBe(!forecast);
+      }
+      if (forecast) {
+        const untouched = buildComplexityRouterConfig({ ...baseParams, classifierType });
+        expect(untouched.enable_context_window_escalation).toBe(false);
+        expect(untouched.escalation_keywords).toEqual([]);
+      }
+    },
+  );
+
+  it("carries Fast and reasoning overrides independently into a new router payload", () => {
+    const params = { speed: "fast", reasoning_effort: "high", max_tokens: 1024 };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tiers: { ...tiers, COMPLEX: ["primary"], REASONING: ["secondary"] },
+      tierModelParams: { COMPLEX: { primary: params }, REASONING: { secondary: { speed: "fast" } } },
+    });
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "primary", litellm_params: params }],
+      REASONING: [{ model_name: "secondary", litellm_params: { speed: "fast" } }],
+    });
+  });
+
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
     const expected = {
       tiers,
       classifier_type: "heuristic",
+      classification_mode: "every_request",
       session_affinity: false,
       deployment_affinity: true,
+      modality_routing: false,
+      modality_pin_override: false,
       escalation_keywords: ["LITELLM ESCALATE"],
     };
     expect(config).toEqual(expected);
+  });
+
+  it.each([undefined, false, true])("preserves the context-window escalation setting: %s", (enabled) => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      enableContextWindowEscalation: enabled,
+      contextWindowEscalationBuffer: 0.9,
+    });
+    expect(config.enable_context_window_escalation).toBe(enabled);
+    expect(Object.hasOwn(config, "enable_context_window_escalation")).toBe(enabled !== undefined);
+    expect(config.context_window_escalation_buffer).toBe(0.9);
+  });
+
+  it("omits session_affinity_ttl_seconds when untouched, so the router tracks the backend default", () => {
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("session_affinity_ttl_seconds");
+  });
+
+  it("emits an explicit session affinity idle window", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, sessionAffinityTtlSeconds: 300 });
+    expect(config.session_affinity_ttl_seconds).toBe(300);
   });
 
   it("trims escalation keywords and drops blank entries", () => {
@@ -90,6 +273,21 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
   });
 
+  it("preserves explicit classifier circuit-breaker settings, including disabled", () => {
+    const classifierLlmConfig = {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      circuit_breaker_enabled: false,
+      circuit_breaker_cooldown_seconds: 45,
+    };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig,
+    });
+    expect(config.classifier_llm_config).toEqual(classifierLlmConfig);
+  });
+
   it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
@@ -98,6 +296,41 @@ describe("buildComplexityRouterConfig", () => {
     });
     expect(config.classifier_llm_config).toBeUndefined();
   });
+
+  it("emits heuristic_v2 without classifier-only fields", () => {
+    const trainedParams: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "heuristic_v2",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 5,
+      classifierFallback: "heuristic",
+    };
+    const config = buildComplexityRouterConfig(trainedParams);
+    expect(config.classifier_type).toBe("heuristic_v2");
+    expect(config.classifier_llm_config).toBeUndefined();
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_fallback).toBeUndefined();
+    expect(config).not.toHaveProperty("heuristic_v2_success_threshold");
+  });
+
+  it.each([0, 0.95, 1])("serializes a heuristic v2 success threshold of %s", (heuristicV2SuccessThreshold) => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "heuristic_v2",
+      heuristicV2SuccessThreshold,
+    });
+    expect(config.heuristic_v2_success_threshold).toBe(heuristicV2SuccessThreshold);
+  });
+
+  it.each(["heuristic", "llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const)(
+    "retains the inactive success threshold under %s",
+    (classifierType) => {
+      expect(
+        buildComplexityRouterConfig({ ...baseParams, classifierType, heuristicV2SuccessThreshold: 0.91 })
+          .heuristic_v2_success_threshold,
+      ).toBe(0.91);
+    },
+  );
 
   it("includes classifier_context_window_size and classifier_context_budget_chars only when classifier_type is llm", () => {
     const params: BuildComplexityRouterConfigParams = {
@@ -235,6 +468,20 @@ describe("buildComplexityRouterConfig", () => {
   it("omits return_raw_model_name when disabled", () => {
     const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
     expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("writes modality_routing explicitly both ways, so the stored config never relies on the backend default", () => {
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: true }).modality_routing).toBe(true);
+    expect(buildComplexityRouterConfig(baseParams).modality_routing).toBe(false);
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: false }).modality_routing).toBe(false);
+  });
+
+  it("writes modality_pin_override explicitly both ways, so the stored config never relies on the backend default", () => {
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityPinOverride: true }).modality_pin_override).toBe(true);
+    expect(buildComplexityRouterConfig(baseParams).modality_pin_override).toBe(false);
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityPinOverride: false }).modality_pin_override).toBe(
+      false,
+    );
   });
 
   it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
@@ -464,6 +711,19 @@ describe("classifier prompt and fallback", () => {
     expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
   });
 
+  it("keeps an explicit classifier reasoning effort", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, reasoning_effort: "low" },
+    });
+    expect(config.classifier_llm_config?.reasoning_effort).toBe("low");
+  });
+
+  it("omits classifier reasoning effort when the provider default is selected", () => {
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config).not.toHaveProperty("reasoning_effort");
+  });
+
   it("sends the chat preset the operator picked", () => {
     const config = buildComplexityRouterConfig({
       ...llmParams,
@@ -498,15 +758,25 @@ describe("classifier prompt and fallback", () => {
   });
 
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
-    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
+    const customPromptConfig = { model: "m", timeout_ms: 1, reasoning_effort: "none" as const, system_prompt: "x" };
+    const emptyPromptConfig = { model: "m", timeout_ms: 1, system_prompt: "" };
+    const expectedCustomPromptConfig = {
       model: "m",
       timeout_ms: 1,
+      reasoning_effort: "none",
       system_prompt: "x",
-    });
-    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
+    };
+    expect(normalizeClassifierLlmConfig(customPromptConfig)).toEqual(expectedCustomPromptConfig);
+    expect(normalizeClassifierLlmConfig(emptyPromptConfig)).toEqual({
       model: "m",
       timeout_ms: 1,
     });
+  });
+
+  it.each([{}, { system_prompt: "x" }])("normalizeClassifierLlmConfig carries vision through %o", (extra) => {
+    const base = { model: "m", timeout_ms: 1, ...extra };
+    const vision = { enabled: true, max_images: 2 };
+    expect(normalizeClassifierLlmConfig({ ...base, vision })).toEqual({ ...base, vision });
   });
 });
 
@@ -614,6 +884,49 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
     expect(buildComplexityRouterConfig(tuned).tier_boundaries).toEqual(BOUNDARIES);
   });
 
+  it("serializes custom rows without changing weights, matcher order, or optional-field absence", () => {
+    const weights = { codePresence: 0.12345678901234568, unknownStoredWeight: 9 };
+    const dimension = { name: "internalFrameworks", weight: 0.3765432109876543, keywords: ["ORBITMESH", "fluxgate"] };
+    const graded = { name: "sqlDdl", weight: 0.5, patterns: ["create table"], scoring_mode: "match_count" as const };
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      dimensionWeights: weights,
+      customDimensions: [
+        { id: "row-1", ...dimension },
+        { id: "row-2", ...graded },
+      ],
+    });
+    expect(payload.dimension_weights).toEqual(weights);
+    expect(payload.custom_dimensions).toEqual([dimension, graded]);
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("custom_dimensions");
+    expect(buildComplexityRouterConfig({ ...baseParams, customDimensions: [] }).custom_dimensions).toEqual([]);
+  });
+
+  it.each([
+    ["heuristic", undefined, true],
+    ["heuristic_first", "heuristic", true],
+    ["hybrid", "heuristic", true],
+    ["llm", "heuristic", false],
+    ["custom", "heuristic", false],
+    ["llm", "default_model", false],
+    ["custom", "default_model", false],
+    ["heuristic_v2", undefined, false],
+  ] as const)(
+    "%s with fallback %s only emits custom dimensions when its scorer decides",
+    (classifierType, classifierFallback, emits) => {
+      const dimension = { name: "d", weight: 0.4, keywords: ["orbitmesh"] };
+      const uncheckedParams: unknown = {
+        ...baseParams,
+        classifierType,
+        classifierFallback,
+        customDimensions: [{ id: "row", ...dimension }],
+      };
+      const payload = buildComplexityRouterConfig(uncheckedParams as BuildComplexityRouterConfigParams);
+      if (emits) expect(payload.custom_dimensions).toEqual([dimension]);
+      else expect(payload).not.toHaveProperty("custom_dimensions");
+    },
+  );
+
   it("drops them when the classifier falls back to the default model and nothing is scored", () => {
     expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
   });
@@ -690,9 +1003,26 @@ describe("buildComplexityRouterConfig tier model params", () => {
   });
 });
 
+describe("getHeuristicV2SuccessThresholdError", () => {
+  it.each([undefined, 0, 0.95, 1])("accepts the optional probability %s", (threshold) => {
+    expect(getHeuristicV2SuccessThresholdError(threshold)).toBeNull();
+  });
+
+  it.each([-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects invalid success threshold %s",
+    (threshold) => {
+      expect(getHeuristicV2SuccessThresholdError(threshold)).toBe("Success threshold must be a number between 0 and 1");
+    },
+  );
+});
+
 describe("getClassifierModelError", () => {
   it("stays quiet for a heuristic router, which needs no classifier model", () => {
     expect(getClassifierModelError({ classifier_type: "heuristic" })).toBeNull();
+  });
+
+  it("stays quiet for a heuristic v2 router, which runs locally", () => {
+    expect(getClassifierModelError({ classifier_type: "heuristic_v2" })).toBeNull();
   });
 
   it("blocks an LLM classifier with no model, which the router cannot start without", () => {
@@ -718,6 +1048,26 @@ describe("getClassifierModelError", () => {
     expect(
       getClassifierModelError({ classifier_type: "llm", classifier_llm_config: { model: "m", timeout_ms: 3000 } }),
     ).toBeNull();
+  });
+});
+
+describe("getClassifierReasoningEffortError", () => {
+  const classifier = {
+    classifier_type: "llm" as const,
+    classifier_llm_config: { model: "classifier", timeout_ms: 3000, reasoning_effort: "low" },
+  };
+
+  it.each([
+    [["low", "medium"], null],
+    [["medium", "high"], "low reasoning effort is not supported"],
+    [null, null],
+    [undefined, null],
+  ])("validates capability levels %o", (supportedReasoningEfforts, expectedError) => {
+    const error = getClassifierReasoningEffortError(classifier, [
+      { model_group: "classifier", supported_reasoning_efforts: supportedReasoningEfforts },
+    ]);
+    if (expectedError) expect(error).toContain(expectedError);
+    else expect(error).toBeNull();
   });
 });
 
@@ -773,10 +1123,57 @@ describe("heuristic_first", () => {
   });
 
   it("omits heuristic_first_max_tier on every other classifier type, which the backend rejects it on", () => {
-    for (const classifierType of ["heuristic", "llm"] as const) {
+    for (const classifierType of ["heuristic", "heuristic_v2", "llm"] as const) {
       const config = buildComplexityRouterConfig({ ...heuristicFirstParams, classifierType });
       expect(config.heuristic_first_max_tier).toBeUndefined();
     }
+  });
+});
+
+describe("hybrid", () => {
+  const hybridParams: BuildComplexityRouterConfigParams = {
+    ...baseParams,
+    classifierType: "hybrid",
+    hybridBoundaryMargin: 0.03,
+    classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifierFallback: "default_model",
+  };
+
+  it("emits hybrid_boundary_margin, zero included since exactly-on-a-boundary is a real setting", () => {
+    expect(buildComplexityRouterConfig(hybridParams).hybrid_boundary_margin).toBe(0.03);
+    expect(buildComplexityRouterConfig({ ...hybridParams, hybridBoundaryMargin: 0 }).hybrid_boundary_margin).toBe(0);
+  });
+
+  it("keeps every classifier key the operator set, since hybrid still calls the classifier", () => {
+    const config = buildComplexityRouterConfig(hybridParams);
+    expect(config.classifier_type).toBe("hybrid");
+    expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(config.classifier_fallback).toBe("default_model");
+  });
+
+  it("omits hybrid_boundary_margin on every other classifier type, which the backend rejects it on", () => {
+    for (const classifierType of ["heuristic", "llm", "heuristic_first"] as const) {
+      const config = buildComplexityRouterConfig({
+        ...hybridParams,
+        classifierType,
+        ...(classifierType === "heuristic_first" && { heuristicFirstMaxTier: "SIMPLE" }),
+      });
+      expect(config.hybrid_boundary_margin).toBeUndefined();
+    }
+  });
+});
+
+describe("classification_mode", () => {
+  it("emits user_turn", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, classificationMode: "user_turn" });
+    expect(config.classification_mode).toBe("user_turn");
+  });
+
+  it("writes every_request explicitly, so a saved router never depends on the backend default", () => {
+    expect(
+      buildComplexityRouterConfig({ ...baseParams, classificationMode: "every_request" }).classification_mode,
+    ).toBe("every_request");
+    expect(buildComplexityRouterConfig(baseParams).classification_mode).toBe("every_request");
   });
 });
 
@@ -827,13 +1224,36 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     expect(build({ classificationPrompt: "   \n  " })).not.toHaveProperty("classification_prompt");
   });
 
-  it("never writes classification_prompt on a built-in router, which the backend rejects without tier_definitions", () => {
+  it("writes classification_prompt on a built-in router, whose tier bullets the backend derives", () => {
     const payload = buildComplexityRouterConfig({
       ...baseParams,
       classifierType: "llm",
-      classificationPrompt: "opening instructions",
+      classificationPrompt: "  opening instructions  ",
     });
-    expect(payload).not.toHaveProperty("classification_prompt");
+    expect(payload.classification_prompt).toBe("opening instructions");
+  });
+
+  it.each(["heuristic", "heuristic_v2"] as const)(
+    "keeps classification_prompt off a %s router, which never builds a classifier prompt",
+    (classifierType) => {
+      const payload = buildComplexityRouterConfig({
+        ...baseParams,
+        classifierType,
+        classificationPrompt: "opening instructions",
+      });
+      expect(payload).not.toHaveProperty("classification_prompt");
+    },
+  );
+
+  it("keeps classification_prompt off a router still holding a legacy whole-prompt override", () => {
+    // The backend rejects the pair: both replace the same prompt, so the payload must carry one.
+    const legacyPromptParams = {
+      ...baseParams,
+      classifierType: "llm" as const,
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000, system_prompt: "replace the whole rubric" },
+      classificationPrompt: "opening instructions",
+    };
+    expect(buildComplexityRouterConfig(legacyPromptParams)).not.toHaveProperty("classification_prompt");
   });
 
   it("omits a definition on a built-in name, letting the backend rubric supply it", () => {
@@ -851,11 +1271,16 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       classifierLlmConfig: {
         model: "gpt-4o-mini",
         timeout_ms: 3000,
+        reasoning_effort: "low",
         system_prompt: "replace the whole rubric",
         classification_rubric: "agentic",
       },
     });
-    expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(payload.classifier_llm_config).toEqual({
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      reasoning_effort: "low",
+    });
   });
 
   it.each(
@@ -871,12 +1296,19 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       tierBoundaries: { simple_medium: 0.1, medium_complex: 0.25, complex_reasoning: 0.5 },
       tokenThresholds: { short: 1, long: 2 },
       dimensionWeights: { length: 1 },
+      customDimensions: [{ id: "row-1", name: "sqlDdl", weight: 0.4, keywords: ["orbitmesh"] }],
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
+      hybridBoundaryMargin: 0.03,
       customTechnicalKeywords: ["kubernetes"],
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 6,
+      stallEscalationRepeatThreshold: 3,
     };
-    const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
-    expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: emittingType })).toHaveProperty(key);
+    // custom_dimensions only ever ship when the scorer decides, so "llm" cannot prove it emits.
+    const emittingType = key === "heuristic_first_max_tier" || key === "custom_dimensions" ? "heuristic_first" : "llm";
+    const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
+    expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: typeForKey })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);
   });
 
@@ -890,6 +1322,10 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     const payload = build({ classifierType: "heuristic", classifierContextWindowSize: 5 });
     expect(payload.classifier_context_window_size).toBe(5);
     expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it("keeps classification_mode, which the backend accepts beside tier_definitions", () => {
+    expect(build({ classificationMode: "user_turn" }).classification_mode).toBe("user_turn");
   });
 
   it("carries the plan-mode floor as the row's name, not the row id the form holds", () => {
@@ -963,6 +1399,35 @@ describe("hydrateCustomTierSet", () => {
   });
 });
 
+describe("buildComplexityRouterConfig stall escalation", () => {
+  it("omits all three keys when the toggle is off, since the backend rejects them next to session pinning", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: false });
+    expect(config).not.toHaveProperty("stall_escalation_enabled");
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
+  });
+
+  it("emits the toggle and both knobs when it is on", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 8,
+      stallEscalationRepeatThreshold: 4,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config.stall_escalation_window).toBe(8);
+    expect(config.stall_escalation_repeat_threshold).toBe(4);
+  });
+
+  it("emits the toggle alone when neither knob was touched, so both track the backend defaults", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: true });
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
+  });
+});
+
 describe("dryRunRejection", () => {
   it("blocks the save on a rejection whose message is missing, which the write would return as a raw 400", () => {
     expect(dryRunRejection({ valid: false })).toBe("The proxy rejected this auto-router configuration");
@@ -979,5 +1444,112 @@ describe("dryRunRejection", () => {
   it("lets a valid verdict through, including the fail-open one a transport failure returns", () => {
     expect(dryRunRejection({ valid: true })).toBeNull();
     expect(dryRunRejection({ valid: true, error: null })).toBeNull();
+  });
+});
+
+describe("classifier vision wire payload", () => {
+  const vision = { enabled: true, max_images: 3 };
+  const classifierLlmConfig = { model: "classifier", timeout_ms: 3000, vision };
+
+  it("keeps vision through the standard-tier payload", () => {
+    const params = { ...baseParams, classifierType: "llm" as const, classifierLlmConfig };
+    const payload = buildComplexityRouterConfig(params);
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps vision through the custom-tier payload", () => {
+    const customTierSet = {
+      tiers: [
+        { id: "simple", name: "simple", definition: "small talk", models: ["gpt-4o-mini"] },
+        { id: "complex", name: "complex", definition: "hard work", models: ["gpt-4o"] },
+      ],
+      fallback_tier_id: "simple",
+    };
+    const payload = buildComplexityRouterConfig({ ...baseParams, customTierSet, classifierLlmConfig });
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps an untouched classifier config free of vision", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "classifier", timeout_ms: 3000 },
+    });
+
+    expect(payload.classifier_llm_config).not.toHaveProperty("vision");
+  });
+});
+
+describe("advanced complexity router fields", () => {
+  it("normalizes lists, reminder markers, and explicit false values", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      codeKeywords: [" async ", "  "],
+      reasoningKeywords: ["prove"],
+      technicalKeywords: ["api"],
+      simpleKeywords: ["hello"],
+      planModePatterns: [" plan "],
+      routeHousekeepingToCheapestTier: false,
+      housekeepingPatterns: [" title "],
+      reminderMarkers: [{ open: " <SYSTEM> ", close: " </SYSTEM> " }],
+      maxTokensFromTierModel: false,
+      classifierType: "custom",
+      classifierPluginTimeoutMs: 3000,
+    });
+    expect(payload).toMatchObject({
+      code_keywords: ["async"],
+      reasoning_keywords: ["prove"],
+      technical_keywords: ["api"],
+      simple_keywords: ["hello"],
+      plan_mode_patterns: ["plan"],
+      route_housekeeping_to_cheapest_tier: false,
+      housekeeping_patterns: ["title"],
+      reminder_markers: [{ open: "<system>", close: "</system>" }],
+      max_tokens_from_tier_model: false,
+      classifier_plugin_timeout_ms: 3000,
+    });
+  });
+
+  it("omits defaults, empty lists, and timeout values for non-custom classifiers", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      codeKeywords: [" ", ""],
+      reminderMarkers: [],
+      routeHousekeepingToCheapestTier: true,
+      maxTokensFromTierModel: true,
+      classifierPluginTimeoutMs: 3000,
+    });
+    expect(payload).not.toHaveProperty("code_keywords");
+    expect(payload).not.toHaveProperty("reminder_markers");
+    expect(payload).not.toHaveProperty("route_housekeeping_to_cheapest_tier");
+    expect(payload).not.toHaveProperty("max_tokens_from_tier_model");
+    expect(payload).not.toHaveProperty("classifier_plugin_timeout_ms");
+  });
+
+  it.each([
+    "code_keywords",
+    "reasoning_keywords",
+    "technical_keywords",
+    "simple_keywords",
+    "plan_mode_patterns",
+    "route_housekeeping_to_cheapest_tier",
+    "housekeeping_patterns",
+    "reminder_markers",
+    "max_tokens_from_tier_model",
+    "classifier_plugin_timeout_ms",
+  ])("omits unset advanced field %s", (key) => {
+    const payload = buildComplexityRouterConfig(baseParams);
+    expect(payload).not.toHaveProperty(key);
+  });
+
+  it("validates marker pairs and custom classifier timeout", () => {
+    expect(getReminderMarkersError([{ open: " <X> ", close: " <x> " }])).toContain("different");
+    expect(getReminderMarkersError([{ open: "", close: "</x>" }])).toContain("needs both");
+    expect(getReminderMarkersError([{ open: "<x>", close: "</x>" }])).toBeNull();
+    expect(getClassifierPluginTimeoutError("custom", 0)).toContain("whole number");
+    expect(getClassifierPluginTimeoutError("custom", 3000)).toBeNull();
+    expect(getClassifierPluginTimeoutError("heuristic", 0)).toBeNull();
   });
 });

@@ -21,7 +21,7 @@ on the shared lifecycle (every entity it creates is deleted on teardown).
 
 | Entity | Unit | Pre-existing live | This suite (live) | Status |
 |--------|------|-------------------|-------------------|--------|
-| API key | `test_budget_reservation.py`, `test_max_budget_limiter.py` | `otel_tests` | `test_budget_enforcement_e2e::test_key_budget_blocks` | **covered** |
+| API key | `test_budget_reservation.py` | `otel_tests` | `test_budget_enforcement_e2e::test_key_budget_blocks` | **covered** |
 | Team | `test_team_budget_limits.py` | `otel_tests` | (org test builds a team) | **covered** |
 | Internal user | auth unit tests | - | `test_internal_user_budget_blocks` | **covered (new)** |
 | Team member | `test_team_member_budget.py` | - | `test_team_member_budget_blocks` | **covered (new)** |

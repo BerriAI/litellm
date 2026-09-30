@@ -19,6 +19,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 # ``litellm.model_cost`` is loaded at import time from the URL pinned to ``main``
 # (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with this branch
@@ -75,6 +76,9 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
         "test_router_caching.py",
         # Hits the local fake OpenAI endpoint on 127.0.0.1; nothing to record.
         "test_fake_openai_endpoint.py",
+        # Needs the real connection pool a collected handler tears down; vcrpy
+        # patches the transport that pool lives in.
+        "test_handler_gc_does_not_close_client.py",
     }
 )
 
@@ -229,6 +233,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
 
 
 @pytest.fixture(scope="module", autouse=True)

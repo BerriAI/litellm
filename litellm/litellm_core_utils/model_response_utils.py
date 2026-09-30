@@ -144,7 +144,6 @@ def _is_choice_non_empty(choice: StreamingChoices) -> bool:
     # Check model_extra for dynamically added fields on the choice
     choice_extra_fields: Final[Mapping[str, object]] = choice.model_extra or {}
     for extra_field_name, extra_field_value in choice_extra_fields.items():
-        # Skip certain structural fields that are just default/None placeholders
         if extra_field_name == "index" and extra_field_value == 0:
             continue
         if extra_field_name in {"finish_reason", "logprobs"} and extra_field_value is None:
@@ -192,7 +191,6 @@ def _is_delta_non_empty(delta: Delta) -> bool:
     # Check model_extra for dynamically added fields (this is where Pydantic stores them)
     delta_extra_fields: Final[Mapping[str, object]] = delta.model_extra or {}
     for extra_field_value in delta_extra_fields.values():
-        # Even structural fields are meaningful if they have actual content
         if _has_meaningful_content(extra_field_value):
             return True
 

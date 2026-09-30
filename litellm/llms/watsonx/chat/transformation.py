@@ -157,11 +157,9 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
     @staticmethod
     async def aapply_prompt_template(model: str, messages: list[dict[str, str]]) -> str | None:
         """Apply prompt template (async version)"""
-        import litellm
         from litellm.litellm_core_utils.prompt_templates.factory import (
             ahf_chat_template,
             custom_prompt,
-            hf_chat_template,
             ibm_granite_pt,
             mistral_instruct_pt,
         )
@@ -179,11 +177,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             else:
                 hf_model = model
             try:
-                # Use sync if cached, async if not
-                if hf_model in litellm.known_tokenizer_config:
-                    result = hf_chat_template(model=hf_model, messages=messages)
-                else:
-                    result = await ahf_chat_template(model=hf_model, messages=messages)
+                result = await ahf_chat_template(model=hf_model, messages=messages)
                 # Return result if it's truthy (not None and not empty string)
                 # The caller (_aconvert_watsonx_messages_core) will handle None/empty by falling back to default
                 if result:

@@ -40,6 +40,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
     {
       query: string;
       response: VectorStoreSearchResponse | null;
+      error: string | null;
       timestamp: number;
     }[]
   >([]);
@@ -59,6 +60,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
       const historyEntry = {
         query,
         response,
+        error: null,
         timestamp: Date.now(),
       };
 
@@ -66,7 +68,9 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
       setQuery("");
     } catch (error) {
       console.error("Error searching vector store:", error);
-      toast.fromError("Failed to search vector store");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.fromError(errorMessage);
+      setSearchHistory((prev) => [{ query, response: null, error: errorMessage, timestamp: Date.now() }, ...prev]);
     } finally {
       setIsLoading(false);
     }
@@ -228,7 +232,13 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                           })}
                         </div>
                       ) : (
-                        <div className="text-sm text-muted-foreground">No results found</div>
+                        <div
+                          className={
+                            entry.error ? "text-sm break-words text-destructive" : "text-sm text-muted-foreground"
+                          }
+                        >
+                          {entry.error ? `Search failed: ${entry.error}` : "No results found"}
+                        </div>
                       )}
                     </div>
                   </div>

@@ -35,6 +35,15 @@ span orphaned into its own trace). The anchor — a contextvar inherited by thos
 child tasks — gives a stable parent in both cases. DB/service spans keep ambient
 parenting so an auth DB lookup still nests under `auth`.
 
+The anchor is also what `litellm.request.route` is read from: `request_root_http_route`
+returns the server span's own `http.route`, so the LLM call span cannot disagree with
+its parent about which endpoint served the request. That means the route template on a
+normal route and the literal path on a passthrough prefix, because the passthrough hook
+rewrote the attribute; an MCP call anchors the same server span, so it reports the
+`/mcp` mount point. Attributes stay readable after a span ends, so the async close
+callback reads the same value. Where no server span was anchored at all, the route the
+proxy recorded at auth (`metadata.user_api_key_request_route`) is the backstop.
+
 **Which service calls become spans (`spans.span_role_for_service`).** LiteLLM's
 service-logging layer instruments many internal functions, but only some are
 traceable units of work:
@@ -51,10 +60,35 @@ traceable units of work:
   instead (see below).
 
 Spans are named `"{service} {call_type}"` (e.g. `"redis set"`) so repeated calls
-to one service stay distinguishable. Like every other span they parent to the
+to one service stay distinguishable. `call_type` is the operation only; the
+litellm call chain that issued it (`async_set_cache <- async_add_cache`) travels
+as `ServiceLoggerPayload.caller` and lands on the `litellm.service.caller`
+attribute, so one operation is one span name. Like every other span they parent to the
 **ambient** context, falling back to the threaded `litellm_parent_otel_span` only
 when ambient has no live span; a background job with neither starts its own root
-trace. Caller-supplied `event_metadata` is **sanitized** before it reaches a span
+trace.
+
+**Post-response work is its own trace.** Spend tracking, the response cache write
+and the spend-counter increment all run after the response is on the wire, so they
+add nothing to the request's latency. Parenting them under the (already ended)
+server span stretched the request trace past the request itself, which is what a
+viewer shows as trace duration. `context.resolve_service_span_context` detaches
+a call in two cases: it was logged from the post-response phase
+(`litellm._internal_context.post_response_phase`, entered by the success
+handlers and by the response-cache write task, inherited by every task spawned
+inside), or it finished after the resolved parent ended. Either way it starts a
+**new root trace** carrying a **span link** back to the request span (the
+`FollowsFrom` relationship of OpenTracing; the default `:link` propagation style
+of the OTel Ruby ActiveJob and Sidekiq instrumentations). The phase check matters
+for streaming: the stream-finished callbacks run before the ASGI server span
+closes, so by end time alone the cache write would look like request latency.
+Identity Baggage still rides along, so the detached span keeps its team / key /
+user attributes. Only an SDK span detaches: a sampled-out or remote
+`NonRecordingSpan` is never recording but is still the right parent. A call that
+ended before the server span did stays a child even when its
+`asyncio.create_task`-dispatched hook runs after the response.
+
+Caller-supplied `event_metadata` is **sanitized** before it reaches a span
 (primitives only, no live objects, no secrets/headers, bounded) — see
 `payloads.sanitize_event_metadata`.
 
@@ -179,6 +213,15 @@ nothing here imports outside it:
   `config.yaml` — the latter reach the config through the logger's constructor
   kwargs. `baggage_team_metadata_keys` is empty by default, so none of a team's
   free-form metadata is promoted until each sub-key is explicitly allowlisted.
+  `excluded_services` withholds datastore spans from key/team `callback_vars`
+  destinations while the operator's own exporters keep them: set
+  `LITELLM_OTEL_EXCLUDED_SERVICES` (comma-separated) or `excluded_services`
+  (a YAML list) under `callback_settings.otel`, naming the datastore services
+  to withhold (`redis`, `postgres`, `batch_write_to_db`, `redis_*`, or their
+  `db.system.name` spellings `redis` / `postgresql`). Unknown names are logged
+  as an error and ignored. A span is withheld when its `db.system.name` /
+  `db.system` attribute is in the set, so request root, auth, guardrail and
+  model spans can never be excluded.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.

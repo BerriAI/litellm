@@ -163,15 +163,11 @@ class BitBucketClient:
             response.raise_for_status()
 
             data: Final[BitBucketSrcListing] = response.json()
-            files: Final[list[str]] = []
-
-            for item in data.get("values", []):
-                if item.get("type") == "commit_file":
-                    file_path = item.get("path", "")
-                    if file_path.endswith(file_extension):
-                        files.append(file_path)
-
-            return files
+            return [
+                file_path
+                for item in data.get("values", [])
+                if item.get("type") == "commit_file" and (file_path := item.get("path", "")).endswith(file_extension)
+            ]
 
         except Exception as e:
             # Check if it's an HTTP error

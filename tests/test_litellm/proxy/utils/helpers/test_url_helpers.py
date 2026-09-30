@@ -314,3 +314,76 @@ def test_normalize_route_for_root_path_error_path_when_route_not_under_root(
     _clear_url_env(monkeypatch)
     monkeypatch.setenv("SERVER_ROOT_PATH", "/proxy")
     assert normalize_route_for_root_path("/other/v1/chat") is None
+
+
+# ---------------------------------------------------------------------------
+# get_custom_url under a per-request prefix (SERVER_ROOT_PATHS):
+# when a request lives under a dynamic prefix, request.base_url already
+# contains it. Appending the SERVER_ROOT_PATH scalar on top produced
+# double-prefixed SSO callback / login URLs (a path that doesn't exist on
+# the deployment). These pin that the emitted URL now stays under one
+# prefix — the one the request actually arrived on.
+# ---------------------------------------------------------------------------
+
+
+def test_get_custom_url_uses_per_request_prefix_when_middleware_ran(monkeypatch):
+    """The middleware stashes the effective per-request prefix in a ContextVar.
+    ``get_custom_url`` reads that in preference to the SERVER_ROOT_PATH scalar,
+    and ``join_paths``'s tail-dedup collapses the append so a request whose
+    ``base_url`` already ends in ``/tenant-a`` does not become
+    ``/tenant-a/legacy/route``."""
+    _clear_url_env(monkeypatch)
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+
+    from litellm.proxy.middleware.per_request_root_path_middleware import (
+        _request_root_path_var,
+    )
+
+    token = _request_root_path_var.set("/tenant-a")
+    try:
+        # request.base_url already carries the tenant prefix; the scalar
+        # SERVER_ROOT_PATH must not be re-appended on top.
+        result = get_custom_url(
+            request_base_url="https://request.example.com/tenant-a/",
+            route="/v1/chat",
+        )
+    finally:
+        _request_root_path_var.reset(token)
+
+    assert result == "https://request.example.com/tenant-a/v1/chat"
+
+
+def test_get_custom_url_no_double_prefix_when_both_env_vars_configured(monkeypatch):
+    """Regression guard for the review point: with SERVER_ROOT_PATH also set
+    (scalar-legacy) and the request matched by SERVER_ROOT_PATHS (per-request),
+    the emitted URL is under one prefix — the per-request one — never both."""
+    _clear_url_env(monkeypatch)
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+    monkeypatch.setenv("SERVER_ROOT_PATHS", "/tenant-a")
+
+    from litellm.proxy.middleware.per_request_root_path_middleware import (
+        _request_root_path_var,
+    )
+
+    token = _request_root_path_var.set("/tenant-a")
+    try:
+        # No "/legacy" ever appears — the fix pins the reviewer's expected
+        # behavior: only one prefix should apply per request.
+        result = get_custom_url("https://api.example.com/tenant-a", "/sso/callback")
+    finally:
+        _request_root_path_var.reset(token)
+
+    assert result == "https://api.example.com/tenant-a/sso/callback"
+    assert "/legacy" not in result
+
+
+def test_get_custom_url_scalar_only_still_stamps_root_path(monkeypatch):
+    """Pre-middleware deployments have not opted into SERVER_ROOT_PATHS at all;
+    the ContextVar stays unset and the SERVER_ROOT_PATH scalar owns the answer
+    — the behavior every existing scalar-only deployment relies on."""
+    _clear_url_env(monkeypatch)
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+
+    result = get_custom_url("https://request.example.com", "/v1/chat")
+
+    assert result == "https://request.example.com/legacy/v1/chat"

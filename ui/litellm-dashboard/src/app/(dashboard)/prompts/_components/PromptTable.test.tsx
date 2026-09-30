@@ -10,6 +10,8 @@ vi.mock("@/components/networking", () => ({
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const mockPrompts: PromptSpec[] = [
   {
     prompt_id: "prompt-newer",
@@ -53,6 +55,15 @@ describe("PromptTable", () => {
     }
   });
 
+  it("links the Created By cell to the creator's detail page, leaving the placeholder unlinked", () => {
+    const prompts = [mockPrompts[0], { ...mockPrompts[1], created_by: "default_user_id" }];
+    render(<PromptTable {...defaultProps} promptsList={prompts} />);
+
+    expect(screen.getByRole("link", { name: "user-1" })).toHaveAttribute("href", "/ui/users?user=user-1");
+    expect(screen.getByText("default_user_id")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
+  });
+
   it("should display the empty state when data is empty", () => {
     render(<PromptTable {...defaultProps} promptsList={[]} />);
     expect(screen.getByText("No prompts yet")).toBeInTheDocument();
@@ -65,11 +76,13 @@ describe("PromptTable", () => {
     expect(within(rows[1]).getByText("prompt-older")).toBeInTheDocument();
   });
 
-  it("should call onPromptClick when the prompt ID is clicked", async () => {
+  it("should call onPromptClick with the row's environment, defaulting to development", async () => {
     const user = userEvent.setup();
     render(<PromptTable {...defaultProps} />);
     await user.click(screen.getByRole("button", { name: "prompt-newer" }));
-    expect(mockOnPromptClick).toHaveBeenCalledWith("prompt-newer");
+    expect(mockOnPromptClick).toHaveBeenCalledWith("prompt-newer", "production");
+    await user.click(screen.getByRole("button", { name: "prompt-older" }));
+    expect(mockOnPromptClick).toHaveBeenCalledWith("prompt-older", "development");
   });
 
   it("should label the environment and default missing environments to development", () => {
@@ -83,7 +96,7 @@ describe("PromptTable", () => {
     render(<PromptTable {...defaultProps} />);
     await user.click(screen.getByTestId("prompt-actions-prompt-newer"));
     await user.click(await screen.findByTestId("prompt-action-delete"));
-    expect(mockOnDeleteClick).toHaveBeenCalledWith("prompt-newer", "prompt-newer");
+    expect(mockOnDeleteClick).toHaveBeenCalledWith("prompt-newer", "prompt-newer", "production");
   });
 
   it("should copy the prompt ID through the actions menu", async () => {
