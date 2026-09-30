@@ -1,3 +1,6 @@
+from collections.abc import Mapping
+from types import MappingProxyType
+
 import pytest
 from fastapi import HTTPException
 
@@ -595,12 +598,15 @@ def test_ensure_litellm_metadata_noop_when_already_present() -> None:
 
 
 class _CapturingClient:
-    def __init__(self, payload: dict | None = None):
+    def __init__(self, payload: dict[str, float] | None = None):
         self.payload = payload or {"violation": 0.0}
-        self.calls: list[dict] = []
+        self.calls: tuple[Mapping[str, object], ...] = ()
 
     async def post(self, *, url: str, headers: dict, json: dict, timeout: float):
-        self.calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+        self.calls = (
+            *self.calls,
+            MappingProxyType({"url": url, "headers": headers, "json": json, "timeout": timeout}),
+        )
         return _DummyResponse(self.payload)
 
 
