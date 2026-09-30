@@ -32,6 +32,7 @@ from itertools import chain
 from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -74,6 +75,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -342,6 +344,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
+    can_agent_call_model,
     can_key_call_resolved_model,
     get_team_object,
     log_db_metrics,
@@ -12839,6 +12842,17 @@ async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth)
     await release_like_http_disconnect(user_api_key_dict)
 
 
+class _RealtimeErrorBody(TypedDict):
+    type: ReadOnly[str]
+    message: ReadOnly[str]
+    code: NotRequired[ReadOnly[str]]
+
+
+class _RealtimeErrorEvent(TypedDict):
+    type: ReadOnly[str]
+    error: ReadOnly[_RealtimeErrorBody]
+
+
 async def _reject_realtime_session(
     websocket: WebSocket,
     user_api_key_dict: UserAPIKeyAuth,
@@ -12846,13 +12860,19 @@ async def _reject_realtime_session(
     code: int,
     reason: str,
     error_message: str | None = None,
+    error_type: str = "guardrail_error",
+    error_code: str | None = None,
 ) -> None:
     try:
         if error_message is not None:
             try:
-                await websocket.send_text(
-                    json.dumps({"type": "error", "error": {"type": "guardrail_error", "message": error_message}})
-                )
+                error_event: Final[_RealtimeErrorEvent] = {
+                    "type": "error",
+                    "error": {"type": error_type, "message": error_message}
+                    if error_code is None
+                    else {"type": error_type, "message": error_message, "code": error_code},
+                }
+                await websocket.send_text(json.dumps(error_event))
             except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
                 verbose_proxy_logger.debug("Could not send realtime pre-call error event to client; closing anyway")
         await websocket.close(code=code, reason=reason)
@@ -12861,67 +12881,36 @@ async def _reject_realtime_session(
         await _release_realtime_max_parallel_slot(user_api_key_dict)
 
 
-@app.websocket("/openai/v1/realtime")
-@app.websocket("/v1/realtime")
-@app.websocket("/realtime")
-async def realtime_websocket_endpoint(
+async def _route_realtime_websocket_session(
     websocket: WebSocket,
-    model: str | None = fastapi.Query(None, description="The model to use for the websocket connection."),
-    intent: str | None = fastapi.Query(None, description="The intent of the websocket connection."),
-    guardrails: str | None = fastapi.Query(
-        None,
-        description="Comma-separated list of guardrail names to apply to this request.",
-    ),
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
-):
-    requested_protocols: Final = [
-        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
-    ]
-    accept_kwargs: Final[dict] = {}
-    if requested_protocols:
-        accept_kwargs["subprotocol"] = requested_protocols[0]
-
-    route_model = model
-    if route_model is None:
-        if intent == "transcription":
-            route_model = "gpt-realtime-whisper"
-        else:
-            await _reject_realtime_session(
-                websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
-            )
-            return
-    assert route_model is not None
-    try:
-        await can_key_call_resolved_model(
-            model=route_model,
-            llm_model_list=llm_model_list,
-            valid_token=user_api_key_dict,
-            llm_router=llm_router,
-        )
-    except ProxyException as e:
-        _log_model_access_denial(e)
-        await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
-        return
-    await websocket.accept(**accept_kwargs)
-
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    route_model: str,
+    model: str | None,
+    intent: str | None,
+    guardrails: str | None,
+    request_path: str | None = None,
+    live_session_start: Mapping[str, object] | None = None,
+) -> None:
     # Only use explicit parameters, not all query params
     query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
-
     data: dict[str, object] = {
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
     }
-
     # Pass guardrails into data so pre-call guardrail processing picks them up
     if guardrails:
         data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
+    if live_session_start is not None:
+        data["live_session_start"] = live_session_start
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list: Final = list(websocket.scope.get("headers") or [])
-
     scope: Final = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
     scope["headers"] = headers_list
+    if request_path is not None:
+        scope["path"] = request_path
 
     request: Final = Request(scope=scope)
 
@@ -12999,6 +12988,162 @@ async def realtime_websocket_endpoint(
             await _release_realtime_budget_reservation(user_api_key_dict)
             if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):
                 await _release_realtime_max_parallel_slot(user_api_key_dict)
+
+
+@app.websocket("/openai/v1/realtime")
+@app.websocket("/v1/realtime")
+@app.websocket("/realtime")
+async def realtime_websocket_endpoint(
+    websocket: WebSocket,
+    model: str | None = fastapi.Query(None, description="The model to use for the websocket connection."),
+    intent: str | None = fastapi.Query(None, description="The intent of the websocket connection."),
+    guardrails: str | None = fastapi.Query(
+        None,
+        description="Comma-separated list of guardrail names to apply to this request.",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
+):
+    requested_protocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+
+    route_model = model
+    if route_model is None:
+        if intent == "transcription":
+            route_model = "gpt-realtime-whisper"
+        else:
+            await _reject_realtime_session(
+                websocket, user_api_key_dict, code=1008, reason="model query parameter is required"
+            )
+            return
+    assert route_model is not None
+    try:
+        await can_key_call_resolved_model(
+            model=route_model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+    except ProxyException as e:
+        _log_model_access_denial(e)
+        await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
+        return
+    await websocket.accept(subprotocol=requested_protocols[0] if requested_protocols else None)
+    await _route_realtime_websocket_session(
+        websocket,
+        user_api_key_dict,
+        route_model=route_model,
+        model=model,
+        intent=intent,
+        guardrails=guardrails,
+    )
+
+
+async def _reject_invalid_live_session_start(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    await _reject_realtime_session(
+        websocket,
+        user_api_key_dict,
+        code=1008,
+        reason="Invalid session.start frame",
+        error_message="First message must be a session.start JSON object with a non-empty session.model.",
+        error_type="invalid_request_error",
+        error_code="invalid_session_start",
+    )
+
+
+@app.websocket("/openai/v1/live/sessions")
+@app.websocket("/v1/live/sessions")
+@app.websocket("/live/sessions")
+async def live_sessions_websocket_endpoint(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
+) -> None:
+    requested_protocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    await websocket.accept(subprotocol=requested_protocols[0] if requested_protocols else None)
+
+    try:
+        first_message: Final = await asyncio.wait_for(
+            websocket.receive_text(),
+            timeout=OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+    except WebSocketDisconnect:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        return
+    except RuntimeError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+    except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
+
+    try:
+        session_start: Final = TypeAdapter(dict[str, object]).validate_json(
+            first_message.replace("\r", "").replace("\n", "")
+        )
+        session: Final = TypeAdapter(dict[str, object]).validate_python(session_start.get("session"))
+    except ValidationError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+
+    model: Final = session.get("model")
+    if session_start.get("type") != "session.start" or not isinstance(model, str) or not model.strip():
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+
+    try:
+        await can_key_call_resolved_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        await can_agent_call_model(
+            model=model,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except (ProxyException, HTTPException) as error:
+        denial_message: Final = error.message if isinstance(error, ProxyException) else str(error.detail)
+        if isinstance(error, ProxyException):
+            _log_model_access_denial(error)
+        await _reject_realtime_session(
+            websocket,
+            user_api_key_dict,
+            code=1008,
+            reason=websocket_close_reason(denial_message, fallback="Model access denied"),
+            error_message=denial_message,
+            error_type="invalid_request_error",
+            error_code="model_not_allowed",
+        )
+        return
+
+    await _route_realtime_websocket_session(
+        websocket,
+        user_api_key_dict,
+        route_model=model,
+        model=None,
+        intent=None,
+        guardrails=None,
+        request_path=websocket.url.path,
+        live_session_start=session_start,
+    )
 
 
 ######################################################################

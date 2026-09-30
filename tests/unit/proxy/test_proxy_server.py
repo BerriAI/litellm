@@ -1,6 +1,7 @@
 import os
 import traceback
-from typing import Final
+from collections.abc import Coroutine
+from typing import Final, cast
 from unittest import mock
 
 from dotenv import load_dotenv
@@ -3108,3 +3109,249 @@ def test_get_litellm_model_info(data):
     ):
         get_litellm_model_info(model=model)
         get_info_mock.assert_called_once_with(data["expected"])
+
+
+@pytest.mark.parametrize("path", ["/openai/v1/live/sessions", "/v1/live/sessions", "/live/sessions"])
+def test_live_session_invalid_start_is_rejected_without_routing(
+    path: str,
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocketDisconnect
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    with client_no_auth.websocket_connect(path, headers={"Authorization": "Bearer test-api-key"}) as websocket:
+        websocket.send_text('{"type":"session.start","session":{"model":""}}')
+        assert websocket.receive_json() == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_session_start",
+                "message": "First message must be a session.start JSON object with a non-empty session.model.",
+            },
+        }
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+        assert error.value.code == 1008
+
+    route_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("frame_model", "granted"), (("gpt-3.5-turbo", True), ("gpt-4o", False)))
+def test_live_session_frame_model_is_checked_against_managed_agent_grants(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    frame_model: str,
+    granted: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.types.agents import AgentResponse
+    from starlette.websockets import WebSocket, WebSocketDisconnect
+
+    async def managed_agent_auth() -> UserAPIKeyAuth:
+        auth: Final = UserAPIKeyAuth(token="managed-token", agent_id="managed")
+        auth.managed_agent_policy = AgentResponse(
+            agent_id="managed",
+            agent_name="Managed",
+            agent_card_params={},
+            object_permission={"models": ["gpt-3.5-turbo"]},
+        )
+        return auth
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    route_call: Final = AsyncMock(side_effect=route)
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth_websocket, managed_agent_auth)
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer managed-token"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": frame_model}})
+        if granted:
+            assert websocket.receive_text() == "routed"
+        else:
+            assert websocket.receive_json()["type"] == "error"
+            with pytest.raises(WebSocketDisconnect) as error:
+                websocket.receive_json()
+            assert error.value.code == 1008
+
+    assert route_call.await_count == (1 if granted else 0)
+
+
+def test_live_session_valid_start_routes_with_model_and_frame(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocket
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    captured: Final = SimpleNamespace(data=None, route_type=None)
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        captured.data = data
+        captured.route_type = route_type
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    async def allow_model(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(proxy_server, "can_key_call_resolved_model", allow_model)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    start_frame: Final[dict[str, object]] = {
+        "type": "session.start",
+        "session": {"model": "gpt-3.5-turbo", "instructions": "Stay brief"},
+    }
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json(start_frame)
+        assert websocket.receive_text() == "routed"
+
+    routed_data: Final = cast(dict[str, object], captured.data)
+    assert captured.route_type == "_arealtime"
+    assert routed_data["model"] == "gpt-3.5-turbo"
+    assert routed_data["live_session_start"] == start_frame
+
+
+def test_live_session_preserves_pretty_printed_start_frame(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from starlette.websockets import WebSocket
+
+    from litellm.proxy import proxy_server
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    captured: Final = SimpleNamespace(data=None, route_type=None)
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        captured.data = data
+        captured.route_type = route_type
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    async def allow_model(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(proxy_server, "can_key_call_resolved_model", allow_model)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    start_frame: Final = "\r\n".join(
+        [
+            "{",
+            '  "type": "session.start",',
+            '  "session": {"model": "gpt-live-1", "instructions": "a\\nb"}',
+            "}",
+        ]
+    )
+    expected_start: Final[dict[str, object]] = {
+        "type": "session.start",
+        "session": {"model": "gpt-live-1", "instructions": "a\nb"},
+    }
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_text(start_frame)
+        assert websocket.receive_text() == "routed"
+
+    routed_data: Final = cast(dict[str, object], captured.data)
+    assert captured.route_type == "_arealtime"
+    assert routed_data["model"] == "gpt-live-1"
+    assert routed_data["live_session_start"] == expected_start
+
+
+def test_live_session_denied_model_closes_with_policy_code(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from starlette.websockets import WebSocketDisconnect
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def deny_model(**kwargs: object) -> None:
+        raise ProxyException("model access denied", "invalid_request_error", None, 403)
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "can_key_call_resolved_model", deny_model)
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-3.5-turbo"}})
+        assert websocket.receive_json()["type"] == "error"
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+        assert error.value.code == 1008
+
+    route_call.assert_not_awaited()
