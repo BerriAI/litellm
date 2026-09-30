@@ -4400,6 +4400,19 @@ wheels = [
 ]
 
 [[package]]
+name = "libfaketime"
+version = "3.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "pytz" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/df/85/b46c502837430823420be8ba856479819acc5a5fa4e46de167b0188f4ba3/libfaketime-3.0.1.tar.gz", hash = "sha256:49c2b06250bd5a1206efe5ecfdc575850517081b50b42c6c58718be1a4a09fbd", size = 75878, upload-time = "2026-08-19T16:44:13.598Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/a3/af0d453324bff5ee0c1ae51be5604df56c5c6d1d5f61e430a1b96a80e2ac/libfaketime-3.0.1-py3-none-any.whl", hash = "sha256:5eed7c17f3d4ba0f6f828de4975f69a622b06b1e792674e6c1b069c0689fab79", size = 92987, upload-time = "2026-08-19T16:44:12.085Z" },
+]
+
+[[package]]
 name = "librt"
 version = "0.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4687,6 +4700,7 @@ dev = [
     { name = "hypothesis" },
     { name = "keyring" },
     { name = "langfuse" },
+    { name = "libfaketime" },
     { name = "mypy" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -4902,6 +4916,7 @@ dev = [
     { name = "hypothesis", specifier = "==6.165.10" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "langfuse", specifier = ">=4.7,<5.0" },
+    { name = "libfaketime", specifier = "==3.0.1" },
     { name = "mypy", specifier = "==1.20.1" },
     { name = "numpy", specifier = ">=1.26.0,<3.0" },
     { name = "openapi-core", specifier = "==0.22.0" },

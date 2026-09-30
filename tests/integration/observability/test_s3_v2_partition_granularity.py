@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from importlib.resources import files
 from pathlib import Path
 from typing import Final
 from urllib.parse import quote, unquote
@@ -29,11 +30,13 @@ from _s3_v2_support import (
 )
 from integration._support.client import Gateway, JsonValue, Scenario, eventually, object_value
 from integration._support.database import read_rows, scratch_database
+from integration._support.database_relay import database_relay
 from integration._support.process import OwnedProxy, group_members, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
 FLUSH: Final = {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1"}
 HOUR: Final = {"s3_partition_granularity": "hour"}
+FAKETIME_LIBRARY: Final = files("libfaketime").joinpath("vendor", "libfaketime", "src", "libfaketime.so.1")
 ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-4-5-20250929"
 WARNING: Final = "s3 logging: s3_partition_granularity="
 SINK_CREDENTIALS: Final = {
@@ -174,6 +177,49 @@ def _update_environment(candidate: Gateway, values: Mapping[str, JsonValue]) -> 
     candidate.post(
         "/config/update",
         {"environment_variables": dict(values), "litellm_settings": {"success_callback": ["s3_v2"]}},
+    )
+
+
+def _keys_on_fresh_connections(candidate: Gateway, aliases: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    def generate(alias: str) -> tuple[str, str]:
+        with httpx.Client(base_url=candidate.client.base_url, timeout=30, trust_env=False) as fresh:
+            response: Final = fresh.post(
+                "/key/generate",
+                json={"key_alias": alias},
+                headers={"Authorization": f"Bearer {candidate.key}", "Connection": "close"},
+            )
+        assert response.status_code == 200, response.text
+        return str(response.json()["key"]), str(response.json()["token_id"])
+
+    with ThreadPoolExecutor(max_workers=len(aliases)) as pool:
+        return tuple(pool.map(generate, aliases))
+
+
+SETUP_AUDITS: Final = (
+    ("created", "LiteLLM_ProxyModelTable"),
+    ("created", "LiteLLM_ProxyModelTable"),
+    ("created", "LiteLLM_VerificationToken"),
+)
+
+
+def _audit_changes(sink: RecordingS3Sink, audit_prefix: str) -> tuple[tuple[str, str], ...]:
+    bodies: Final = (body for target, body in sink.objects().items() if target.startswith(audit_prefix))
+    lines: Final = b"\n".join(bodies).splitlines()
+    return tuple(sorted((str(audit["action"]), str(audit["table_name"])) for audit in map(_audit_line, lines)))
+
+
+def _audit_line(line: bytes) -> Mapping[str, JsonValue]:
+    return object_value(json.loads(line))
+
+
+def _created_key_hashes(sink: RecordingS3Sink, audit_prefix: str) -> frozenset[str]:
+    created: Final = (
+        object_value(json.loads(body)) for target, body in sink.objects().items() if target.startswith(audit_prefix)
+    )
+    return frozenset(
+        str(audit["object_id"])
+        for audit in created
+        if audit["action"] == "created" and audit["table_name"] == "LiteLLM_VerificationToken"
     )
 
 
@@ -576,17 +622,20 @@ def test_s3_v2_audit_logs_follow_the_audit_params_granularity_not_the_request_lo
             "s3_audit_callback_params": {**SINK_CREDENTIALS, "s3_endpoint_url": bucket.url, **HOUR},
         }
         with (
-            _s3_proxy(gateway, tmp_path, bucket.url, {}, settings, workers=1) as owned,
+            _s3_proxy(gateway, tmp_path, bucket.url, {}, settings) as owned,
             owned.gateway.scenario() as scenario,
         ):
             openai_model, _, key = _models(scenario, provider.url, key_alias=marker)
             returned: Final = _sdk_chats(owned.gateway, openai_model, key, (marker,))
+            aliases: Final = tuple(f"{marker}-fresh{index}" for index in range(16))
+            fresh_keys: Final = _keys_on_fresh_connections(owned.gateway, aliases)
             audit_prefix: Final = f"/{BUCKET}/{PREFIX}/audit_logs/"
             eventually(
-                lambda: tuple(target for target in sink.objects() if target.startswith(audit_prefix)),
-                lambda targets: len(targets) >= 1,
+                lambda: _created_key_hashes(sink, audit_prefix),
+                lambda created: frozenset(token for _, token in fresh_keys) <= created,
                 seconds=30,
             )
+            owned.gateway.post("/key/delete", {"keys": [key for key, _ in fresh_keys]})
             collect_payloads(sink, 2)
             objects: Final = sink.objects()
     audits: Final = {
@@ -611,6 +660,40 @@ def test_s3_v2_audit_logs_follow_the_audit_params_granularity_not_the_request_lo
             target,
             audit["updated_at"],
         )
+
+
+@pytest.mark.parametrize("level", ["key", "team"])
+def test_s3_v2_key_and_team_logging_callback_vars_cannot_change_the_proxy_hour_layout(
+    gateway: Gateway, tmp_path: Path, level: str
+) -> None:
+    marker: Final = f"s3h{level}vars" + uuid.uuid4().hex[:8]
+    logging: Final[list[JsonValue]] = [
+        {"callback_name": "s3_v2", "callback_type": "success", "callback_vars": {"s3_partition_granularity": "day"}}
+    ]
+    upstream: Final = CountingUpstream()
+    sink: Final = RecordingS3Sink(delay_seconds=0.05)
+    with (
+        wire_server(upstream.respond) as provider,
+        wire_server(sink.respond) as bucket,
+        _s3_proxy(gateway, tmp_path, bucket.url, HOUR) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        openai_model, _, _ = _models(scenario, provider.url)
+        key: Final = (
+            scenario.key(models=[openai_model], metadata={"logging": logging})
+            if level == "key"
+            else scenario.key(models=[openai_model], team_id=scenario.team(metadata={"logging": logging}))
+        )
+        prompts: Final = tuple(f"{marker}-{index}" for index in range(8))
+        returned: Final = _sdk_chats(owned.gateway, openai_model, key, prompts)
+        collect_payloads(sink, len(prompts))
+        objects: Final = sink.objects()
+    assert returned == prompts
+    assert sorted(upstream.received()) == sorted(prompts)
+    assert sorted(str(object_value(json.loads(body))["id"]) for body in objects.values()) == sorted(prompts), (
+        f"{level}-level s3_v2 logging must land exactly one object per request"
+    )
+    assert _outside_layout(objects, "hour") == (), f"{level}-level callback_vars must not change the proxy granularity"
 
 
 def test_s3_v2_admin_ui_granularity_update_moves_live_traffic_on_both_workers(gateway: Gateway, tmp_path: Path) -> None:
@@ -713,6 +796,195 @@ def test_s3_v2_granularity_toggles_mid_burst_keep_every_cold_storage_key_on_its_
     )
 
 
+def test_s3_v2_in_flight_request_keeps_its_cold_storage_key_on_its_object_across_owner_and_granularity_switches(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "s3hflight" + uuid.uuid4().hex[:8]
+    held_prompt: Final = f"{marker}-held"
+    upstream: Final = CountingUpstream()
+    arrived: Final = threading.Event()
+    release: Final = threading.Event()
+
+    def held(request: Request) -> Reply:
+        if held_prompt.encode() in request.body:
+            arrived.set()
+            assert release.wait(90), "held request was never released"
+        return upstream.respond(request)
+
+    sink: Final = RecordingS3Sink(delay_seconds=0.05)
+    with (
+        scratch_database() as database_url,
+        wire_server(held) as provider,
+        wire_server(sink.respond) as bucket,
+        _s3_proxy(
+            gateway,
+            tmp_path,
+            bucket.url,
+            {},
+            {"cold_storage_custom_logger": "s3_v2"},
+            environment={"DATABASE_URL": database_url},
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        openai_model, _, key = _models(scenario, provider.url)
+        with ThreadPoolExecutor(max_workers=1) as flight:
+            pending: Final = flight.submit(_sdk_chats, owned.gateway, openai_model, key, (held_prompt,))
+            assert arrived.wait(60), "held request never reached the upstream"
+            owner_switch: Final = owned.gateway.request(
+                "POST", "/config/update", {"litellm_settings": {"cold_storage_custom_logger": "gcs_bucket"}}
+            )
+            _update_environment(owned.gateway, HOUR)
+            probe_round: Final = iter(range(1000))
+
+            def probe() -> Mapping[str, bytes]:
+                round_id: Final = next(probe_round)
+                prompts: Final = tuple(f"{marker}-probe{round_id}-{index}" for index in range(8))
+                _sdk_chats(owned.gateway, openai_model, key, prompts)
+                eventually(
+                    lambda: frozenset(str(payload["id"]) for payload in sink.payloads()),
+                    lambda landed: frozenset(prompts) <= landed,
+                    seconds=20,
+                )
+                return {target: body for target, body in sink.objects().items() if f"-probe{round_id}-" in target}
+
+            eventually(probe, lambda probed: len(probed) == 8 and _outside_layout(probed, "hour") == (), seconds=60)
+            release.set()
+            returned: Final = pending.result()
+        eventually(
+            lambda: frozenset(str(payload["id"]) for payload in sink.payloads()),
+            lambda landed: held_prompt in landed,
+            seconds=30,
+        )
+        held_objects: Final = {target: body for target, body in sink.objects().items() if held_prompt in target}
+        cold_key: Final = _cold_storage_key(held_prompt, database_url)
+    assert owner_switch.status_code == 400, owner_switch.text
+    assert "cold_storage_custom_logger" in owner_switch.text and "config file" in owner_switch.text, owner_switch.text
+    assert returned == (held_prompt,)
+    assert upstream.received().count(held_prompt) == 1
+    assert frozenset(held_objects) == frozenset({f"/{BUCKET}/{quote(cold_key, safe='/')}"}), (
+        "the in-flight request's cold_storage_object_key must name the one object the logger uploaded",
+        cold_key,
+        tuple(held_objects),
+    )
+    assert _outside_layout(held_objects, "hour") == ()
+
+
+def test_s3_v2_cold_storage_owner_saved_through_config_update_is_not_applied_to_a_running_proxy(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "s3howner" + uuid.uuid4().hex[:8]
+    upstream: Final = CountingUpstream()
+    sink: Final = RecordingS3Sink()
+    with (
+        scratch_database() as database_url,
+        wire_server(upstream.respond) as provider,
+        wire_server(sink.respond) as bucket,
+        _s3_proxy(gateway, tmp_path, bucket.url, HOUR, environment={"DATABASE_URL": database_url}) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        openai_model, _, key = _models(scenario, provider.url)
+        saved: Final = owned.gateway.request(
+            "POST", "/config/update", {"litellm_settings": {"cold_storage_custom_logger": "s3_v2"}}
+        )
+        prompts: Final = tuple(f"{marker}-{index}" for index in range(8))
+        answered: Final = _sdk_chats(owned.gateway, openai_model, key, prompts)
+        landed: Final = collect_payloads(sink, len(prompts))
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id, metadata FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)',
+                (list(answered),),
+                database_url=database_url,
+            ),
+            lambda values: len(values) == len(prompts),
+            seconds=60,
+        )
+        objects: Final = sink.objects()
+        stored: Final = read_rows(
+            'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s',
+            ("litellm_settings",),
+            database_url=database_url,
+        )
+    cold_keys: Final = {
+        str(row["request_id"]): object_value(
+            json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
+        ).get("cold_storage_object_key")
+        for row in rows
+    }
+    assert saved.status_code == 200, saved.text
+    assert [
+        object_value(json.loads(row["param_value"]) if isinstance(row["param_value"], str) else row["param_value"]).get(
+            "cold_storage_custom_logger"
+        )
+        for row in stored
+    ] == ["s3_v2"], "the owner switch must be persisted, so the unchanged live keys are not a rejected write"
+    assert sorted(upstream.received()) == sorted(prompts)
+    assert sorted(_prompt(payload) for payload in landed) == sorted(prompts)
+    assert cold_keys == dict.fromkeys(answered), "a DB-saved cold storage owner must not change a live request"
+    assert _outside_layout(objects, "hour") == ()
+
+
+def test_s3_v2_hour_postgres_outage_mid_mixed_burst_lands_every_id_exactly_once_and_recovers(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "s3hpg" + uuid.uuid4().hex[:8]
+    upstream: Final = CountingUpstream()
+    sink: Final = RecordingS3Sink(delay_seconds=0.05)
+    sent: Final = _surface_prompts(marker, 5)
+    with (
+        scratch_database() as database_url,
+        database_relay(database_url, b'"LiteLLM_SpendLogs"') as (relay, relayed_url),
+        wire_server(upstream.respond) as provider,
+        wire_server(sink.respond) as bucket,
+        _s3_proxy(
+            gateway,
+            tmp_path,
+            bucket.url,
+            HOUR,
+            {"cold_storage_custom_logger": "s3_v2"},
+            environment={"DATABASE_URL": relayed_url},
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        openai_model, anthropic_model, key = _models(scenario, provider.url)
+        warm: Final = mixed_burst(owned.gateway, openai_model, anthropic_model, key, f"{marker}warm", per_surface=2)
+        eventually(
+            lambda: frozenset(_prompt(payload) for payload in sink.payloads()),
+            lambda landed: _surface_prompts(f"{marker}warm", 2) <= landed,
+            seconds=60,
+        )
+        relay.arm()
+        answered: Final = mixed_burst(owned.gateway, openai_model, anthropic_model, key, marker, per_surface=5)
+        assert relay.tripped.wait(90), "no spend log write reached the database during the burst"
+        eventually(lambda: relay.refused, lambda count: count >= 1, seconds=30)
+        burst_payloads: Final = eventually(
+            lambda: tuple(payload for payload in sink.payloads() if _prompt(payload) in sent),
+            lambda landed: frozenset(_prompt(payload) for payload in landed) == frozenset(sent),
+            seconds=60,
+        )
+        recovered_prompt: Final = f"{marker}-recovered"
+        recovered: Final = _sdk_chats(owned.gateway, openai_model, key, (recovered_prompt,))
+        recovered_key: Final = _cold_storage_key(recovered_prompt, database_url)
+        eventually(
+            lambda: frozenset(str(payload["id"]) for payload in sink.payloads()),
+            lambda landed: recovered_prompt in landed,
+            seconds=30,
+        )
+        objects: Final = sink.objects()
+        uploads: Final = sink.attempts
+    burst: Final = burst_payloads
+    assert len(warm) == len(_surface_prompts(f"{marker}warm", 2))
+    assert len(answered) == len(sent) == 30
+    assert sorted(prompt for prompt in upstream.received() if prompt.startswith(f"{marker}-")) == sorted(
+        (*sent, recovered_prompt)
+    )
+    assert matched_ids(burst, answered) == frozenset(str(payload["id"]) for payload in burst)
+    assert sorted(_prompt(payload) for payload in burst) == sorted(sent), "every burst id lands exactly once"
+    assert uploads == len(objects), "no object is uploaded twice"
+    assert _outside_layout(objects, "hour") == ()
+    assert recovered == (recovered_prompt,)
+    assert f"/{BUCKET}/{quote(recovered_key, safe='/')}" in objects, "cold key written after recovery names its object"
+
+
 def test_legacy_s3_callback_ignores_hour_granularity(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3v1hour" + uuid.uuid4().hex[:8]
     upstream: Final = CountingUpstream()
@@ -783,6 +1055,99 @@ def test_s3_v2_hour_coded_403_retries_reuse_the_same_hour_key(gateway: Gateway, 
     assert frozenset(attempted) == frozenset(objects), "a retried upload must reuse the key of its first attempt"
     assert sum(attempted.values()) == len(objects) + 10
     assert _outside_layout(objects, "hour") == ()
+
+
+def test_s3_v2_hour_rollover_inside_one_batch_flush_splits_files_by_hour_folder(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    assert FAKETIME_LIBRARY.is_file(), "the libfaketime dev dependency drives the proxy clock"
+    marker: Final = "s3hroll" + uuid.uuid4().hex[:8]
+    clock: Final = tmp_path / "proxy-clock"
+    clock.write_text("@2026-09-29 10:59:30\n")
+    upstream: Final = CountingUpstream()
+    sink: Final = RecordingS3Sink(delay_seconds=0.05)
+    audit_prefix: Final = f"/{BUCKET}/{PREFIX}/audit_logs/"
+    with (
+        wire_server(upstream.respond) as provider,
+        wire_server(sink.respond) as bucket,
+        _s3_proxy(
+            gateway,
+            tmp_path,
+            bucket.url,
+            {**HOUR, "s3_batch_file_upload": True},
+            {"store_audit_logs": True, "audit_log_callbacks": ["s3_v2"]},
+            environment={
+                "DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "3600",
+                "DEFAULT_S3_BATCH_SIZE": "1",
+                "LD_PRELOAD": str(FAKETIME_LIBRARY),
+                "FAKETIME_TIMESTAMP_FILE": str(clock),
+                "FAKETIME_CACHE_DURATION": "1",
+                "FAKETIME_DONT_FAKE_MONOTONIC": "1",
+            },
+            workers=1,
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        openai_model, _, key = _models(scenario, provider.url)
+        setup_audits: Final = eventually(
+            lambda: _audit_changes(sink, audit_prefix),
+            lambda changes: changes == SETUP_AUDITS,
+            seconds=30,
+        )
+
+        def advance(stamp: str, shown: str) -> None:
+            clock.write_text(f"@2026-09-29 {stamp}\n")
+            eventually(
+                lambda: owned.gateway.client.get("/health/liveliness").headers["date"],
+                lambda date: f" {shown}:" in date,
+                seconds=10,
+            )
+
+        advance("10:59:40", "10:59")
+        flushed_before: Final = frozenset(sink.objects())
+        before: Final = tuple(f"{marker}-before-{index}" for index in range(4))
+        after: Final = tuple(f"{marker}-after-{index}" for index in range(4))
+        answered_before: Final = _sdk_chats(owned.gateway, openai_model, key, before)
+        advance("11:00:05", "11:00")
+        answered_after: Final = _sdk_chats(owned.gateway, openai_model, key, after)
+        spent: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)',
+                (list(answered_before + answered_after),),
+            ),
+            lambda rows: len(rows) == len(before) + len(after),
+            seconds=70,
+        )
+        pending: Final = frozenset(sink.objects()) - flushed_before
+        scenario.key(models=[openai_model])
+        batches: Final = eventually(
+            lambda: {
+                target: body
+                for target, body in sink.objects().items()
+                if target not in flushed_before and not target.startswith(audit_prefix)
+            },
+            lambda landed: sum(len(body.splitlines()) for body in landed.values()) >= len(before) + len(after),
+            seconds=30,
+        )
+    batch_file: Final = re.compile(
+        rf"/{BUCKET}/{PREFIX}/2026-09-29/(\d{{2}})/batch_(\d{{2}}-\d{{2}}-\d{{2}})_[0-9a-f]{{32}}\.jsonl"
+    )
+    layout: Final = {
+        (match.group(1), match.group(2)): sorted(_prompt(object_value(json.loads(line))) for line in body.splitlines())
+        for target, body in batches.items()
+        if (match := batch_file.fullmatch(unquote(target)))
+    }
+    assert setup_audits == SETUP_AUDITS
+    assert answered_before == before and answered_after == after
+    assert sorted(str(row["request_id"]) for row in spent) == sorted(before + after)
+    assert sorted(upstream.received()) == sorted(before + after), "every prompt must reach the upstream exactly once"
+    assert pending == frozenset(), (
+        f"request logs must stay queued until the audit log fills the batch: {sorted(pending)}"
+    )
+    assert len(layout) == len(batches) == 2, tuple(batches)
+    assert sorted(hour for hour, _ in layout) == ["10", "11"], layout
+    assert len({stamp for _, stamp in layout}) == 1, f"both hour files must come from one flush: {layout}"
+    assert {hour: prompts for (hour, _), prompts in layout.items()} == {"10": sorted(before), "11": sorted(after)}
 
 
 def test_s3_v2_hour_slow_sink_batches_never_duplicate_an_upload(gateway: Gateway, tmp_path: Path) -> None:

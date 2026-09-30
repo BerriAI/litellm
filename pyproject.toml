@@ -236,6 +236,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "libfaketime==3.0.1",
 ]
 e2e-dev = [
     "playwright==1.61.0",
