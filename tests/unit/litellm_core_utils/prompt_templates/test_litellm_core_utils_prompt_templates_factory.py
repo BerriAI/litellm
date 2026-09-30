@@ -4118,7 +4118,9 @@ _BOSTON_WEATHER_TOOL_CALL_TURN: Final = (
 )
 
 
-def _conversation_around(content_less_user_message: dict) -> tuple[list[dict], list[dict]]:
+def _conversation_around(
+    content_less_user_message: dict[str, object],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     with_message: Final = [
         {"role": "user", "content": "What is the capital of France?"},
         content_less_user_message,
@@ -4130,7 +4132,9 @@ def _conversation_around(content_less_user_message: dict) -> tuple[list[dict], l
 
 
 @pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
-def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block(content_less_user_message):
+def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block(
+    content_less_user_message: dict[str, object],
+):
     with_message, without_message = _conversation_around(content_less_user_message)
 
     assert _bedrock_converse_messages_pt(
@@ -4141,7 +4145,7 @@ def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
 async def test_bedrock_converse_messages_pt_async_user_message_without_content_adds_no_block(
-    content_less_user_message,
+    content_less_user_message: dict[str, object],
 ):
     with_message, without_message = _conversation_around(content_less_user_message)
 
@@ -4154,7 +4158,7 @@ async def test_bedrock_converse_messages_pt_async_user_message_without_content_a
 
 @pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
 def test_bedrock_converse_messages_pt_tool_message_without_content_yields_empty_tool_result(
-    content_less_tool_message,
+    content_less_tool_message: dict[str, object],
 ):
     result: Final = _bedrock_converse_messages_pt(
         messages=validate_and_fix_openai_messages([*_BOSTON_WEATHER_TOOL_CALL_TURN, content_less_tool_message]),
@@ -4171,7 +4175,7 @@ def test_bedrock_converse_messages_pt_tool_message_without_content_yields_empty_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content_less_tool_message", _CONTENT_LESS_TOOL_MESSAGES)
 async def test_bedrock_converse_messages_pt_async_tool_message_without_content_yields_empty_tool_result(
-    content_less_tool_message,
+    content_less_tool_message: dict[str, object],
 ):
     result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
         messages=validate_and_fix_openai_messages([*_BOSTON_WEATHER_TOOL_CALL_TURN, content_less_tool_message]),
@@ -4208,7 +4212,7 @@ def test_bedrock_converse_messages_pt_blank_user_text_sends_the_continue_message
 
 @pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
 def test_bedrock_converse_messages_pt_lone_content_less_user_turn_sends_the_continue_message(
-    content_less_user_message,
+    content_less_user_message: dict[str, object],
 ):
     continue_message: Final = {"role": "user", "content": "Please continue."}
 
@@ -4228,7 +4232,7 @@ def test_bedrock_converse_messages_pt_lone_content_less_user_turn_sends_the_cont
 @pytest.mark.asyncio
 @pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
 async def test_bedrock_converse_messages_pt_async_lone_content_less_user_turn_continues_under_modify_params(
-    content_less_user_message, monkeypatch
+    content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "modify_params", True)
 
@@ -4245,7 +4249,7 @@ async def test_bedrock_converse_messages_pt_async_lone_content_less_user_turn_co
 
 @pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
 def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_without_a_continue_message(
-    content_less_user_message, monkeypatch
+    content_less_user_message: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "modify_params", False)
 
