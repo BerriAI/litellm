@@ -1691,6 +1691,84 @@ async def test_vector_store_access_check_enforces_rag_query_key_permissions() ->
 
 
 @pytest.mark.asyncio
+async def test_vector_store_access_check_uses_cached_rag_query_key_permissions() -> None:
+    request_body: Final = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "test"}],
+        "retrieval_config": {"vector_store_id": "KBOTHERTEAM99"},
+    }
+    key_permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-permission",
+        vector_stores=["KBALLOWED123"],
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        token="test-token",
+        object_permission_id="key-permission",
+        object_permission=key_permission,
+    )
+    mock_prisma_client: Final = MagicMock()
+    find_unique: Final = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
+
+    with (
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", None
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=None,
+                valid_token=valid_token,
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+    find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_vector_store_access_check_uses_cached_rag_query_team_permissions() -> None:
+    request_body: Final = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "test"}],
+        "retrieval_config": {"vector_store_id": "KBOTHERTEAM99"},
+    }
+    team_permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="team-permission",
+        vector_stores=["KBALLOWED123"],
+    )
+    team_object: Final = LiteLLM_TeamTable(
+        team_id="team-id",
+        object_permission_id="team-permission",
+        object_permission=team_permission,
+    )
+    mock_prisma_client: Final = MagicMock()
+    find_unique: Final = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
+
+    with (
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", None
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=None,
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_vector_store_access_denied
+    find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_body",
     [

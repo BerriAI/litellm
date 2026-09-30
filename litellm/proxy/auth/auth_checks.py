@@ -6666,10 +6666,12 @@ async def vector_store_access_check(
     #########################################################
     # Check if the key can access the vector store
     if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission: Final = await _object_permission_table(
-            ObjectPermissionRepository(prisma_client)
-        ).find_unique(
-            where={"object_permission_id": valid_token.object_permission_id},
+        key_object_permission: Final = (
+            valid_token.object_permission
+            if valid_token.object_permission is not None
+            else await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
+                where={"object_permission_id": valid_token.object_permission_id},
+            )
         )
         if key_object_permission is not None:
             _can_object_call_vector_stores(
@@ -6680,10 +6682,13 @@ async def vector_store_access_check(
 
     # Check if the team can access the vector store
     if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission: Final = await _object_permission_table(
-            ObjectPermissionRepository(prisma_client)
-        ).find_unique(
-            where={"object_permission_id": team_object.object_permission_id},
+        cached_team_object_permission: Final = team_object.object_permission
+        team_object_permission: Final = (
+            cached_team_object_permission
+            if isinstance(cached_team_object_permission, LiteLLM_ObjectPermissionTable)
+            else await _object_permission_table(ObjectPermissionRepository(prisma_client)).find_unique(
+                where={"object_permission_id": team_object.object_permission_id},
+            )
         )
         if team_object_permission is not None:
             _can_object_call_vector_stores(
