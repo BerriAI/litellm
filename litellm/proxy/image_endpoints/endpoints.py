@@ -1,6 +1,8 @@
 import asyncio
 import io
 from collections.abc import Sequence
+from itertools import chain
+from types import MappingProxyType
 from typing import Final, get_type_hints
 
 import orjson
@@ -36,6 +38,7 @@ from litellm.types.llms.openai import ChatCompletionUserMessage
 router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
+IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -299,9 +302,9 @@ async def image_edit_api(
         numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
     )
     data: Final = {
-        "prompt": None,
-        "image": None,
-        **{key: value for key, value in form_fields.items() if key not in BRACKETED_FILE_FIELDS},
+        key: value
+        for key, value in chain(IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        if key not in BRACKETED_FILE_FIELDS
     }
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
