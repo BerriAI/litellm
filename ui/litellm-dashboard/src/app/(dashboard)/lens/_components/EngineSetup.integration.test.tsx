@@ -113,8 +113,8 @@ it("searches providers and saves custom history and schedule values", async () =
       onSave={save}
     />,
   );
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
   await user.selectOptions(screen.getByRole("combobox", { name: "Review the last unit" }), "1");
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.clear(screen.getByRole("combobox", { name: "Analysis model" }));
