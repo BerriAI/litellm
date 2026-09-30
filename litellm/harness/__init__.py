@@ -1,14 +1,18 @@
-"""litellm.harness: run coding-agent runtimes (Claude Code, Codex, OpenCode, Deep Agents)
-through one API, with every model call routed via LiteLLM.
+"""Agent harnesses: run Claude Code, Codex, OpenCode or Deep Agents on any LiteLLM model.
 
-    from litellm import harness, sandbox
+The entrypoints live on the top-level package:
 
-    result = harness.run(
-        harness.Harness.CLAUDE_CODE,
+    import litellm
+    from litellm import Harness, sandbox
+
+    result = litellm.agent(
+        Harness.CLAUDE_CODE,
         "fix the failing test",
         sandbox=sandbox.local("."),
-        model="claude-sonnet-4-5",
+        model="litellm_proxy/claude-sonnet-4-5",  # a model group on your AI Gateway
     )
+
+This module holds the types you get back: events, Result, State, errors.
 """
 
 from litellm.harness.errors import (
@@ -30,13 +34,12 @@ from litellm.harness.options import (
 from litellm.harness.runtime import (
     AsyncEventStream,
     AsyncSession,
-    aresume,
-    arun,
-    asession,
-    astream,
-    capabilities,
+    aagent,
+    aagent_resume,
+    aagent_session,
+    agent_capabilities,
 )
-from litellm.harness.sync import EventStream, Session, resume, run, session, stream
+from litellm.harness.sync import EventStream, Session, agent, agent_resume, agent_session
 from litellm.harness.types import (
     Approval,
     Capabilities,
@@ -44,7 +47,6 @@ from litellm.harness.types import (
     Done,
     Event,
     FileChange,
-    Gateway,
     Harness,
     Reasoning,
     Result,
@@ -69,7 +71,6 @@ __all__ = [
     "Event",
     "EventStream",
     "FileChange",
-    "Gateway",
     "Harness",
     "HarnessError",
     "HarnessInstallFailed",
@@ -87,13 +88,11 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "Usage",
-    "aresume",
-    "arun",
-    "asession",
-    "astream",
-    "capabilities",
-    "resume",
-    "run",
-    "session",
-    "stream",
+    "aagent",
+    "aagent_resume",
+    "aagent_session",
+    "agent",
+    "agent_capabilities",
+    "agent_resume",
+    "agent_session",
 ]
