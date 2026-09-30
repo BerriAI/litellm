@@ -54,6 +54,15 @@ Each caller needs a current `proxy_admin` identity, including for read operation
 The connector calls this gateway's management API in process with the caller's
 credential. It does not use `LITELLM_BASE_URL` or a shared `LITELLM_API_KEY`
 
+The integration mounts the connector's own ASGI application and uses the standard
+`httpx2.ASGITransport` for calls back into the gateway. LiteLLM's outbound HTTP
+handler uses `httpx`, while the connector requires `httpx2`. A small ASGI adapter
+preserves the original caller's address, scheme and policy headers, which a direct
+transport mount would replace with loopback defaults. It retains the complete
+gateway middleware and authentication stack; it does not implement HTTP requests
+or MCP protocol handling. Nested calls share their parent request's admission
+slot, and active requests drain before the connector is closed
+
 `PROXY_BASE_URL` supplies the trusted public origin for Host and Origin validation.
 Set `LITELLM_MCP_PUBLIC_URL` to an HTTPS origin if the admin MCP uses a different
 public hostname. Without either setting, only the connector's loopback hosts are

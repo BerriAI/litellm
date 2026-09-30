@@ -1,6 +1,7 @@
 import asyncio
 import os
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Final, Protocol, TypeAlias, runtime_checkable
@@ -37,6 +38,11 @@ class AdmissionControlStats:
     admitted: int
     queued: int
     rejected_total: int
+
+
+class _AdmissionLease:
+    def __init__(self) -> None:
+        self.active: bool = True
 
 
 @runtime_checkable
@@ -140,9 +146,15 @@ class AdmissionControlMiddleware:
         self.app = app
         self.get_settings = get_settings
         self.state = state
+        self._lease: ContextVar[_AdmissionLease | None] = ContextVar("admission_lease", default=None)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        inherited_lease: Final = self._lease.get()
+        if inherited_lease is not None and inherited_lease.active:
             await self.app(scope, receive, send)
             return
 
@@ -178,9 +190,13 @@ class AdmissionControlMiddleware:
             state.record_dequeue()
             state.record_admission()
 
+        lease: Final = _AdmissionLease()
+        token: Final = self._lease.set(lease)
         try:
             await self.app(scope, receive, send)
         finally:
+            lease.active = False
+            self._lease.reset(token)
             semaphore.release()
             state.record_release()
 

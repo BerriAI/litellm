@@ -70,6 +70,8 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Use a LiteLLM image that bundles it, or run uv sync --extra proxy --group admin-mcp."
         ) from exc
 
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
     public_url: Final = urlsplit(os.environ.get("LITELLM_MCP_PUBLIC_URL") or os.environ.get("PROXY_BASE_URL", ""))
     config: Final = Config(
         base_url="http://localhost",
@@ -104,4 +106,8 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             try:
                 yield
             finally:
-                app.router.routes.remove(route)
+                GracefulShutdownManager.start_shutdown()
+                try:
+                    await GracefulShutdownManager.wait_for_drain()
+                finally:
+                    app.router.routes.remove(route)

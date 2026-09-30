@@ -99,6 +99,31 @@ async def test_capacity_rejects_excess_and_releases_queued_request(state: Admiss
 
 
 @pytest.mark.asyncio
+async def test_background_request_acquires_a_new_slot_after_parent_finishes(state: AdmissionControlState) -> None:
+    release: Final = asyncio.Event()
+    background: Final[asyncio.Future[asyncio.Task[tuple[Message, ...]]]] = asyncio.get_running_loop().create_future()
+
+    async def later_request() -> tuple[Message, ...]:
+        await release.wait()
+        return await _call(middleware, path="/child")
+
+    async def handler(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["path"] == "/":
+            background.set_result(asyncio.create_task(later_request()))
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": str(state.get_stats().admitted).encode()})
+
+    middleware: Final = AdmissionControlMiddleware(handler, lambda: AdmissionControlSettings(1, 0, 1.0), state)
+    parent: Final = await _call(middleware)
+    assert parent[1]["body"] == b"1"
+    assert state.get_stats() == AdmissionControlStats(0, 0, 0)
+    release.set()
+    child: Final = await (await background)
+    assert child[1]["body"] == b"1"
+    assert state.get_stats() == AdmissionControlStats(0, 0, 0)
+
+
+@pytest.mark.asyncio
 async def test_pending_waiter_is_not_skipped_after_admission_is_released(state: AdmissionControlState) -> None:
     started: Final = asyncio.Event()
     release: Final = asyncio.Event()

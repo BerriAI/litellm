@@ -10,6 +10,14 @@ from pydantic import BaseModel
 from starlette.testclient import TestClient
 
 from litellm.proxy.admin_mcp import admin_mcp_lifespan
+from litellm.proxy.middleware.admission_control_middleware import (
+    AdmissionControlMiddleware,
+    AdmissionControlSettings,
+    AdmissionControlState,
+    AdmissionControlStats,
+)
+from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
 
 class KeyRequest(BaseModel):
@@ -220,3 +228,68 @@ def test_full_results_do_not_require_worker_affinity(management_app: FastAPI) ->
         )
     assert response.status_code == 200, response.text
     assert json.loads(response.json()["result"]["content"][0]["text"]) == {"keys": [{"key_alias": "a" * 20000}]}
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+def test_nested_management_calls_share_one_admission_slot(management_app: FastAPI) -> None:
+    state: Final = AdmissionControlState(lambda: None)
+    management_app.add_middleware(
+        AdmissionControlMiddleware,
+        get_settings=lambda: AdmissionControlSettings(1, 0, 1.0),
+        state=state,
+    )
+    with TestClient(management_app, base_url="http://localhost:4000") as client:
+        response: Final = client.post(
+            "/admin/mcp",
+            headers={"Authorization": "Bearer admin-a", "Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_keys"}},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["isError"] is False
+    assert json.loads(response.json()["result"]["content"][0]["text"])["keys"] == ["owned-by-a"]
+    assert state.get_stats() == AdmissionControlStats(0, 0, 0)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+async def test_shutdown_drains_an_active_tool_before_closing_connector(
+    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_ADMIN_TOOLS", "list_teams")
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    management_app.add_middleware(InFlightRequestsMiddleware)
+
+    @management_app.get("/team/list", operation_id="list_team_team_list_get")
+    async def list_teams() -> dict[str, object]:
+        started.set()
+        await release.wait()
+        return {"teams": ["completed-before-shutdown"]}
+
+    async def complete_during_drain() -> None:
+        try:
+            async with asyncio.timeout(5):
+                while not GracefulShutdownManager.is_shutting_down():
+                    await asyncio.sleep(0)
+        finally:
+            release.set()
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=management_app), base_url="http://localhost:4000"
+    ) as client:
+        async with management_app.router.lifespan_context(management_app):
+            request: Final = asyncio.create_task(
+                client.post(
+                    "/admin/mcp",
+                    headers={"Authorization": "Bearer admin-a", "Accept": "application/json, text/event-stream"},
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_teams"}},
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=5)
+            completion: Final = asyncio.create_task(complete_during_drain())
+        await asyncio.wait_for(completion, timeout=5)
+        response: Final = await asyncio.wait_for(request, timeout=5)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["isError"] is False
+    assert json.loads(response.json()["result"]["content"][0]["text"]) == {"teams": ["completed-before-shutdown"]}
+    assert InFlightRequestsMiddleware.get_count() == 0
