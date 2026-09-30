@@ -8892,16 +8892,22 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Sequence | None
 _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
 
 
-def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+def _reported_cost_is_priced_by_calculator(response: ModelResponse, logging_obj: Optional["Logging"]) -> bool:
+    """
+    A deployment with its own pricing is priced by the calculator, which drops the provider's
+    usage.cost for it, the same way the non-streamed path does.
+    """
     if logging_obj is None:
         return False
     provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
-    return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+    if provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS:
+        return True
+    return logging_obj._custom_pricing_for(response)  # pyright: ignore[reportPrivateUsage]  # same rule as the calculator
 
 
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
+    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(response, logging_obj):
         return float(usage_cost)
     if logging_obj is not None:
         return None
