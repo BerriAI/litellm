@@ -4095,23 +4095,20 @@ def get_user_message_block_or_continue_message(
 ) -> ChatCompletionUserMessage:
     """
     Returns the user content block
-    if content block is an empty string, then return the default continue message
+    if content block is missing or an empty string, then return the default continue message
 
     Relevant Issue: https://github.com/BerriAI/litellm/issues/7169
     """
     content_block: Final = message.get("content", None)
 
-    # Handle None case
-    if content_block is None or (user_continue_message is None and litellm.modify_params is False):
+    if user_continue_message is None and litellm.modify_params is False:
         return skip_empty_text_blocks(message=message)
 
-    # Handle string case
+    if content_block is None or (isinstance(content_block, str) and not content_block.strip()):
+        return ChatCompletionUserMessage(**(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE))
+
     if isinstance(content_block, str):
-        # check if content is empty
-        if content_block.strip():
-            return message
-        else:
-            return ChatCompletionUserMessage(**(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE))
+        return message
 
     # Handle list case
     if isinstance(content_block, list):

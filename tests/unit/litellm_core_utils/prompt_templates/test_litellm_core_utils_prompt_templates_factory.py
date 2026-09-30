@@ -4204,3 +4204,56 @@ def test_bedrock_converse_messages_pt_blank_user_text_sends_the_continue_message
         llm_provider="bedrock",
         user_continue_message=continue_message,
     )
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_sends_the_continue_message(
+    content_less_user_message,
+):
+    continue_message: Final = {"role": "user", "content": "Please continue."}
+
+    assert _bedrock_converse_messages_pt(
+        messages=validate_and_fix_openai_messages([content_less_user_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    ) == _bedrock_converse_messages_pt(
+        messages=[continue_message],
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+        user_continue_message=continue_message,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+async def test_bedrock_converse_messages_pt_async_lone_content_less_user_turn_continues_under_modify_params(
+    content_less_user_message, monkeypatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=validate_and_fix_openai_messages([content_less_user_message]),
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    ) == await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=[{"role": "user", "content": ""}],
+        model="anthropic.claude-haiku-4-5",
+        llm_provider="bedrock",
+    )
+
+
+@pytest.mark.parametrize("content_less_user_message", _CONTENT_LESS_USER_MESSAGES)
+def test_bedrock_converse_messages_pt_lone_content_less_user_turn_adds_no_block_without_a_continue_message(
+    content_less_user_message, monkeypatch
+):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    assert (
+        _bedrock_converse_messages_pt(
+            messages=validate_and_fix_openai_messages([content_less_user_message]),
+            model="anthropic.claude-haiku-4-5",
+            llm_provider="bedrock",
+        )
+        == []
+    )
