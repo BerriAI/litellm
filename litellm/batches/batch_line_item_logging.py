@@ -105,12 +105,17 @@ async def _release_line_item_claim(claim_cache: DualCache, claim_key: str, token
         )
 
 
+def _json_fallback(value: object) -> dict[str, object] | str:
+    mapping: Final = _as_object_mapping(value)
+    return dict(mapping) if mapping is not None else str(value)
+
+
 class _BatchLineFailure(Exception):
     """A provider-reported per-line batch failure; carries the batch's hidden
     params so the failure logging payload can attribute the line."""
 
     def __init__(self, error_payload: object) -> None:
-        super().__init__(json.dumps(error_payload))
+        super().__init__(json.dumps(error_payload, default=_json_fallback))
         self._hidden_params: dict[str, object] = {}  # mutable-ok: plain-dict contract like response _hidden_params
 
 

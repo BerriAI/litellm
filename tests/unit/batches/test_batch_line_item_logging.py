@@ -136,10 +136,16 @@ def _fresh_line_item_claim_cache():
 @pytest.fixture
 def recorder():
     logger = _RecordingLogger()
-    saved_flag = litellm.store_batch_line_items_in_callbacks  # test-quality-ok: process-wide opt-in flag; restored in teardown
-    saved_success = list(litellm._async_success_callback)  # test-quality-ok: the feature dispatches through this global list; restored in teardown
+    saved_flag = (
+        litellm.store_batch_line_items_in_callbacks
+    )  # test-quality-ok: process-wide opt-in flag; restored in teardown
+    saved_success = list(
+        litellm._async_success_callback
+    )  # test-quality-ok: the feature dispatches through this global list; restored in teardown
     saved_failure = list(litellm._async_failure_callback)  # test-quality-ok: same dispatch seam, restored in teardown
-    litellm._async_success_callback = [logger]  # test-quality-ok: there is no injection seam for callback lists; teardown restores
+    litellm._async_success_callback = [
+        logger
+    ]  # test-quality-ok: there is no injection seam for callback lists; teardown restores
     litellm._async_failure_callback = [logger]  # test-quality-ok: same dispatch seam, restored in teardown
     yield logger
     litellm.store_batch_line_items_in_callbacks = saved_flag  # test-quality-ok: teardown restoring the value set above
@@ -188,11 +194,17 @@ def _hidden(event: dict) -> dict:
 
 @pytest.mark.asyncio
 async def test_line_items_emitted_alongside_aggregate(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     batch = _batch()
     with (
-        patch("litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content),  # test-quality-ok: afile_content is the provider boundary; there is no HTTP transport or injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; there is no HTTP transport or injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(_parent_logging(), batch)
 
@@ -228,7 +240,9 @@ async def test_line_items_emitted_alongside_aggregate(recorder):
 async def test_flag_off_emits_only_aggregate(recorder):
     assert litellm.store_batch_line_items_in_callbacks is False
     file_mock = AsyncMock(side_effect=_file_content)
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         await _log_completed_batch(_parent_logging(), _batch())
 
     assert len(recorder.success_events) == 1
@@ -238,9 +252,13 @@ async def test_flag_off_emits_only_aggregate(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_skipped_for_unsupported_provider(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     file_mock: Final = AsyncMock(side_effect=_file_content)
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         await _log_completed_batch(_parent_logging(custom_llm_provider="cohere"), _batch())
 
     file_mock.assert_not_awaited()
@@ -252,7 +270,9 @@ async def test_line_items_skipped_for_unsupported_provider(recorder):
 
 @pytest.mark.asyncio
 async def test_in_progress_batch_poll_emits_no_line_events(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     in_progress: Final = LiteLLMBatch(
         id="batch_wip",
         object="batch",
@@ -265,7 +285,9 @@ async def test_in_progress_batch_poll_emits_no_line_events(recorder):
         created_at=1,
     )
     file_mock: Final = AsyncMock(side_effect=_file_content)
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         await _parent_logging().async_success_handler(result=in_progress)
 
     file_mock.assert_not_called()
@@ -275,13 +297,18 @@ async def test_in_progress_batch_poll_emits_no_line_events(recorder):
 
 @pytest.mark.asyncio
 async def test_input_fetch_failure_still_emits_aggregate(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
-    with patch("litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
+    with patch(
+        "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         await _log_completed_batch(_parent_logging(), _batch())
 
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 0
     assert _payload(recorder.success_events[0])["response_cost"] == 1.5
+
 
 EDGE_INPUT_JSONL = b"\n".join(
     [
@@ -519,7 +546,9 @@ def _parent_logging_with_params(litellm_params: dict) -> Logging:
 
 @pytest.mark.asyncio
 async def test_line_items_edge_shapes_and_edge_cases(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     batch = LiteLLMBatch(
         id="batch_edge",
         object="batch",
@@ -537,10 +566,16 @@ async def test_line_items_edge_shapes_and_edge_cases(recorder):
             "metadata": {"model_info": {"id": "dep-1"}, "model_group": "gpt-4o"},
         }
     )
-    parent._litellm_internal_model_credentials = {"api_key": "sk-line-items-marker"}  # test-quality-ok: private transport attribute, same channel the batch cost tracker uses
+    parent._litellm_internal_model_credentials = {
+        "api_key": "sk-line-items-marker"
+    }  # test-quality-ok: private transport attribute, same channel the batch cost tracker uses
     with (
-        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(parent, batch)
 
@@ -575,7 +610,9 @@ async def test_line_items_edge_shapes_and_edge_cases(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_child_params_drop_parent_credentials(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     file_mock: Final = AsyncMock(side_effect=_file_content)
     parent: Final = _parent_logging_with_params(
         {
@@ -587,15 +624,17 @@ async def test_line_items_child_params_drop_parent_credentials(recorder):
     )
     batch: Final = _batch()
     with (
-        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(parent, batch)
 
     line_events = [
-        e
-        for e in [*recorder.success_events, *recorder.failure_events]
-        if _hidden(e).get("batch_custom_id") is not None
+        e for e in [*recorder.success_events, *recorder.failure_events] if _hidden(e).get("batch_custom_id") is not None
     ]
     assert len(line_events) == 2
     for event in line_events:
@@ -608,7 +647,9 @@ async def test_line_items_child_params_drop_parent_credentials(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_anthropic_shapes(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     batch = LiteLLMBatch(
         id="batch_anth",
         object="batch",
@@ -628,8 +669,12 @@ async def test_line_items_anthropic_shapes(recorder):
         custom_llm_provider="anthropic",
     )
     with (
-        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(logging_obj, batch)
 
@@ -658,11 +703,17 @@ def _provider_batch(batch_id: str, input_file_id: str, output_file_id: str) -> L
 
 @pytest.mark.asyncio
 async def test_line_items_bedrock_shapes(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     file_mock: Final = AsyncMock(side_effect=_edge_file_content)
     with (
-        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(
             _parent_logging(custom_llm_provider="bedrock"),
@@ -699,11 +750,17 @@ async def test_line_items_bedrock_shapes(recorder):
 
 @pytest.mark.asyncio
 async def test_line_items_mistral_shape(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     file_mock: Final = AsyncMock(side_effect=_edge_file_content)
     with (
-        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(
             _parent_logging(custom_llm_provider="mistral"),
@@ -762,7 +819,9 @@ def _scoped_file_content(file_map):
 
 @pytest.mark.asyncio
 async def test_line_items_anthropic_failure_keeps_provider_error(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     file_mock: Final = AsyncMock(
         side_effect=_scoped_file_content(
             {
@@ -772,8 +831,12 @@ async def test_line_items_anthropic_failure_keeps_provider_error(recorder):
         )
     )
     with (
-        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(
             _parent_logging(custom_llm_provider="anthropic"),
@@ -787,9 +850,47 @@ async def test_line_items_anthropic_failure_keeps_provider_error(recorder):
     assert "max_tokens must be positive" in _payload(failure)["error_str"]
 
 
+BODYLESS_ERR_INPUT_JSONL = json.dumps(
+    {"custom_id": "bare", "url": "/v1/chat/completions", "body": {"model": "gpt-4.1-nano", "messages": []}}
+).encode()
+
+BODYLESS_ERR_OUTPUT_JSONL = json.dumps({"custom_id": "bare", "response": None, "error": None}).encode()
+
+
+@pytest.mark.asyncio
+async def test_line_items_failure_without_error_or_response_body_still_reaches_callbacks(recorder):
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
+    file_mock: Final = AsyncMock(
+        side_effect=_scoped_file_content(
+            {
+                "input-bare": BODYLESS_ERR_INPUT_JSONL,
+                "output-bare": BODYLESS_ERR_OUTPUT_JSONL,
+            }
+        )
+    )
+    with (
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(_parent_logging(), _provider_batch("batch_bare", "input-bare", "output-bare"))
+
+    assert len(recorder.failure_events) == 1
+    failure = recorder.failure_events[0]
+    assert _hidden(failure)["batch_custom_id"] == "bare"
+    assert _payload(failure)["error_str"] == "{}"
+
+
 @pytest.mark.asyncio
 async def test_line_items_native_vertex_rows_are_skipped(recorder):
-    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    litellm.store_batch_line_items_in_callbacks = (
+        True  # test-quality-ok: the flag under test is a module global; fixture restores it
+    )
     file_mock: Final = AsyncMock(
         side_effect=_scoped_file_content(
             {
@@ -799,8 +900,12 @@ async def test_line_items_native_vertex_rows_are_skipped(recorder):
         )
     )
     with (
-        patch("litellm.files.main.afile_content", file_mock),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
-        patch("litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
         await _log_completed_batch(
             _parent_logging(custom_llm_provider="vertex_ai"),
@@ -823,7 +928,9 @@ async def test_line_items_emit_once_per_batch_id(recorder):
     claim_cache: Final = DualCache()
     parent: Final = _parent_logging()
     batch: Final = _batch()
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         first: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
@@ -854,7 +961,9 @@ async def test_line_items_claim_is_scoped_to_the_batch_id(recorder):
     file_mock: Final = AsyncMock(side_effect=_file_content)
     claim_cache: Final = DualCache()
     parent: Final = _parent_logging()
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         first: Final = await log_batch_line_items(
             batch=_batch(),
             custom_llm_provider="openai",
@@ -883,7 +992,9 @@ async def test_line_items_claim_is_scoped_to_the_batch_id(recorder):
 @pytest.mark.asyncio
 async def test_line_items_emit_when_the_claim_backend_returns_nothing(recorder):
     file_mock: Final = AsyncMock(side_effect=_file_content)
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         emitted: Final = await log_batch_line_items(
             batch=_batch(),
             custom_llm_provider="openai",
@@ -911,7 +1022,9 @@ async def test_line_items_retry_after_a_failed_fanout(recorder):
     claim_cache: Final = DualCache()
     batch: Final = _batch()
     parent: Final = _parent_logging()
-    with patch("litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         first: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
@@ -922,7 +1035,9 @@ async def test_line_items_retry_after_a_failed_fanout(recorder):
             claim_cache=claim_cache,
         )
     file_mock: Final = AsyncMock(side_effect=_file_content)
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         second: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
@@ -945,7 +1060,9 @@ async def test_line_items_claim_kept_after_partial_emission(recorder):
     batch: Final = _batch()
     parent: Final = _parent_logging()
     file_mock: Final = AsyncMock(side_effect=_broken_error_file_content)
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         first: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
@@ -1004,7 +1121,9 @@ async def test_line_items_emit_once_per_batch_id_over_redis(recorder):
     file_mock: Final = AsyncMock(side_effect=_file_content)
     parent: Final = _parent_logging()
     batch: Final = _batch()
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         first: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
@@ -1038,7 +1157,9 @@ async def test_line_items_skip_when_redis_claim_backend_is_down(recorder):
     file_mock: Final = AsyncMock(side_effect=_file_content)
     parent: Final = _parent_logging()
     batch: Final = _batch()
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         first: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
@@ -1069,7 +1190,9 @@ async def test_release_line_item_claim_only_deletes_owned_claims():
     fake: Final = _FakeRedisCache()
     claim_cache: Final = DualCache(redis_cache=fake)
     key: Final = "batch_line_items_emitted:batch_1"
-    fake._store[key] = "someone-else"  # test-quality-ok: seeding the fake's store is the arrangement, like writing Redis directly
+    fake._store[key] = (
+        "someone-else"  # test-quality-ok: seeding the fake's store is the arrangement, like writing Redis directly
+    )
 
     await _release_line_item_claim(claim_cache, key, "my-token")
     assert fake._store.get(key) == "someone-else"
@@ -1086,7 +1209,9 @@ async def test_line_items_failed_fanout_does_not_delete_another_workers_claim(re
     key: Final = "batch_line_items_emitted:batch_1"
     batch: Final = _batch()
     parent: Final = _parent_logging()
-    with patch("litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         first: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
@@ -1097,7 +1222,9 @@ async def test_line_items_failed_fanout_does_not_delete_another_workers_claim(re
             claim_cache=claim_cache,
         )
     file_mock: Final = AsyncMock(side_effect=_file_content)
-    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
         second: Final = await log_batch_line_items(
             batch=batch,
             custom_llm_provider="openai",
