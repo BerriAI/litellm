@@ -9,6 +9,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import threading
 import copy
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -284,6 +285,172 @@ def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_
         }
     )
     assert enriched["model_info"]["supports_parallel_function_calling"] is True
+
+
+def test_get_proxy_model_info_discovers_vllm_context_with_config_precedence(
+    monkeypatch,
+):
+    response = MagicMock()
+    response.json.return_value = {"data": [{"id": "shared", "max_model_len": 262_144}]}
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(proxy_server.litellm.module_level_client, "get", request)
+
+    enriched = proxy_server._get_proxy_model_info(
+        model={
+            "model_name": "vllm-model",
+            "litellm_params": {
+                "model": "hosted_vllm/shared",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "endpoint-secret",
+            },
+            "model_info": {
+                "id": "vllm-deployment",
+                "max_input_tokens": 200_000,
+                "max_output_tokens": 32_768,
+            },
+        }
+    )
+
+    assert enriched["model_info"]["max_input_tokens"] == 200_000
+    assert enriched["model_info"]["max_output_tokens"] == 32_768
+    assert enriched["model_info"]["max_tokens"] is None
+    assert "api_key" not in enriched["litellm_params"]
+    assert request.call_args.kwargs["headers"] == {"Authorization": "Bearer endpoint-secret"}
+
+
+@pytest.mark.parametrize(
+    "path,params",
+    [
+        ("/v1/model/info", {"litellm_model_id": "vllm-route-deployment"}),
+        ("/v1/model/info", {}),
+        ("/v2/model/info", {}),
+    ],
+)
+@pytest.mark.parametrize("explicit_context", [None, 200_000])
+@pytest.mark.parametrize("named_credential", [False, True])
+def test_model_info_routes_refresh_discovered_context_below_explicit_config(
+    client,
+    auth_as,
+    monkeypatch,
+    path,
+    params,
+    explicit_context,
+    named_credential,
+    local_model_cost_map,
+    mock_prisma,
+):
+    response = MagicMock()
+    response.json.return_value = {"data": [{"id": "shared", "max_model_len": 262_144}]}
+    request = MagicMock(return_value=response)
+    monkeypatch.setattr(litellm.module_level_client, "get", request)
+    model_list = [
+        {
+            "model_name": "vllm-model",
+            "litellm_params": {
+                "model": "hosted_vllm/shared",
+                "api_base": "https://vllm.example/v1",
+                "api_key": "endpoint-secret",
+            },
+            "model_info": {
+                "id": "vllm-route-deployment",
+                "base_model": "gpt-4o",
+                **({"max_input_tokens": explicit_context} if explicit_context else {}),
+            },
+        }
+    ]
+    if named_credential:
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="vllm-credential",
+                    credential_values={"api_base": "https://vllm.example/v1", "api_key": "endpoint-secret"},
+                    credential_info={},
+                )
+            ],
+        )
+        model_list[0]["litellm_params"] = {
+            "model": "hosted_vllm/shared",
+            "api_base": "https://overridden.example/v1",
+            "litellm_credential_name": "vllm-credential",
+        }
+    router = litellm.Router(model_list=model_list)
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+
+    router.get_model_group_info(model_group="vllm-model")
+    model_has_no_cost_mapping(model="vllm-model", llm_router=router)
+    request.assert_not_called()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma if path == "/v2/model/info" else None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    base = litellm.get_model_info("gpt-4o")
+    for context in (262_144, 65_536, None):
+        response.json.return_value = {"data": [{"id": "shared", "max_model_len": context}] if context else []}
+        with auth_as():
+            result = client.get(path, params=params)
+        assert result.status_code == 200, result.text
+        deployment = result.json()["data"][0]
+        assert deployment["model_info"]["max_input_tokens"] == (explicit_context or context or base["max_input_tokens"])
+        assert deployment["model_info"]["max_output_tokens"] == base["max_output_tokens"]
+        assert deployment["model_info"]["input_cost_per_token"] == base["input_cost_per_token"]
+        assert "api_key" not in deployment["litellm_params"]
+        assert "endpoint-secret" not in result.text
+    assert request.call_count == 3
+    chat_api_base = model_list[0]["litellm_params"]["api_base"]
+    for call in request.call_args_list:
+        assert call.kwargs["url"] == f"{chat_api_base}/models"
+        assert call.kwargs["headers"] == {"Authorization": "Bearer endpoint-secret"}
+
+
+@pytest.mark.asyncio
+async def test_model_info_discovery_runs_outside_the_event_loop(app, auth_as, configured_router, monkeypatch):
+    event_loop_thread = threading.get_ident()
+    lookup_threads: list[int] = []
+
+    def lookup(model):
+        lookup_threads.append(threading.get_ident())
+        return model
+
+    monkeypatch.setattr(proxy_server, "_get_proxy_model_info", lookup)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        with auth_as():
+            response = await client.get("/v1/model/info", params={"litellm_model_id": "abc"})
+    assert response.status_code == 200
+    assert len(lookup_threads) == 1
+    assert lookup_threads[0] != event_loop_thread
+
+
+@pytest.mark.parametrize("path", ["/v1/model/info", "/v2/model/info"])
+def test_model_info_list_routes_enrich_deployments_concurrently(client, auth_as, monkeypatch, mock_prisma, path):
+    model_list = [
+        {"model_name": name, "litellm_params": {"model": f"hosted_vllm/{name}"}, "model_info": {"id": name}}
+        for name in ("slow-a", "slow-b")
+    ]
+    both_lookups_started = threading.Barrier(2, timeout=5)
+
+    def enrich(model, **kwargs):
+        both_lookups_started.wait()
+        return model
+
+    monkeypatch.setattr(proxy_server, "_enrich_model_info_with_litellm_data", enrich)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=model_list))
+    monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma if path == "/v2/model/info" else None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+
+    with auth_as():
+        result = client.get(path)
+
+    assert result.status_code == 200, result.text
+    assert [deployment["model_info"]["id"] for deployment in result.json()["data"]] == ["slow-a", "slow-b"]
 
 
 def _enriched_model_info(monkeypatch, litellm_params: dict, model_info: dict) -> dict:
