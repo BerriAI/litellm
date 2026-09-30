@@ -138,7 +138,7 @@ def _item_events(event_type: str, item: Mapping[str, Any], state: CodexStreamSta
     return events
 
 
-def toml_value(value: Any) -> str:
+def toml_value(value: object) -> str:
     """Encode a Python value as a TOML value for `codex -c key=value`."""
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -154,7 +154,7 @@ def toml_value(value: Any) -> str:
     raise OptionsMismatch(f"CodexOptions.config value of type {type(value).__name__} cannot be passed to codex")
 
 
-def toml_key(key: Any) -> str:
+def toml_key(key: object) -> str:
     text = str(key)
     return text if _BARE_TOML_KEY.match(text) else json.dumps(text)
 
