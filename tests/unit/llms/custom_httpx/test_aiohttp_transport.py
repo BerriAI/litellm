@@ -1196,3 +1196,26 @@ async def test_genuine_request_cancellation_still_propagates():
         if sys.version_info >= (3, 11):
             current.uncancel()
         await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_transport_del_closes_owned_session():
+    """Verify that garbage collection of LiteLLMAiohttpTransport closes its owned ClientSession."""
+    import gc
+    import time
+
+    session = aiohttp.ClientSession()
+    assert not session.closed
+
+    transport = LiteLLMAiohttpTransport(client=session, owns_session=True)
+    assert transport._owns_session is True
+
+    del transport
+    gc.collect()
+
+    deadline = time.monotonic() + 5
+    while not session.closed and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+
+    assert session.closed
+
