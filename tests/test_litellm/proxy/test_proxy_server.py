@@ -6852,7 +6852,6 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.png
     exists_calls = []
 
     def exists_side_effect(path):
@@ -6887,7 +6886,6 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
-        # Verify that exists was called to check /var/lib/litellm/assets/logo.png
         assets_logo_path = "/var/lib/litellm/assets/logo.png"
         assert any(assets_logo_path in str(call) for call in exists_calls), f"Should check if {assets_logo_path} exists"
 

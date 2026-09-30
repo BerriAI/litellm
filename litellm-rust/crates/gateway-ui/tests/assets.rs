@@ -40,11 +40,14 @@ fn dashboard(directory: TempDir) -> App {
     let export = directory.path().join("public");
     std::fs::create_dir_all(export.join("_next/static")).unwrap();
     std::fs::create_dir_all(export.join("assets/logos")).unwrap();
-    std::fs::write(
-        export.join("assets/logos/litellm_monogram.svg"),
-        "logo bytes",
-    )
-    .unwrap();
+    for (file, bytes) in [
+        ("litellm_logo.png", "logo bytes"),
+        ("litellm_logo_dark.png", "dark logo bytes"),
+        ("litellm_monogram.svg", "monogram bytes"),
+        ("litellm_monogram_dark.svg", "dark monogram bytes"),
+    ] {
+        std::fs::write(export.join("assets/logos").join(file), bytes).unwrap();
+    }
     std::fs::write(export.join("favicon.ico"), "icon bytes").unwrap();
     std::fs::write(export.join("_next/static/app.js"), "window.app = true;").unwrap();
     App {
@@ -134,7 +137,15 @@ async fn missing_paths_never_fall_back_to_dashboard(app: App, #[case] path: &str
 )]
 #[case::root_assets("/_next/static/app.js", "window.app = true;", "text/javascript")]
 #[case::nested_assets("/ui/_next/static/app.js", "window.app = true;", "text/javascript")]
-#[case::logo("/get_image", "logo bytes", "image/svg+xml")]
+#[case::logo("/get_image", "logo bytes", "image/png")]
+#[case::logo_light("/get_image?theme=light", "logo bytes", "image/png")]
+#[case::logo_dark("/get_image?theme=dark", "dark logo bytes", "image/png")]
+#[case::monogram("/get_image?variant=monogram", "monogram bytes", "image/svg+xml")]
+#[case::monogram_dark(
+    "/get_image?theme=dark&variant=monogram",
+    "dark monogram bytes",
+    "image/svg+xml"
+)]
 #[case::favicon("/get_favicon", "icon bytes", "image/x-icon")]
 #[tokio::test]
 async fn dashboard_adapter_preserves_existing_urls(
@@ -187,4 +198,20 @@ async fn logo_discovery_points_to_served_image(dashboard: App) {
         to_bytes(response.into_body(), 65536).await.unwrap(),
         "logo bytes"
     );
+}
+
+#[rstest]
+#[case::logo("/get_image")]
+#[case::logo_dark("/get_image?theme=dark")]
+#[case::monogram("/get_image?variant=monogram")]
+#[case::monogram_dark("/get_image?theme=dark&variant=monogram")]
+#[tokio::test]
+async fn committed_dashboard_export_serves_every_logo(#[case] path: &str) {
+    let export = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../litellm/proxy/_experimental/out");
+    let response = litellm_gateway_ui::dashboard_assets(export)
+        .oneshot(Request::get(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
