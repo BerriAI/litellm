@@ -50,6 +50,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
@@ -359,7 +360,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         from prisma import Json
 
-        api_key = user_api_key_dict.api_key or None
+        api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
