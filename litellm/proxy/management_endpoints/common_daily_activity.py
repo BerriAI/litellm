@@ -1220,6 +1220,14 @@ async def get_daily_activity(
             detail={"error": "Please provide start_date and end_date"},
         )
 
+    if page < 1 or page_size < 1:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException.detail has no immutable form
+                "error": f"page and page_size must be >= 1, got page={page}, page_size={page_size}"
+            },
+        )
+
     try:
         where_conditions: Final = _build_where_conditions(
             entity_id_field=entity_id_field,

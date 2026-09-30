@@ -1,7 +1,7 @@
 import os
 import json
 import traceback
-from typing import Optional
+from typing import Final, Optional
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
@@ -707,7 +707,7 @@ def test_initialize_router_endpoints():
 
 
 @pytest.mark.asyncio
-async def test_init_responses_api_endpoints():
+async def test_init_responses_api_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     A simpler test for _init_responses_api_endpoints that focuses on the basic functionality
     """
@@ -725,18 +725,23 @@ async def test_init_responses_api_endpoints():
             }
         ]
     )
+    router.default_deployment = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "openai/test-model", "api_key": "fake-api-key"},
+    }
 
     # Just mock the _ageneric_api_call_with_fallbacks method
     router._ageneric_api_call_with_fallbacks = AsyncMock()
 
-    # Add a mock implementation of _get_model_id_from_response_id to the Router instance
-    ResponsesAPIRequestUtils.get_model_id_from_response_id = MagicMock(
-        return_value=None
+    get_model_id_from_response_id: Final = MagicMock(return_value=None)
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils,
+        "get_model_id_from_response_id",
+        get_model_id_from_response_id,
     )
 
-    # Call without a response_id (no model extraction should happen)
     await router._init_responses_api_endpoints(
-        original_function=AsyncMock(), thread_id="thread_xyz"
+        original_function=AsyncMock(), response_id="resp_unrouted", thread_id="thread_xyz"
     )
 
     # Verify _ageneric_api_call_with_fallbacks was called but model wasn't changed
@@ -748,9 +753,7 @@ async def test_init_responses_api_endpoints():
     router._ageneric_api_call_with_fallbacks.reset_mock()
 
     # Change the return value for the second call
-    ResponsesAPIRequestUtils.get_model_id_from_response_id.return_value = (
-        "claude-3-sonnet"
-    )
+    get_model_id_from_response_id.return_value = "claude-3-sonnet"
 
     # Call with a response_id
     await router._init_responses_api_endpoints(
@@ -761,6 +764,54 @@ async def test_init_responses_api_endpoints():
     second_call_kwargs = router._ageneric_api_call_with_fallbacks.call_args.kwargs
     assert second_call_kwargs["model"] == "claude-3-sonnet"
     assert second_call_kwargs["response_id"] == "resp_claude_123"
+
+
+@pytest.mark.asyncio
+async def test_init_responses_api_endpoints_unknown_id_without_routing_info_raises_not_found() -> None:
+    router = Router(model_list=[])
+    original_function: Final = AsyncMock()
+    generic_api_call: Final = AsyncMock()
+    router._ageneric_api_call_with_fallbacks = generic_api_call
+    response_id: Final = f"resp_{'a' * 48}"
+
+    with pytest.raises(litellm.NotFoundError) as exc_info:
+        await router._init_responses_api_endpoints(
+            original_function=original_function,
+            response_id=response_id,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.message.endswith(
+        f"Response '{response_id}' not found. "
+        "It carries no LiteLLM routing information and no model was provided."
+    )
+    generic_api_call.assert_not_awaited()
+    original_function.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_init_responses_api_endpoints_unknown_id_uses_default_deployment() -> None:
+    router = Router(model_list=[])
+    router.default_deployment = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "openai/test-model", "api_key": "fake-api-key"},
+    }
+    original_function: Final = AsyncMock()
+    generic_api_call: Final = AsyncMock(return_value="routed")
+    router._ageneric_api_call_with_fallbacks = generic_api_call
+    response_id: Final = f"resp_{'b' * 48}"
+
+    response: Final = await router._init_responses_api_endpoints(
+        original_function=original_function,
+        response_id=response_id,
+    )
+
+    assert response == "routed"
+    generic_api_call.assert_awaited_once_with(
+        original_function=original_function,
+        response_id=response_id,
+    )
+    original_function.assert_not_awaited()
 
 
 @pytest.mark.asyncio

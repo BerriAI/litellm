@@ -73,6 +73,19 @@ router: Final = APIRouter()
 
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
 
+
+def _parse_spend_logs_date(value: str, param: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise ProxyException(
+            message=f"/spend/logs: Invalid {param} '{value}', expected YYYY-MM-DD",
+            type="invalid_request_error",
+            param=param,
+            code=400,
+        ) from exc
+
+
 _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
@@ -3539,8 +3552,8 @@ async def view_spend_logs(
             and isinstance(end_date, str)
         ):
             # Convert the date strings to datetime objects
-            start_date_obj: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            end_date_obj: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            start_date_obj: Final = _parse_spend_logs_date(start_date, "start_date")
+            end_date_obj: Final = _parse_spend_logs_date(end_date, "end_date")
 
             # Convert to ISO format strings for Prisma
             start_date_iso: Final = start_date_obj.isoformat()

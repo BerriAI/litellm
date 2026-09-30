@@ -5,6 +5,7 @@ import traceback
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime, timezone
+from typing import Final
 
 from litellm import Router
 import pytest
@@ -2763,26 +2764,23 @@ async def test_asearch_with_fallbacks_helper(search_tools):
 
 
 @pytest.mark.asyncio
-async def test_asearch_with_fallbacks_helper_missing_search_tool():
-    """
-    Test _asearch_with_fallbacks_helper raises error when search tool not found.
+async def test_asearch_with_fallbacks_helper_missing_search_tool() -> None:
+    router: Final = Router(model_list=[])
 
-    Tests that the helper method raises a ValueError when the requested
-    search tool name doesn't exist in the router's search_tools configuration.
-    """
-    # Create router with no search tools
-    router = Router(model_list=[])
-
-    async def mock_original_function(**kwargs):
+    async def mock_original_function(**kwargs: object) -> None:
         return None
 
-    # Should raise ValueError for missing search tool
-    with pytest.raises(ValueError, match="Search tool 'nonexistent-tool' not found"):
+    with pytest.raises(
+        litellm.BadRequestError,
+        match="Search tool 'nonexistent-tool' not found",
+    ) as exc_info:
         await router._asearch_with_fallbacks_helper(
             model="nonexistent-tool",
             original_generic_function=mock_original_function,
             query="test query",
         )
+
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio

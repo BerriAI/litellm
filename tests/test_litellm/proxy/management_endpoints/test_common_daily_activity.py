@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+from fastapi import HTTPException
 import psycopg
 import pytest
 from psycopg.rows import dict_row
@@ -113,6 +114,39 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
     assert order == [{"date": "desc"}, {"id": "asc"}], (
         f"order must include the id tiebreaker after date for stable offset pagination (see #30164); got {order!r}"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page, page_size", [(0, 10), (1, 0)])
+async def test_get_daily_activity_rejects_invalid_pagination_without_query(page: int, page_size: int) -> None:
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table: Final = MagicMock()
+    mock_table.count = AsyncMock()
+    mock_table.find_many = AsyncMock()
+    mock_prisma.db.litellm_dailyspend = mock_table
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyspend",
+            entity_id_field="team_id",
+            entity_id="team-1",
+            entity_metadata_field=None,
+            start_date="2024-01-01",
+            end_date="2024-01-02",
+            model=None,
+            api_key=None,
+            page=page,
+            page_size=page_size,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": f"page and page_size must be >= 1, got page={page}, page_size={page_size}"
+    }
+    mock_table.count.assert_not_called()
+    mock_table.find_many.assert_not_called()
 
 
 def test_is_user_agent_tag():

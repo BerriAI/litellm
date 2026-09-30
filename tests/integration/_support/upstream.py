@@ -247,6 +247,10 @@ class Provider:
                     self.observations.put(
                         Observation(request.url.path, request.headers.get("authorization", ""), body)
                     )
+        elif request.method == "POST" and "multipart/form-data" in request.headers.get("content-type", ""):
+            form: Final = await request.form()
+            body: Final = {name: value for name, value in form.items() if isinstance(value, str)}
+            self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
         if isinstance(response, RoutedResponse):
             route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
             route: Final = next(

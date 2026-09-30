@@ -7104,9 +7104,24 @@ class Router:
         """
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(kwargs.get("response_id"))
+        response_id: Final = kwargs.get("response_id")
+        model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
         if model_id is not None:
             kwargs["model"] = model_id
+        elif (
+            not kwargs.get("model")
+            and self.default_deployment is None
+            and not self._has_default_fallbacks()
+            and not self.pattern_router.patterns
+        ):
+            raise litellm.NotFoundError(
+                message=(
+                    f"Response '{response_id}' not found. "
+                    "It carries no LiteLLM routing information and no model was provided."
+                ),
+                model="",
+                llm_provider="",
+            )
         return await self._ageneric_api_call_with_fallbacks(
             original_function=original_function,
             **kwargs,

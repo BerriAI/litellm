@@ -12,6 +12,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import Any, Final, Protocol
 
+import litellm
 from litellm._logging import verbose_router_logger
 from litellm.types.router import SearchToolLiteLLMParams, SearchToolTypedDict
 
@@ -102,14 +103,18 @@ class SearchAPIRouter:
             List of matching search tool configurations
 
         Raises:
-            ValueError: If no matching search tools are found
+            BadRequestError: If no matching search tools are found
         """
         matching_tools: Final = [
             tool for tool in router_instance.search_tools if tool.get("search_tool_name") == search_tool_name
         ]
 
         if not matching_tools:
-            raise ValueError(f"Search tool '{search_tool_name}' not found in router.search_tools")
+            raise litellm.BadRequestError(
+                message=f"Search tool '{search_tool_name}' not found in router.search_tools",
+                model=search_tool_name,
+                llm_provider="",
+            )
 
         return matching_tools
 

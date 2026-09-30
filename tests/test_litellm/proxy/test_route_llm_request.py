@@ -8,35 +8,43 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError, RouteType, route_request
 
 
 @pytest.mark.parametrize(
     "route_type, required_body_params",
     [
-        ("atext_completion", {}),
+        ("atext_completion", {"prompt": "Hello"}),
         ("acompletion", {"messages": [{"role": "user", "content": "Hello"}]}),
         ("aembedding", {"input": "Hello"}),
-        ("aimage_generation", {}),
-        ("aspeech", {}),
+        ("aimage_generation", {"prompt": "Hello"}),
+        ("aspeech", {"input": "Hello"}),
         ("atranscription", {}),
-        ("amoderation", {}),
-        ("arerank", {}),
+        ("amoderation", {"input": "Hello"}),
+        ("arerank", {"query": "Hello", "documents": ["Hello"]}),
+        ("aimage_edit", {"image": "image-data", "prompt": "edit this"}),
+        ("asearch", {"query": "Hello"}),
+        (
+            "anthropic_messages",
+            {"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 10},
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_route_request_dynamic_credentials(route_type, required_body_params):
-    data = {
+async def test_route_request_dynamic_credentials(
+    route_type: RouteType, required_body_params: dict[str, object]
+) -> None:
+    data: Final = {
         "model": "openai/gpt-4o-mini-2024-07-18",
         "api_key": "my-bad-key",
         "api_base": "https://api.openai.com/v1 ",
         **required_body_params,
     }
-    llm_router = MagicMock()
+    llm_router: Final = MagicMock()
     # Ensure that the dynamic method exists on the llm_router mock.
     getattr(llm_router, route_type).return_value = "fake_response"
 
-    response = await route_request(data, llm_router, None, route_type)
+    response: Final = await route_request(data, llm_router, None, route_type)
     # Optionally verify the response if needed:
     assert response == "fake_response"
     # Now assert that the dynamic method was called once with the expected kwargs.
@@ -1064,6 +1072,48 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
 
 
 @pytest.mark.parametrize(
+    "route_type, param, route, data_extra",
+    [
+        ("atext_completion", "prompt", "/completions", {}),
+        ("aspeech", "input", "/audio/speech", {"voice": "alloy"}),
+        ("amoderation", "input", "/moderations", {}),
+        ("aimage_generation", "prompt", "/images/generations", {}),
+        ("aimage_edit", "image", "/images/edits", {"prompt": "edit this"}),
+        ("aimage_edit", "prompt", "/images/edits", {"image": "image-data"}),
+        ("arerank", "query", "/rerank", {"documents": ["Hello"]}),
+        ("arerank", "documents", "/rerank", {"query": "Hello"}),
+        ("asearch", "query", "/search", {}),
+        ("anthropic_messages", "messages", "/v1/messages", {"max_tokens": 10}),
+        (
+            "anthropic_messages",
+            "max_tokens",
+            "/v1/messages",
+            {"messages": [{"role": "user", "content": "Hello"}]},
+        ),
+    ],
+)
+def test_raise_if_required_body_param_missing_rejects_new_route_params(
+    route_type: RouteType,
+    param: str,
+    route: str,
+    data_extra: dict[str, object],
+) -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    data: Final = {"model": "gpt-4o", **data_extra}
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(route_type=route_type, data=data)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == param
+    assert exc_info.value.message == f"{route}: Missing required parameter: '{param}'."
+
+
+@pytest.mark.parametrize(
     "data, param",
     [
         ({"endpoint": "/v1/chat/completions", "completion_window": "24h"}, "input_file_id"),
@@ -1089,19 +1139,29 @@ def test_raise_if_required_body_param_missing_names_first_missing_batch_param(da
     [
         ("acompletion", {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]}),
         ("acompletion", {"model": "gpt-4o", "messages": []}),
-        ("atext_completion", {"model": "gpt-4o"}),
+        ("atext_completion", {"model": "gpt-4o", "prompt": "hi"}),
         ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
         ("aresponses", {"model": "gpt-4o", "input": "hi"}),
         ("aresponses", {"model": "gpt-4o", "input": []}),
-        ("arerank", {"model": "rerank-model"}),
-        ("aimage_generation", {"model": "dall-e-3"}),
+        ("arerank", {"model": "rerank-model", "query": "hi", "documents": ["hi"]}),
+        ("aimage_generation", {"model": "dall-e-3", "prompt": "hi"}),
+        ("aspeech", {"model": "tts", "input": "hi", "voice": "alloy"}),
+        ("amoderation", {"model": "moderation", "input": "hi"}),
+        ("aimage_edit", {"model": "image-model", "image": "image-data", "prompt": "edit"}),
+        ("asearch", {"model": "search", "query": "hi"}),
+        (
+            "anthropic_messages",
+            {"model": "claude", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 10},
+        ),
         (
             "acreate_batch",
             {"input_file_id": "file-abc", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
         ),
     ],
 )
-def test_raise_if_required_body_param_missing_allows_valid_requests(route_type, data):
+def test_raise_if_required_body_param_missing_allows_valid_requests(
+    route_type: RouteType, data: dict[str, object]
+) -> None:
     from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 
     raise_if_required_body_param_missing(route_type=route_type, data=data)

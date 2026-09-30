@@ -1188,7 +1188,7 @@ def function_setup(
         elif call_type == CallTypes.moderation.value or call_type == CallTypes.amoderation.value:
             messages = args[1] if len(args) > 1 else kwargs["input"]
         elif call_type == CallTypes.atext_completion.value or call_type == CallTypes.text_completion.value:
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            messages = args[0] if len(args) > 0 else kwargs.get("prompt")
         elif call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value:
             messages = kwargs.get("query")
         elif call_type in (CallTypes.search.value, CallTypes.asearch.value):

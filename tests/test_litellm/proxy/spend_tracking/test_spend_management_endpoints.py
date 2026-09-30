@@ -8,7 +8,7 @@ from datetime import timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
 
 import litellm
@@ -7790,3 +7790,27 @@ def test_capture_rate_reports_an_unreadable_bill_as_502(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
     assert response.status_code == 502
     assert "HTTP 401" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_view_spend_logs_invalid_start_date_raises_proxy_exception_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import view_spend_logs
+
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    with pytest.raises(ProxyException) as exc_info:
+        await view_spend_logs(
+            fastapi_response=Response(),
+            api_key=None,
+            user_id=None,
+            request_id=None,
+            start_date="notadate",
+            end_date="2024-01-02",
+            summarize=True,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "start_date"

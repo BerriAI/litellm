@@ -2,6 +2,7 @@
 ## Unit tests for the 'function_setup()' function
 import sys, os
 import traceback
+from typing import Final
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -31,6 +32,17 @@ def test_empty_content():
         messages=[],
         litellm_call_id=str(uuid.uuid4()),
     )
+
+
+def test_atext_completion_without_prompt_does_not_raise() -> None:
+    logging_obj: Final = function_setup(
+        original_function="atext_completion",
+        rules_obj=Rules(),
+        start_time=datetime.now(),
+        litellm_call_id=str(uuid.uuid4()),
+    )[0]
+
+    assert logging_obj is not None
 
 
 def test_thought_signature_removal_for_non_gemini():

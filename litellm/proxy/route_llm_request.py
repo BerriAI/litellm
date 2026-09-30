@@ -77,7 +77,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
     "aembedding": "/embeddings",
-    "aimage_generation": "/image/generations",
+    "aimage_generation": "/images/generations",
     "aspeech": "/audio/speech",
     "atranscription": "/audio/transcriptions",
     "amoderation": "/moderations",
@@ -86,6 +86,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "_aresponses_websocket": "/responses",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
+    "anthropic_messages": "/v1/messages",
     "acancel_responses": "/responses/{response_id}/cancel",
     "acompact_responses": "/responses/compact",
     "aocr": "/ocr",
@@ -159,7 +160,15 @@ class ProxyModelNotFoundError(HTTPException):
 
 REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "acompletion": ("messages",),
+    "atext_completion": ("prompt",),
     "aembedding": ("input",),
+    "aspeech": ("input",),
+    "amoderation": ("input",),
+    "aimage_generation": ("prompt",),
+    "aimage_edit": ("image", "prompt"),
+    "arerank": ("query", "documents"),
+    "asearch": ("query",),
+    "anthropic_messages": ("messages", "max_tokens"),
     "aresponses": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
 }

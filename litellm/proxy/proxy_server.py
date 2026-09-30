@@ -445,6 +445,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
     with_litellm_call_id,
@@ -9242,7 +9243,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            code=error_status_code(e, 500),
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
@@ -9969,7 +9970,7 @@ async def async_data_generator(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            code=error_status_code(e, 500),
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
@@ -12179,7 +12180,7 @@ async def completion(
             param=getattr(e, "param", "None"),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
+            code=error_status_code(e, 500),
         )
 
 
@@ -12420,7 +12421,7 @@ async def moderations(
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 headers=litellm_call_id_headers(litellm_call_id),
-                code=getattr(e, "status_code", 500),
+                code=error_status_code(e, 500),
             )
 
 
@@ -12565,7 +12566,7 @@ async def audio_speech(
             param=getattr(e, "param", "None"),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
+            code=error_status_code(e, 500),
         )
 
 
@@ -12722,7 +12723,7 @@ async def audio_transcriptions(
                 param=getattr(e, "param", "None"),
                 headers=litellm_call_id_headers(litellm_call_id),
                 openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13062,7 +13063,7 @@ async def get_assistants(
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 openai_code=getattr(e, "code", None),
-                code=getattr(e, "status_code", 500),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13152,7 +13153,7 @@ async def create_assistant(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13241,7 +13242,7 @@ async def delete_assistant(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13330,7 +13331,7 @@ async def create_threads(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13417,7 +13418,7 @@ async def get_thread(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13508,7 +13509,7 @@ async def add_messages(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13595,7 +13596,7 @@ async def get_messages(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
+                code=error_status_code(e, 500),
             )
 
 
@@ -13717,7 +13718,7 @@ async def run_thread(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "code", getattr(e, "status_code", 500)),
+                code=error_status_code(e, 500),
             )
 
 

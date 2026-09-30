@@ -9,11 +9,16 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
 from litellm.proxy import common_request_processing, proxy_server
+from litellm.proxy._types import ProxyException
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -124,3 +129,39 @@ def test_completion_pipeline_error(client, auth_as, completion_pipeline_raises, 
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert response.headers.get("content-type", "").startswith("application/json")
+
+
+def test_completion_pipeline_proxy_exception_preserves_400(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock())
+    )
+
+    async def _raise_proxy_exception(
+        self: common_request_processing.ProxyBaseLLMRequestProcessing,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        raise ProxyException(
+            message="Missing required parameter: 'prompt'",
+            type="invalid_request_error",
+            param="prompt",
+            code=400,
+        )
+
+    monkeypatch.setattr(
+        common_request_processing.ProxyBaseLLMRequestProcessing,
+        "base_process_llm_request",
+        _raise_proxy_exception,
+    )
+    with auth_as():
+        response: Final = client.post(
+            "/v1/completions",
+            json={"model": "gpt-3.5-turbo-instruct", "prompt": "prompt"},
+        )
+
+    assert response.status_code == 400, response.text
