@@ -201,6 +201,12 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "vynaris": {
+    "base_url": "https://api.vynaris.com/v1",
+    "api_key_env": "VYNARIS_API_KEY",
+    "api_base_env": "VYNARIS_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
+  },
   "prism": {
     "base_url": "https://api.prisminference.com/v1",
     "api_key_env": "PRISM_API_KEY",
