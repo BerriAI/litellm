@@ -4,6 +4,7 @@ mod coercion;
 mod credentials;
 mod diagnostics;
 mod errors;
+mod execution;
 mod http;
 mod lifecycle;
 mod logger;
