@@ -4,8 +4,9 @@ Helper functions to handle images passed in messages
 
 import asyncio
 import base64
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -304,18 +305,19 @@ async def _fetch_data_urls(remote_urls: tuple[str, ...]) -> tuple[str, ...]:
         raise
 
 
+def _remote_urls_to_inline(
+    messages: Iterable[AllMessageValues], should_inline: Callable[[RemoteMedia], bool]
+) -> tuple[str, ...]:
+    parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
+    remotes: Final = (remote for part in parts if (remote := _parse_remote_part(part)) is not None)
+    return tuple(dict.fromkeys(remote.url for remote in remotes if should_inline(_remote_media(remote))))
+
+
 def inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
     should_inline: Callable[[RemoteMedia], bool] = inline_every_remote_url,
 ) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
-    remote_urls: Final = tuple(
-        dict.fromkeys(
-            remote.url
-            for message in messages
-            for part in _content_parts(message)
-            if (remote := _parse_remote_part(part)) is not None and should_inline(_remote_media(remote))
-        )
-    )
+    remote_urls: Final = _remote_urls_to_inline(messages, should_inline)
     if not remote_urls:
         return messages
     data_urls: Final = MappingProxyType({url: convert_url_to_base64(url) for url in remote_urls})
@@ -328,14 +330,7 @@ async def async_inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
     should_inline: Callable[[RemoteMedia], bool] = inline_every_remote_url,
 ) -> list[AllMessageValues]:  # mutable-ok: every transform_request takes list[AllMessageValues]
-    remote_urls: Final = tuple(
-        dict.fromkeys(
-            remote.url
-            for message in messages
-            for part in _content_parts(message)
-            if (remote := _parse_remote_part(part)) is not None and should_inline(_remote_media(remote))
-        )
-    )
+    remote_urls: Final = _remote_urls_to_inline(messages, should_inline)
     if not remote_urls:
         return messages
     data_urls: Final = await _fetch_data_urls(remote_urls)

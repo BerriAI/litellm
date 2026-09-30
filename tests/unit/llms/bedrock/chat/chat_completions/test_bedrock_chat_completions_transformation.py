@@ -1,4 +1,4 @@
-"""Opt-in Bedrock Runtime Chat Completions: ``bedrock/chat_completions/<model>`` posts to /openai/v1/chat/completions."""
+"""Bedrock Runtime Chat Completions: the default for GPT 5.6 and newer, ``bedrock/chat_completions/<model>`` for the rest."""
 
 import json
 
@@ -20,6 +20,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     bedrock_request_needs_converse,
     bedrock_route_for_request,
+    bedrock_runtime_chat_completions_is_default,
     get_bedrock_chat_config,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -63,9 +64,11 @@ def test_claude_stays_on_converse(local_cost_map):
         "us.xai.grok-4.6",
         "bedrock/openai.gpt-oss-20b-1:0",
         "openai.gpt-oss-120b-1:0",
-        "global.openai.gpt-5.6-sol",
-        "bedrock/us.openai.gpt-5.6-terra",
+        "global.openai.gpt-5.5",
+        "bedrock/us.openai.gpt-5.4",
         "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.openai.gpt-6-astra",
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123xyz",
     ],
 )
 def test_models_without_the_prefix_stay_on_converse(local_cost_map, model):
@@ -84,6 +87,32 @@ def test_cost_map_row_listing_chat_completions_leaves_the_default_route_alone(mo
     monkeypatch.setattr(litellm, "model_cost", {"openai.gpt-oss-20b-1:0": entry})
     assert BedrockModelInfo.get_bedrock_route("bedrock/openai.gpt-oss-20b-1:0", {}) == "converse"
     assert BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {}) == "chat_completions"
+
+
+@pytest.mark.parametrize(
+    "model, supported_endpoints, expected_route",
+    [
+        ("global.openai.gpt-5.5", ["/v1/chat/completions", "/v1/responses"], "converse"),
+        ("us.openai.gpt-5.6-sol", ["/v1/chat/completions", "/v1/responses"], "chat_completions"),
+        ("us.openai.gpt-5.6-sol", ["/v1/responses"], "converse"),
+        ("global.openai.gpt-6-sol", ["/v1/chat/completions", "/v1/responses"], "chat_completions"),
+        ("global.openai.gpt-6-sol", ["/v1/responses"], "converse"),
+        ("global.openai.gpt-6-sol", [], "converse"),
+        ("us.openai.gpt-6.1-sol", ["/v1/chat/completions"], "chat_completions"),
+        ("global.openai.gpt-10-sol", ["/v1/chat/completions"], "chat_completions"),
+        ("openai.gpt-oss-120b-1:0", ["/v1/chat/completions"], "converse"),
+        ("us.xai.grok-4.6", ["/v1/chat/completions"], "converse"),
+    ],
+)
+def test_default_route_needs_gpt_56_or_newer_and_a_row_listing_chat_completions(
+    monkeypatch, model, supported_endpoints, expected_route
+):
+    entry = {"litellm_provider": "bedrock_converse", "supported_endpoints": supported_endpoints}
+    monkeypatch.setattr(litellm, "model_cost", {model: entry})
+    assert bedrock_runtime_chat_completions_is_default(model) is (expected_route == "chat_completions")
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/{model}", {}) == expected_route
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/chat_completions/{model}", {}) == "chat_completions"
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/converse/{model}", {}) == "converse"
 
 
 @pytest.mark.parametrize("model", ["global.openai.gpt-5.6-sol", "openai.gpt-oss-20b-1:0", "us.xai.grok-4.6"])
@@ -194,7 +223,7 @@ def _recording_client(**response_kwargs):
     [
         ("bedrock/us.xai.grok-4.6", b"/model/us.xai.grok-4.6/converse"),
         ("bedrock/openai.gpt-oss-20b-1:0", b"/model/openai.gpt-oss-20b-1%3A0/converse"),
-        ("bedrock/global.openai.gpt-5.6-sol", b"/model/global.openai.gpt-5.6-sol/converse"),
+        ("bedrock/global.openai.gpt-5.5", b"/model/global.openai.gpt-5.5/converse"),
     ],
 )
 def test_completion_without_the_prefix_posts_converse(local_cost_map, fake_aws_env, model, model_path):
@@ -310,13 +339,40 @@ def test_openai_runtime_models_use_chat_completions_route(local_cost_map, model)
     assert isinstance(get_bedrock_chat_config(model), AmazonBedrockRuntimeChatCompletionsConfig)
 
 
+GPT_56_AND_NEWER_MODELS = (
+    "global.openai.gpt-5.6-sol",
+    "bedrock/us.openai.gpt-5.6-terra",
+    "us.openai.gpt-5.6-luna",
+    "bedrock/global.openai.gpt-6-astra",
+    "us.openai.gpt-6-sol",
+    "global.openai.gpt-6-luna",
+    "bedrock/global.openai.gpt-6.1-sol",
+    "us.openai.gpt-6.1-sol",
+)
+
+
+@pytest.mark.parametrize("model", GPT_56_AND_NEWER_MODELS)
+def test_gpt_56_and_newer_default_to_chat_completions(local_cost_map, model):
+    assert bedrock_runtime_chat_completions_is_default(model) is True
+    assert BedrockModelInfo.get_bedrock_route(model) == "chat_completions"
+    assert BedrockModelInfo.get_bedrock_route(model, {}) == "chat_completions"
+    assert isinstance(get_bedrock_chat_config(model), AmazonBedrockRuntimeChatCompletionsConfig)
+
+
 @pytest.mark.parametrize("model", ["us.amazon.nova-micro-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0"])
 def test_nova_and_claude_stay_on_converse(local_cost_map, model):
     assert BedrockModelInfo.get_bedrock_route(model, {"tools": [GET_WEATHER_TOOL]}) == "converse"
 
 
 @pytest.mark.parametrize(
-    "model", ["chat_completions/openai.gpt-oss-20b-1:0", "bedrock/chat_completions/global.openai.gpt-5.6-sol"]
+    "model",
+    [
+        "chat_completions/openai.gpt-oss-20b-1:0",
+        "bedrock/chat_completions/global.openai.gpt-5.6-sol",
+        "bedrock/us.openai.gpt-5.6-sol",
+        "global.openai.gpt-6-sol",
+        "us.openai.gpt-6.1-sol",
+    ],
 )
 def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
     guardrail = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
@@ -363,6 +419,9 @@ def test_gpt56_tools_need_reasoning_none_on_chat_completions(local_cost_map, req
         BedrockModelInfo.get_bedrock_route("bedrock/chat_completions/us.openai.gpt-5.6-terra", request_params)
         == expected_route
     )
+    assert BedrockModelInfo.get_bedrock_route("bedrock/us.openai.gpt-5.6-sol", request_params) == expected_route
+    assert BedrockModelInfo.get_bedrock_route("global.openai.gpt-6-sol", request_params) == expected_route
+    assert BedrockModelInfo.get_bedrock_route("bedrock/us.openai.gpt-6.1-sol", request_params) == expected_route
 
 
 @pytest.mark.parametrize("reasoning_effort", ["low", "high", None])
@@ -395,6 +454,8 @@ def test_thinking_block_goes_to_converse(local_cost_map):
 def test_explicit_converse_prefix_wins_for_openai_models(local_cost_map):
     assert BedrockModelInfo.get_bedrock_route("bedrock/converse/openai.gpt-oss-20b-1:0") == "converse"
     assert BedrockModelInfo.get_bedrock_route("converse/global.openai.gpt-5.6-sol", {}) == "converse"
+    assert BedrockModelInfo.get_bedrock_route("bedrock/converse/global.openai.gpt-6-sol", {}) == "converse"
+    assert isinstance(get_bedrock_chat_config("bedrock/converse/global.openai.gpt-6-sol"), litellm.AmazonConverseConfig)
 
 
 def test_map_openai_params_sends_max_tokens_as_max_completion_tokens():
@@ -769,6 +830,58 @@ def test_gpt56_tools_with_reasoning_none_stay_on_chat_completions(local_cost_map
     assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
+@pytest.mark.parametrize("model", ["global.openai.gpt-6-sol", "us.openai.gpt-5.6-sol", "us.openai.gpt-6.1-sol"])
+def test_gpt_56_and_newer_completion_without_the_prefix_posts_runtime_chat_completions(
+    local_cost_map, fake_aws_env, model
+):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model))
+    response = litellm.completion(
+        model=f"bedrock/{model}",
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort="low",
+        client=client,
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+    body = json.loads(requests[0].content)
+    assert body["model"] == model
+    assert body["reasoning_effort"] == "low"
+    assert "inferenceConfig" not in body
+    assert response.choices[0].message.content == "ok"
+    assert response._hidden_params["response_cost"] > 0
+
+
+def test_gpt6_without_the_prefix_tools_with_reasoning_effort_go_to_converse(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    response = litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
+    body = json.loads(requests[0].content)
+    assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
+    assert body["additionalModelRequestFields"]["reasoning"] == {"effort": "low"}
+    assert response.choices[0].message.content == "ok"
+
+
+def test_gpt6_without_the_prefix_guardrail_config_goes_to_converse(local_cost_map, fake_aws_env):
+    guardrail = {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        guardrailConfig=guardrail,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
+    assert json.loads(requests[0].content)["guardrailConfig"] == guardrail
+
+
 @pytest.mark.parametrize(
     "converse_only_param",
     [
@@ -1017,6 +1130,8 @@ RESPONSE_FORMAT_ENFORCING_MODELS = [
     "chat_completions/global.openai.gpt-5.6-sol",
     "chat_completions/us.xai.grok-4.6",
     "bedrock/chat_completions/us-gov.xai.grok-4.6",
+    "global.openai.gpt-6-sol",
+    "bedrock/us.openai.gpt-6.1-sol",
 ]
 
 
