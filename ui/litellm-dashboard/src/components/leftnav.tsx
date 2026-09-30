@@ -83,6 +83,11 @@ const ICON = { strokeWidth: 1.75 } as const;
 
 const LOGO_CLASS_NAME = "h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7";
 
+function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
+  const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
+  return `${baseUrl}/get_image${query ? `?${query}` : ""}`;
+}
+
 interface SidebarProps {
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
@@ -605,9 +610,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
     );
   };
 
-  const logoSrc = logoUrl || `${baseUrl}/get_image`;
+  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed });
   const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
-  const darkLogoSrc = reachableDarkLogo || logoUrl || `${baseUrl}/get_image?theme=dark`;
+  const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
 
   return (
     <Sidebar collapsed={collapsed}>

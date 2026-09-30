@@ -17519,13 +17519,17 @@ def _serve_custom_ui_logo(candidate: str) -> Response | None:
 
 
 @app.get("/get_image", include_in_schema=False)
-async def get_image(theme: Literal["light", "dark"] | None = None):
+async def get_image(
+    theme: Literal["light", "dark"] | None = None,
+    variant: Literal["full", "monogram"] = "full",
+):
     """Get logo to show on admin UI"""
 
     # get current_dir
     current_dir: Final = os.path.dirname(os.path.abspath(__file__))
-    bundled_light_logo: Final = os.path.join(current_dir, "logo.jpg")
-    bundled_dark_logo: Final = os.path.join(current_dir, "logo_dark.png")
+    bundled_logo_stem: Final = "logo_monogram" if variant == "monogram" else "logo"
+    bundled_light_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}.png")
+    bundled_dark_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}_dark.png")
     default_site_logo: Final = (
         bundled_dark_logo if theme == "dark" and os.path.isfile(bundled_dark_logo) else bundled_light_logo
     )
@@ -17586,7 +17590,7 @@ async def get_image(theme: Literal["light", "dark"] | None = None):
     if safe_logo is not None:
         safe_logo_path, media_type = safe_logo
         return FileResponse(safe_logo_path, media_type=media_type)
-    return FileResponse(bundled_light_logo, media_type="image/jpeg")
+    return FileResponse(bundled_light_logo, media_type="image/png")
 
 
 @app.get("/get_favicon", include_in_schema=False)

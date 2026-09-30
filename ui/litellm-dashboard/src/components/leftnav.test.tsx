@@ -136,6 +136,29 @@ describe("Sidebar (leftnav)", () => {
     expect(classesOf(dark).has("dark:block")).toBe(true);
   });
 
+  it("requests the bundled monogram for both themes when collapsed", () => {
+    renderWithProviders(<Sidebar collapsed />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image\?variant=monogram$/));
+    expect(dark).toHaveAttribute("src", expect.stringMatching(/\/get_image\?theme=dark&variant=monogram$/));
+  });
+
+  it("keeps a configured custom logo when collapsed instead of the LiteLLM monogram", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar collapsed />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
+  });
+
   it("prefers a configured dark logo over the light one in dark mode", () => {
     mockUseThemeImpl = () => ({
       ...unbrandedTheme(),

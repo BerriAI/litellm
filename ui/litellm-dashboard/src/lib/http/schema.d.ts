@@ -55453,6 +55453,7 @@ export interface operations {
         parameters: {
             query?: {
                 theme?: ("light" | "dark") | null;
+                variant?: "full" | "monogram";
             };
             header?: never;
             path?: never;

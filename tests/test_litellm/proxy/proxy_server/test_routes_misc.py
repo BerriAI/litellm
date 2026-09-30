@@ -11,6 +11,7 @@ Routes covered:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -192,11 +193,21 @@ PNG_IHDR_COLOUR_TYPE_OFFSET = 25
 PNG_COLOUR_TYPE_RGBA = 6
 
 
-def test_get_image_dark_theme_returns_logo_with_an_alpha_channel(client, monkeypatch):
-    """?theme=dark serves the dark logo. It must be an RGBA PNG: the light logo is a
-    JPEG whose baked-in white background renders as a white slab on a dark sidebar."""
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},
+        {"theme": "dark"},
+        {"variant": "monogram"},
+        {"theme": "dark", "variant": "monogram"},
+    ],
+)
+def test_get_image_bundled_logos_have_an_alpha_channel(client, monkeypatch, params):
+    """Every bundled logo must be an RGBA PNG so it never renders as an opaque slab
+    on a sidebar whose background differs from the image's."""
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
-    response = client.get("/get_image", params={"theme": "dark"})
+    monkeypatch.delenv("UI_LOGO_PATH_DARK", raising=False)
+    response = client.get("/get_image", params=params)
     body = response.content
     shape = {
         "status": response.status_code,
@@ -212,16 +223,34 @@ def test_get_image_dark_theme_returns_logo_with_an_alpha_channel(client, monkeyp
     }
 
 
-def test_get_image_without_theme_still_serves_the_light_jpeg(client, monkeypatch):
-    """The default response is unchanged, so light mode keeps the existing logo."""
+@pytest.mark.parametrize(
+    ("params", "bundled_file"),
+    [
+        ({}, "logo.png"),
+        ({"theme": "light"}, "logo.png"),
+        ({"theme": "dark"}, "logo_dark.png"),
+        ({"variant": "monogram"}, "logo_monogram.png"),
+        ({"theme": "dark", "variant": "monogram"}, "logo_monogram_dark.png"),
+    ],
+)
+def test_get_image_serves_the_bundled_logo_for_each_theme_and_variant(client, monkeypatch, params, bundled_file):
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
-    response = client.get("/get_image")
-    shape = {
-        "status": response.status_code,
-        "media_type": response.headers.get("content-type", "").split(";")[0],
-        "is_jpeg": response.content[:3] == b"\xff\xd8\xff",
-    }
-    assert shape == {"status": 200, "media_type": "image/jpeg", "is_jpeg": True}
+    monkeypatch.delenv("UI_LOGO_PATH_DARK", raising=False)
+    from litellm.proxy import proxy_server
+
+    expected = (Path(proxy_server.__file__).parent / bundled_file).read_bytes()
+    response = client.get("/get_image", params=params)
+    assert (response.status_code, response.content) == (200, expected)
+
+
+def test_get_image_monogram_variant_keeps_serving_a_custom_ui_logo(client, monkeypatch, tmp_path):
+    """A collapsed sidebar must not swap the admin's own branding for LiteLLM's monogram."""
+    custom_logo = tmp_path / "custom.png"
+    custom_logo.write_bytes(PNG_SIGNATURE + b"custom-logo-marker")
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo))
+    response = client.get("/get_image", params={"theme": "dark", "variant": "monogram"})
+    shape = {"status": response.status_code, "body": response.content}
+    assert shape == {"status": 200, "body": PNG_SIGNATURE + b"custom-logo-marker"}
 
 
 def test_get_image_dark_theme_keeps_serving_a_custom_ui_logo(client, monkeypatch, tmp_path):
@@ -290,7 +319,7 @@ def test_get_image_dark_logo_alone_still_serves_the_bundled_light_logo_in_light_
         "status": response.status_code,
         "media_type": response.headers.get("content-type", "").split(";")[0],
     }
-    assert shape == {"status": 200, "media_type": "image/jpeg"}
+    assert shape == {"status": 200, "media_type": "image/png"}
 
 
 def test_get_image_redirects_remote_url(client, monkeypatch):
