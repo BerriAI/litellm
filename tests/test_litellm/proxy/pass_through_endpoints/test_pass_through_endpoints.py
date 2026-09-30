@@ -7683,3 +7683,482 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key"] == "cli-session-alice"
     assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
+
+
+@pytest.mark.asyncio
+async def test_set_env_variables_in_header_decrypts_stored_headers(monkeypatch):
+    from litellm.proxy.pass_through_endpoints.common_utils import encrypt_pass_through_endpoints
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import set_env_variables_in_header
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-pass-through-tests")
+    monkeypatch.setenv("UPSTREAM_TOKEN", "resolved-from-env")
+    [stored] = encrypt_pass_through_endpoints(
+        [
+            {
+                "path": "/pt",
+                "headers": {
+                    "x-legacy": "plain-value",
+                    "Authorization": "Bearer sk-literal",
+                    "x-env": "Bearer os.environ/UPSTREAM_TOKEN",
+                },
+            }
+        ]
+    )
+    headers = {**stored["headers"], "x-legacy": "plain-value"}
+
+    assert await set_env_variables_in_header(custom_headers=headers) == {
+        "x-legacy": "plain-value",
+        "Authorization": "Bearer sk-literal",
+        "x-env": "Bearer resolved-from-env",
+    }
+
+
+@pytest.mark.asyncio
+async def test_register_pass_through_endpoint_keeps_serving_headers_when_stored_headers_do_not_decrypt(monkeypatch):
+    from fastapi import FastAPI
+
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        encrypt_pass_through_endpoints,
+        reencrypt_general_settings_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _register_pass_through_endpoint,
+        _registered_pass_through_routes,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-current-key")
+    app = FastAPI()
+    [stored] = encrypt_pass_through_endpoints(
+        [
+            {
+                "id": "ep-rotate",
+                "path": "/rotate-pt",
+                "target": "http://upstream",
+                "headers": {"Authorization": "Bearer sk-literal"},
+            }
+        ]
+    )
+    rotated = reencrypt_general_settings_pass_through({"pass_through_endpoints": [stored]}, "sk-next-key")
+    assert rotated is not None
+    [rotated_endpoint] = rotated["pass_through_endpoints"]
+    try:
+        await _register_pass_through_endpoint(
+            endpoint={"id": "ep-rotate-other", "path": "/other-pt", "target": "http://other", "headers": {"x": "y"}},
+            app=app,
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+        first_visit: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint=dict(stored), app=app, premium_user=False, visited_endpoints=first_visit
+        )
+        [route_key] = first_visit
+        second_visit: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint={
+                **rotated_endpoint,
+                "path": "/rotate-pt-moved",
+                "headers": {**rotated_endpoint["headers"], "x-org": "acme"},
+            },
+            app=app,
+            premium_user=False,
+            visited_endpoints=second_visit,
+        )
+
+        [moved_route_key] = second_visit
+        assert moved_route_key != route_key
+        params = _registered_pass_through_routes[moved_route_key]["passthrough_params"]
+        assert params["custom_headers"] == {"Authorization": "Bearer sk-literal", "x-org": "acme"}
+
+        retargeted_visit: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint={**rotated_endpoint, "path": "/rotate-pt-moved", "target": "http://upstream-moved"},
+            app=app,
+            premium_user=False,
+            visited_endpoints=retargeted_visit,
+        )
+        [retargeted_route_key] = retargeted_visit
+        retargeted = _registered_pass_through_routes[retargeted_route_key]["passthrough_params"]
+        assert retargeted["target"] == "http://upstream-moved"
+        assert retargeted["custom_headers"]["Authorization"] != "Bearer sk-literal"
+    finally:
+        for key in [k for k in _registered_pass_through_routes if k.startswith("ep-rotate")]:
+            _registered_pass_through_routes.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_register_pass_through_endpoint_without_id_keeps_serving_headers_when_stored_headers_do_not_decrypt(
+    monkeypatch,
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        encrypt_pass_through_endpoints,
+        reencrypt_general_settings_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _register_pass_through_endpoint,
+        _registered_pass_through_routes,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-current-key")
+    app = FastAPI()
+    [stored] = encrypt_pass_through_endpoints(
+        [{"path": "/rotate-no-id-pt", "target": "http://upstream", "headers": {"Authorization": "Bearer sk-no-id"}}]
+    )
+    rotated = reencrypt_general_settings_pass_through({"pass_through_endpoints": [stored]}, "sk-next-key")
+    assert rotated is not None
+    [rotated_endpoint] = rotated["pass_through_endpoints"]
+    visited: set[str] = set()
+    try:
+        await _register_pass_through_endpoint(
+            endpoint={"path": "/rotate-no-id-other", "target": "http://other", "headers": {"x": "y"}},
+            app=app,
+            premium_user=False,
+            visited_endpoints=visited,
+        )
+        await _register_pass_through_endpoint(
+            endpoint=dict(stored), app=app, premium_user=False, visited_endpoints=visited
+        )
+        reloaded: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint=dict(rotated_endpoint), app=app, premium_user=False, visited_endpoints=reloaded
+        )
+
+        [route_key] = reloaded
+        params = _registered_pass_through_routes[route_key]["passthrough_params"]
+        assert params["custom_headers"] == {"Authorization": "Bearer sk-no-id"}
+    finally:
+        for key in [k for k in _registered_pass_through_routes if "/rotate-no-id" in k]:
+            _registered_pass_through_routes.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_register_pass_through_endpoint_keeps_its_own_headers_when_another_endpoint_shares_the_path(
+    monkeypatch,
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        encrypt_pass_through_endpoints,
+        reencrypt_general_settings_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _register_pass_through_endpoint,
+        _registered_pass_through_routes,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-current-key")
+    app = FastAPI()
+    stored = encrypt_pass_through_endpoints(
+        [
+            {
+                "id": "ep-shared-a",
+                "path": "/shared-pt",
+                "methods": ["GET"],
+                "target": "http://a",
+                "headers": {"Authorization": "Bearer sk-a"},
+            },
+            {
+                "id": "ep-shared-b",
+                "path": "/shared-pt",
+                "methods": ["POST"],
+                "target": "http://b",
+                "headers": {"Authorization": "Bearer sk-b"},
+            },
+            {
+                "path": "/shared-pt",
+                "methods": ["PUT"],
+                "target": "http://c",
+                "headers": {"Authorization": "Bearer sk-c"},
+            },
+        ]
+    )
+    rotated = reencrypt_general_settings_pass_through({"pass_through_endpoints": stored}, "sk-next-key")
+    assert rotated is not None
+    try:
+        for endpoint in stored:
+            await _register_pass_through_endpoint(
+                endpoint=dict(endpoint), app=app, premium_user=False, visited_endpoints=set()
+            )
+        reloaded_b: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint=dict(rotated["pass_through_endpoints"][1]),
+            app=app,
+            premium_user=False,
+            visited_endpoints=reloaded_b,
+        )
+        reloaded_c: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint=dict(rotated["pass_through_endpoints"][2]),
+            app=app,
+            premium_user=False,
+            visited_endpoints=reloaded_c,
+        )
+
+        [route_b] = reloaded_b
+        assert _registered_pass_through_routes[route_b]["passthrough_params"]["custom_headers"] == {
+            "Authorization": "Bearer sk-b"
+        }
+        [route_c] = reloaded_c
+        assert _registered_pass_through_routes[route_c]["passthrough_params"]["custom_headers"] == {
+            "Authorization": "Bearer sk-c"
+        }
+
+        twins = encrypt_pass_through_endpoints(
+            [
+                {
+                    "path": "/shared-twin-pt",
+                    "methods": [method],
+                    "target": "http://twin",
+                    "headers": {"Authorization": f"Bearer sk-{method}"},
+                }
+                for method in ("GET", "POST")
+            ]
+        )
+        rotated_twins = reencrypt_general_settings_pass_through({"pass_through_endpoints": twins}, "sk-next-key")
+        assert rotated_twins is not None
+        for twin in twins:
+            await _register_pass_through_endpoint(
+                endpoint=dict(twin), app=app, premium_user=False, visited_endpoints=set()
+            )
+        reloaded_twin: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint=dict(rotated_twins["pass_through_endpoints"][0]),
+            app=app,
+            premium_user=False,
+            visited_endpoints=reloaded_twin,
+        )
+        [route_twin] = reloaded_twin
+        served_twin = _registered_pass_through_routes[route_twin]["passthrough_params"]["custom_headers"]
+        assert served_twin["Authorization"] not in ("Bearer sk-GET", "Bearer sk-POST")
+
+        [solo, newcomer] = encrypt_pass_through_endpoints(
+            [
+                {"path": "/shared-solo-pt", "target": "http://d", "headers": {"Authorization": "Bearer sk-d"}},
+                {
+                    "id": "ep-shared-e",
+                    "path": "/shared-solo-pt",
+                    "target": "http://d",
+                    "headers": {"Authorization": "Bearer sk-e"},
+                },
+            ]
+        )
+        await _register_pass_through_endpoint(endpoint=solo, app=app, premium_user=False, visited_endpoints=set())
+        rotated_newcomer = reencrypt_general_settings_pass_through(
+            {"pass_through_endpoints": [newcomer]}, "sk-next-key"
+        )
+        assert rotated_newcomer is not None
+        reloaded_e: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint=dict(rotated_newcomer["pass_through_endpoints"][0]),
+            app=app,
+            premium_user=False,
+            visited_endpoints=reloaded_e,
+        )
+        [route_e] = reloaded_e
+        assert _registered_pass_through_routes[route_e]["passthrough_params"]["custom_headers"][
+            "Authorization"
+        ] not in (
+            "Bearer sk-d",
+            "Bearer sk-e",
+        )
+
+        [moved] = encrypt_pass_through_endpoints(
+            [{"path": "/shared-pt", "target": "http://moved", "headers": {"Authorization": "Bearer sk-moved"}}]
+        )
+        rotated_moved = reencrypt_general_settings_pass_through({"pass_through_endpoints": [moved]}, "sk-next-key")
+        assert rotated_moved is not None
+        reloaded_moved: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint=dict(rotated_moved["pass_through_endpoints"][0]),
+            app=app,
+            premium_user=False,
+            visited_endpoints=reloaded_moved,
+        )
+        [route_moved] = reloaded_moved
+        served_moved = _registered_pass_through_routes[route_moved]["passthrough_params"]["custom_headers"]
+        assert served_moved["Authorization"] not in ("Bearer sk-a", "Bearer sk-b", "Bearer sk-c", "Bearer sk-moved")
+    finally:
+        for key in [k for k in _registered_pass_through_routes if "/shared-" in k]:
+            _registered_pass_through_routes.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_register_pass_through_endpoint_reusing_an_id_does_not_get_that_endpoints_headers(monkeypatch):
+    from fastapi import FastAPI
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _register_pass_through_endpoint,
+        _registered_pass_through_routes,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-current-key")
+    app = FastAPI()
+    try:
+        await _register_pass_through_endpoint(
+            endpoint={
+                "id": "ep-reused",
+                "path": "/reused-victim",
+                "target": "http://victim",
+                "headers": {"Authorization": "Bearer sk-victim"},
+            },
+            app=app,
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+        copied: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint={
+                "id": "ep-reused",
+                "path": "/reused-copy",
+                "target": "http://elsewhere",
+                "headers": {"Authorization": "litellm_enc::not-a-ciphertext"},
+            },
+            app=app,
+            premium_user=False,
+            visited_endpoints=copied,
+        )
+
+        [copied_route] = copied
+        assert _registered_pass_through_routes[copied_route]["passthrough_params"]["custom_headers"] == {
+            "Authorization": "litellm_enc::not-a-ciphertext"
+        }
+    finally:
+        for key in [k for k in _registered_pass_through_routes if k.startswith("ep-reused")]:
+            _registered_pass_through_routes.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_keeps_serving_headers_when_stored_headers_do_not_decrypt(monkeypatch):
+    from fastapi import FastAPI
+
+    from litellm.proxy._types import ConfigFieldInfo, PassThroughGenericEndpoint, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        encrypt_pass_through_endpoints,
+        reencrypt_general_settings_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _register_pass_through_endpoint,
+        _registered_pass_through_routes,
+        update_pass_through_endpoints,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-current-key")
+    app = FastAPI()
+    [stored] = encrypt_pass_through_endpoints(
+        [
+            {
+                "id": "ep-update-rotate",
+                "path": "/update-rotate-pt",
+                "target": "http://upstream",
+                "headers": {"Authorization": "Bearer sk-update"},
+            }
+        ]
+    )
+    rotated = reencrypt_general_settings_pass_through({"pass_through_endpoints": [stored]}, "sk-next-key")
+    assert rotated is not None
+    [rotated_endpoint] = rotated["pass_through_endpoints"]
+    request = MagicMock(spec=Request)
+    request.app = app
+    try:
+        await _register_pass_through_endpoint(
+            endpoint=dict(stored), app=app, premium_user=False, visited_endpoints=set()
+        )
+        with (
+            patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config,
+            patch("litellm.proxy.proxy_server.update_config_general_settings"),
+        ):
+            mock_get_config.return_value = ConfigFieldInfo(
+                field_name="pass_through_endpoints", field_value=[rotated_endpoint]
+            )
+            await update_pass_through_endpoints(
+                endpoint_id="ep-update-rotate",
+                data=PassThroughGenericEndpoint(
+                    path="/update-rotate-pt",
+                    target="http://upstream",
+                    headers={**rotated_endpoint["headers"], "x-org": "acme"},
+                ),
+                request=request,
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+        [served] = [
+            route["passthrough_params"]
+            for route in _registered_pass_through_routes.values()
+            if route["endpoint_id"] == "ep-update-rotate"
+        ]
+        assert served["custom_headers"] == {"Authorization": "Bearer sk-update", "x-org": "acme"}
+    finally:
+        for key in [k for k in _registered_pass_through_routes if k.startswith("ep-update-rotate")]:
+            _registered_pass_through_routes.pop(key, None)
+
+
+@pytest.mark.asyncio
+async def test_register_pass_through_endpoint_keeps_serving_langfuse_keys_and_applies_other_header_edits(
+    monkeypatch,
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        encrypt_pass_through_endpoints,
+        reencrypt_general_settings_pass_through,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _register_pass_through_endpoint,
+        _registered_pass_through_routes,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-current-key")
+    app = FastAPI()
+    [stored] = encrypt_pass_through_endpoints(
+        [
+            {
+                "id": "ep-langfuse-rotate",
+                "path": "/langfuse-rotate-pt",
+                "target": "http://langfuse",
+                "headers": {"LANGFUSE_PUBLIC_KEY": "pk-lf", "LANGFUSE_SECRET_KEY": "sk-lf", "x-org": "old"},
+            }
+        ]
+    )
+    rotated = reencrypt_general_settings_pass_through({"pass_through_endpoints": [stored]}, "sk-next-key")
+    assert rotated is not None
+    [rotated_endpoint] = rotated["pass_through_endpoints"]
+    try:
+        await _register_pass_through_endpoint(
+            endpoint=dict(stored), app=app, premium_user=False, visited_endpoints=set()
+        )
+        [served_before] = [
+            route["passthrough_params"]["custom_headers"]
+            for route in _registered_pass_through_routes.values()
+            if route["endpoint_id"] == "ep-langfuse-rotate"
+        ]
+        reloaded: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint={**rotated_endpoint, "headers": {**rotated_endpoint["headers"], "x-org": "new"}},
+            app=app,
+            premium_user=False,
+            visited_endpoints=reloaded,
+        )
+
+        [route_key] = reloaded
+        assert _registered_pass_through_routes[route_key]["passthrough_params"]["custom_headers"] == {
+            "Authorization": served_before["Authorization"],
+            "x-org": "new",
+        }
+
+        half_edited: set[str] = set()
+        await _register_pass_through_endpoint(
+            endpoint={**rotated_endpoint, "headers": {**rotated_endpoint["headers"], "LANGFUSE_PUBLIC_KEY": "pk-new"}},
+            app=app,
+            premium_user=False,
+            visited_endpoints=half_edited,
+        )
+        [half_edited_key] = half_edited
+        assert _registered_pass_through_routes[half_edited_key]["passthrough_params"]["custom_headers"] == {
+            "Authorization": served_before["Authorization"],
+            "x-org": "new",
+        }
+    finally:
+        for key in [k for k in _registered_pass_through_routes if k.startswith("ep-langfuse-rotate")]:
+            _registered_pass_through_routes.pop(key, None)

@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_batch_enqueued_token_limit_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
@@ -83,6 +84,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management_endpoints.common_utils import (
@@ -124,6 +126,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.pass_through_endpoints.common_utils import reencrypt_general_settings_pass_through
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
@@ -131,6 +134,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     _hash_token_if_needed,
     handle_exception_on_proxy,
+    invalidate_config_param,
     is_valid_api_key,
 )
 from litellm.repositories.base_repository import BaseRepository
@@ -5218,6 +5222,53 @@ async def delete_key_aliases(
     )
 
 
+class _ConfigRowFinder(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> ConfigParam | None: ...
+
+
+class _PassThroughConfigWriter(Protocol):
+    litellm_config: _ConfigRowFinder
+
+    async def execute_raw(self, query: str, *args: object) -> int: ...
+
+
+_PASS_THROUGH_REENCRYPT_ATTEMPTS: Final = 3
+_SWAP_PASS_THROUGH_ENDPOINTS_SQL: Final = (
+    'UPDATE "LiteLLM_Config" '
+    "SET param_value = jsonb_set(param_value::jsonb, '{pass_through_endpoints}', $1::jsonb) "
+    "WHERE param_name = 'general_settings' AND param_value::jsonb -> 'pass_through_endpoints' = $2::jsonb"
+)
+
+
+async def _reencrypt_pass_through_endpoint_headers(prisma_client: PrismaClient, new_master_key: str) -> None:
+    """Re-encrypt pass-through header values in general_settings under new_master_key.
+
+    Reads and writes go to the writer. Only the pass_through_endpoints key is written, and only
+    if it still equals the list that was read, so a concurrent settings edit is kept; a changed
+    list is re-read and retried.
+    """
+    writer: Final = cast(  # cast-ok: untyped Prisma client behind the writer pin
+        "_PassThroughConfigWriter", writer_wrapper(prisma_client.db)
+    )
+    for _ in range(_PASS_THROUGH_REENCRYPT_ATTEMPTS):
+        row = await writer.litellm_config.find_unique(where={"param_name": "general_settings"})
+        stored = row.param_value if row is not None else None
+        reencrypted = reencrypt_general_settings_pass_through(stored, new_master_key)
+        if not isinstance(stored, dict) or reencrypted is None:
+            return
+        swapped = await writer.execute_raw(
+            _SWAP_PASS_THROUGH_ENDPOINTS_SQL,
+            json.dumps(reencrypted["pass_through_endpoints"]),
+            json.dumps(stored["pass_through_endpoints"]),
+        )
+        if swapped:
+            await invalidate_config_param("general_settings")
+            return
+    verbose_proxy_logger.warning(
+        "Pass-through endpoint headers were not re-encrypted: general_settings kept changing during the rotation"
+    )
+
+
 async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -5302,6 +5353,12 @@ async def _rotate_master_key(
                     where={"param_name": "environment_variables"},
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
+
+        if os.getenv(SALT_KEY_ENV_VAR) is None:
+            try:
+                await _reencrypt_pass_through_endpoint_headers(prisma_client, new_master_key)
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to rotate pass-through endpoint headers: %s", str(e))
 
     # 4. process MCP server table
     try:

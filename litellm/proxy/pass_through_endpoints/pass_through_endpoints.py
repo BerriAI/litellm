@@ -101,6 +101,10 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
+from litellm.proxy.pass_through_endpoints.common_utils import (
+    decrypt_pass_through_headers,
+    undecryptable_pass_through_header_names,
+)
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
@@ -161,14 +165,15 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     """
     if custom_headers is None:
         return None
+    stored_headers: Final = decrypt_pass_through_headers(custom_headers) or {}
     headers: Final = {}
-    for key, value in custom_headers.items():
+    for key, value in stored_headers.items():
         # langfuse Api requires base64 encoded headers - it's simpleer to just ask litellm users to set their langfuse public and secret keys
         # we can then get the b64 encoded keys here
         if key == "LANGFUSE_PUBLIC_KEY" or key == "LANGFUSE_SECRET_KEY":
             # langfuse requires b64 encoded headers - we construct that here
-            _langfuse_public_key = custom_headers["LANGFUSE_PUBLIC_KEY"]
-            _langfuse_secret_key = custom_headers["LANGFUSE_SECRET_KEY"]
+            _langfuse_public_key = stored_headers["LANGFUSE_PUBLIC_KEY"]
+            _langfuse_secret_key = stored_headers["LANGFUSE_SECRET_KEY"]
             if isinstance(_langfuse_public_key, str) and _langfuse_public_key.startswith("os.environ/"):
                 _langfuse_public_key = get_secret_str(_langfuse_public_key)
             if isinstance(_langfuse_secret_key, str) and _langfuse_secret_key.startswith("os.environ/"):
@@ -194,6 +199,67 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
                     new_value = value.replace(_variable_name, _secret_value)
                     headers[key] = new_value
     return headers
+
+
+_LANGFUSE_KEY_HEADERS: Final = frozenset({"LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"})
+# set_env_variables_in_header serves the Langfuse key pair as one Authorization header.
+_SERVED_NAME_OF_STORED_HEADER: Final = {name: "Authorization" for name in _LANGFUSE_KEY_HEADERS}
+
+
+def _served_custom_headers(
+    endpoint_id: str, target: str | None, path_without_stored_id: str | None
+) -> Mapping[str, object] | None:
+    by_id: Final[list[Mapping[str, object]]] = []
+    by_path: Final[dict[str, Mapping[str, object]]] = {}
+    for route in _registered_pass_through_routes.values():
+        params = route.get("passthrough_params")
+        if (
+            not isinstance(params, Mapping)
+            or params.get("target") != target
+            or not isinstance(headers := params.get("custom_headers"), Mapping)
+        ):
+            continue
+        served_headers = cast(Mapping[str, object], headers)
+        if route["endpoint_id"] == endpoint_id:
+            by_id.append(served_headers)
+        elif path_without_stored_id is not None and route.get("path") == path_without_stored_id:
+            by_path[str(route["endpoint_id"])] = served_headers
+    if by_id:
+        return by_id[0]
+    return next(iter(by_path.values())) if len(by_path) == 1 else None
+
+
+async def _resolve_stored_headers(
+    endpoint_id: str,
+    target: str | None,
+    stored_headers: dict | None,
+    path_without_stored_id: str | None = None,
+) -> dict | None:
+    """Resolve an endpoint's stored headers for outbound use.
+
+    A header that no longer decrypts under the current key (between an in-app master key
+    rotation and the restart) keeps the value the endpoint already sends to the same target;
+    every other header resolves from the stored value. The served endpoint is matched by id,
+    or, for a stored endpoint without an id (it gets a new one on every reload), by path when
+    exactly one served endpoint has that path and target.
+    """
+    undecryptable: Final = undecryptable_pass_through_header_names(stored_headers)
+    registered: Final = _served_custom_headers(endpoint_id, target, path_without_stored_id) if undecryptable else None
+    if stored_headers is None or registered is None:
+        return await set_env_variables_in_header(custom_headers=stored_headers)
+    verbose_proxy_logger.warning(
+        "Pass-through endpoint %s keeps its current value for headers %s: the stored values do not decrypt "
+        "under the current key (restart with the new master key after a rotation)",
+        endpoint_id,
+        sorted(undecryptable),
+    )
+    replaced: Final = {name for name in undecryptable if _SERVED_NAME_OF_STORED_HEADER.get(name, name) in registered}
+    dropped: Final = replaced | (_LANGFUSE_KEY_HEADERS if replaced & _LANGFUSE_KEY_HEADERS else frozenset())
+    resolved: Final = await set_env_variables_in_header(
+        custom_headers={name: value for name, value in stored_headers.items() if name not in dropped}
+    )
+    kept: Final = {_SERVED_NAME_OF_STORED_HEADER.get(name, name) for name in replaced}
+    return {**(resolved or {}), **{name: registered[name] for name in kept}}
 
 
 async def chat_completion_pass_through_endpoint(
@@ -3247,7 +3313,8 @@ async def _register_pass_through_endpoint(
     else:
         endpoint_data = endpoint
 
-    if endpoint_data.get("id") is None:
+    stored_without_id: Final = endpoint_data.get("id") is None
+    if stored_without_id:
         endpoint_data["id"] = str(uuid.uuid4())
     endpoint_id: Final = cast(str, endpoint_data["id"])
 
@@ -3256,7 +3323,9 @@ async def _register_pass_through_endpoint(
     if path is None:
         raise ValueError("Path is required for pass-through endpoint")
 
-    custom_headers: Final = await set_env_variables_in_header(custom_headers=endpoint_data.get("headers"))
+    custom_headers: Final = await _resolve_stored_headers(
+        endpoint_id, target, endpoint_data.get("headers"), path if stored_without_id else None
+    )
     forward_headers: Final = endpoint_data.get("forward_headers")
     merge_query_params: Final = endpoint_data.get("merge_query_params")
     default_query_params: Final = endpoint_data.get("default_query_params")
@@ -3677,6 +3746,10 @@ async def update_pass_through_endpoints(
     # Update the list
     pass_through_endpoint_data[endpoint_index] = endpoint_dict
 
+    _custom_headers: Final = await _resolve_stored_headers(
+        endpoint_id, updated_endpoint.target, updated_endpoint.headers or {}
+    )
+
     # Remove old routes from registry before they get re-registered
     InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
 
@@ -3688,10 +3761,6 @@ async def update_pass_through_endpoints(
     )
 
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
-
-    # Re-register the route with updated headers
-    _custom_headers: dict | None = updated_endpoint.headers or {}
-    _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)
     if updated_endpoint.include_subpath:

@@ -21102,3 +21102,181 @@ class TestTeamAdminMemberKeyBudgetUpdate:
             )
         assert exc.value.status_code == 403
         assert "member_key_budgets" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_reencrypts_pass_through_endpoint_headers(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import key_management_endpoints
+    from litellm.proxy.pass_through_endpoints.common_utils import (
+        decrypt_pass_through_headers,
+        encrypt_pass_through_endpoints,
+    )
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+    stored_endpoints = encrypt_pass_through_endpoints(
+        [
+            {"path": "/a", "headers": {"x-a": "plain-a"}},
+            {"path": "/b", "headers": {"Authorization": "Bearer sk-literal"}},
+        ]
+    )
+    general_settings_row = MagicMock(
+        param_name="general_settings",
+        param_value={"store_model_in_db": True, "pass_through_endpoints": stored_endpoints},
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    edited_row = MagicMock(
+        param_name="general_settings",
+        param_value={"store_model_in_db": True, "pass_through_endpoints": stored_endpoints[:1]},
+    )
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[general_settings_row])
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(side_effect=[general_settings_row, edited_row])
+    mock_prisma_client.db.litellm_config.update = AsyncMock()
+    mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[0, 1])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    invalidate = AsyncMock()
+    monkeypatch.setattr(key_management_endpoints, "invalidate_config_param", invalidate)
+    for rotate_helper in (
+        "rotate_mcp_server_credentials_master_key",
+        "rotate_mcp_user_credentials_master_key",
+        "rotate_mcp_user_env_vars_master_key",
+        "rotate_sso_identity_assertions_master_key",
+    ):
+        monkeypatch.setattr(key_management_endpoints, rotate_helper, AsyncMock())
+
+    await key_management_endpoints._rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    mock_prisma_client.db.litellm_config.update.assert_not_awaited()
+    [first_swap, retried_swap] = mock_prisma_client.db.execute_raw.await_args_list
+    assert json.loads(first_swap.args[2]) == stored_endpoints
+    assert json.loads(retried_swap.args[2]) == stored_endpoints[:1]
+    assert "jsonb_set" in retried_swap.args[0]
+    invalidate.assert_awaited_once_with("general_settings")
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-new-master-key")
+    assert [decrypt_pass_through_headers(e["headers"]) for e in json.loads(first_swap.args[1])] == [
+        {"x-a": "plain-a"},
+        {"Authorization": "Bearer sk-literal"},
+    ]
+    assert [decrypt_pass_through_headers(e["headers"]) for e in json.loads(retried_swap.args[1])] == [
+        {"x-a": "plain-a"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_leaves_pass_through_headers_under_salt_key(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import key_management_endpoints
+    from litellm.proxy.pass_through_endpoints.common_utils import encrypt_pass_through_endpoints
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-stays")
+    general_settings_row = MagicMock(
+        param_name="general_settings",
+        param_value={
+            "pass_through_endpoints": encrypt_pass_through_endpoints(
+                [{"path": "/a", "headers": {"Authorization": "Bearer sk-literal"}}]
+            )
+        },
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[general_settings_row])
+    mock_prisma_client.db.litellm_config.update = AsyncMock()
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    for rotate_helper in (
+        "rotate_mcp_server_credentials_master_key",
+        "rotate_mcp_user_credentials_master_key",
+        "rotate_mcp_user_env_vars_master_key",
+        "rotate_sso_identity_assertions_master_key",
+    ):
+        monkeypatch.setattr(key_management_endpoints, rotate_helper, AsyncMock())
+
+    await key_management_endpoints._rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    mock_prisma_client.db.litellm_config.update.assert_not_awaited()
+    mock_prisma_client.db.execute_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_continues_when_pass_through_header_reencryption_fails(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(
+        return_value=[MagicMock(param_name="general_settings", param_value={})]
+    )
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        key_management_endpoints,
+        "_reencrypt_pass_through_endpoint_headers",
+        AsyncMock(side_effect=RuntimeError("general_settings write fault")),
+    )
+    later_steps = {
+        name: AsyncMock()
+        for name in (
+            "rotate_mcp_server_credentials_master_key",
+            "rotate_mcp_user_credentials_master_key",
+            "rotate_mcp_user_env_vars_master_key",
+            "rotate_sso_identity_assertions_master_key",
+        )
+    }
+    for name, step in later_steps.items():
+        monkeypatch.setattr(key_management_endpoints, name, step)
+
+    await key_management_endpoints._rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    assert all(step.await_count == 1 for step in later_steps.values())
+    mock_prisma_client.db.litellm_credentialstable.find_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_reencrypts_pass_through_headers_on_the_writer(monkeypatch):
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+    from litellm.proxy.management_endpoints import key_management_endpoints
+    from litellm.proxy.pass_through_endpoints.common_utils import encrypt_pass_through_endpoints
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+    row = MagicMock(
+        param_name="general_settings",
+        param_value={"pass_through_endpoints": encrypt_pass_through_endpoints([{"path": "/a", "headers": {"x": "v"}}])},
+    )
+    from unittest.mock import NonCallableMagicMock
+
+    writer = MagicMock()
+    writer.litellm_config = NonCallableMagicMock(find_unique=AsyncMock(return_value=row))
+    writer.execute_raw = AsyncMock(return_value=1)
+    reader = MagicMock()
+    reader.litellm_config = NonCallableMagicMock(find_unique=AsyncMock(return_value=None))
+    prisma_client = MagicMock()
+    prisma_client.db = RoutingPrismaWrapper(writer=writer, reader=reader)
+    monkeypatch.setattr(key_management_endpoints, "invalidate_config_param", AsyncMock())
+
+    await key_management_endpoints._reencrypt_pass_through_endpoint_headers(prisma_client, "sk-new-master-key")
+
+    writer.litellm_config.find_unique.assert_awaited_once()
+    writer.execute_raw.assert_awaited_once()
+    reader.litellm_config.find_unique.assert_not_called()
