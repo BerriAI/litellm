@@ -888,3 +888,106 @@ class TestMessagesToSapTemplateReasoningContent:
         assert assistant_msg["reasoning_content"] == [
             {"content": "Simple arithmetic.", "signature": "sig1"}
         ]
+
+
+class TestFileContentModel:
+    def test_file_content_serializes_type_alias(self):
+        from litellm.llms.sap.chat.models import FileContent
+
+        fc = FileContent(**{"type": "file", "file_data": "base64=="})
+        dumped = fc.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["type"] == "file"
+        assert dumped["file_data"] == "base64=="
+
+    def test_file_content_filename_omitted_when_not_set(self):
+        from litellm.llms.sap.chat.models import FileContent
+
+        fc = FileContent(**{"type": "file", "file_data": "abc"})
+        dumped = fc.model_dump(by_alias=True, exclude_unset=True)
+        assert "filename" not in dumped
+
+    def test_file_content_filename_included_when_set(self):
+        from litellm.llms.sap.chat.models import FileContent
+
+        fc = FileContent(**{"type": "file", "file_data": "abc", "filename": "report.pdf"})
+        dumped = fc.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["filename"] == "report.pdf"
+
+    def test_file_content_requires_file_data(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from litellm.llms.sap.chat.models import FileContent
+
+        with pytest.raises(ValidationError):
+            FileContent(**{"type": "file"})
+
+
+class TestSAPUserMessageWithFileContent:
+    def test_user_message_accepts_file_content(self):
+        from litellm.llms.sap.chat.models import FileContent, SAPUserMessage
+
+        fc = FileContent(**{"type": "file", "file_data": "base64=="})
+        msg = SAPUserMessage(role="user", content=fc)
+        dumped = msg.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["content"]["type"] == "file"
+        assert dumped["content"]["file_data"] == "base64=="
+
+    def test_user_message_accepts_list_with_text_and_file(self):
+        from litellm.llms.sap.chat.models import FileContent, SAPUserMessage, TextContent
+
+        parts = [
+            TextContent(**{"type": "text", "text": "Analyze this:"}),
+            FileContent(**{"type": "file", "file_data": "base64==", "filename": "data.csv"}),
+        ]
+        msg = SAPUserMessage(role="user", content=parts)
+        dumped = msg.model_dump(by_alias=True, exclude_unset=True)
+        assert dumped["content"][0]["type"] == "text"
+        assert dumped["content"][1]["type"] == "file"
+        assert dumped["content"][1]["filename"] == "data.csv"
+
+
+class TestMessagesToSapTemplateWithFileContent:
+    def test_file_content_message_round_trips_through_template(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {
+                "role": "user",
+                "content": {"type": "file", "file_data": "base64==", "filename": "doc.pdf"},
+            }
+        ]
+        result = _messages_to_sap_template(messages)
+        assert result[0]["role"] == "user"
+        assert result[0]["content"]["type"] == "file"
+        assert result[0]["content"]["file_data"] == "base64=="
+        assert result[0]["content"]["filename"] == "doc.pdf"
+
+    def test_file_content_without_filename_omitted_in_template(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {
+                "role": "user",
+                "content": {"type": "file", "file_data": "xyz"},
+            }
+        ]
+        result = _messages_to_sap_template(messages)
+        assert "filename" not in result[0]["content"]
+
+    def test_mixed_list_with_file_and_text_in_template(self):
+        from litellm.llms.sap.chat.transformation import _messages_to_sap_template
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize:"},
+                    {"type": "file", "file_data": "base64=="},
+                ],
+            }
+        ]
+        result = _messages_to_sap_template(messages)
+        content = result[0]["content"]
+        assert content[0]["type"] == "text"
+        assert content[1]["type"] == "file"
