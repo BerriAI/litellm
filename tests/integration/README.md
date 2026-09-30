@@ -14,7 +14,7 @@ Reuse the existing canned provider handlers through `_support/upstream.py`. It r
 
 The CircleCI workflow starts its own database and Redis, restricts test-phase egress to its owned services and writes JUnit plus an executed-node manifest. Missing setup, failed cleanup or a selected test with neither a passed call nor a skip fail qualification. Skipped nodes are listed under `skipped` in `execution.json`, so the skip reasons double as the open bug list. Existing GitHub Actions jobs do not own these tests
 
-There is no per-node manifest. The runner fails only when pytest fails, when collection errors, or when a selected file collects zero tests. Older tests still carry `@pytest.mark.covers(...)` decorators; the marker stays registered so they collect, but the IDs are not checked against anything and new tests should not use it. The GitHub Actions coverage census reads the `GROUPS` literal in `run.py` and treats every `tests/integration/<directory>/test_*.py` file in a scheduled group as owned by CircleCI
+Groups other than MCP have no per-node manifest. Those groups fail when pytest fails, when collection errors, or when a selected file collects zero tests. MCP additionally enforces the required baseline described below. Older tests still carry `@pytest.mark.covers(...)` decorators; the marker stays registered so they collect, but the IDs are not checked against anything and new tests should not use it. The GitHub Actions coverage census reads the `GROUPS` literal in `run.py` and treats every `tests/integration/<directory>/test_*.py` file in a scheduled group as owned by CircleCI
 
 Provider sentinels currently use the controlled server, not live recordings. The provider shard also runs the existing strict replay controls for changed requests, exhausted interactions, leftover interactions and no provider connection. Future recorded scenarios must use that replay-only implementation; missing recordings cannot fall back to a real provider. The observation endpoint is destructive and the current selection runs serially against one owned upstream
 
@@ -41,7 +41,11 @@ Browser contracts live in `tests/e2e/ui/tests/integrationCritical` and run only 
 Two always-on `-replica` CircleCI jobs (management, database) run their groups in replica mode, where every proxy connects through a real `litellm_writer` role and a real read-only `litellm_reader` role against the same PostgreSQL. Nothing is captured there: the job passes when the tests pass, and a write routed to the read-only reader fails the test that issued it. A deeper check runs on demand as the `routing_parity` workflow, triggered through the CircleCI API v2 pipeline endpoint on the PR branch with `{"parameters": {"routing_parity_base": "<40-hex merge-base sha>"}}`. The workflow fans out over the seven groups, and each `routing-parity-<group>` job runs its own group twice against the same test harness, once with `litellm/`, `enterprise/`, and `litellm-proxy-extras/` checked out from the base revision and once from the head, with a pytest plugin snapshotting `pg_stat_statements` into `routing-observed.json` per side. The `check` step then compares the two observations and writes `routing-diff.txt`: a statement seen on both sides fails when its role set changed, globally or for the same test (per-test capture is skipped under xdist), unless it is listed in `tests/integration/routing/either_role.json`, where each entry names the statement and a one-line reason it legitimately runs on whichever role asks for it, printed under `== either role ==`. Queries seen on only one side are listed, never failed, `pg_stat_statements` evictions and a role that never ran a statement are failures
 
 
-### MCP conformance
+### MCP regression and conformance baseline
+
+This gate protects existing behavior while the stateless refactor proceeds. Completion establishes a
+passing, enforced baseline; it does not certify exhaustive conformance or future capabilities.
+Each later implementation preserves this baseline and adds tests for the behavior it changes
 
 The `mcp` group runs a pinned official conformance client against the official reference
 both directly and through a source-built gateway. Install it with
@@ -83,6 +87,44 @@ It preserves protocol versions, arguments, metadata, Origin/Host headers and res
 No discovery warm-up or expected-failure exemption is used. Missing, failed, skipped or wrongly
 negotiated required cases fail the MCP integration result.
 
-An installed workflow alone is not a merge gate. After these changes reach the default branch,
-verify the hosted MCP job's exact status name and add that check to the existing main ruleset.
-Do not mark LIT-7744 complete until all applicable cases pass and that requirement is active.
+`mcp/conformance_baseline.json` is the independent required-coverage contract. Its 19 official
+scenarios across four upstream revisions, 96 SDK revision/transport combinations, and nine explicit
+checks require 181 passing nodes. Test generation does not read this file, so removing a scenario,
+transport case or test file cannot silently remove its requirement. Capability mappings name the
+required test families that exercise each revision's operations and extensions. A completed
+revision or capability without mapped required coverage fails the gate
+
+To extend the gate, add meaningful behavior assertions to the existing mapped integration file,
+then update the baseline with the required cases and corresponding capability mapping in the same
+PR. Review that the mapped test actually exercises the capability. A mapping alone is not proof.
+Keep required cases passing without skip/xfail exemptions. Track an existing uncovered requirement
+with its owning ticket; do not remove baseline protection or advertise unverified new support
+
+CircleCI currently runs MCP on one node with four pytest workers. The pytest controller combines
+all worker reports into `execution.json`; the full invocation checks all required nodes. Missing
+worker results, absent files, skips and incomplete runs fail the baseline. Local file selections
+check the required cases in those files and are not evidence of a complete gate. If MCP is later
+split across CircleCI nodes, aggregate their results against the entire baseline before accepting
+the job; per-file successes alone are insufficient
+
+Remaining coverage grows with the owning implementation:
+
+| Behavior | Owner and acceptance boundary |
+| --- | --- |
+| Modern upstream calls without initialization; affected legacy auth/policy parity | LIT-7745, tested with its implementation |
+| Authorized list/call across cold replicas without session affinity | LIT-4500, tested with its implementation |
+| Full schema/result preservation and remaining upstream pagination | LIT-7750 and LIT-5594 |
+| Input relay, MRTR and event/cancellation behavior | LIT-4508, LIT-7752 and LIT-4510 |
+| Expanded OAuth and security regressions | LIT-3467, LIT-3559 and LIT-4506 alongside the affected fixes |
+| Applicable combined conformance, canary and rollback | LIT-8305 before the corresponding release |
+
+The SDK matrix provides successful legacy-operation compatibility coverage. It does not repeat
+every official rich-content, error, progress or lifecycle assertion for every older client and
+transport. Expand those cases when relevant paths change; this limitation does not block unrelated
+implementation. Modern revision and extension activation still requires their applicable tests
+
+An installed workflow alone is not an enforced merge gate. Require the hosted MCP job's exact
+status in the existing main ruleset. Close LIT-7744 after this baseline is merged, passes and is
+required. LIT-7745 can be developed alongside gate completion; its shared-path changes must pass
+the baseline and their added legacy/modern tests before merging. Later coverage extensions belong
+to their implementation tickets rather than keeping LIT-7744 open indefinitely

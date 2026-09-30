@@ -4,7 +4,7 @@ import os
 import queue
 import signal
 import subprocess
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from itertools import product
 from pathlib import Path
@@ -12,9 +12,11 @@ from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
 import psutil
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.capabilities import RevisionSupport
+
     from integration._support.mcp import McpPeer
 
 
@@ -219,9 +221,12 @@ class ExecutionReport(BaseModel):
 def require_passes(directory: Path, required: tuple[str, ...]) -> None:
     report: Final = ExecutionReport.model_validate_json((directory / "execution.json").read_bytes())
     assert required and report.complete, "conformance execution was incomplete"
-    assert set(required) <= set(report.collected), "conformance cases were not collected"
-    assert set(required) <= set(report.passed), "conformance cases did not pass"
-    assert not set(required).intersection(report.skipped), "conformance cases were skipped"
+    missing: Final = set(required) - set(report.collected)
+    assert not missing, f"conformance cases were not collected: {sorted(missing)}"
+    unsuccessful: Final = set(required) - set(report.passed)
+    assert not unsuccessful, f"conformance cases did not pass: {sorted(unsuccessful)}"
+    skipped: Final = set(required).intersection(report.skipped)
+    assert not skipped, f"conformance cases were skipped: {sorted(skipped)}"
 
 
 def translation_cases() -> tuple[tuple[str, str, str, str], ...]:
@@ -272,41 +277,74 @@ def official_cases() -> tuple[tuple[str, str], ...]:
     return tuple(product(OFFICIAL_SCENARIOS, MCP_LEGACY_VERSIONS))
 
 
+class CapabilityContract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revisions: tuple[str, ...] = Field(min_length=1)
+    operations: tuple[str, ...]
+    extensions: tuple[str, ...]
+    tests: tuple[str, ...] = Field(min_length=1)
+
+
+class ConformanceBaseline(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    revisions: tuple[str, ...] = Field(min_length=1)
+    ingress_transports: tuple[str, ...] = Field(min_length=1)
+    upstream_transports: tuple[str, ...] = Field(min_length=1)
+    official_scenarios: tuple[str, ...] = Field(min_length=1)
+    capabilities: tuple[CapabilityContract, ...] = Field(min_length=1)
+    required_tests: tuple[str, ...] = Field(min_length=1)
+
+
+def require_capability_coverage(
+    baseline: ConformanceBaseline,
+    required: tuple[str, ...],
+    support: Mapping[str, "RevisionSupport"],
+) -> None:
+    families: Final = {node.split("[", 1)[0] for node in required}
+    for contract in baseline.capabilities:
+        assert set(contract.revisions) <= set(baseline.revisions), "Conformance capability maps an untested revision"
+        assert set(contract.tests) <= families, "Conformance capability maps a test outside the required baseline"
+    for revision, advertised in support.items():
+        if not advertised.completed:
+            continue
+        contracts: Final = tuple(contract for contract in baseline.capabilities if revision in contract.revisions)
+        assert contracts, f"Conformance capability coverage missing for revision {revision}"
+        operations: Final = {operation for contract in contracts for operation in contract.operations}
+        extensions: Final = {extension for contract in contracts for extension in contract.extensions}
+        assert advertised.operations <= operations, (
+            f"Conformance capability coverage missing for {revision}: {sorted(advertised.operations - operations)}"
+        )
+        assert advertised.extensions <= extensions, (
+            f"Conformance capability coverage missing for {revision}: {sorted(advertised.extensions - extensions)}"
+        )
+
+
 def required_conformance_nodes() -> tuple[str, ...]:
+    from litellm.proxy._experimental.mcp_server.capabilities import REVISION_SUPPORT
+
+    baseline: Final = ConformanceBaseline.model_validate_json(
+        (Path(__file__).resolve().parents[1] / "mcp/conformance_baseline.json").read_bytes()
+    )
     official: Final = tuple(
         "tests/integration/mcp/test_mcp_official_conformance.py::test_official_scenario_through_gateway["
         + "-".join(case)
         + "]"
-        for case in official_cases()
+        for case in product(baseline.official_scenarios, baseline.revisions)
     )
     matrix: Final = tuple(
         "tests/integration/mcp/test_mcp_transports.py::test_pinned_revision_pairs_list_and_call_through_gateway["
         + "-".join(case)
         + "]"
-        for case in translation_cases()
-    )
-    return (
-        official
-        + matrix
-        + ("tests/integration/mcp/test_mcp_protocol_errors.py::test_omitted_tool_arguments_reach_the_upstream",)
-        + tuple(
-            "tests/integration/mcp/test_mcp_protocol_errors.py::test_configured_origin_policy_rejects_before_tool_execution["
-            + ingress
-            + "]"
-            for ingress in ("server_mcp", "sse")
-        )
-        + tuple(
-            "tests/integration/mcp/test_mcp_official_conformance.py::" + name
-            for name in (
-                "test_conformance_bridge_preserves_headers_payload_and_error_status[200]",
-                "test_conformance_bridge_preserves_headers_payload_and_error_status[403]",
-                "test_official_runner_rejects_unknown_scenario",
-                "test_official_gateway_session_lifecycle",
-                "test_stalled_reference_is_killed_and_cannot_report_clean_teardown",
-                "test_reference_children_are_stopped_after_the_root_exits",
-            )
+        for case in product(
+            baseline.revisions, baseline.revisions, baseline.upstream_transports, baseline.ingress_transports
         )
     )
+    required: Final = official + matrix + baseline.required_tests
+    assert len(set(required)) == len(required), "Conformance baseline contains duplicate required cases"
+    require_capability_coverage(baseline, required, REVISION_SUPPORT)
+    return required
 
 
 def read_negotiation(request: bytes, response: bytes, content_type: str) -> tuple[str, str]:

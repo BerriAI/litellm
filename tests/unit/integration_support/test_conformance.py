@@ -450,3 +450,139 @@ def test_missing_secondary_checks_cannot_report_complete_conformance(
             read_checks(tmp_path, scenario)
     report.write_text(json.dumps([{"id": identity, "status": "SUCCESS"} for identity in identities]))
     assert len(read_checks(tmp_path, scenario)) == len(identities)
+
+
+@pytest.mark.parametrize("removed", ("tools-list", "tools-call-with-progress"))
+def test_removing_official_scenario_cannot_shrink_required_baseline(
+    monkeypatch: pytest.MonkeyPatch, removed: str
+) -> None:
+    from tests.integration._support import conformance
+
+    expected: Final = conformance.required_conformance_nodes()
+    monkeypatch.setattr(
+        conformance, "OFFICIAL_SCENARIOS", tuple(s for s in conformance.OFFICIAL_SCENARIOS if s != removed)
+    )
+    assert conformance.required_conformance_nodes() == expected
+
+
+def test_removing_transport_cannot_shrink_required_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    from tests.integration._support.conformance import required_conformance_nodes
+    from litellm.proxy._experimental.mcp_server import capabilities
+    from litellm.types.mcp import MCPTransport
+
+    expected: Final = required_conformance_nodes()
+    monkeypatch.setattr(
+        capabilities,
+        "REVISION_SUPPORT",
+        {
+            revision: replace(support, transports=support.transports - {MCPTransport.stdio})
+            for revision, support in capabilities.REVISION_SUPPORT.items()
+        },
+    )
+    assert required_conformance_nodes() == expected
+
+
+@pytest.mark.parametrize("kind", ("operations", "extensions"))
+def test_new_completed_capability_requires_mapped_tests(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    from dataclasses import replace
+
+    from tests.integration._support.conformance import required_conformance_nodes
+    from litellm.proxy._experimental.mcp_server import capabilities
+
+    support: Final = capabilities.REVISION_SUPPORT["2025-11-25"]
+    expanded: Final = (
+        replace(support, operations=support.operations | {"resources/subscribe"})
+        if kind == "operations"
+        else replace(support, extensions=support.extensions | {"tasks"})
+    )
+    monkeypatch.setattr(capabilities, "REVISION_SUPPORT", {**capabilities.REVISION_SUPPORT, "2025-11-25": expanded})
+    with pytest.raises(AssertionError, match="capability"):
+        required_conformance_nodes()
+
+
+@pytest.mark.parametrize("missing", ("scenario", "file", "worker"))
+def test_required_execution_cannot_omit_part_of_baseline(tmp_path: Path, missing: str) -> None:
+    from tests.integration._support.conformance import required_conformance_nodes
+
+    required: Final = required_conformance_nodes()
+    omitted: Final = (
+        required[:1]
+        if missing == "scenario"
+        else tuple(node for node in required if "test_mcp_transports.py" in node)
+        if missing == "file"
+        else required[::4]
+    )
+    remaining: Final = tuple(node for node in required if node not in omitted)
+    (tmp_path / "execution.json").write_text(
+        json.dumps({"collected": remaining, "passed": remaining, "skipped": [], "complete": True})
+    )
+    with pytest.raises(AssertionError, match="not collected"):
+        require_passes(tmp_path, required)
+
+
+@pytest.mark.parametrize("invalid", ("revision", "test"))
+def test_capability_mapping_must_reference_required_coverage(invalid: str) -> None:
+    from tests.integration._support.conformance import (
+        CapabilityContract,
+        ConformanceBaseline,
+        require_capability_coverage,
+    )
+
+    baseline: Final = ConformanceBaseline(
+        revisions=("2025-11-25",),
+        ingress_transports=("http",),
+        upstream_transports=("http",),
+        official_scenarios=("tools-list",),
+        required_tests=("test_tools",),
+        capabilities=(
+            CapabilityContract(
+                revisions=("unknown" if invalid == "revision" else "2025-11-25",),
+                operations=("tools/list",),
+                extensions=(),
+                tests=("missing" if invalid == "test" else "test_tools",),
+            ),
+        ),
+    )
+    with pytest.raises(AssertionError, match="capability maps"):
+        require_capability_coverage(baseline, ("test_tools[http]",), {})
+
+
+def test_capability_can_activate_after_its_required_contract_is_added() -> None:
+    from dataclasses import replace
+
+    from tests.integration._support.conformance import (
+        CapabilityContract,
+        ConformanceBaseline,
+        require_capability_coverage,
+    )
+    from litellm.proxy._experimental.mcp_server.capabilities import REVISION_SUPPORT
+
+    baseline: Final = ConformanceBaseline(
+        revisions=("candidate",),
+        ingress_transports=("http",),
+        upstream_transports=("http",),
+        official_scenarios=("tools-list",),
+        required_tests=("test_subscription",),
+        capabilities=(
+            CapabilityContract(
+                revisions=("candidate",),
+                operations=("resources/subscribe",),
+                extensions=("subscriptions",),
+                tests=("test_subscription",),
+            ),
+        ),
+    )
+    support: Final = replace(
+        REVISION_SUPPORT["2025-11-25"],
+        operations=frozenset({"resources/subscribe"}),
+        extensions=frozenset({"subscriptions"}),
+    )
+    assert require_capability_coverage(baseline, ("test_subscription",), {"candidate": support}) is None
+    assert (
+        require_capability_coverage(baseline, ("test_subscription",), {"future": replace(support, completed=False)})
+        is None
+    )
+    with pytest.raises(AssertionError, match="coverage missing for revision"):
+        require_capability_coverage(baseline, ("test_subscription",), {"future": support})
