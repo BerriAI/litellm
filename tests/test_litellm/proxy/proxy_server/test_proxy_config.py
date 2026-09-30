@@ -1809,16 +1809,16 @@ async def test_ProxyConfig_delete_credentials_drops_only_names_missing_from_db_a
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pc = ProxyConfig()
-    monkeypatch.setattr(
-        litellm, "credential_list", [_credential("db-kept"), _credential("stale"), _credential("from-config")]
-    )
+    loaded = [_credential("db-kept"), _credential("stale"), _credential("from-config")]
+    monkeypatch.setattr(litellm, "credential_list", loaded)
     monkeypatch.setattr(
         pc, "get_config", AsyncMock(return_value={"credential_list": [_credential("from-config").model_dump()]})
     )
 
     await pc.delete_credentials([_credential("db-kept")])
 
-    assert [cred.credential_name for cred in litellm.credential_list] == ["db-kept", "from-config"]
+    assert litellm.credential_list is loaded
+    assert [cred.credential_name for cred in loaded] == ["db-kept", "from-config"]
 
 
 @pytest.mark.asyncio
