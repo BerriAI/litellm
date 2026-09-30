@@ -2129,6 +2129,23 @@ class _GatedScanGuardrail(_ScanCountingGuardrail):
         return recorded
 
 
+class _FinishReasonRecordingGuardrail(_ScanCountingGuardrail):
+    """Records the finish reasons of the stream handed to each response-side scan"""
+
+    def __init__(self):
+        super().__init__(end_of_stream_only=True)
+        self.finish_reasons: tuple[str | None, ...] = ()
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        rebuilt = request_data.get("response")
+        choices = [
+            *(rebuilt.choices if rebuilt is not None else ()),
+            *(choice for chunk in request_data.get("responses") or () for choice in chunk.choices),
+        ]
+        self.finish_reasons = (*self.finish_reasons, *(choice.finish_reason for choice in choices))
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
 class _GatedToolCallGuardrail(_StreamingTextGuardrail):
     """Tool-call inspection that holds until released"""
 
@@ -2199,6 +2216,21 @@ class TestStreamingClientDisconnectScan:
 
         assert _delta_text(received) == "synthetic secret"
         assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_mid_text_stream_does_not_hand_the_scan_a_tool_calls_finish(self):
+        guardrail = _FinishReasonRecordingGuardrail()
+
+        async def upstream():
+            yield _stream_chunk("synthetic secret")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+        assert "tool_calls" not in guardrail.finish_reasons, guardrail.finish_reasons
 
     @pytest.mark.asyncio
     async def test_upstream_cancellation_after_released_content_still_scans_it(self):
