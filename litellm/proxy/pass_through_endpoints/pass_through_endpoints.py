@@ -1121,7 +1121,7 @@ async def pass_through_request(
         is_multipart: Final = HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
 
         if custom_body:
-            _parsed_body = custom_body
+            _parsed_body = dict(custom_body)
         elif is_multipart:
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
