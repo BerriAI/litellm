@@ -366,6 +366,10 @@ def test_can_object_call_model_denials_return_forbidden(object_type, expected_er
 
     assert exc_info.value.type == expected_error_type
     assert int(exc_info.value.code) == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.message == (
+        "The requested model 'restricted-model' is not available for this API key, or the model name is invalid. "
+        "Check the models available to you and try again."
+    )
 
 
 @pytest.mark.asyncio
@@ -8851,6 +8855,10 @@ async def test_common_checks_denies_model_outside_customer_allowlist() -> None:
 
     assert exc_info.value.code == "403"
     assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
+    assert exc_info.value.message == (
+        "The requested model 'b' is not in the allowed models for this customer. "
+        "Check the models this customer can use and try again."
+    )
 
 
 @pytest.mark.parametrize(
@@ -8897,6 +8905,10 @@ async def test_common_checks_denies_customer_allowlist_when_team_alias_target_is
 
     assert exc_info.value.code == "403"
     assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
+    assert exc_info.value.message == (
+        "The requested model 'my-alias' is not in the allowed models for this customer. "
+        "Check the models this customer can use and try again."
+    )
 
 
 @pytest.mark.asyncio

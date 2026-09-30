@@ -45,6 +45,7 @@ def test_customer_models_allowlist_rejects_model_outside_it_for_the_same_key(gat
         assert permitted.status_code == 200, permitted.text
         denied: Final = _chat(gateway, key, disallowed, customer=customer)
         assert _denial_type(denied) == "customer_model_access_denied", denied.text
+        assert "not in the allowed models for this customer" in denied.text, denied.text
         via_header: Final = _chat(gateway, key, disallowed, customer=None, headers={"x-litellm-customer-id": customer})
         assert _denial_type(via_header) == "customer_model_access_denied", via_header.text
         without_customer: Final = _chat(gateway, key, disallowed, customer=None)
