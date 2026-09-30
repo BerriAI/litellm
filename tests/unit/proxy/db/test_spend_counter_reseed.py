@@ -523,3 +523,17 @@ async def test_agent_window_reseed_handles_missing_rows_and_malformed_keys(missi
     key: Final = "spend:agent_window:20260102T000000.000000Z:missing" if missing else "spend:agent_window:malformed"
     assert await SpendCounterReseed.from_db(client, key) is None
     assert lookup.await_count == int(missing)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget_id,expected", [("current", 0.25), ("retired", 0.0), ("deleted", None)])
+async def test_lifetime_counter_reseed_excludes_historical_and_other_budget_spend(budget_id: str, expected: float | None) -> None:
+    from prisma.models import LiteLLM_AgentsTable
+
+    row: Final = LiteLLM_AgentsTable.model_construct(
+        agent_id="agent", budget_id="current", spend=12.5, lifetime_budget_spend=0.25,
+    )
+    lookup: Final = AsyncMock(return_value=row if expected is not None else None)
+    client: Final = SimpleNamespace(writer_db=SimpleNamespace(litellm_agentstable=SimpleNamespace(find_unique=lookup)))
+    assert await SpendCounterReseed.from_db(client, f"spend:agent_lifetime:{budget_id}:agent") == expected
+    lookup.assert_awaited_once_with(where={"agent_id": "agent"})

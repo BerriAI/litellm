@@ -26,3 +26,16 @@ def test_different_budget_windows_never_share_a_settlement_filter() -> None:
     assert agent_spend_filter(agent_budget_counter_key("agent-one", first)) != agent_spend_filter(
         agent_budget_counter_key("agent-one", second)
     )
+
+
+def test_lifetime_budget_consumption_is_separate_from_agent_history() -> None:
+    from litellm.types.agents import AgentResponse
+
+    agent: Final = AgentResponse(
+        agent_id="agent", agent_name="Agent", agent_card_params={}, spend=12.5,
+        lifetime_budget_spend=0.75,
+        litellm_budget_table={"budget_id": "budget", "max_budget": 1.0},
+    )
+    assert agent.budget_spend == 0.75
+    assert agent.spend == 12.5
+    assert agent.budget_counter_key == "spend:agent_lifetime:budget:agent"

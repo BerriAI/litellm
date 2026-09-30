@@ -33,6 +33,7 @@ export interface Agent {
   kill_switch?: AgentKillSwitchConfig | null;
   keys?: AgentAttachedKey[] | null;
   spend?: number;
+  lifetime_budget_spend?: number;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
   session_tpm_limit?: number | null;

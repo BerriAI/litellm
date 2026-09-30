@@ -207,8 +207,11 @@ def admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> fr
     billing_agent: Final = token.billing_agent_policy
     charged_agent_id: Final = billing_agent.agent_id if billing_agent is not None else token.agent_id
     agent_keys: Final = (
-        frozenset((billing_agent.budget_counter_key if billing_agent is not None else f"spend:agent:{charged_agent_id}",))
-        if charged_agent_id is not None else frozenset()
+        frozenset(
+            (billing_agent.budget_counter_key if billing_agent is not None else f"spend:agent:{charged_agent_id}",)
+        )
+        if charged_agent_id is not None
+        else frozenset()
     )
     return agent_keys | frozenset(
         _iter_entity_counter_keys(
@@ -251,13 +254,10 @@ def post_call_counter_keys(
         for group in model_access_groups or ()
         if group and isinstance(group, str)
     )
-    agent_key: Final = billing_agent_counter_key or (f"spend:agent:{billing_agent_id}" if billing_agent_id is not None else None)
-    return (
-        entity_keys
-        | tag_keys
-        | group_keys
-        | (frozenset((agent_key,)) if agent_key else frozenset())
+    agent_key: Final = billing_agent_counter_key or (
+        f"spend:agent:{billing_agent_id}" if billing_agent_id is not None else None
     )
+    return entity_keys | tag_keys | group_keys | (frozenset((agent_key,)) if agent_key else frozenset())
 
 
 def bind_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> None:

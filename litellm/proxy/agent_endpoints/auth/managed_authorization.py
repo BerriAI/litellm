@@ -214,7 +214,7 @@ async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
     budget: Final = agent.litellm_budget_table.max_budget
     spend: Final = await get_current_spend(
         counter_key=agent.budget_counter_key,
-        fallback_spend=agent.spend or 0.0,
+        fallback_spend=agent.budget_spend,
         max_budget=budget,
         fallback_authoritative=True,
     )
@@ -254,7 +254,12 @@ async def prepare_agent_invocation(
     if target is None and registered_managed:
         raise_identity_failure(AgentIdentityFailure(message="Invoked agent no longer exists"))
     effective: Final = target if target is not None else registered
-    if not effective.identity_managed and effective.litellm_budget_table is None and auth.managed_agent_policy is None:
+    if (
+        not effective.identity_managed
+        and effective.litellm_budget_table is None
+        and auth.managed_agent_policy is None
+        and auth.billing_agent_policy is None
+    ):
         return
     if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
         raise_identity_failure(AgentIdentityFailure(message="The caller is not permitted to invoke this agent"))

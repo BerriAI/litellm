@@ -82,6 +82,7 @@ class ManagedWriteFields(TypedDict, total=False):
     litellm_budget_table: ReadOnly[BudgetRelationWrite]
     spend_window: ReadOnly[datetime | None]
     spend: ReadOnly[float]
+    lifetime_budget_spend: ReadOnly[float]
 
 
 def raise_identity_failure(failure: AgentIdentityFailure, status_code: int = 403) -> NoReturn:
@@ -202,6 +203,11 @@ def _budget_write(raw: object, existing: AgentResponse | None, updated_by: str) 
     duration_error: Final = budget_duration_error(budget.budget_duration)
     if duration_error is not None:
         raise ValueError(duration_error)
+    creating_lifetime: Final = budget.budget_duration is None and (
+        existing is None
+        or existing.litellm_budget_table is None
+        or existing.litellm_budget_table.budget_duration is not None
+    )
     fields: Final[BudgetFields] = {
         "max_budget": budget.max_budget,
         "budget_duration": budget.budget_duration,
@@ -218,6 +224,7 @@ def _budget_write(raw: object, existing: AgentResponse | None, updated_by: str) 
     }
     result: Final[ManagedWriteFields] = {
         "spend_window": fields["budget_reset_at"],
+        **({"lifetime_budget_spend": 0.0} if creating_lifetime else {}),
         **(
             {"spend": 0.0}
             if fields["budget_reset_at"] is not None
@@ -229,7 +236,9 @@ def _budget_write(raw: object, existing: AgentResponse | None, updated_by: str) 
             else {}
         ),
         "litellm_budget_table": (
-            {"update": fields} if existing and existing.budget_id else {"create": {**fields, "created_by": updated_by}}
+            {"update": fields}
+            if existing and existing.budget_id and not creating_lifetime
+            else {"create": {**fields, "created_by": updated_by}}
         ),
     }
     return result

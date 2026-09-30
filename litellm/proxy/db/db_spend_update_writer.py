@@ -86,6 +86,8 @@ from litellm.types.agents import agent_spend_filter
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
+    from prisma.types import LiteLLM_AgentsTableUpdateManyMutationInput, LiteLLM_AgentsTableWhereInput
+
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.baseline_accounting import DailyBaselineAttribution
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -161,6 +163,26 @@ _ENTITY_SPEND_TABLES: Final[Mapping[_EntitySpendTable, Callable[[_SpendBatch], B
 
 def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
     return _ENTITY_SPEND_TABLES[table_accessor](batcher)
+
+
+def _queue_lifetime_agent_spend(table: BatchTable, counter_key: str, response_cost: float) -> None:
+    lifetime_filter: Final = agent_spend_filter(counter_key)
+    lifetime_data: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {
+        "lifetime_budget_spend": {"increment": response_cost}
+    }
+    history_filter: Final[LiteLLM_AgentsTableWhereInput] = {
+        "agent_id": lifetime_filter.get("agent_id"),
+        "spend_window": None,
+    }
+    history_data: Final[LiteLLM_AgentsTableUpdateManyMutationInput] = {"spend": {"increment": response_cost}}
+    table.update_many(
+        where=lifetime_filter,
+        data=lifetime_data,
+    )
+    table.update_many(
+        where=history_filter,
+        data=history_data,
+    )
 
 
 class _SpendBatchManager(Protocol):
@@ -1357,7 +1379,7 @@ class DBSpendUpdateWriter:
         try:
             if agent_id is None or prisma_client is None:
                 return
-            if counter_key is not None and agent_spend_filter(counter_key)["agent_id"] != agent_id:
+            if counter_key is not None and agent_spend_filter(counter_key).get("agent_id") != agent_id:
                 raise ValueError("Agent spend counter does not match the billed agent")
 
             await self.spend_update_queue.add_update(
@@ -2342,6 +2364,13 @@ class DBSpendUpdateWriter:
                                     entity_id,
                                     response_cost,
                                 )
+                                if table_accessor == "litellm_agentstable" and entity_id.startswith(
+                                    "spend:agent_lifetime:"
+                                ):
+                                    _queue_lifetime_agent_spend(
+                                        _entity_spend_table(batcher, table_accessor), entity_id, response_cost
+                                    )
+                                    continue
                                 _entity_spend_table(batcher, table_accessor).update_many(
                                     where=(
                                         agent_spend_filter(entity_id)

@@ -1,6 +1,6 @@
 import { AgentIdentityFields } from "./AgentIdentityFields";
 import { AgentIdentityDetails } from "./AgentIdentityDetails";
-import { withAgentIdentity } from "./agent_identity";
+import { agentBudgetSpend, withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect, useMemo } from "react";
 import { cx } from "@/lib/cva.config";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
@@ -82,7 +82,7 @@ const AgentBudgetDetails = ({ agent }: { agent: Agent }) => (
   <>
     <DetailItem label="Agent Budget">
       {agent.litellm_budget_table?.max_budget != null
-        ? `$${agent.spend ?? 0} / $${agent.litellm_budget_table.max_budget}`
+        ? `$${agentBudgetSpend(agent)} / $${agent.litellm_budget_table.max_budget}`
         : "No aggregate limit"}
     </DetailItem>
     <DetailItem label="Budget Reset">

@@ -100,23 +100,26 @@ export const withAgentIdentity = (
   const hasCard = !existing || cardEdited || Object.keys(existing.agent_card_params ?? {}).length > 0;
   const identityFields = buildIdentityParams(values, existing?.identity);
   const managed = values.identity_provider === "microsoft_entra" || Boolean(readAgentIdentity(existing?.identity));
-  const budgetIsSet =
-    values.agent_max_budget !== undefined && values.agent_max_budget !== "" && values.agent_max_budget !== null;
-  const budgetWasSet = existing?.litellm_budget_table?.max_budget != null;
   return {
     ...settings,
     ...(hasCard && agent_card_params ? { agent_card_params } : {}),
     ...identityFields,
     ...(managed && values.execution_mode !== undefined ? { execution_mode: values.execution_mode } : {}),
     ...(managed && values.enabled !== undefined ? { enabled: values.enabled } : {}),
-    ...(budgetIsSet
-      ? {
-          budget: {
-            max_budget: Number(values.agent_max_budget),
-            budget_duration: values.agent_budget_duration || null,
-          },
-        }
-      : {}),
-    ...(!budgetIsSet && budgetWasSet && values.agent_max_budget !== undefined ? { budget: null } : {}),
+    ...(values.agent_max_budget === undefined
+      ? {}
+      : {
+          budget:
+            values.agent_max_budget === "" || values.agent_max_budget === null
+              ? null
+              : { max_budget: Number(values.agent_max_budget), budget_duration: values.agent_budget_duration || null },
+        }),
   };
 };
+
+export const agentBudgetSpend = (
+  agent: Pick<import("@/components/agents/types").Agent, "spend" | "lifetime_budget_spend" | "litellm_budget_table">,
+): number =>
+  agent.litellm_budget_table && !agent.litellm_budget_table.budget_duration
+    ? agent.lifetime_budget_spend ?? 0
+    : agent.spend ?? 0;

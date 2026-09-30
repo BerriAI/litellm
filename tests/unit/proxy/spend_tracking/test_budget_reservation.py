@@ -317,13 +317,13 @@ async def test_agent_invocation_reserves_exact_fee_and_reconciles_without_child_
     from litellm.types.agents import AgentResponse
 
     cache: Final = DualCache()
-    counter_key: Final = f"spend:agent_window:20260102T000000.000000Z:{charged_agent}" if window else f"spend:agent:{charged_agent}"
+    counter_key: Final = f"spend:agent_window:20260102T000000.000000Z:{charged_agent}" if window else f"spend:agent_lifetime:agent-budget:{charged_agent}"
     cache.set_cache(counter_key, 0.1)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
     auth: Final = UserAPIKeyAuth(agent_id="caller-agent" if charged_agent == "caller-agent" else None)
     auth.billing_agent_policy = AgentResponse(
-        agent_id=charged_agent, agent_name="Charged agent", agent_card_params={}, spend=0.1,
-        litellm_budget_table={"budget_id": "agent-budget", "max_budget": 0.5, "budget_reset_at": window},
+        agent_id=charged_agent, agent_name="Charged agent", agent_card_params={}, spend=0.1, lifetime_budget_spend=0.1,
+        litellm_budget_table={"budget_id": "agent-budget", "max_budget": 0.5, "budget_reset_at": window, "budget_duration": "1d" if window else None},
     )
     auth.invoked_agent_id = "target-agent"
     auth.agent_invocation_cost = 0.2
@@ -359,11 +359,11 @@ async def test_agent_invocation_over_budget_is_rejected_and_reservation_is_refun
     from litellm.types.agents import AgentResponse
 
     cache: Final = DualCache()
-    cache.set_cache("spend:agent:agent", 0.4)
+    cache.set_cache("spend:agent_lifetime:agent-budget:agent", 0.4)
     monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
     auth: Final = UserAPIKeyAuth(agent_id="agent")
     auth.billing_agent_policy = AgentResponse(
-        agent_id="agent", agent_name="Charged agent", agent_card_params={}, spend=0.4,
+        agent_id="agent", agent_name="Charged agent", agent_card_params={}, spend=0.4, lifetime_budget_spend=0.4,
         litellm_budget_table={"budget_id": "agent-budget", "max_budget": 0.5},
     )
     auth.agent_invocation_cost = 0.2
@@ -374,7 +374,7 @@ async def test_agent_invocation_over_budget_is_rejected_and_reservation_is_refun
             user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             fail_closed_budget_enforcement=True,
         )
-    assert await cache.async_get_cache("spend:agent:agent") == pytest.approx(0.4)
+    assert await cache.async_get_cache("spend:agent_lifetime:agent-budget:agent") == pytest.approx(0.4)
 
 
 @pytest.mark.asyncio
@@ -413,3 +413,68 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 
     assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reservation["reserved_cost"])
     assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ("failed", "cancelled", "completed"))
+async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_admission(
+    spend_counter_cache: DualCache, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    import asyncio
+
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        reconcile_budget_reservation,
+        release_budget_reservation,
+        release_budget_reservation_on_cancel,
+    )
+    from litellm.types.agents import AgentResponse
+
+    caller: Final = AgentResponse(
+        agent_id="caller", agent_name="Caller", agent_card_params={}, spend=0.0,
+        litellm_budget_table={"budget_id": "caller-budget", "max_budget": 0.5},
+    )
+    target: Final = AgentResponse(
+        agent_id="target", agent_name="Target", agent_card_params={}, litellm_params={"cost_per_query": 0.25},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+
+    async def admit() -> dict[str, object] | None:
+        auth: Final = UserAPIKeyAuth(agent_id="caller", user_role="proxy_admin")
+        auth.billing_agent_policy = caller
+        await prepare_agent_invocation(auth, "target", None)
+        return await reserve_budget_for_request(
+            request_body={"method": "message/send"}, route="/a2a/target", llm_router=None,
+            valid_token=auth, team_object=None, user_object=None, prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            fail_closed_budget_enforcement=True,
+        )
+
+    results: Final = await asyncio.gather(*(admit() for _ in range(8)), return_exceptions=True)
+    accepted: Final = tuple(result for result in results if isinstance(result, dict))
+    rejected: Final = tuple(result for result in results if isinstance(result, litellm.BudgetExceededError))
+    assert all(result is None or isinstance(result, (dict, litellm.BudgetExceededError)) for result in results), results
+    assert len(accepted) == 2, results
+    assert len(rejected) == 6
+    assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.5)
+    first: Final = accepted[0]
+    if outcome == "completed":
+        await proxy_server.increment_spend_counters(
+            token=None, team_id=None, user_id=None, response_cost=0.25,
+            billing_agent_id=caller.agent_id, billing_agent_counter_key=caller.budget_counter_key,
+            budget_reservation=first,
+        )
+        await reconcile_budget_reservation(first, actual_cost=0.25)
+        assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.5)
+        with pytest.raises(litellm.BudgetExceededError):
+            await admit()
+    else:
+        release: Final = release_budget_reservation_on_cancel if outcome == "cancelled" else release_budget_reservation
+        await release(first)
+        await release(first)
+        assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.25)
+        assert await admit() is not None
+        assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.5)

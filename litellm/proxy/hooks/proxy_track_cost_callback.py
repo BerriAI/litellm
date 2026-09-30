@@ -758,6 +758,8 @@ async def _update_database_and_spend_counters(
         tags=request_tags,
         model_access_groups=model_access_groups,
         project_id=project_id,
+        billing_agent_id=billing_agent_id,
+        billing_agent_counter_key=billing_agent_counter_key,
     )
     with spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(

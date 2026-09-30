@@ -156,6 +156,44 @@ describe("AgentInfoView update payload", () => {
       .mockResolvedValue({} as never);
   });
 
+  it.each(["preserve", "edit", "clear"])(
+    "%s lifetime budget without displaying historical spend as consumption",
+    async (action) => {
+      const budgetedAgent = {
+        ...A2A_AGENT,
+        spend: 12.5,
+        lifetime_budget_spend: 0.5,
+        litellm_budget_table: { budget_id: "budget", max_budget: 1, budget_duration: null },
+      };
+      vi.mocked(networking.getAgentInfo).mockResolvedValue(budgetedAgent);
+      const user = setup();
+      renderView();
+      expect(await screen.findByText("$0.5 / $1")).toBeInTheDocument();
+      await openEditor(user);
+      const limit = screen.getByLabelText("Aggregate Agent Budget ($)");
+      expect(limit).toHaveValue(1);
+      expect(screen.getByLabelText("Budget Reset Period")).toHaveValue("");
+      if (action !== "preserve") {
+        fireEvent.change(limit, { target: { value: action === "edit" ? "2" : "" } });
+      }
+      await save(user);
+      expect(patchedPayload().budget).toEqual(
+        action === "clear" ? null : { max_budget: action === "edit" ? 2 : 1, budget_duration: null },
+      );
+    },
+  );
+
+  it("creates a recurring budget from the budget fields", async () => {
+    const user = setup();
+    renderView();
+    expect(await screen.findByText("No aggregate limit")).toBeInTheDocument();
+    await openEditor(user);
+    fireEvent.change(screen.getByLabelText("Aggregate Agent Budget ($)"), { target: { value: "0.75" } });
+    fireEvent.change(screen.getByLabelText("Budget Reset Period"), { target: { value: "1d" } });
+    await save(user);
+    expect(patchedPayload().budget).toEqual({ max_budget: 0.75, budget_duration: "1d" });
+  });
+
   it.each([
     { card: "complete", editCard: false },
     { card: "empty", editCard: false },
@@ -222,7 +260,8 @@ describe("AgentInfoView update payload", () => {
 
     await save(user);
 
-    expect(patchedPayload()).toEqual({
+    const expectedPayload = {
+      budget: null,
       agent_name: "my-agent",
       agent_card_params: {
         protocolVersion: "1.0",
@@ -241,7 +280,8 @@ describe("AgentInfoView update payload", () => {
       session_rpm_limit: 444,
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
       access_group_ids: [],
-    });
+    };
+    expect(patchedPayload()).toEqual(expectedPayload);
   });
 
   it("sends the loaded values of every panel the user opens", async () => {
@@ -259,7 +299,8 @@ describe("AgentInfoView update payload", () => {
 
     await save(user);
 
-    expect(patchedPayload()).toEqual({
+    const expectedPayload = {
+      budget: null,
       agent_name: "my-agent",
       agent_card_params: {
         protocolVersion: "1.0",
@@ -283,7 +324,8 @@ describe("AgentInfoView update payload", () => {
       session_rpm_limit: 444,
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
       access_group_ids: [],
-    });
+    };
+    expect(patchedPayload()).toEqual(expectedPayload);
   });
 
   it("clamps a rate limit typed below its minimum up to that minimum", async () => {
@@ -342,7 +384,8 @@ describe("AgentInfoView update payload", () => {
 
     await save(user);
 
-    expect(patchedPayload()).toEqual({
+    const expectedPayload = {
+      budget: null,
       agent_name: "lg-agent",
       agent_card_params: {
         protocolVersion: "1.0",
@@ -362,7 +405,8 @@ describe("AgentInfoView update payload", () => {
       },
       object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
       access_group_ids: [],
-    });
+    };
+    expect(patchedPayload()).toEqual(expectedPayload);
   });
 
   it("keeps the agent's existing MCP grants in the update payload", async () => {

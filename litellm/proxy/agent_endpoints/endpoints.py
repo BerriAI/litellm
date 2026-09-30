@@ -13,7 +13,7 @@ import os
 import uuid
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Final, TypedDict
+from typing import TYPE_CHECKING, Annotated, Final, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
@@ -77,6 +77,7 @@ from litellm.types.agents import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.agent_identity import (
+    AgentBudgetState,
     AgentIdentityBinding,
     AgentIdentityFailure,
     EntraIdentityConfig,
@@ -127,6 +128,12 @@ def _build_merged_agent_card(
         proxy_base_url=proxy_base,
         name=card_name or agent_name,
     )
+
+
+if TYPE_CHECKING:
+    from prisma.types import LiteLLM_AgentsTableInclude
+
+_AGENT_BUDGET_INCLUDE: Final["LiteLLM_AgentsTableInclude"] = {"litellm_budget_table": True}
 
 
 router: Final = APIRouter()
@@ -372,8 +379,10 @@ async def get_agents(
             if agent_ids:
                 db_agents: Final = await agents_table(prisma_client).find_many(
                     where={"agent_id": {"in": agent_ids}},
+                    include=_AGENT_BUDGET_INCLUDE,
                 )
-                spend_map: Final = {a.agent_id: a.spend for a in db_agents}
+                spend_map: Final = MappingProxyType({a.agent_id: a.spend for a in db_agents})
+                budget_map: Final = MappingProxyType({a.agent_id: a for a in db_agents})
                 for agent in returned_agents:
                     matched_spends = tuple(
                         spend_map[alias_id]
@@ -382,6 +391,14 @@ async def get_agents(
                     )
                     if matched_spends:
                         agent.spend = sum(matched_spends)
+                    if (budget_row := budget_map.get(agent.agent_id)) is not None:
+                        agent.lifetime_budget_spend = budget_row.lifetime_budget_spend
+                        agent.budget_id = budget_row.budget_id
+                        agent.litellm_budget_table = (
+                            AgentBudgetState.model_validate(budget_row.litellm_budget_table.model_dump())
+                            if budget_row.litellm_budget_table is not None
+                            else None
+                        )
                 await _attach_keys_to_agents(returned_agents, prisma_client)
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
@@ -674,7 +691,7 @@ async def get_agent_by_id(
         if agent is None:
             agent_row: Final = await agents_table(prisma_client).find_unique(
                 where={"agent_id": agent_id},
-                include={"object_permission": True, "identity": True},
+                include={"object_permission": True, "identity": True, "litellm_budget_table": True},
             )
             if agent_row is not None:
                 agent_dict: Final = agent_row.model_dump()
@@ -686,9 +703,18 @@ async def get_agent_by_id(
                 agent = AgentResponse(**agent_dict)
         else:
             # Agent found in memory — refresh spend from DB
-            db_row: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+            db_row: Final = await agents_table(prisma_client).find_unique(
+                where={"agent_id": agent_id}, include=_AGENT_BUDGET_INCLUDE
+            )
             if db_row is not None:
                 agent.spend = db_row.spend
+                agent.lifetime_budget_spend = db_row.lifetime_budget_spend
+                agent.budget_id = db_row.budget_id
+                agent.litellm_budget_table = (
+                    AgentBudgetState.model_validate(db_row.litellm_budget_table.model_dump())
+                    if db_row.litellm_budget_table is not None
+                    else None
+                )
 
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")

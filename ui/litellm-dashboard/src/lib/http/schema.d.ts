@@ -25052,6 +25052,11 @@ export interface components {
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
+            /**
+             * Lifetime Budget Spend
+             * @default 0
+             */
+            lifetime_budget_spend: number;
             litellm_budget_table?: components["schemas"]["AgentBudgetState"] | null;
             /** Litellm Params */
             litellm_params?: {

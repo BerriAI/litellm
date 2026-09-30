@@ -9762,6 +9762,8 @@ async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and
         user_id="human",
         object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["agent"]),
     )
+    database.get_data = AsyncMock(return_value=auth)
+    proxy_server.proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock(return_value=None)
     with patch(
         "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
         new_callable=AsyncMock,

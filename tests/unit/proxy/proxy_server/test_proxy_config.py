@@ -4744,6 +4744,7 @@ def _agent_db_row(agent_id: str, agent_name: str):
         agent_access_groups=[],
         access_group_ids=[],
         spend=0.0,
+        lifetime_budget_spend=0.0,
         identity_managed=False,
         enabled=True,
         execution_mode="autonomous",
