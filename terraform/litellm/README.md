@@ -34,11 +34,16 @@ secret-manager refs.
 
 The proxy is split into three deployables:
 
-| Component | Default image                            | Port | Role                                                                 |
-| --------- | ---------------------------------------- | ---- | -------------------------------------------------------------------- |
-| `gateway` | `ghcr.io/berriai/litellm-gateway:main-stable` | 4000 | LLM data plane (`/v1/chat/completions`, `/v1/embeddings`, …)         |
-| `backend` | `ghcr.io/berriai/litellm-backend:main-stable` | 4001 | Management API (`/key/*`, `/user/*`, `/team/*`, `/model/*`, …)       |
-| `ui`      | `ghcr.io/berriai/litellm-ui:main-stable`      | 3000 | Static Next.js dashboard served by nginx                             |
+| Component | Entrypoint argument | Port | Role                                                                 |
+| --------- | ------------------- | ---- | -------------------------------------------------------------------- |
+| `gateway` | `gateway`           | 4000 | LLM data plane (`/v1/chat/completions`, `/v1/embeddings`, …)         |
+| `backend` | `backend`           | 4001 | Management API (`/key/*`, `/user/*`, `/team/*`, `/model/*`, …)       |
+| `ui`      | `ui`                | 3000 | Static Next.js dashboard served by nginx                             |
+
+All of them run the same `ghcr.io/berriai/litellm` image (`image` on AWS,
+`image_registry` + `image_tag` or `image` on GCP). The image entrypoint
+starts the process named by its first argument, so each workload only
+differs in the argument the module passes
 
 The load balancer routes gateway path prefixes (mirrored verbatim from
 `gateway/routes/allowlist.py`) to the gateway, UI asset paths (`/`,
@@ -152,8 +157,8 @@ pin to a specific tag for production:
 
 LiteLLM's proxy runs `prisma migrate deploy` at startup, but on first apply
 the gateway/backend can race the empty database. Both stacks expose a
-one-off migration task that runs `python litellm/proxy/prisma_migration.py`
-against the backend image:
+one-off migration task that runs the `migrations` component of the same
+image:
 
 - AWS: an `aws_ecs_task_definition` (`litellm-migrations`). Run with
   `aws ecs run-task` — the command is printed in `terraform output`.
@@ -234,19 +239,17 @@ dynamic-credentials OIDC).
 Required overrides the launcher must supply per stack:
 
 - **AWS** (`terraform/litellm/aws`): `region`, `azs`, `tenant`, `env`.
-  The image vars (`gateway_image`, `backend_image`, `ui_image`,
-  `migrations_image`) can be left at their defaults — the GHCR images
-  are anonymous-readable and ECS Fargate pulls them without extra
-  credentials.
+  `image` can be left at its default: the GHCR image is
+  anonymous-readable and ECS Fargate pulls it without extra credentials.
 
 - **GCP** (`terraform/litellm/gcp`): `project`, `tenant`, `env`, **and
   one of**:
   - `image_registry` pointed at an Artifact Registry **remote** repository
     backed by `https://ghcr.io` (e.g.
     `us-central1-docker.pkg.dev/<project>/litellm/berriai`), so Cloud Run
-    pulls the four upstream `litellm-*` images through it; or
-  - all four per-component `*_image` URIs pointing at images mirrored
-    into a regular Artifact Registry repo.
+    pulls the upstream `litellm` image through it; or
+  - `image` pointing at a copy mirrored into a regular Artifact Registry
+    repo.
 
   The defaults (`ghcr.io/berriai`) cause Cloud Run admission to reject
   the service spec — Cloud Run only authenticates against Artifact

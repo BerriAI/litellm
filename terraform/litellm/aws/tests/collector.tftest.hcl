@@ -66,14 +66,14 @@ run "enabled_adds_a_sidecar_that_shares_the_gateway_transport" {
 
   assert {
     condition = (
-      local.collector_container[0].image == var.gateway_image &&
-      local.collector_container[0].entryPoint == ["sh", "-c"] &&
-      local.collector_container[0].command == ["exec python -m litellm.proxy.collector"] &&
+      local.collector_container[0].image == var.image &&
+      !can(local.collector_container[0].entryPoint) &&
+      local.collector_container[0].command == tolist(["collector"]) &&
       local.collector_container[0].essential == false &&
       local.collector_container[0].restartPolicy.enabled == true &&
       { for e in local.collector_container[0].environment : e.name => e.value }["LITELLM_JOB_ROLE"] == "collector"
     )
-    error_message = "The sidecar must run litellm.proxy.collector from the gateway image as a restartable, non-essential collector."
+    error_message = "The sidecar must run the collector component of the shared image as a restartable, non-essential collector."
   }
 
   assert {
@@ -108,8 +108,9 @@ run "proxy_config_is_fetched_by_the_sidecar_too" {
 
   assert {
     condition = (
+      local.collector_container[0].entryPoint == tolist(["sh", "-c"]) &&
       startswith(local.collector_container[0].command[0], local.proxy_config_fetch_cmd) &&
-      endswith(local.collector_container[0].command[0], "exec python -m litellm.proxy.collector") &&
+      endswith(local.collector_container[0].command[0], "exec /app/docker-entrypoint.sh collector") &&
       contains([for e in local.collector_container[0].environment : e.name], "CONFIG_FILE_PATH")
     )
     error_message = "The sidecar must pull the proxy config from S3 before starting, like the gateway does."
