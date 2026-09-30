@@ -12064,6 +12064,45 @@ def test_db_config_sync_restores_a_code_callback_it_replaced(monkeypatch: pytest
     assert litellm.success_callback == ["langfuse_otel"]
 
 
+@pytest.mark.parametrize(
+    ("setting_key", "event", "list_name"),
+    [
+        ("success_callback", "success", "_async_success_callback"),
+        ("failure_callback", "failure", "_async_failure_callback"),
+    ],
+)
+def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
+    monkeypatch: pytest.MonkeyPatch, setting_key: str, event: str, list_name: str
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    _reset_runtime_callbacks(monkeypatch)
+    for extra_list in ("input_callback", "service_callback"):
+        monkeypatch.setattr(litellm, extra_list, [])
+    monkeypatch.setattr(ps, "open_telemetry_logger", None)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("OTEL_EXPORTER", "console")
+    monkeypatch.setenv("ARIZE_API_KEY", "test-arize-key")
+    monkeypatch.setenv("ARIZE_SPACE_ID", "test-space-id")
+    monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "http://127.0.0.1:4318/v1/traces")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        getattr(litellm.logging_callback_manager, f"add_litellm_{event}_callback")("helicone")
+        _add_custom_logger_callback_to_specific_event("otel", event)
+        pc = ps.ProxyConfig()
+        for _ in range(2):
+            pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: ["arize"]}})
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+    v2_names: Final = [cb.callback_name for cb in getattr(litellm, list_name) if isinstance(cb, OpenTelemetryV2)]
+    assert len(v2_names) == 2
+    assert "arize" in v2_names
+
+
 @pytest.mark.asyncio
 async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as ps
