@@ -3838,7 +3838,7 @@ def _fallback_target_model_name(target: object) -> str | None:
 
 
 def _is_master_key_auth_token(valid_token: UserAPIKeyAuth) -> bool:
-    return valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or valid_token.token == LITELLM_PROXY_MASTER_KEY_ALIAS
+    return LITELLM_PROXY_MASTER_KEY_ALIAS in (valid_token.api_key, valid_token.token)
 
 
 async def _maybe_enforce_master_key_end_user_model_max_budget(
