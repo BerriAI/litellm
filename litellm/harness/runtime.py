@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import os
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -22,7 +23,6 @@ from typing import (
 from pydantic import BaseModel, ValidationError
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.constants import HARNESS_EVENT_QUEUE_MAX_SIZE
 from litellm.harness.context import ApprovalHandler, GatewayTarget, SessionContext
 from litellm.harness.endpoint import ModelEndpoint
@@ -62,6 +62,8 @@ from litellm.llms.base_llm.harness.utils import last_json_object
 PERMISSION_MODES: Final = frozenset(get_args(PermissionMode))
 SKILL_FILE: Final = "SKILL.md"
 # Adapter errors that mean "misconfigured", not "the runtime crashed": re-raised to the caller.
+verbose_logger: Final = logging.getLogger("LiteLLM")
+
 PROPAGATED_ERRORS: Final = (HarnessInstallFailed, CapabilityUnsupported)
 
 
@@ -295,8 +297,8 @@ async def _aclose(events: AsyncIterator[Event]) -> None:
         return
     try:
         await closer()
-    except Exception as e:
-        verbose_logger.debug("harness: error closing handler turn: %s", e)
+    except Exception:  # closing must not mask the turn's own outcome
+        verbose_logger.debug("harness: error closing handler turn", exc_info=True)
 
 
 async def pump_events(
@@ -319,7 +321,8 @@ async def pump_events(
     except asyncio.CancelledError:
         end = _End(reason="cancelled")
         raise
-    except Exception as e:
+    except Exception as e:  # any runtime failure becomes stop_reason="runtime_error" (see _Turn._finish)
+        verbose_logger.debug("harness: handler turn raised", exc_info=True)
         end = _End(error=e)
     finally:
         await _aclose(events)
@@ -342,8 +345,8 @@ async def call_approval_handler(handler: ApprovalHandler, approval: Approval) ->
             decision = await asyncio.to_thread(handler, approval)
             if inspect.isawaitable(decision):
                 decision = await decision
-    except Exception as e:
-        verbose_logger.warning("harness: on_approval raised %r for tool %s; denying", e, approval.tool)
+    except Exception as e:  # a failing user callback denies the tool instead of crashing the turn
+        verbose_logger.warning("harness: on_approval raised for tool %s; denying", approval.tool, exc_info=True)
         approval.deny(f"on_approval raised: {e}")
         return
     if decision:
@@ -623,7 +626,7 @@ class AsyncSession:
 
     # -- lifecycle ----------------------------------------------------------
 
-    def __await__(self) -> Any:
+    def __await__(self) -> Generator[object, None, AsyncSession]:
         return self.start().__await__()
 
     async def __aenter__(self) -> AsyncSession:
@@ -670,8 +673,8 @@ class AsyncSession:
         self._native_id = self.handler.native_session_id() or self._native_id
         try:
             await self.handler.stop(self.ctx)
-        except Exception as e:
-            verbose_logger.warning("harness: handler stop failed: %s", e)
+        except Exception:  # the next turn restarts the runtime regardless
+            verbose_logger.warning("harness: handler stop failed", exc_info=True)
         self._restart_needed = True
 
     async def _ensure_ready(self) -> None:
@@ -690,8 +693,8 @@ class AsyncSession:
             return
         try:
             await endpoint.__aexit__(None, None, None)
-        except Exception as e:
-            verbose_logger.warning("harness: endpoint shutdown failed: %s", e)
+        except Exception:  # shutdown is best-effort cleanup
+            verbose_logger.warning("harness: endpoint shutdown failed", exc_info=True)
 
     async def aclose(self) -> None:
         """Stop the runtime and the endpoint. Safe to call twice."""
@@ -702,8 +705,8 @@ class AsyncSession:
             self._native_id = self.handler.native_session_id() or self._native_id
             try:
                 await self.handler.stop(self.ctx)
-            except Exception as e:
-                verbose_logger.warning("harness: handler stop failed: %s", e)
+            except Exception:  # still close the endpoint below
+                verbose_logger.warning("harness: handler stop failed", exc_info=True)
         await self._close_endpoint()
 
     close = aclose
