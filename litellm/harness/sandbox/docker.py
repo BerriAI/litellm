@@ -48,6 +48,9 @@ def parse_sha256sum(output: str) -> dict[str, str]:
 class DockerSandbox:
     """Sandbox backed by a long-lived `sleep infinity` container."""
 
+    # Harness configs read this to skip a runtime's own nested OS sandbox.
+    is_container = True
+
     def __init__(
         self,
         image: str,
