@@ -63,6 +63,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     release_or_invalidate_budget_reservation,  # pyright: ignore[reportUnknownVariableType]  # budget helper accepts legacy reservation dicts
 )
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.table_repositories import ModelAccessGroupBudgetRepository
 from litellm.repositories.team_repository import TeamRepository
 
@@ -856,18 +857,28 @@ def _live_group_limits(row: object) -> LiteLLM_BudgetTable:
 
 
 async def _live_fetch_group_limits(groups: tuple[str, ...]) -> tuple[LiteLLM_BudgetTable, ...]:
-    """Fetch the linked budget of each group in one query and cache one entry per group."""
+    """Fetch the linked budget of each group in chunked queries and cache one entry per group."""
     if not groups:
         return ()
     from litellm.proxy import proxy_server as server
 
-    rows: Final = await ModelAccessGroupBudgetRepository(server.prisma_client).table.find_many(
-        where={  # mutable-ok: Prisma serializes query filters from concrete dictionaries
-            "access_group_name": {  # mutable-ok: Prisma serializes nested filters from concrete dictionaries
-                "in": list(groups),
-            }
-        },
-        include={"litellm_budget_table": True},  # mutable-ok: Prisma serializes concrete include dictionaries
+    # `find_many_in` cannot carry the budget join, so the group names are sliced here by hand.
+    table: Final = ModelAccessGroupBudgetRepository(server.prisma_client).table
+    unique_groups: Final = tuple(dict.fromkeys(groups))
+    rows: Final = tuple(
+        [
+            row
+            for start in range(0, len(unique_groups), IN_LIST_CHUNK_SIZE)
+            for row in await table.find_many(
+                where={  # mutable-ok: Prisma serializes query filters from concrete dictionaries
+                    "access_group_name": {  # mutable-ok: Prisma serializes nested filters from concrete dictionaries
+                        # bounded-ok: <= IN_LIST_CHUNK_SIZE (5,000) names, the loop slices groups by that size
+                        "in": list(unique_groups[start : start + IN_LIST_CHUNK_SIZE]),
+                    }
+                },
+                include={"litellm_budget_table": True},  # mutable-ok: Prisma serializes concrete include dictionaries
+            )
+        ]
     )
     linked: Final = MappingProxyType({getattr(row, "access_group_name", None): _live_group_limits(row) for row in rows})
     limits: Final = tuple(linked.get(group) or LiteLLM_BudgetTable() for group in groups)

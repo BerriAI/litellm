@@ -2,6 +2,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from types import MappingProxyType, SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, Mock
 
 import httpx
