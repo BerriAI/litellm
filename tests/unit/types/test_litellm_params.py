@@ -161,6 +161,7 @@ OPTION_NAMES: Final = (
     "logger_fn",
     "verbose",
     "no-log",
+    "log_client_error_tracebacks",
     "max_agentic_loops",
     "guardrails",
     "prompt_id",

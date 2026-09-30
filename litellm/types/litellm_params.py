@@ -199,6 +199,7 @@ class ObservabilityOptions:
     logger_fn: Callable[[Mapping[str, object]], None] | None = None
     verbose: bool | None = None
     no_log: bool | None = field(default=None, metadata=wire("no-log"))
+    log_client_error_tracebacks: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
