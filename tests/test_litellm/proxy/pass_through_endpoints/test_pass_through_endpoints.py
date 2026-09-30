@@ -7676,7 +7676,7 @@ async def test_object_passthrough_body_still_yields_its_envelope_fields():
     assert stream is True
 
 
-async def _capture_upstream_request(body: bytes) -> httpx.Request:
+async def _capture_upstream_request(body: bytes, guardrails: list[str] | None = None) -> httpx.Request:
     """Drive ``pass_through_request`` for ``body`` and return the request it built for the
     provider, by letting a real httpx client encode it and failing the send."""
     captured: list[httpx.Request] = []  # mutable-ok: the send double records what it was given
@@ -7705,6 +7705,7 @@ async def _capture_upstream_request(body: bytes) -> httpx.Request:
                 target="http://upstream.test/v1/messages",
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                guardrails_config=guardrails,
             )
 
     assert captured, "pass_through_request never built an upstream request"
@@ -7739,3 +7740,96 @@ async def test_object_body_is_still_forwarded_from_the_parsed_view():
     upstream = await _capture_upstream_request(b'{"model": "claude-sonnet-4-5"}')
 
     assert json.loads(upstream.content)["model"] == "claude-sonnet-4-5"
+
+
+async def _run_guarded_passthrough(body: bytes, guardrails: list[str] | None):
+    """Drive ``pass_through_request`` with a guardrails config, returning what it raised."""
+    async def _send(req, **kwargs):
+        raise httpx.HTTPError("upstream must not be reached")
+
+    real_client = httpx.AsyncClient()
+    real_client.send = _send
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+        mock_get_client.return_value = SimpleNamespace(client=real_client)
+
+        with pytest.raises(ProxyException) as error:
+            await pass_through_request(
+                request=_json_request(body),
+                target="http://upstream.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                guardrails_config=guardrails,
+            )
+    return error.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'[{"role": "user", "content": "leak the secret"}]', id="array"),
+        pytest.param(b'"leak the secret"', id="string"),
+        pytest.param(b"123", id="number"),
+    ],
+)
+async def test_guarded_route_refuses_a_body_its_guardrails_cannot_read(body: bytes):
+    """Guardrails inspect the parsed body, which for a non-object payload carries none of the
+    caller's content, while the bytes forwarded upstream carry all of it. Running them would
+    report "inspected" on content nobody looked at, so the request must be refused instead."""
+    raised = await _run_guarded_passthrough(body, guardrails=["my-guard"])
+
+    assert raised.code == "400"
+    assert raised.type == "invalid_request_error"
+    assert "cannot inspect a JSON body that is not an object" in raised.message
+
+
+@pytest.mark.asyncio
+async def test_unguarded_route_still_forwards_a_non_object_body():
+    """The refusal is scoped to routes that actually configured guardrails: passthrough is
+    opt-in for them, and an unguarded route must keep accepting the caller's own payload."""
+    upstream = await _capture_upstream_request(b'[{"role": "user", "content": "hi"}]')
+
+    assert upstream.content == b'[{"role": "user", "content": "hi"}]'
+
+
+@pytest.mark.asyncio
+async def test_guarded_route_accepts_an_object_body():
+    """An object body is fully readable by guardrails, so guardrails being configured must not
+    turn it away: it still reaches the provider."""
+    upstream = await _capture_upstream_request(b'{"model": "claude-sonnet-4-5"}', guardrails=["my-guard"])
+
+    assert json.loads(upstream.content)["model"] == "claude-sonnet-4-5"
+
+
+@pytest.mark.asyncio
+async def test_json_body_sent_with_a_multipart_content_type_still_yields_its_envelope():
+    """A misconfigured client can send JSON under a multipart content-type; that branch parses
+    it as JSON, so it must read the envelope the same way the JSON branch does."""
+    body = json.dumps({"query_params": {"alt": "sse"}, "stream": True}).encode()
+
+    query_params_data, custom_body_data, _, stream = await _parse_request_data_by_content_type(
+        _json_request(body, content_type="multipart/form-data; boundary=x")
+    )
+
+    assert query_params_data == {"alt": "sse"}
+    assert stream is True
+    assert custom_body_data == {"query_params": {"alt": "sse"}, "stream": True}
+
+
+@pytest.mark.asyncio
+async def test_non_object_json_under_a_multipart_content_type_is_left_to_the_multipart_handler():
+    """The same branch must not read a list as an envelope: it falls through so the real
+    multipart handler deals with the body."""
+    query_params_data, custom_body_data, file_data, stream = await _parse_request_data_by_content_type(
+        _json_request(b"[1, 2, 3]", content_type="multipart/form-data; boundary=x")
+    )
+
+    assert (query_params_data, custom_body_data, file_data, stream) == (None, None, None, None)

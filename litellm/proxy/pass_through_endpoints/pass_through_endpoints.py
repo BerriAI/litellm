@@ -1074,6 +1074,8 @@ async def pass_through_request(
 
     # parsed request body
     _parsed_body: dict | None = None
+    # bytes of a non-object JSON body: forwarded verbatim, but unreadable to guardrails
+    uninspectable_body: bytes | None = None
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: dict | None = None
     logging_obj: Logging | None = None
@@ -1124,7 +1126,8 @@ async def pass_through_request(
             if state_raw_body is None:
                 # A non-object JSON body reads as ``{}``, so forwarding the parsed body would
                 # send an empty object in place of the caller's own provider payload.
-                state_raw_body = await non_object_raw_body(request)
+                uninspectable_body = await non_object_raw_body(request)
+                state_raw_body = uninspectable_body
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1139,6 +1142,20 @@ async def pass_through_request(
             user_api_key_dict=user_api_key_dict,
             passthrough_guardrails_config=guardrails_config,
         )
+
+        if guardrails_to_run and uninspectable_body is not None:
+            # Guardrails read the parsed body, which for a non-object payload carries none of
+            # the caller's content, while the bytes forwarded upstream carry all of it. Running
+            # them would report "inspected" on content nobody looked at, so refuse instead.
+            raise ProxyException(
+                message=(
+                    "Guardrails are configured for this route and cannot inspect a JSON body "
+                    "that is not an object. Send the payload as a JSON object."
+                ),
+                type="invalid_request_error",
+                param="request_body",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Add guardrails to metadata if any should run
         if guardrails_to_run and len(guardrails_to_run) > 0:

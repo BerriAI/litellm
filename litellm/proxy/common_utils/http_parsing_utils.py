@@ -13,6 +13,7 @@ from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+    NON_OBJECT_JSON_BODY_SCOPE_KEY,
 )
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
@@ -23,8 +24,6 @@ from litellm.types.router import Deployment
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
-
-_NON_OBJECT_BODY_SCOPE_KEY: Final[str] = "litellm_non_object_json_body"
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -248,7 +247,7 @@ def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
 def _mark_non_object_body(request: Request | None) -> None:
     try:
         if request is not None:
-            request.scope[_NON_OBJECT_BODY_SCOPE_KEY] = True
+            request.scope[NON_OBJECT_JSON_BODY_SCOPE_KEY] = True
     except Exception as e:
         verbose_proxy_logger.debug("Unexpected error marking non-object request body - %s", e)
 
@@ -263,7 +262,7 @@ async def non_object_raw_body(request: Request | None) -> bytes | None:
     if request is None:
         return None
     scope: Final[object] = getattr(request, "scope", None)
-    if not isinstance(scope, Mapping) or scope.get(_NON_OBJECT_BODY_SCOPE_KEY) is not True:
+    if not isinstance(scope, Mapping) or scope.get(NON_OBJECT_JSON_BODY_SCOPE_KEY) is not True:
         return None
     try:
         return await request.body()

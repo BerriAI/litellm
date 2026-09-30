@@ -1308,3 +1308,37 @@ class TestCoerceNumericFormFields:
             numeric_fields=self.numeric_fields,
         )
         assert result == {"n": 3, "temperature": None, "image": buffer}
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_cannot_be_marked_still_parses():
+    """Marking is best-effort bookkeeping for passthrough forwarding. A request object that
+    rejects the write (a test double, a frozen scope) must still get its parsed body rather
+    than turning a client's bad body into a 500."""
+
+    class _UnwritableScope(dict):
+        def __setitem__(self, key, value):
+            raise TypeError("scope is read-only")
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"[1, 2, 3]")
+    request.headers = {"content-type": "application/json"}
+    request.scope = _UnwritableScope()
+
+    assert await _read_request_body(request) == {}
+    assert await non_object_raw_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_a_consumed_body_stream_yields_no_bytes_to_forward():
+    """Starlette raises RuntimeError once a body stream has been consumed. Forwarding must
+    fall back to the parsed view rather than propagating that as a 500."""
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"[1, 2, 3]")
+    request.headers = {"content-type": "application/json"}
+    request.scope = {}
+
+    assert await _read_request_body(request) == {}
+
+    request.body = AsyncMock(side_effect=RuntimeError("Stream consumed"))
+    assert await non_object_raw_body(request) is None
