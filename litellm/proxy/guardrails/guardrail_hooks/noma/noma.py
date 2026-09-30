@@ -9,13 +9,13 @@ import asyncio
 import json
 import os
 import warnings
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterable
 from datetime import datetime
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
+    TypeVar,
 )
 from urllib.parse import urljoin
 
@@ -39,9 +39,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
-    EmbeddingResponse,
     GuardrailStatus,
-    ImageResponse,
     ModelResponseStream,
     TextCompletionResponse,
 )
@@ -53,7 +51,8 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 
 # Type aliases
 MessageRole = Literal["user", "assistant"]
-LLMResponse = Any | ModelResponse | EmbeddingResponse | ImageResponse
+LLMResponse = object
+_LLMResponseT: Final = TypeVar("_LLMResponseT")
 _LEGACY_NOMA_DEPRECATION_WARNED = False
 
 if TYPE_CHECKING:
@@ -709,10 +708,10 @@ class NomaGuardrail(CustomGuardrail):
     async def _check_llm_response(
         self,
         request_data: dict,
-        response: LLMResponse,
+        response: _LLMResponseT,
         user_auth: UserAPIKeyAuth,
         event_type: GuardrailEventHooks | None = None,
-    ) -> Any:
+    ) -> _LLMResponseT:
         """Check LLM response for policy violations"""
         content: Final = await self._process_llm_response_check(request_data, response, user_auth, event_type)
         if not content:
@@ -798,7 +797,7 @@ class NomaGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[ModelResponseStream],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks with Noma guardrail."""

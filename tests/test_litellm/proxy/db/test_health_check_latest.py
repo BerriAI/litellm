@@ -8,6 +8,7 @@ from litellm.proxy.db.health_check_latest import (
     LATEST_HEALTH_CHECKS_SQL,
     fetch_latest_health_checks,
     fetch_latest_health_checks_for_models,
+    query_latest_health_checks,
 )
 
 
@@ -81,6 +82,15 @@ async def test_fetch_all_degrades_to_no_rows_when_the_query_fails():
     prisma = _prisma([])
     prisma.db.query_raw.side_effect = RuntimeError("db down")
     assert await fetch_latest_health_checks(prisma) == ()
+
+
+@pytest.mark.asyncio
+async def test_query_all_raises_when_the_query_fails_instead_of_reading_as_an_empty_table():
+    """The background save decides what to write from this read; a failure has to be told apart from no rows."""
+    prisma = _prisma([])
+    prisma.db.query_raw.side_effect = RuntimeError("db down")
+    with pytest.raises(RuntimeError, match="db down"):
+        await query_latest_health_checks(prisma)
 
 
 @pytest.mark.asyncio

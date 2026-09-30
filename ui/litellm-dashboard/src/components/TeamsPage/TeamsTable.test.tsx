@@ -138,6 +138,14 @@ it("shows a loading state on initial load and hides the data", () => {
   expect(screen.queryByText("Acme Team")).not.toBeInTheDocument();
 });
 
+it("replaces the previous rows with the loading state while a new search is pending", () => {
+  mockUseTeamsTable.mockReturnValue(teamsResult([mockTeam], {}, { isPlaceholderData: true, isFetching: true }));
+  renderTable();
+
+  expect(screen.getByText("Loading teams...")).toBeInTheDocument();
+  expect(screen.queryByText("Acme Team")).not.toBeInTheDocument();
+});
+
 describe("sort contract – only backend-sortable columns are sortable", () => {
   it("requests the default created_at descending sort on first render", () => {
     renderTable();
@@ -151,6 +159,12 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
     await waitFor(() => {
       expect(mockUseTeamsTable).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "team_alias" }));
     });
+  });
+
+  it("right-aligns Spend / Budget but not Team", () => {
+    renderTable();
+    expect(screen.getByRole("columnheader", { name: "Spend / Budget" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Team" })).not.toHaveClass("text-right");
   });
 
   it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {

@@ -5,20 +5,17 @@ Tests for MCPDebug — MCP OAuth2 debug response headers.
 import asyncio
 from typing import Final
 
+import httpx
 import pytest
 from starlette.types import Message
 
-from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
-
-import httpx
-
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_DEBUG_REQUEST_HEADER,
+    MCPAuthDiagnostics,
     MCPDebug,
     describe_upstream_http_failure,
-
-    MCPAuthDiagnostics,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
 
 
 class TestIsDebugEnabled:
@@ -265,6 +262,7 @@ class TestDescribeUpstreamHttpFailure:
         assert describe_upstream_http_failure(ConnectionError("refused")) is None
 
 
+
 @pytest.mark.parametrize("body", [
     b'{"password":"first second","token":"demo-secret"}',
     b'{"nested":[{"access_token":"first,second"}]}',
@@ -464,13 +462,12 @@ def test_diagnostics_keep_requests_separate_and_do_not_collapse_multiple_servers
 
 
 @pytest.mark.asyncio
-async def test_concurrent_mcp_messages_record_on_their_own_http_scope() -> None:
+async def test_concurrent_mcp_messages_record_on_their_own_http_scope(_mcp_request_ctx) -> None:
     from unittest.mock import MagicMock
 
-    from mcp.server.lowlevel.server import request_ctx
-    from mcp.shared.context import RequestContext
     from starlette.requests import Request
 
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
     from litellm.proxy._experimental.mcp_server.mcp_debug import (
         MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
         record_auth_resolution,
@@ -481,16 +478,16 @@ async def test_concurrent_mcp_messages_record_on_their_own_http_scope() -> None:
     second: Final = MCPAuthDiagnostics()
 
     async def record(diagnostics: MCPAuthDiagnostics, source: AuthResolution) -> None:
-        context: Final = RequestContext(
-            request_id=1, meta=None, session=session, lifespan_context=None,
+        context: Final = _mcp_request_ctx(
+            session=session,
             request=Request({"type": "http", MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: diagnostics}),
         )
-        token: Final = request_ctx.set(context)
+        token: Final = active_mcp_request_ctx_var.set(context)
         try:
             await asyncio.sleep(0)
             record_auth_resolution("same-server", source)
         finally:
-            request_ctx.reset(token)
+            active_mcp_request_ctx_var.reset(token)
 
     await asyncio.gather(record(first, AuthResolution.stored_user_token), record(second, AuthResolution.per_request_header))
     assert first.resolution() == "stored-user-token"

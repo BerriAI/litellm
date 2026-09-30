@@ -6,7 +6,7 @@ usage/spend data by querying the aggregated daily activity endpoints.
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import date
-from typing import Any, Final, Literal, NamedTuple, Protocol, cast, overload
+from typing import Final, Literal, NamedTuple, Protocol, cast, overload
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -16,6 +16,7 @@ from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -489,19 +490,19 @@ async def _execute_tool_call(
 
 
 async def _process_tool_call(
-    tc: Any,
+    tc: ChatCompletionMessageToolCall,
     chat_messages: list[Mapping[str, object]],
     user_id: str | None,
     is_admin: bool,
 ) -> AsyncIterator[str]:
     """Execute a single tool call, yielding SSE events for status."""
-    fn_name: Final[str] = tc.function.name
+    fn_name: Final = tc.function.name
     fn_args: Final[Mapping[str, str]] = json.loads(tc.function.arguments)
 
     allowed_names: Final = {t["function"]["name"] for t in get_tools_for_role(is_admin)}
-    handler: Final = TOOL_HANDLERS.get(fn_name)
+    handler: Final = TOOL_HANDLERS.get(fn_name) if fn_name is not None else None
 
-    if fn_name not in allowed_names or not handler:
+    if fn_name is None or fn_name not in allowed_names or not handler:
         chat_messages.append(
             {
                 "role": "tool",

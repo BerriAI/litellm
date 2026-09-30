@@ -22,7 +22,7 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeGuard
+from typing import TYPE_CHECKING, Final, Literal, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
@@ -63,6 +63,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
+    )
+    from litellm.llms.base_llm.anthropic_messages.transformation import (
+        BaseAnthropicMessagesConfig,
     )
     from litellm.types.proxy.guardrails.guardrail_hooks.base import (
         GuardrailConfigModel,
@@ -1049,7 +1052,7 @@ class CompresrGuardrail(CustomGuardrail):
 
     async def async_should_run_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         tools: list[dict] | None,
@@ -1069,8 +1072,8 @@ class CompresrGuardrail(CustomGuardrail):
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
+        response: object,
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,
         logging_obj: LiteLLMLoggingObj | None,
         stream: bool,

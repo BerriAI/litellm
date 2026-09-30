@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Sequence
 from typing import Any, Final
 
 from fastapi import Request
@@ -19,7 +20,7 @@ class NetworkContext(BaseModel):
 
 class TrustedProxyConfig(BaseModel):
     use_forwarded_for: bool = False
-    trusted_proxy_cidrs: list[str] = Field(default_factory=list)
+    trusted_proxy_cidrs: Sequence[str] = Field(default_factory=tuple)
 
 
 def normalize_cidr_ranges(configured_ranges: Any, *, setting_name: str = "trusted_proxy_cidrs") -> list[str]:
@@ -49,6 +50,12 @@ def parse_trusted_proxy_ranges(
     return networks
 
 
+def _unmapped(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    return addr
+
+
 def ip_in_networks(client_ip: str | None, networks: list[TrustedProxyNetwork]) -> bool:
     if not client_ip or not networks:
         return False
@@ -56,7 +63,8 @@ def ip_in_networks(client_ip: str | None, networks: list[TrustedProxyNetwork]) -
         addr: Final = ipaddress.ip_address(client_ip.strip())
     except ValueError:
         return False
-    return any(addr in network for network in networks)
+    candidates: Final = (addr, _unmapped(addr))
+    return any(candidate in network for candidate in candidates for network in networks)
 
 
 def _is_valid_ip(value: str) -> bool:

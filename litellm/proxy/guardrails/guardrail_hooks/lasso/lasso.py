@@ -121,7 +121,7 @@ class LassoGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def _get_field(obj: Any, field: str, default: object = None) -> Any:
+    def _get_field(obj: object, field: str, default: object = None) -> object:
         """Get a field from either a dict or a Pydantic object."""
         if isinstance(obj, dict):
             return obj.get(field, default)
@@ -130,7 +130,7 @@ class LassoGuardrail(CustomGuardrail):
     @staticmethod
     def _extract_tool_call_fields(
         call: object,
-    ) -> tuple[str | None, str | None, dict[str, object] | None]:
+    ) -> tuple[object, object, dict[str, object] | None]:
         """Extract (call_id, name, parsed_input) from a tool call.
 
         Handles both dict-style and Pydantic object-style tool_calls.
@@ -146,7 +146,7 @@ class LassoGuardrail(CustomGuardrail):
         input_data: dict[str, object] | None = None
         if args_str:
             try:
-                parsed = json.loads(args_str)
+                parsed = json.loads(args_str) if isinstance(args_str, (str, bytes, bytearray)) else None
             except (json.JSONDecodeError, TypeError):
                 parsed = None
             if isinstance(parsed, dict):
@@ -488,7 +488,7 @@ class LassoGuardrail(CustomGuardrail):
         while preserving the original structure.
         """
         # Index masked content by type so we can look up by id without caring about order.
-        masked_tool_use: Final[dict[str, dict[str, object]]] = {}
+        masked_tool_use: Final[dict[object, dict[str, object]]] = {}
         masked_tool_result: Final[dict[str, str]] = {}
         masked_text: Final[list[str]] = []
 
@@ -565,7 +565,7 @@ class LassoGuardrail(CustomGuardrail):
     def _update_tool_calls_from_masked(
         self,
         tool_calls: list[object],
-        masked_tool_use: dict[str, dict[str, object]],
+        masked_tool_use: Mapping[object, Mapping[str, object]],
     ) -> list[object]:
         """Replace tool_call arguments with masked values returned by Lasso."""
         updated: Final = []
@@ -922,7 +922,7 @@ class LassoGuardrail(CustomGuardrail):
     ) -> None:
         """Apply masking to the actual model response when mask=True and masked content is available."""
         # Index masked tool_use blocks by id for O(1) lookup.
-        masked_tool_use: Final[dict[str, dict[str, object]]] = {}
+        masked_tool_use: Final[dict[object, dict[str, object]]] = {}
         masked_text: Final[list[str]] = []
         for masked_msg in masked_messages:
             content = masked_msg.get("content")

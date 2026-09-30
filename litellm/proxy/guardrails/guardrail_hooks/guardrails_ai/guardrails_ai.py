@@ -7,7 +7,7 @@
 
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 from fastapi import HTTPException
 
@@ -181,7 +181,7 @@ class GuardrailsAI(CustomGuardrail):
     ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         return await self.process_input(data=data, call_type=call_type)
 
-    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         if call_type == "acompletion" or call_type == "completion":
             kwargs = await self.process_input(data=kwargs, call_type=call_type)
 

@@ -23,6 +23,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
         fail_on_error=litellm_params.fail_on_error,
+        streaming_buffer_until_moderated=streaming_params.streaming_buffer_until_moderated,
+        streaming_buffer_release_on_scan=streaming_params.streaming_buffer_release_on_scan,
         streaming_end_of_stream_only=streaming_params.streaming_end_of_stream_only,
         streaming_sampling_rate=streaming_params.streaming_sampling_rate,
     )

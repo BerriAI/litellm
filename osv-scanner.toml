@@ -5,5 +5,15 @@ reason = "diskcache has no fixed release published; remove this entry once one e
 
 [[IgnoredVulns]]
 id = "GHSA-h7x2-h6g9-p789"
-ignoreUntil = 2026-09-14
-reason = "mlflow has no fixed release published; remove this entry once one exists"
+ignoreUntil = 2026-10-14
+reason = "mlflow has no fixed release published (3.16.0, 2026-09-04, and master still store gateway secret api_base unvalidated); remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-hj66-6f7g-4r5v"
+ignoreUntil = 2026-10-02
+reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-day uv exclude-newer cooldown; bump oauthlib and remove this entry once it clears"
+
+[[IgnoredVulns]]
+id = "GHSA-xpv3-w29h-x7cv"
+ignoreUntil = 2026-10-02
+reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-day uv exclude-newer cooldown; bump oauthlib and remove this entry once it clears"

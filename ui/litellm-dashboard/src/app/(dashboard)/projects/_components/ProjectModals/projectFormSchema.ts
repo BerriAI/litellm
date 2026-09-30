@@ -22,7 +22,7 @@ export const projectFormSchema = z
       .pipe(z.string({ error: "Please select a team" }).min(1, "Please select a team")),
     description: z.string().optional(),
     models: z.array(z.string()),
-    max_budget: z.number().optional(),
+    max_budget: z.number().nullish(),
     isBlocked: z.boolean(),
     guardrails: z.array(z.string()).optional(),
     modelLimits: z.array(modelLimitSchema).optional(),

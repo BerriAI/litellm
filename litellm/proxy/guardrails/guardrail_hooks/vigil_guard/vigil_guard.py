@@ -3,7 +3,7 @@ from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, cast
 
 import httpx
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -18,7 +18,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -53,6 +54,7 @@ _METADATA_ALLOWLIST: Final = (
 
 _FallbackMode: TypeAlias = Literal["fail_closed", "fail_open"]
 _MetadataValue: TypeAlias = str | int | float | Sequence[str | int | float]
+_ToolCalls: TypeAlias = list[ChatCompletionToolCallChunk] | list[ChatCompletionMessageToolCall]
 
 
 class _AnalyzePayload(TypedDict):
@@ -68,6 +70,12 @@ class _AnalysisView(TypedDict):
     """Typed read of the analyze endpoint's decoded JSON body."""
 
     analysis: ReadOnly[Mapping[str, object]]
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+    supported_event_hooks: ReadOnly[list[GuardrailEventHooks]]
 
 
 class _AsyncPostHandler(Protocol):
@@ -93,7 +101,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         async_handler: _AsyncPostHandler | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         resolved_base: Final = api_base or get_secret_str("VIGIL_GUARD_URL")
         if not resolved_base:
@@ -122,9 +130,12 @@ class VigilGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        forwarded: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
 
-        super().__init__(**kwargs)
+        super().__init__(**forwarded)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:
@@ -264,7 +275,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         source: str,
         final_texts: list[str],
-        final_tool_calls: Any,
+        final_tool_calls: _ToolCalls | None,
     ) -> GenericGuardrailAPIInputs:
         if self.unreachable_fallback == "fail_open":
             verbose_proxy_logger.error(

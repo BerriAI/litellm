@@ -1,7 +1,7 @@
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Final, cast
-import json
 from unittest.mock import patch
 
 import httpx
@@ -12,9 +12,9 @@ from pydantic import ValidationError
 import litellm
 from litellm.exceptions import Timeout
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr.crowdstrike_aidr import (
     CrowdStrikeAIDRGuardrailMissingSecrets,
@@ -1622,8 +1622,21 @@ def test_initialize_guardrail_rejects_unsupported_mode_instead_of_running_other_
 def test_initialize_guardrail_defaults_streaming_params() -> None:
     handler = _initialize_from_config(mode="post_call")
 
+    assert handler.streaming_buffer_until_moderated is False
+    assert handler.streaming_buffer_release_on_scan is False
     assert handler.streaming_end_of_stream_only is False
     assert handler.streaming_sampling_rate == 5
+
+
+def test_initialize_guardrail_forwards_buffer_streaming_params() -> None:
+    handler = _initialize_from_config(
+        mode="post_call",
+        streaming_buffer_until_moderated=True,
+        streaming_buffer_release_on_scan=True,
+    )
+
+    assert handler.streaming_buffer_until_moderated is True
+    assert handler.streaming_buffer_release_on_scan is True
 
 
 @pytest.mark.parametrize(
@@ -1792,36 +1805,22 @@ class _MessageShapedGuardrail(CustomGuardrail):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("case", "instructions", "responses_input"),
-    [
-        (
-            "instructions add a system message",
-            "be terse",
-            [{"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]}],
-        ),
-        (
-            "tool items add messages that carry no text",
-            None,
-            [
-                {"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]},
-                {"type": "function_call", "call_id": "c1", "name": "get_x", "arguments": "{}"},
-                {"type": "function_call_output", "call_id": "c1", "output": "42"},
-            ],
-        ),
-    ],
+    ("case", "instructions"),
+    [("tool items add messages that carry no text", None), ("instructions do not rescue the tool desync", "be terse")],
 )
-async def test_unalignable_rewrite_is_rejected_never_sent_unredacted(
-    case: str,
-    instructions: str | None,
-    responses_input: list[dict[str, object]],
-) -> None:
+async def test_unalignable_rewrite_is_rejected_never_sent_unredacted(case: str, instructions: str | None) -> None:
     """An unalignable rewrite must fail the request, not forward the raw prompt.
 
     Skipping the write-back would hand the model the unredacted text, so a
-    guardrail could be bypassed by adding ``instructions`` or a tool call.
+    guardrail could be bypassed by adding a tool call.
     """
-    from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
+    from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 
+    responses_input: list[dict[str, object]] = [
+        {"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]},
+        {"type": "function_call", "call_id": "c1", "name": "get_x", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "42"},
+    ]
     data: dict[str, object] = {"model": "gpt-4o", "input": responses_input}
     if instructions is not None:
         data["instructions"] = instructions
@@ -1833,21 +1832,27 @@ async def test_unalignable_rewrite_is_rejected_never_sent_unredacted(
         )
 
     assert "078-05-1120" in str(responses_input), case
+    assert data.get("instructions") == instructions, case
 
 
 @pytest.mark.asyncio
-async def test_aligned_rewrite_is_written_back() -> None:
-    """Matching counts must still redact the input in place."""
+@pytest.mark.parametrize("instructions", [None, "be terse"])
+async def test_aligned_rewrite_is_written_back(instructions: str | None) -> None:
+    """Matching counts must redact the input, and the instructions when present, in place."""
     responses_input: list[dict[str, object]] = [
         {"role": "user", "content": [{"type": "input_text", "text": "my ssn is 078-05-1120"}]}
     ]
+    data: dict[str, object] = {"model": "gpt-4o", "input": responses_input}
+    if instructions is not None:
+        data["instructions"] = instructions
 
     await OpenAIResponsesHandler().process_input_messages(
-        data={"model": "gpt-4o", "input": responses_input},
+        data=data,
         guardrail_to_apply=_MessageShapedGuardrail("my ssn is <US_SSN>"),
     )
 
     assert cast(list, responses_input[0]["content"])[0]["text"] == "my ssn is <US_SSN>"
+    assert data.get("instructions") == (None if instructions is None else "my ssn is <US_SSN>")
 
 
 @pytest.mark.asyncio

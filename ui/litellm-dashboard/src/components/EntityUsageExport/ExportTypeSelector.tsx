@@ -9,7 +9,7 @@ interface ExportTypeSelectorProps {
 }
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
-  const scopes: { value: ExportScope; title: string; description: string }[] = [
+  const allScopes: { value: ExportScope; title: string; description: string }[] = [
     {
       value: "daily",
       title: `Day-by-day breakdown by ${entityType}`,
@@ -25,7 +25,13 @@ const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange
       title: `Day-by-day by ${entityType} and model`,
       description: "Daily metrics split by model",
     },
+    {
+      value: "daily_with_users",
+      title: `Day-by-day breakdown by ${entityType} and user`,
+      description: `Daily metrics for each ${entityType}, split by key owner`,
+    },
   ];
+  const scopes = allScopes.filter((scope) => scope.value !== "daily_with_users" || entityType !== "user");
 
   return (
     <div>
