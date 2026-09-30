@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_traces::{Connection, encode_rows, execute_read, schema_statements};
+use litellm_traces::{Connection, encode_rows, ensure_schema, execute_read, schema_statements};
 use rstest::rstest;
 use testcontainers_modules::{
     clickhouse::ClickHouse,
@@ -25,16 +25,9 @@ async fn schema_supports_span_rollups_and_spend_joins() -> Result<(), Box<dyn st
         container.get_host_port_ipv4(8123).await?
     );
     let client = Client::no_redirect_for_test();
-    for _ in 0..2 {
-        for sql in schema_statements("trace_test", 7, 14)? {
-            client
-                .post(&url)
-                .body(sql)
-                .send()
-                .await?
-                .error_for_status()?;
-        }
-    }
+    let writer = Connection::writer(&url, "default", "")?;
+    ensure_schema(&client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&client, &writer, "trace_test", 7, 14).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let span = serde_json::from_value(serde_json::json!({
         "Timestamp": timestamp, "TraceId": "trace-1", "SpanId": "span-1", "ParentSpanId": "",

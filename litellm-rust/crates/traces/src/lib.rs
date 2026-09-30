@@ -5,7 +5,7 @@ mod sql;
 
 pub use error::Error;
 pub use insert::encode_rows;
-pub use schema::schema_statements;
+pub use schema::{ensure_schema, schema_statements};
 pub use sql::{Parameter, execute_read};
 use url::Url;
 
@@ -50,6 +50,20 @@ impl Connection {
             .clear()
             .extend_pairs(pairs)
             .append_pair("database", database);
+        Ok(connection)
+    }
+
+    pub fn writer(url: &str, user: &str, password: &str) -> Result<Self, Error> {
+        let mut connection = Self::parse(url)?;
+        connection
+            .url
+            .set_username(user)
+            .map_err(|_| Error::InvalidUrl)?;
+        connection
+            .url
+            .set_password(Some(password))
+            .map_err(|_| Error::InvalidUrl)?;
+        connection.url.set_query(None);
         Ok(connection)
     }
 

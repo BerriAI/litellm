@@ -1,3 +1,6 @@
+use litellm_http::Client;
+
+use crate::Connection;
 use crate::Error;
 
 const MIGRATIONS: [&str; 4] = [
@@ -34,4 +37,25 @@ pub fn schema_statements(
             }))
             .collect(),
     )
+}
+
+pub async fn ensure_schema(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    trace_retention_days: u32,
+    spend_log_retention_days: u32,
+) -> Result<(), Error> {
+    for statement in schema_statements(database, trace_retention_days, spend_log_retention_days)? {
+        let response = client
+            .post(connection.url().clone())
+            .body(statement)
+            .send()
+            .await
+            .map_err(|_| Error::Transport)?;
+        if !response.status().is_success() {
+            return Err(Error::SchemaFailed(response.status().as_u16()));
+        }
+    }
+    Ok(())
 }
