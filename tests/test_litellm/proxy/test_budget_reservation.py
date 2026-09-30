@@ -1880,8 +1880,8 @@ async def test_should_raise_503_when_counter_increment_fails_and_fail_closed(
 async def test_fail_closed_releases_earlier_counters_before_503(
     spend_counter_state,
 ):
-    """#33923: when a later counter's reservation write fails in strict mode, the
-    counters that already reserved must be released before the 503 propagates."""
+    """#33923: when a later counter cannot be loaded in strict mode, the 503 is raised before any counter is
+    reserved."""
     counter_cache, key_cache = spend_counter_state
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
     valid_token = UserAPIKeyAuth(
@@ -1915,12 +1915,8 @@ async def test_fail_closed_releases_earlier_counters_before_503(
             )
 
     assert exc_info.value.status_code == 503
-    assert (
-        counter_cache.in_memory_cache.get_cache(
-            key="spend:key:key-budget-fail-closed-release"
-        )
-        == 0.0
-    )
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-fail-closed-release") is None
+    assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-fail-closed-release:window:1h") is None
 
 
 @pytest.mark.asyncio
@@ -1982,21 +1978,10 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
         max_budget=1.0,
     )
 
-    import litellm.proxy.proxy_server as ps
-
-    original_increment_counter = ps._increment_spend_counter_cache
-    first_increment = True
-
-    async def fail_after_increment(counter_key: str, increment: float):
-        nonlocal first_increment
-        if first_increment:
-            first_increment = False
-            await counter_cache.async_increment_cache(key=counter_key, value=increment)
-            raise RuntimeError("lost increment response")
-        return await original_increment_counter(
-            counter_key=counter_key,
-            increment=increment,
-        )
+    async def fail_after_increment(pending):
+        for item in pending:
+            await counter_cache.async_increment_cache(key=item.counter_key, value=item.increment)
+        raise RuntimeError("lost increment response")
 
     with (
         patch(
@@ -2004,7 +1989,7 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
             return_value=0.5,
         ),
         patch(
-            "litellm.proxy.proxy_server._increment_spend_counter_cache",
+            "litellm.proxy.proxy_server.run_spend_counter_pipeline",
             side_effect=fail_after_increment,
         ),
         patch(
@@ -2593,6 +2578,72 @@ async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands
     )
 
     assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert reservation["finalized"] is True
+
+
+class _BatchReadingRedisCache(_ExpiringRedisCache):
+    async def async_batch_get_cache(self, key_list: Sequence[str], **kwargs: object) -> dict[str, float | None]:
+        return {key: await self.async_get_cache(key) for key in key_list}
+
+
+@pytest.mark.asyncio
+async def test_reserved_counter_deleted_during_spend_write_is_reseeded_instead_of_going_negative(
+    spend_counter_state,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.hooks.proxy_track_cost_callback import _update_database_and_spend_counters
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:key:key-deleted-mid-write"
+    redis_cache = _BatchReadingRedisCache()
+    counter_cache.redis_cache = redis_cache
+    await redis_cache.async_set_cache(counter_key, 0.6)
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+
+    async def _delete_counter_while_persisting(**kwargs: object) -> bool:
+        await redis_cache.async_delete_cache(counter_key)
+        counter_cache.in_memory_cache.delete_cache(key=counter_key)
+        return True
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=_delete_counter_while_persisting)
+    reservation = {
+        "reserved_cost": 0.6,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "entity_type": "Key",
+                "entity_id": "key-deleted-mid-write",
+                "reserved_cost": 0.6,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with (
+        patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+            ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
+        )
+    ):
+        charged = await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=ps.increment_spend_counters,
+            user_api_key="key-deleted-mid-write",
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.05,
+            budget_reservation=reservation,
+        )
+
+    assert charged is True
+    assert redis_cache.store[counter_key] == pytest.approx(0.35), redis_cache.store
     assert reservation["finalized"] is True
 
 

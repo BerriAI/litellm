@@ -1,0 +1,8 @@
+**
+!litellm/
+!litellm/proxy/
+!litellm/proxy/engine/
+!litellm/proxy/engine/__init__.py
+!litellm/proxy/engine/models.py
+!litellm/proxy/engine/analysis.py
+!litellm/proxy/engine/worker.py

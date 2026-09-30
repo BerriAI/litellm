@@ -1,18 +1,27 @@
 import asyncio
+import re
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import litellm_proxy_extras
+import psycopg
 import pytest
 from prisma.errors import PrismaError
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from pytest_postgresql import factories
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     SPEND_LOG_KEY_METADATA_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
+    SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE,
 )
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_details,
@@ -20,6 +29,7 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
     recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
+    recover_key_owner_from_daily_spend,
 )
 from litellm.proxy.utils import hash_token
 
@@ -586,10 +596,312 @@ async def test_recover_key_metadata_from_spend_logs_bounds_the_scan_with_a_state
 
     await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=InMemoryCache())
 
-    assert calls == [f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}", "scan"]
+    assert calls == [
+        f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}",
+        "SET LOCAL enable_bitmapscan = off",
+        "scan",
+    ]
     assert mock_prisma.db.tx.call_args.kwargs["timeout"] == timedelta(
         milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
     )
+
+
+_spend_logs_postgresql_proc: Final = factories.postgresql_proc()
+_spend_logs_postgresql: Final = factories.postgresql("_spend_logs_postgresql_proc")
+
+_SPEND_LOGS_DDL: Final = """
+    CREATE TABLE "LiteLLM_SpendLogs" (
+        request_id TEXT PRIMARY KEY,
+        api_key TEXT NOT NULL DEFAULT '',
+        "startTime" TIMESTAMP(3) NOT NULL,
+        "user" TEXT DEFAULT '',
+        team_id TEXT,
+        metadata JSONB DEFAULT '{}'
+    )
+"""
+
+_API_KEY_START_TIME_INDEX_MIGRATION: Final = (
+    Path(litellm_proxy_extras.__file__).parent
+    / "migrations"
+    / "20260823000000_add_spend_logs_api_key_starttime_index"
+    / "migration.sql"
+)
+
+_SPEND_LOG_ROWS_READ_IN_THIS_TRANSACTION_SQL: Final = """
+    SELECT COALESCE(seq_tup_read, 0) + COALESCE(idx_tup_fetch, 0) AS rows_read
+    FROM pg_stat_xact_user_tables
+    WHERE relname = 'LiteLLM_SpendLogs'
+"""
+
+
+def _create_spend_logs_table(conn: psycopg.Connection) -> None:
+    conn.execute(_SPEND_LOGS_DDL)  # pyright: ignore[reportArgumentType]  # DDL literal
+    conn.execute(_API_KEY_START_TIME_INDEX_MIGRATION.read_text())  # pyright: ignore[reportArgumentType]  # migration file
+
+
+def _psycopg_prisma(conn: psycopg.Connection) -> MagicMock:
+    async def query_raw(sql: str, *params: object) -> list[dict[str, object]]:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                re.sub(r"\$(\d+)", r"%(p\1)s", sql),  # pyright: ignore[reportArgumentType]  # proxy SQL is not a literal
+                {f"p{i}": v for i, v in enumerate(params, start=1)},
+            )
+            return cur.fetchall()
+
+    async def execute_raw(sql: str) -> int:
+        conn.execute(sql)  # pyright: ignore[reportArgumentType]  # proxy SQL is not a literal
+        return 0
+
+    mock_prisma: Final = MagicMock()
+    transaction: Final = MagicMock()
+    transaction.query_raw = AsyncMock(side_effect=query_raw)
+    transaction.execute_raw = AsyncMock(side_effect=execute_raw)
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return mock_prisma
+
+
+def _commit_and_vacuum(conn: psycopg.Connection) -> None:
+    conn.commit()
+    conn.set_autocommit(True)
+    conn.execute('VACUUM (ANALYZE) "LiteLLM_SpendLogs"')
+    conn.set_autocommit(False)
+
+
+def _insert_nameless_spend_logs(conn: psycopg.Connection, digest: str, rows: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO "LiteLLM_SpendLogs" (request_id, api_key, "startTime")
+        SELECT %(digest)s || '-' || g, %(digest)s, %(start)s + g * interval '1 minute'
+        FROM generate_series(1, %(rows)s) g
+        """,
+        {"digest": digest, "start": datetime(2026, 9, 7), "rows": rows},
+    )
+
+
+def _named_spend_log(
+    digest: str, logged_at: datetime, alias: str | None, user: str | None, team: str | None = None
+) -> tuple[str, str, datetime, str, str | None, Jsonb]:
+    return (
+        f"{digest}-{logged_at.isoformat()}",
+        digest,
+        logged_at,
+        user or "",
+        team,
+        Jsonb({"user_api_key_alias": alias} if alias else {}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_names_a_key_by_its_oldest_and_newest_named_rows_in_the_window(
+    _spend_logs_postgresql: psycopg.Connection,
+):
+    conn: Final = _spend_logs_postgresql
+    _create_spend_logs_table(conn)
+    unnamed_edges, owner_logged_late, reowned, outside_window, never_named = (
+        hash_token(f"cli-session-{name}") for name in ("edges", "late", "reowned", "window", "never")
+    )
+    with conn.cursor() as cur:
+        cur.executemany(
+            'INSERT INTO "LiteLLM_SpendLogs" (request_id, api_key, "startTime", "user", team_id, metadata)'
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                _named_spend_log(unnamed_edges, datetime(2026, 9, 7, 1), None, None),
+                _named_spend_log(unnamed_edges, datetime(2026, 9, 8), "cli-a", "alice", "team-a"),
+                _named_spend_log(unnamed_edges, datetime(2026, 9, 9), "cli-a", "alice", "team-a"),
+                _named_spend_log(unnamed_edges, datetime(2026, 9, 9, 23), None, None),
+                _named_spend_log(owner_logged_late, datetime(2026, 9, 7, 1), "cli-b", None),
+                _named_spend_log(owner_logged_late, datetime(2026, 9, 9), "cli-b", "bob"),
+                _named_spend_log(reowned, datetime(2026, 9, 7, 1), "cli-c", "carol"),
+                _named_spend_log(reowned, datetime(2026, 9, 9), "cli-c", "dave"),
+                _named_spend_log(outside_window, datetime(2026, 9, 6), "stale-alias", "erin"),
+                _named_spend_log(outside_window, datetime(2026, 9, 8), "cli-d", "erin"),
+                _named_spend_log(outside_window, datetime(2026, 9, 10), "later-alias", "erin"),
+                _named_spend_log(never_named, datetime(2026, 9, 8), None, None),
+            ),
+        )
+    conn.commit()
+
+    result = await recover_key_metadata_from_spend_logs(
+        _psycopg_prisma(conn),
+        {unnamed_edges, owner_logged_late, reowned, outside_window, never_named},
+        (datetime(2026, 9, 7), datetime(2026, 9, 10)),
+        cache=InMemoryCache(),
+    )
+
+    assert dict(result) == {
+        unnamed_edges: {"key_alias": "cli-a", "team_id": "team-a", "user_id": "alice"},
+        owner_logged_late: {"key_alias": "cli-b", "team_id": None, "user_id": "bob"},
+        reowned: {"key_alias": "cli-c", "team_id": None, "user_id": None},
+        outside_window: {"key_alias": "cli-d", "team_id": None, "user_id": "erin"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_reads_two_rows_per_key_however_many_the_key_logged(
+    _spend_logs_postgresql: psycopg.Connection,
+):
+    conn: Final = _spend_logs_postgresql
+    _create_spend_logs_table(conn)
+    owners: Final[Mapping[str, str]] = {hash_token(f"cli-session-busy-{i}"): f"user-{i}" for i in range(5)}
+    for digest, owner in owners.items():
+        conn.execute(
+            """
+            INSERT INTO "LiteLLM_SpendLogs" (request_id, api_key, "startTime", "user", metadata)
+            SELECT %(digest)s || '-' || g, %(digest)s, %(start)s + g * interval '1 minute', %(owner)s,
+                jsonb_build_object('user_api_key_alias', 'cli-session-' || %(owner)s)
+            FROM generate_series(1, 2000) g
+            """,
+            {"digest": digest, "owner": owner, "start": datetime(2026, 9, 7)},
+        )
+    conn.execute('ANALYZE "LiteLLM_SpendLogs"')
+    conn.commit()
+
+    result = await recover_key_metadata_from_spend_logs(
+        _psycopg_prisma(conn), frozenset(owners), (datetime(2026, 9, 7), datetime(2026, 9, 10)), cache=InMemoryCache()
+    )
+
+    assert {digest: meta.get("user_id") for digest, meta in result.items()} == owners
+    rows_read: Final = conn.execute(_SPEND_LOG_ROWS_READ_IN_THIS_TRANSACTION_SQL).fetchone()  # pyright: ignore[reportArgumentType]  # SQL literal
+    assert rows_read is not None and rows_read[0] <= 2 * len(owners)
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_walks_a_bounded_number_of_nameless_rows_per_key(
+    _spend_logs_postgresql: psycopg.Connection,
+):
+    conn: Final = _spend_logs_postgresql
+    _create_spend_logs_table(conn)
+    named_late: Final[Mapping[str, str]] = {hash_token(f"cli-session-late-{i}"): f"user-{i}" for i in range(3)}
+    never_named: Final = frozenset(hash_token(f"cli-session-never-{i}") for i in range(3))
+    for digest in (*named_late, *never_named):
+        _insert_nameless_spend_logs(conn, digest, 3 * SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE)
+    for digest, owner in named_late.items():
+        conn.execute(
+            """
+            INSERT INTO "LiteLLM_SpendLogs" (request_id, api_key, "startTime", "user", metadata)
+            VALUES (%(digest)s || '-newest', %(digest)s, %(logged_at)s, %(owner)s,
+                jsonb_build_object('user_api_key_alias', 'cli-session-' || %(owner)s))
+            """,
+            {"digest": digest, "owner": owner, "logged_at": datetime(2026, 9, 9)},
+        )
+    conn.execute('ANALYZE "LiteLLM_SpendLogs"')
+    conn.commit()
+
+    result = await recover_key_metadata_from_spend_logs(
+        _psycopg_prisma(conn),
+        frozenset(named_late) | never_named,
+        (datetime(2026, 9, 7), datetime(2026, 9, 10)),
+        cache=InMemoryCache(),
+    )
+
+    assert {digest: meta.get("user_id") for digest, meta in result.items()} == named_late
+    rows_read: Final = conn.execute(_SPEND_LOG_ROWS_READ_IN_THIS_TRANSACTION_SQL).fetchone()  # pyright: ignore[reportArgumentType]  # SQL literal
+    assert rows_read is not None
+    assert rows_read[0] <= 3 * SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE * (len(named_late) + len(never_named))
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_reads_a_short_nameless_key_once(
+    _spend_logs_postgresql: psycopg.Connection,
+):
+    conn: Final = _spend_logs_postgresql
+    _create_spend_logs_table(conn)
+    rows_per_key: Final = SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE // 2
+    never_named: Final = frozenset(hash_token(f"cli-session-short-{i}") for i in range(20))
+    for digest in never_named:
+        _insert_nameless_spend_logs(conn, digest, rows_per_key)
+    _commit_and_vacuum(conn)
+
+    result = await recover_key_metadata_from_spend_logs(
+        _psycopg_prisma(conn), never_named, (datetime(2026, 9, 7), datetime(2026, 9, 10)), cache=InMemoryCache()
+    )
+
+    assert dict(result) == {}
+    rows_read: Final = conn.execute(_SPEND_LOG_ROWS_READ_IN_THIS_TRANSACTION_SQL).fetchone()  # pyright: ignore[reportArgumentType]  # SQL literal
+    assert rows_read is not None
+    assert rows_read[0] <= rows_per_key * len(never_named)
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_bounds_a_busy_nameless_key_among_short_keys_before_any_vacuum(
+    _spend_logs_postgresql: psycopg.Connection,
+):
+    conn: Final = _spend_logs_postgresql
+    _create_spend_logs_table(conn)
+    busy: Final = frozenset(hash_token(f"cli-session-busy-nameless-{i}") for i in range(3))
+    for short_key in range(200):
+        _insert_nameless_spend_logs(
+            conn, hash_token(f"cli-session-short-{short_key}"), SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE // 5
+        )
+    for digest in busy:
+        _insert_nameless_spend_logs(conn, digest, 30 * SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE)
+    conn.execute('ANALYZE "LiteLLM_SpendLogs"')
+    conn.commit()
+
+    result = await recover_key_metadata_from_spend_logs(
+        _psycopg_prisma(conn), busy, (datetime(2026, 9, 7), datetime(2026, 9, 10)), cache=InMemoryCache()
+    )
+
+    assert dict(result) == {}
+    rows_read: Final = conn.execute(_SPEND_LOG_ROWS_READ_IN_THIS_TRANSACTION_SQL).fetchone()  # pyright: ignore[reportArgumentType]  # SQL literal
+    assert rows_read is not None
+    assert rows_read[0] <= 3 * SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE * len(busy)
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_finds_a_name_logged_where_the_oldest_probe_stopped(
+    _spend_logs_postgresql: psycopg.Connection,
+):
+    conn: Final = _spend_logs_postgresql
+    _create_spend_logs_table(conn)
+    start: Final = datetime(2026, 9, 7)
+    past_the_stop, tied_with_the_stop = (hash_token(f"cli-session-{name}") for name in ("past", "tied"))
+    same_millisecond: Final = tuple(
+        start + timedelta(minutes=SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE, microseconds=n) for n in (100, 200, 300)
+    )
+    with conn.cursor() as cur:
+        cur.executemany(
+            'INSERT INTO "LiteLLM_SpendLogs" (request_id, api_key, "startTime", "user", team_id, metadata)'
+            " VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                *(
+                    _named_spend_log(past_the_stop, start + timedelta(minutes=minute), None, None)
+                    for minute in range(1, SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE + 20)
+                ),
+                _named_spend_log(
+                    past_the_stop,
+                    start + timedelta(minutes=SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE + 20),
+                    "cli-p",
+                    "pat",
+                ),
+                *(
+                    _named_spend_log(past_the_stop, start + timedelta(minutes=minute), None, None)
+                    for minute in range(
+                        SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE + 21, SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE + 51
+                    )
+                ),
+                *(
+                    _named_spend_log(tied_with_the_stop, start + timedelta(minutes=minute), None, None)
+                    for minute in range(1, SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE)
+                ),
+                _named_spend_log(tied_with_the_stop, same_millisecond[0], None, None),
+                _named_spend_log(tied_with_the_stop, same_millisecond[1], None, None),
+                _named_spend_log(tied_with_the_stop, same_millisecond[2], "cli-t", "tess"),
+            ),
+        )
+    conn.commit()
+
+    result = await recover_key_metadata_from_spend_logs(
+        _psycopg_prisma(conn),
+        {past_the_stop, tied_with_the_stop},
+        (start, datetime(2026, 9, 10)),
+        cache=InMemoryCache(),
+    )
+
+    assert dict(result) == {
+        past_the_stop: {"key_alias": "cli-p", "team_id": None, "user_id": "pat"},
+        tied_with_the_stop: {"key_alias": "cli-t", "team_id": None, "user_id": "tess"},
+    }
 
 
 @pytest.mark.asyncio
@@ -702,3 +1014,91 @@ async def test_attach_user_details_leaves_metadata_unchanged_when_a_later_chunk_
 
     assert mock_prisma.db.litellm_usertable.find_many.call_count == 2
     assert attached == recovered
+
+
+def _daily_spend_owner_row(api_key: str, first_owner: str, last_owner: str) -> dict[str, str]:
+    return {"api_key": api_key, "first_owner": first_owner, "last_owner": last_owner}
+
+
+def _daily_spend_transaction(mock_prisma: MagicMock, query_raw: AsyncMock) -> MagicMock:
+    transaction: Final = MagicMock()
+    transaction.execute_raw = AsyncMock(return_value=0)
+    transaction.query_raw = query_raw
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return transaction
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_keeps_a_unanimous_owner():
+    key: Final = "hashed-jwt-digest-a"
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-a")]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {key: "owner-a"}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_drops_conflicting_owners():
+    key: Final = "hashed-jwt-digest-b"
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-b")]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_skips_empty_input():
+    mock_prisma: Final = MagicMock()
+    transaction: Final = _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, frozenset())
+
+    assert dict(result) == {}
+    transaction.query_raw.assert_not_awaited()
+    mock_prisma.db.tx.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_returns_empty_on_prisma_error():
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("db down")))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {"hashed-jwt-digest-c"})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_names_no_owner_when_the_lookup_hits_the_statement_timeout():
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(
+        mock_prisma, AsyncMock(side_effect=PrismaError("canceling statement due to statement timeout"))
+    )
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {"hashed-jwt-digest-d"})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_bounds_the_lookup_with_a_statement_timeout():
+    key: Final = "hashed-jwt-digest-e"
+    mock_prisma: Final = MagicMock()
+    transaction: Final = _daily_spend_transaction(
+        mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-a")])
+    )
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {key: "owner-a"}
+    assert [name for name, _, _ in transaction.mock_calls] == ["execute_raw", "query_raw"]
+    transaction.execute_raw.assert_awaited_once_with(
+        f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
+    )
+    assert mock_prisma.db.tx.call_args.kwargs["timeout"] == timedelta(
+        milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
+    )
