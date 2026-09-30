@@ -401,6 +401,10 @@ def test_s3_v2_hour_folder_sits_below_the_team_and_key_prefix(gateway: Gateway, 
     assert _outside_layout(objects, "hour", f"{team_alias}/{key_alias}/") == ()
 
 
+def _payload_values(payloads: tuple[dict[str, JsonValue], ...], status: str, field: str) -> frozenset[str]:
+    return frozenset(str(payload[field]) for payload in payloads if payload["status"] == status)
+
+
 def test_s3_v2_hour_failure_and_rejected_requests_keep_the_hour_layout(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3hfail" + uuid.uuid4().hex[:8]
     upstream: Final = CountingUpstream()
@@ -428,7 +432,15 @@ def test_s3_v2_hour_failure_and_rejected_requests_keep_the_hour_layout(gateway: 
         ghost: Final = send(f"{marker}-ghost", model=f"ghost-{uuid.uuid4().hex}")
         unauthenticated: Final = send(f"{marker}-anon", caller="sk-not-a-real-key")
         after: Final = send(f"{marker}-after")
-        payloads: Final = collect_payloads(sink, len(successes) + len(failures) + 1)
+        rejected_call_ids: Final = frozenset(response.headers["x-litellm-call-id"] for response in responses[4:])
+        payloads: Final = eventually(
+            sink.payloads,
+            lambda stored: (
+                _payload_values(stored, "success", "id") >= frozenset((*successes, f"{marker}-after"))
+                and _payload_values(stored, "failure", "litellm_call_id") >= rejected_call_ids
+            ),
+            seconds=60,
+        )
         objects: Final = sink.objects()
     assert [response.status_code for response in responses[:4]] == [200] * 4, [r.text for r in responses]
     assert tuple(response.json()["id"] for response in responses[:4]) == successes
@@ -438,12 +450,8 @@ def test_s3_v2_hour_failure_and_rejected_requests_keep_the_hour_layout(gateway: 
     assert unauthenticated.status_code == 401 and "error" in unauthenticated.json(), unauthenticated.text
     assert after.status_code == 200 and after.json()["id"] == f"{marker}-after", after.text
     assert sorted(upstream.received()) == sorted((*successes, *failures, f"{marker}-after"))
-    succeeded: Final = frozenset(str(payload["id"]) for payload in payloads if payload["status"] == "success")
-    assert succeeded == frozenset((*successes, f"{marker}-after"))
-    failed: Final = tuple(payload for payload in payloads if payload["status"] == "failure")
-    assert frozenset(str(payload["litellm_call_id"]) for payload in failed) >= frozenset(
-        response.headers["x-litellm-call-id"] for response in responses[4:]
-    )
+    assert _payload_values(payloads, "success", "id") == frozenset((*successes, f"{marker}-after"))
+    assert _payload_values(payloads, "failure", "litellm_call_id") >= rejected_call_ids
     assert _outside_layout(objects, "hour") == ()
 
 
