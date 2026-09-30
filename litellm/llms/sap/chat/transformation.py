@@ -413,11 +413,17 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return response
 
     @staticmethod
-    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic types
+    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:
+        # SAP AI Core returns reasoning tokens as a list: message.reasoning_content = [{"content": ..., "signature": ...}]
+        # ModelResponse.reasoning_content is typed Optional[str], so map the list to
+        # thinking_blocks and collapse the text into a single joined string.
         return normalize_reasoning_content(raw)
 
     @staticmethod
-    def _normalize_choice(choice: dict[str, object]) -> dict[str, object]:  # mutable-ok: generic dict from raw JSON
+    def _normalize_choice(choice: dict[str, object]) -> dict[str, object]:
+        # Normalize a single choice dict (message or delta shape) in isolation.
+        # Exposed as a static method so tests and callers can exercise one choice
+        # without constructing a full response envelope.
         return _normalize_choice_fn(choice)
 
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
