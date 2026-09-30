@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         LiteLLM_AgentIdentityWhereUniqueInput,
         LiteLLM_AgentsTableInclude,
         LiteLLM_AgentsTableWhereUniqueInput,
+        LiteLLM_RetiredAgentWhereUniqueInput,
         LiteLLM_VerifiedSubjectCreateInput,
         LiteLLM_VerifiedSubjectUpsertInput,
         LiteLLM_VerifiedSubjectWhereUniqueInput,
@@ -183,7 +184,8 @@ class AgentIdentityStore:
         if self.retired_agents is None:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent history is unavailable")
         try:
-            return await self.retired_agents.table.find_unique(where={"original_agent_id": agent_id}) is not None
+            where: Final[LiteLLM_RetiredAgentWhereUniqueInput] = {"original_agent_id": agent_id}
+            return await self.retired_agents.table.find_unique(where=where) is not None
         except Exception:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent history is unavailable")
 
