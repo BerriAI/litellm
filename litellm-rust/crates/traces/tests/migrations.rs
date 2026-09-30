@@ -88,6 +88,87 @@ async fn schema_supports_span_rollups_and_spend_joins() -> Result<(), Box<dyn st
 }
 
 #[rstest]
+#[case::root_first(["root", "child"])]
+#[case::child_first(["child", "root"])]
+#[tokio::test]
+async fn agent_traces_keeps_root_fields_across_partial_batches(
+    #[case] insert_order: [&str; 2],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let container = ClickHouse::default()
+        .with_tag(CLICKHOUSE_TAG)
+        .with_env_var("CLICKHOUSE_SKIP_USER_SETUP", "1")
+        .start()
+        .await?;
+    let url = format!(
+        "http://{}:{}",
+        container.get_host().await?,
+        container.get_host_port_ipv4(8123).await?
+    );
+    let client = Client::no_redirect_for_test();
+    let writer = Connection::writer(&url)?;
+    ensure_schema(&client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let spans = serde_json::json!({
+        "root": {
+            "Timestamp": timestamp, "TraceId": "trace-1", "SpanId": "span-root",
+            "ParentSpanId": "", "ServiceName": "proxy", "SpanName": "root_run",
+            "StatusCode": "STATUS_CODE_OK", "Input": "root question",
+            "ResourceAttributes": {"litellm.team_id": "team-1", "litellm.api_key_hash": "hash-1"}
+        },
+        "child": {
+            "Timestamp": timestamp + 1_000_000, "TraceId": "trace-1", "SpanId": "span-child",
+            "ParentSpanId": "span-root", "ServiceName": "proxy", "SpanName": "llm_call",
+            "StatusCode": "STATUS_CODE_ERROR", "Input": "child prompt",
+            "ResourceAttributes": {"litellm.team_id": "team-1", "litellm.api_key_hash": "hash-1"},
+            "SpanAttributes": {"gen_ai.operation.name": "chat"}
+        }
+    });
+    for which in insert_order {
+        client
+            .post(&url)
+            .query(&[
+                (
+                    "query",
+                    "INSERT INTO trace_test.otel_traces FORMAT JSONEachRow".to_owned(),
+                ),
+                ("date_time_input_format", "best_effort".into()),
+            ])
+            .body(encode_rows(vec![serde_json::from_value(
+                spans[which].clone(),
+            )?])?)
+            .send()
+            .await?
+            .error_for_status()?;
+    }
+    client
+        .post(&url)
+        .body("OPTIMIZE TABLE trace_test.agent_traces FINAL")
+        .send()
+        .await?
+        .error_for_status()?;
+    let connection = Connection::configured(&url, "trace_test", "default", "")?;
+    let body = execute_read(
+        &client,
+        &connection,
+        "SELECT RootName, RootInput, RootStatus, toUInt32(sum(SpanCount)) AS spans \
+         FROM agent_traces WHERE TraceId = 'trace-1' GROUP BY RootName, RootInput, RootStatus",
+        &BTreeMap::new(),
+    )
+    .await?;
+    let response: serde_json::Value = serde_json::from_str(&body)?;
+    assert_eq!(
+        response["data"],
+        serde_json::json!([{
+            "RootName": "root_run",
+            "RootInput": "root question",
+            "RootStatus": "STATUS_CODE_OK",
+            "spans": 2
+        }])
+    );
+    Ok(())
+}
+
+#[rstest]
 #[case::empty("", 7, 14)]
 #[case::sql("db; DROP DATABASE default", 7, 14)]
 #[case::trace_retention("traces", 0, 14)]

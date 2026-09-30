@@ -34,8 +34,8 @@ _SCOPE_OTEL: Final = (
 # The MV writes one partial row per insert, so root fields come from the partial that saw the root span.
 # agent_traces has no ApiKeyHash, so key-scoped (team-less) reads filter trace ids through otel_traces.
 LIST_TRACES_SQL: Final = f"""
-SELECT t.TraceId AS trace_id, any(t.RootName) AS name, any(t.ServiceName) AS service,
-       any(t.RootInput) AS input_preview, any(t.RootStatus) AS status,
+SELECT t.TraceId AS trace_id, ifNull(any(t.RootName), '') AS name, any(t.ServiceName) AS service,
+       ifNull(any(t.RootInput), '') AS input_preview, ifNull(any(t.RootStatus), '') AS status,
        toUnixTimestamp64Milli(any(t.StartTs)) AS start_ms,
        dateDiff('millisecond', any(t.StartTs), any(t.EndTs)) AS duration_ms,
        any(t.SpanCount) AS span_count, length(any(t.AgentNames)) AS agent_count,
@@ -45,9 +45,9 @@ SELECT t.TraceId AS trace_id, any(t.RootName) AS name, any(t.ServiceName) AS ser
        any(t.Models) AS models, any(t.ErrorCount) AS error_count
 FROM (
     SELECT TeamId, TraceId, min(StartTs) AS StartTs, max(EndTs) AS EndTs,
-           any(ServiceName) AS ServiceName, anyLastIf(a.RootName, a.RootName != '') AS RootName,
-           anyLastIf(a.RootInput, a.RootName != '') AS RootInput,
-           anyLastIf(a.RootStatus, a.RootName != '') AS RootStatus,
+           any(ServiceName) AS ServiceName, anyLast(a.RootName) AS RootName,
+           anyLast(a.RootInput) AS RootInput,
+           anyLast(a.RootStatus) AS RootStatus,
            sum(SpanCount) AS SpanCount, sum(AgentCount) AS AgentCount, sum(LlmCount) AS LlmCount,
            sum(ToolCount) AS ToolCount, sum(ErrorCount) AS ErrorCount, sum(InputTokens) AS InputTokens,
            sum(OutputTokens) AS OutputTokens, groupUniqArrayArray(Models) AS Models,
