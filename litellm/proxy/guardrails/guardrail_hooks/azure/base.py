@@ -2,8 +2,6 @@ import re
 from collections.abc import Mapping
 from typing import Any, Final, cast
 
-from pydantic import TypeAdapter
-
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_last_user_message,
@@ -24,7 +22,6 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
-_RESPONSE_INPUT_PARAM_ADAPTER: Final = TypeAdapter(ResponseInputParam)
 
 
 def resolve_content_safety_api_version(configured: str | None) -> str:
@@ -143,10 +140,6 @@ class AzureGuardrailBase:
         if not isinstance(responses_input, (str, list)):
             return None
 
-        validated_input: Final = (
-            responses_input
-            if isinstance(responses_input, str)
-            else _RESPONSE_INPUT_PARAM_ADAPTER.validate_python(responses_input)
-        )
+        validated_input: Final = cast(ResponseInputParam, responses_input)
         chat_messages: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input)
         return get_last_user_message(chat_messages)

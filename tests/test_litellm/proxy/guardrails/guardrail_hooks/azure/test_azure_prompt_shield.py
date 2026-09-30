@@ -373,6 +373,15 @@ def _recorded_guardrail_info(container):
             "Explain this",
             id="message-item",
         ),
+        pytest.param(
+            [
+                {"type": "some_future_item", "payload": {"x": 1}},
+                {"type": "function_call_output", "call_id": "c1", "output": "tool says hi"},
+                {"role": "user", "content": "Final question"},
+            ],
+            "Final question",
+            id="unmodeled-item",
+        ),
     ],
 )
 @pytest.mark.asyncio
