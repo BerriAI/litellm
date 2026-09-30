@@ -245,7 +245,11 @@ e2e-dev = [
     "psutil==7.2.2",
     "mcp>=2.2.0,<3",
 ]
+admin-mcp = [
+    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/e374120ce9525dad8b4437e888890f781ba5af7e.tar.gz#sha256=74ff1c38016b6801d6f241a9adc1eb1864893772c43597e7ec59ea68a770bcd3 ; python_version >= '3.12'",
+]
 proxy-dev = [
+    { include-group = "admin-mcp" },
     "prisma==0.11.0",
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",

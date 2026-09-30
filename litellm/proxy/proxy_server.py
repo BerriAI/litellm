@@ -1549,7 +1549,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             model_info_scheduler.start()
 
     # End of startup event
-    yield
+    from litellm.proxy.admin_mcp import admin_mcp_lifespan
+
+    async with admin_mcp_lifespan(app):
+        yield
 
     if model_info_scheduler is not None and model_info_scheduler.running:
         model_info_scheduler.remove_job("refresh_model_info")
