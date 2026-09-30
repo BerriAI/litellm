@@ -144,3 +144,26 @@ async def test_default_loader_returns_nothing_without_a_db(monkeypatch: pytest.M
     monkeypatch.setattr(proxy_server, "prisma_client", None)
 
     assert await _load_access_group("ag-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+async def test_authoritative_group_ceiling_propagates_policy_outages(
+    monkeypatch: pytest.MonkeyPatch, strict: bool
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.auth.agent_access_groups import _load_access_group
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    database: Final = MagicMock()
+    database.db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    if strict:
+        with pytest.raises(HTTPException):
+            await _load_access_group("group", check_db_only=True)
+    else:
+        assert await _load_access_group("group") is None

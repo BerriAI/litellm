@@ -10200,3 +10200,28 @@ async def test_authoritative_key_cannot_keep_grants_when_permission_is_unavailab
     )
     with pytest.raises(Exception, match=r"does not exist|unavailable"):
         await get_key_object("hash", database, UserApiKeyCache(), check_db_only=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+async def test_authoritative_group_grants_propagate_policy_outages(
+    monkeypatch: pytest.MonkeyPatch, strict: bool
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import _get_agent_ids_from_access_groups
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    database: Final = MagicMock()
+    database.db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    if strict:
+        with pytest.raises(HTTPException):
+            await _get_agent_ids_from_access_groups(["group"], check_db_only=True)
+    else:
+        assert await _get_agent_ids_from_access_groups(["group"]) == []

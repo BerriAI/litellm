@@ -30,7 +30,7 @@ async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
             for ceiling in ceilings
         )
         grouped: Final = frozenset(server for server in base if all(server in ceiling for ceiling in expanded))
-        caller_capped, _ = await MCPRequestHandler._apply_agent_caller_ceiling(sorted(grouped), auth)
+        caller_capped, _ = await MCPRequestHandler.apply_agent_caller_ceiling(sorted(grouped), auth)
         own: Final = frozenset(caller_capped)
         context: Final = auth.managed_agent_context
         if context is None or context.mode == "autonomous":
@@ -55,7 +55,7 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
         return []
     try:
         granted: Final = await MCPRequestHandler.get_agent_tool_permissions_for_server(server_id, auth)
-        own: Final = await MCPRequestHandler._apply_agent_caller_tool_ceiling(granted, server_id, auth)
+        own: Final = await MCPRequestHandler.apply_agent_caller_tool_ceiling(granted, server_id, auth)
         context: Final = auth.managed_agent_context
         if context is None or context.mode == "autonomous":
             return None if own is None else sorted(own)

@@ -1725,7 +1725,7 @@ class MCPRequestHandler:
             #########################################################
             # Cap an agent key at what the user and team that invoked the agent may reach
             #########################################################
-            caller_capped, caller_restricts = await MCPRequestHandler._apply_agent_caller_ceiling(
+            caller_capped, caller_restricts = await MCPRequestHandler.apply_agent_caller_ceiling(
                 allowed_mcp_servers, user_api_key_auth
             )
 
@@ -2333,7 +2333,7 @@ class MCPRequestHandler:
             )
 
             allowed_tools = _as_list(
-                await MCPRequestHandler._apply_agent_caller_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
+                await MCPRequestHandler.apply_agent_caller_tool_ceiling(allowed_tools, server_id, user_api_key_auth)
             )
 
             return await MCPRequestHandler._apply_agent_and_org_tool_ceilings(
@@ -3169,7 +3169,7 @@ class MCPRequestHandler:
         return capped, True
 
     @staticmethod
-    async def _apply_agent_caller_ceiling(
+    async def apply_agent_caller_ceiling(
         allowed_mcp_servers: Sequence[str],
         user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> tuple[tuple[str, ...], bool]:
@@ -3278,7 +3278,7 @@ class MCPRequestHandler:
         return list(set(allowed_tools) & set(user_tools))
 
     @staticmethod
-    async def _apply_agent_caller_tool_ceiling(
+    async def apply_agent_caller_tool_ceiling(
         allowed_tools: Sequence[str] | None,
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -3286,7 +3286,7 @@ class MCPRequestHandler:
         """Narrow an agent key's tools on ``server_id`` to those the invoking user and team (echoed back
         by the agent as ``x-litellm-user-id`` / ``x-litellm-team-id``) may call: the echoed team's tool
         grants when it names any on this server, then the echoed user's own tool entitlement. The tools
-        axis twin of ``_apply_agent_caller_ceiling``, so the headers only ever narrow. Denies every tool
+        axis twin of ``apply_agent_caller_ceiling``, so the headers only ever narrow. Denies every tool
         on the server when the caller's team cannot be loaded, since a caller we cannot resolve must not
         read as unrestricted."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

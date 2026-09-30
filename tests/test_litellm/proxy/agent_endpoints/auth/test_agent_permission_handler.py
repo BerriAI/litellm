@@ -976,3 +976,70 @@ async def test_managed_target_rechecks_authoritative_key_after_peer_revocation(
             await AgentRequestHandler.is_agent_allowed("target", warm)
     else:
         assert await AgentRequestHandler.is_agent_allowed("target", warm) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ceiling", ["agent-group", "caller-team", "group-without-grant"])
+@pytest.mark.parametrize("permitted", [False, True])
+async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload(
+    monkeypatch: pytest.MonkeyPatch, ceiling: str, permitted: bool
+) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_TeamTable
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    target: Final = AgentResponse(
+        agent_id="target", agent_name="Target", agent_card_params={}, identity_managed=True,
+        identity=AgentIdentityBinding(
+            agent_id="target", provider="microsoft_entra", tenant_id="tenant", client_id="client",
+            issuer="issuer", revision="current",
+        ),
+    )
+    actor: Final = AgentResponse(
+        agent_id="ordinary", agent_name="Ordinary", agent_card_params={},
+        access_group_ids=["actor-group"] if ceiling != "caller-team" else [],
+    )
+    registry: Final = AgentRegistry()
+    registry.register_agent(actor)
+    registry.register_agent(target)
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-grant", agents=[] if ceiling == "group-without-grant" else ["target"]
+    )
+    persisted: Final = UserAPIKeyAuth(
+        api_key="a" * 64, agent_id="ordinary", object_permission_id="key-grant", object_permission=permission,
+    )
+    auth: Final = persisted.model_copy()
+    auth.agent_caller = AgentCaller(team_id="caller-team") if ceiling == "caller-team" else None
+    group: Final = LiteLLM_AccessGroupTable(
+        access_group_id="actor-group", access_group_name="Actor group",
+        access_agent_ids=["target"] if permitted else ["other"],
+    )
+    team: Final = LiteLLM_TeamTable(
+        team_id="caller-team", object_permission_id="caller-grant",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="caller-grant", agents=["target"] if permitted else ["other"],
+        ),
+    )
+    database: Final = MagicMock()
+    database.get_data = AsyncMock(return_value=persisted)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        side_effect=lambda where: permission if where["object_permission_id"] == "key-grant" else team.object_permission
+    )
+    database.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=group)
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("access_group_id:actor-group", group)
+    cache.set_cache("team_id:caller-team", team.model_copy(update={"object_permission": permission}))
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+
+    assert await AgentRequestHandler.is_agent_allowed("target", auth) is (permitted and ceiling != "group-without-grant")
+    database.get_data.assert_awaited_once()
+    assert auth.agent_caller == (AgentCaller(team_id="caller-team") if ceiling == "caller-team" else None)

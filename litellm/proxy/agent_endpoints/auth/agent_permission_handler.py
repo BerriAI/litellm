@@ -87,13 +87,19 @@ class AgentRequestHandler:
     async def resolve_agent_access(
         user_api_key_auth: UserAPIKeyAuth | None = None,
         resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
+        *,
+        strict: bool = False,
     ) -> AgentAccess:
         """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
         and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
         if managed_agent_policy(user_api_key_auth) is not None:
             return await _managed_actor_agent_access(user_api_key_auth)
-        key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(user_api_key_auth)
-        caller_access: Final = await AgentRequestHandler.agent_caller_access(user_api_key_auth)
+        key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(
+            user_api_key_auth, strict=strict
+        )
+        if strict and isinstance(key_team_access, UnrestrictedAgentAccess):
+            return RestrictedAgentAccess(frozenset())
+        caller_access: Final = await AgentRequestHandler.agent_caller_access(user_api_key_auth, strict=strict)
         own_access: Final = _intersect_agent_access(key_team_access, caller_access)
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
         if agent_ceiling is None:
@@ -103,11 +109,11 @@ class AgentRequestHandler:
         return RestrictedAgentAccess(own_access.agent_ids & agent_ceiling)
 
     @staticmethod
-    async def agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None) -> AgentAccess:
+    async def agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None, *, strict: bool = False) -> AgentAccess:
         caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
         if caller_auth is None:
             return UnrestrictedAgentAccess()
-        return await AgentRequestHandler._get_allowed_agents_for_team(caller_auth)
+        return await AgentRequestHandler._get_allowed_agents_for_team(caller_auth, strict=strict)
 
     @staticmethod
     async def resolve_key_team_agent_access(
@@ -188,7 +194,11 @@ class AgentRequestHandler:
                     and not user_api_key_auth.is_session_token
                     else user_api_key_auth
                 )
-                fresh_auth: Final = authority.model_copy(update={"requires_fresh_policy": True})
+                fresh_auth: Final = authority.model_copy(
+                    update=MappingProxyType(
+                        {"requires_fresh_policy": True, "agent_caller": user_api_key_auth.agent_caller}
+                    )
+                )
                 explicit: Final = await _granted_agent_ids(
                     fresh_auth,
                     _strict_agent_access,
@@ -292,7 +302,7 @@ class AgentRequestHandler:
             access_group_agents: Final = (
                 tuple(
                     await AgentRequestHandler._get_agents_from_access_groups(
-                        list(declared_access_groups), check_db_only=strict
+                        declared_access_groups, check_db_only=strict
                     )
                 )
                 if declared_access_groups
@@ -301,7 +311,7 @@ class AgentRequestHandler:
             unified_agents: Final = (
                 tuple(
                     await AgentRequestHandler._get_unified_access_group_agents(
-                        list(key_access_group_ids), check_db_only=strict
+                        key_access_group_ids, check_db_only=strict
                     )
                 )
                 if key_access_group_ids
@@ -375,7 +385,7 @@ class AgentRequestHandler:
             access_group_agents: Final = (
                 tuple(
                     await AgentRequestHandler._get_agents_from_access_groups(
-                        list(declared_access_groups), check_db_only=strict
+                        declared_access_groups, check_db_only=strict
                     )
                 )
                 if declared_access_groups
@@ -384,7 +394,7 @@ class AgentRequestHandler:
             unified_agents: Final = (
                 tuple(
                     await AgentRequestHandler._get_unified_access_group_agents(
-                        list(team_access_group_ids), check_db_only=strict
+                        team_access_group_ids, check_db_only=strict
                     )
                 )
                 if team_access_group_ids
@@ -403,7 +413,7 @@ class AgentRequestHandler:
 
     @staticmethod
     def _get_config_agent_ids_for_access_groups(
-        config_agents: Sequence[AgentResponse], access_groups: list[str]
+        config_agents: Sequence[AgentResponse], access_groups: Sequence[str]
     ) -> set[str]:
         """
         Helper to get agent_ids from config-loaded agents that match any of the given access groups.
@@ -418,7 +428,7 @@ class AgentRequestHandler:
 
     @staticmethod
     async def _get_db_agent_ids_for_access_groups(
-        prisma_client, access_groups: list[str], *, check_db_only: bool = False
+        prisma_client, access_groups: Sequence[str], *, check_db_only: bool = False
     ) -> set[str]:
         """
         Helper to get agent_ids from DB agents that match any of the given access groups.
@@ -436,7 +446,7 @@ class AgentRequestHandler:
 
     @staticmethod
     async def _get_unified_access_group_agents(
-        access_group_ids: list[str], *, check_db_only: bool = False
+        access_group_ids: Sequence[str], *, check_db_only: bool = False
     ) -> list[str]:
         """
         Resolve unified access group ids to agent IDs.
@@ -447,7 +457,7 @@ class AgentRequestHandler:
 
     @staticmethod
     async def _get_agents_from_access_groups(
-        access_groups: list[str],
+        access_groups: Sequence[str],
         *,
         check_db_only: bool = False,
     ) -> list[str]:
@@ -634,9 +644,7 @@ async def accessible_agents(
 
 
 async def _strict_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
-    if managed_agent_policy(auth) is not None:
-        return await _managed_actor_agent_access(auth)
-    return await AgentRequestHandler.resolve_key_team_agent_access(auth, strict=True)
+    return await AgentRequestHandler.resolve_agent_access(auth, strict=True)
 
 
 async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
@@ -651,7 +659,7 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
 
     ceilings: Final = await resolve_managed_agent_ceilings(agent)
     grouped: Final = frozenset(target for target in own if all(target in ceiling.agent_ids for ceiling in ceilings))
-    caller: Final = await AgentRequestHandler.agent_caller_access(auth)
+    caller: Final = await AgentRequestHandler.agent_caller_access(auth, strict=True)
     capped: Final = grouped if isinstance(caller, UnrestrictedAgentAccess) else grouped & caller.agent_ids
     context: Final = auth.managed_agent_context
     if context is None or context.mode == "autonomous":

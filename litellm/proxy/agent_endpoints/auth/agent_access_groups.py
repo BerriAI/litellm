@@ -53,6 +53,8 @@ async def _load_access_group(access_group_id: str, *, check_db_only: bool = Fals
             check_db_only=check_db_only,
         )
     except HTTPException as e:
+        if check_db_only:
+            raise
         verbose_proxy_logger.warning(
             "Agent access group %s could not be loaded, treating it as empty: %s", access_group_id, e.detail
         )

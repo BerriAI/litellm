@@ -4280,6 +4280,8 @@ async def _get_resources_from_access_groups(
             )
             resources.extend(getattr(ag, resource_field, []))
         except Exception:
+            if check_db_only:
+                raise
             verbose_proxy_logger.debug(
                 "Could not fetch access group %s for resource field %s",
                 ag_id,
