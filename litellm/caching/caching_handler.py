@@ -768,8 +768,8 @@ class LLMCachingHandler:
                 if all(result is None for result in cached_result):
                     cached_result = None
         else:
+            request_cache_key: Final = _request_cache_key(new_kwargs)
             request_kwargs: Final = {k: v for k, v in new_kwargs.items() if k != "cache_key"}
-            request_cache_key: Final = _request_cache_key(request_kwargs)
             if litellm.cache._supports_async() is True:
                 ## check if dual cache is supported ##
                 self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)

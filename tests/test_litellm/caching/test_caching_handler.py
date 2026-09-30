@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -839,3 +840,31 @@ async def test_call_type_restriction_cannot_be_bypassed_via_kwargs(monkeypatch):
         is False
     )
     assert cache.should_use_cache(call_type="aembedding", route_type="acompletion") is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supports_async", [True, False])
+async def test_async_lookup_preserves_explicit_cache_partition(monkeypatch, supports_async: bool):
+    import litellm
+    from litellm.caching.caching import Cache
+
+    class CacheWithSelectedBackend(Cache):
+        def _supports_async(self) -> bool:
+            return supports_async
+
+    cache: Final = CacheWithSelectedBackend(type="local")
+    monkeypatch.setattr(litellm, "cache", cache)
+    request: Final = {"model": "test-model", "messages": [{"role": "user", "content": "hello"}]}
+    derived_key: Final = cache.get_cache_key(**request)
+    cache.add_cache({"partition": "derived"}, cache_key=derived_key, **request)
+    cache.add_cache({"partition": "isolated"}, cache_key="isolated-key", **request)
+    handler: Final = LLMCachingHandler(
+        original_function=litellm.acompletion, request_kwargs=request, start_time=datetime.now()
+    )
+
+    hit: Final = await handler._retrieve_from_cache(
+        call_type="acompletion", kwargs={**request, "cache_key": "isolated-key"}, args=()
+    )
+
+    assert hit is not None and hit["partition"] == "isolated"
+    assert handler.preset_cache_key == "isolated-key"
