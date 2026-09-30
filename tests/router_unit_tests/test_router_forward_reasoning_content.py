@@ -83,7 +83,7 @@ async def test_direct_completion_reasoning_flag_reaches_final_wire(
         response: Final = await litellm.acompletion(**kwargs) if async_mode else litellm.completion(**kwargs)
         assert response.choices[0].message.content == "Compared"
         assert route.call_count == 1
-        _assert_wire(route.calls[0].request, forward is True)
+        _assert_wire(route.calls[0].request, forward is not False)
     assert messages == original
 
 
@@ -116,7 +116,7 @@ async def test_router_aliases_isolate_reasoning_flag_on_same_backend(async_mode:
                 else router.completion(model=alias, messages=messages)
             )
             assert response.choices[0].message.content == "Compared"
-            _assert_wire(route.calls[-1].request, alias == "enabled")
+            _assert_wire(route.calls[-1].request, alias != "disabled")
             assert messages == original_messages
         assert route.call_count == 4
     assert model_list == original_models
@@ -207,7 +207,7 @@ async def test_local_cache_separates_forwarded_reasoning_history(
         route: Final = mock.post(URL).mock(side_effect=backend)
         for alias, forward, expected_calls in (
             ("default", None, 1),
-            ("disabled", False, 1),
+            ("disabled", False, 1 if normalize else 2),
             ("enabled", True, 2),
             ("disabled", False, 2),
             ("enabled", True, 2),
@@ -260,7 +260,7 @@ async def test_local_cache_separates_forwarded_reasoning_history(
                 if surface in ("responses", "router-responses")
                 else response.choices[0].message.content
             )
-            assert content == ("forwarded" if forward is True else "omitted")
+            assert content == ("forwarded" if (forward is True if normalize else forward is not False) else "omitted")
             assert route.call_count == expected_calls
             assert messages == original_messages
             assert input_items == original_input

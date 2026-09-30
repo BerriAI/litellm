@@ -405,8 +405,8 @@ class Cache:
         forward_reasoning_content: Final = kwargs.get(
             "forward_reasoning_content", nested_litellm_params.get("forward_reasoning_content")
         )
-        if forward_reasoning_content is True:
-            cache_key += "forward_reasoning_content: True"
+        if forward_reasoning_content is False:
+            cache_key += "forward_reasoning_content: False"
         reasoning_content_field: Final = kwargs.get(
             "reasoning_content_field", nested_litellm_params.get("reasoning_content_field")
         )

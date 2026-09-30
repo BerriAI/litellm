@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -50,7 +51,7 @@ async def test_forward_reasoning_content_preserves_only_explicit_history(
     expected = deepcopy(original)
     expected[1].pop("thinking_blocks")
     expected[3].pop("thinking_blocks")
-    if params.get("forward_reasoning_content") is not True:
+    if params.get("forward_reasoning_content") is False:
         expected[1].pop("reasoning_content")
     assert result["messages"] == expected
     assert messages == original
@@ -204,10 +205,10 @@ def test_hosted_vllm_supports_thinking():
     assert optional_params["reasoning_effort"] == "low"
 
 
-def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():
     """
-    Test that thinking_blocks on assistant messages are removed and content
-    stays a string for vLLM compatibility.
+    Test that reasoning_content on assistant messages is forwarded to vLLM
+    while thinking_blocks are removed and content stays a string.
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -244,7 +245,36 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Here is my answer."
     assert "thinking_blocks" not in assistant_msg
-    assert "reasoning_content" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Let me reason about this..."
+
+
+@pytest.mark.parametrize(
+    ("reasoning_content", "expected"),
+    [
+        ("step one, then step two", "step one, then step two"),
+        ("", ""),
+        (None, "absent"),
+        (42, "absent"),
+        (["step one", "step two"], "absent"),
+        ({"text": "step one"}, "absent"),
+    ],
+)
+def test_hosted_vllm_forwards_only_string_reasoning_content(reasoning_content, expected):
+    config = HostedVLLMChatConfig()
+    transformed = config.transform_request(
+        model="hosted_vllm/qwen3",
+        messages=[
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi", "reasoning_content": reasoning_content},
+            {"role": "user", "content": "Again"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assistant_msg = transformed["messages"][1]
+    assert assistant_msg.get("reasoning_content", "absent") == expected
+    assert assistant_msg["content"] == "Hi"
 
 
 def test_hosted_vllm_thinking_blocks_with_list_content():
@@ -537,9 +567,7 @@ async def test_reasoning_field_sdk_router_final_wire(
                 "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
             },
         )
-        for alias, field in (
-            ("normalized", "reasoning"), ("legacy", None), ("explicit-default", "reasoning_content")
-        ):
+        for alias, field in (("normalized", "reasoning"), ("legacy", None), ("explicit-default", "reasoning_content")):
             kwargs: Final = (
                 {"model": alias, "messages": messages}
                 if via_router
@@ -553,7 +581,7 @@ async def test_reasoning_field_sdk_router_final_wire(
             response: Final = await client.acompletion(**kwargs) if is_async else client.completion(**kwargs)
             assert response.choices[0].message.content == "Done"
             payload: Final = json.loads(route.calls[-1].request.content)
-            forwarded: Final = provider == "openai" or forward is True
+            forwarded: Final = provider == "openai" or forward is not False
             expected_history: Final = (
                 ({"reasoning": expected} if expected is not None and forwarded else {})
                 if field == "reasoning"
@@ -619,15 +647,21 @@ async def test_invalid_reasoning_field_fails_before_http(
     messages = [{"role": "user", "content": "Hello"}]
     original = deepcopy(messages)
     params = {
-        "model": f"{provider}/reasoning-test", "api_key": "test-key",
+        "model": f"{provider}/reasoning-test",
+        "api_key": "test-key",
         "api_base": "https://invalid-reasoning-field.invalid/v1",
-        "reasoning_content_field": field, "forward_reasoning_content": forward,
+        "reasoning_content_field": field,
+        "forward_reasoning_content": forward,
         **({"use_chat_completions_api": True} if bridge else {}),
     }
     router = litellm.Router(model_list=[{"model_name": "invalid-field", "litellm_params": params}], num_retries=0)
     client = router if via_router else litellm
     kwargs = {**({"model": "invalid-field"} if via_router else params), "input" if bridge else "messages": messages}
-    method = (client.aresponses if is_async else client.responses) if bridge else (client.acompletion if is_async else client.completion)
+    method = (
+        (client.aresponses if is_async else client.responses)
+        if bridge
+        else (client.acompletion if is_async else client.completion)
+    )
     with respx.mock(assert_all_called=False) as mock:
         with pytest.raises(litellm.BadRequestError) as error:
             await method(**kwargs) if is_async else method(**kwargs)
@@ -635,4 +669,36 @@ async def test_invalid_reasoning_field_fails_before_http(
         assert "reasoning_content_field must be reasoning_content or reasoning" in str(error.value)
         assert "reasonig" not in str(error.value)
         assert len(mock.calls) == 0
+    assert messages == original
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        {"reasoning_content": 42},
+        {"reasoning_content": ["step"]},
+        {"reasoning_content": {"text": "step"}},
+        {"reasoning": 42},
+        {"reasoning_content": "source", "reasoning": 42},
+        {"reasoning_content": ""},
+        {"reasoning": ""},
+    ],
+)
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_normalized_hosted_reasoning_only_forwards_strings(history, is_async):
+    config = HostedVLLMChatConfig()
+    messages = [{"role": "assistant", "content": "answer", **history}]
+    original = deepcopy(messages)
+    arguments = dict(
+        model="hosted_vllm/test",
+        messages=messages,
+        optional_params={},
+        litellm_params={"reasoning_content_field": "reasoning"},
+        headers={},
+    )
+    result = await config.async_transform_request(**arguments) if is_async else config.transform_request(**arguments)
+    value = history.get("reasoning", history.get("reasoning_content"))
+    expected = {"role": "assistant", "content": "answer", **({"reasoning": value} if isinstance(value, str) else {})}
+    assert result["messages"] == [expected]
     assert messages == original

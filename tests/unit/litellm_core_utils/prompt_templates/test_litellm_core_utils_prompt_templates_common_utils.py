@@ -1879,6 +1879,20 @@ class TestEncryptedReasoningReplay:
         assert messages[0] == {"role": "user", "content": "question"}
         assert messages[2] == {"role": "user", "content": [{"type": "text", "text": "follow-up"}]}
 
+    def test_strip_uses_predicate_to_keep_selected_encrypted_blocks(self):
+        kept_signature = encrypted_reasoning_signature("keep")
+        stripped_signature = encrypted_reasoning_signature("strip")
+        content = [
+            {"type": "thinking", "thinking": "keep", "signature": kept_signature},
+            {"type": "thinking", "thinking": "strip", "signature": stripped_signature},
+        ]
+        messages = [{"role": "assistant", "content": content}]
+
+        strip_encrypted_reasoning_from_messages(messages, should_strip=lambda block: block.get("thinking") == "strip")
+
+        assert messages[0]["content"] is content
+        assert content == [{"type": "thinking", "thinking": "keep", "signature": kept_signature}]
+
     @pytest.mark.parametrize(
         "messages",
         [

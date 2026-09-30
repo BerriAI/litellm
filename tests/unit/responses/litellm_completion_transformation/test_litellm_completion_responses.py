@@ -98,7 +98,7 @@ async def test_hosted_vllm_responses_reasoning_and_parallel_tools_final_wire(
     )
     client: Final = router if via_router else litellm
     request: Final = {"model": "history-alias", "input": input_items} if via_router else kwargs
-    forwarded: Final = provider == "openai" or forward is True
+    forwarded: Final = provider == "openai" or forward is not False
     output_field: Final = field or "reasoning_content"
     with respx.mock(assert_all_called=True) as mock:
         route: Final = mock.post("https://responses-reasoning-test.invalid/v1/chat/completions").mock(

@@ -23,7 +23,7 @@ def should_normalize_reasoning_content(field: object, *, model: str, provider: s
 
 
 def normalize_reasoning_content(
-    messages: Sequence[AllMessageValues], *, forward: bool = True, normalize: bool = True
+    messages: Sequence[AllMessageValues], *, forward: bool = True, normalize: bool = True, strings_only: bool = False
 ) -> list[AllMessageValues]:  # mutable-ok: provider request contract
     def normalize_message(message: AllMessageValues) -> AllMessageValues:
         if message["role"] != "assistant":
@@ -40,7 +40,10 @@ def normalize_reasoning_content(
                 **MappingProxyType({key: value for key, value in history.items() if key not in removed_fields}),
                 **(
                     MappingProxyType({"reasoning": reasoning})
-                    if normalize and forward and reasoning is not None
+                    if normalize
+                    and forward
+                    and reasoning is not None
+                    and (not strings_only or isinstance(reasoning, str))
                     else MappingProxyType({})
                 ),
             }

@@ -139,8 +139,9 @@ def test_reasoning_forwarding_cache_scope_preserves_groups_namespace_and_tenant(
 
     default = key()
     enabled = key(forward=True)
-    assert default == key(forward=False) == key(nested=True, forward=False)
-    assert enabled != default
+    assert default == enabled == key(nested=True, forward=True)
+    assert key(forward=False) == key(nested=True, forward=False)
+    assert key(forward=False) != default
     assert enabled == key(nested=True, forward=True) == key(alias="second", forward=True)
     assert enabled.startswith("reasoning-test:")
     assert enabled != key(namespace="other-namespace", forward=True)
@@ -151,19 +152,21 @@ def test_reasoning_forwarding_cache_scope_preserves_groups_namespace_and_tenant(
         assert enabled != key(prompt="hello", forward=True)
 
 
-def test_reasoning_forwarding_cache_key_preserves_legacy_disabled_key_and_top_level_precedence():
+def test_reasoning_forwarding_cache_key_preserves_default_key_and_top_level_precedence():
     cache = Cache(type="local", namespace="reasoning-cache-test")
     request = {"model": "hosted_vllm/reasoning-test", "messages": [{"role": "user", "content": "hi"}]}
     legacy = "reasoning-cache-test:fca1120c8360f4b9ca0cd9b52f981f290a6eec25a8c6256033a81edcc713618c"
     assert cache.get_cache_key(**request) == legacy
-    assert cache.get_cache_key(**request, forward_reasoning_content=False) == legacy
+    assert cache.get_cache_key(**request, forward_reasoning_content=True) == legacy
+    disabled = cache.get_cache_key(**request, forward_reasoning_content=False)
+    assert disabled != legacy
     assert (
         cache.get_cache_key(
             **request, forward_reasoning_content=False, litellm_params={"forward_reasoning_content": True}
         )
-        == legacy
+        == disabled
     )
-    assert cache.get_cache_key(**request, litellm_params={"forward_reasoning_content": True}) != legacy
+    assert cache.get_cache_key(**request, litellm_params={"forward_reasoning_content": True}) == legacy
 
 
 @pytest.mark.parametrize(
@@ -345,8 +348,11 @@ def test_reasoning_field_cache_identity(semantic: bool, provider: str):
     normalized = cache.get_cache_key(**request, reasoning_content_field="reasoning")
     assert normalized != legacy
     assert normalized == cache.get_cache_key(**request, litellm_params={"reasoning_content_field": "reasoning"})
-    assert normalized != cache.get_cache_key(
+    assert normalized == cache.get_cache_key(
         **request, reasoning_content_field="reasoning", forward_reasoning_content=True
+    )
+    assert normalized != cache.get_cache_key(
+        **request, reasoning_content_field="reasoning", forward_reasoning_content=False
     )
     assert (
         cache.get_cache_key(
