@@ -144,16 +144,12 @@ locals {
     { name = "LITELLM_PGBOUNCER_MAX_CLIENT_CONN", value = tostring(var.gateway_pool_max_client_conn) },
   ] : []
 
-  gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
-  backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
-
-  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run python -m gateway.launch ${local.gateway_uvicorn_args};; *) exec python -m gateway.launch ${local.gateway_uvicorn_args};; esac"
-  backend_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args};; *) exec uvicorn backend.main:app ${local.backend_uvicorn_args};; esac"
+  image_entrypoint = "/app/docker-entrypoint.sh"
 
   gateway_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    [local.gateway_launch_cmd],
+    ["exec ${local.image_entrypoint} gateway --workers ${var.gateway_num_workers}"],
   ))
 
   metrics_enabled       = var.create_runtime && var.gateway_metrics_port != null
@@ -174,7 +170,7 @@ locals {
   backend_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    [local.backend_launch_cmd],
+    ["exec ${local.image_entrypoint} backend"],
   ))
 
   collector_address = "tcp://127.0.0.1:${var.collector_port}"
@@ -202,13 +198,12 @@ locals {
   collector_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec python -m litellm.proxy.collector"],
+    ["exec ${local.image_entrypoint} collector"],
   ))
 
-  # Env shipped to the migrations Job. The migrations image runs run.py
-  # which assembles DATABASE_URL from these discrete vars itself, so we
-  # only need writer-side DB env (no read replica, no proxy_config, no
-  # master key).
+  # run.py assembles DATABASE_URL from these discrete vars itself, so the
+  # migrations Job only needs writer-side DB env (no read replica, no
+  # proxy_config, no master key).
   migrations_env_kv = [
     { name = "DATABASE_HOST", value = google_sql_database_instance.writer.private_ip_address },
     { name = "DATABASE_PORT", value = "5432" },
@@ -254,7 +249,7 @@ resource "google_cloud_run_v2_service" "gateway" {
 
     containers {
       name    = "gateway"
-      image   = local.gateway_image
+      image   = local.image
       command = ["sh", "-c"]
       args    = [local.gateway_args]
 
@@ -330,10 +325,9 @@ resource "google_cloud_run_v2_service" "gateway" {
     dynamic "containers" {
       for_each = local.metrics_enabled ? [1] : []
       content {
-        name    = "metrics"
-        image   = local.gateway_image
-        command = ["python", "-m", "litellm.proxy.prometheus_metrics_server"]
-        args    = ["--port", tostring(var.gateway_metrics_port)]
+        name  = "metrics"
+        image = local.image
+        args  = ["metrics", "--port", tostring(var.gateway_metrics_port)]
 
         dynamic "env" {
           for_each = local.metrics_env_kv
@@ -396,7 +390,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       for_each = var.collector_enabled ? [1] : []
       content {
         name    = "spend-collector"
-        image   = local.gateway_image
+        image   = local.image
         command = ["sh", "-c"]
         args    = [local.collector_args]
 
@@ -519,7 +513,7 @@ resource "google_cloud_run_v2_service" "backend" {
     }
 
     containers {
-      image   = local.backend_image
+      image   = local.image
       command = ["sh", "-c"]
       args    = [local.backend_args]
 
@@ -635,7 +629,8 @@ resource "google_cloud_run_v2_service" "ui" {
     }
 
     containers {
-      image = local.ui_image
+      image = local.image
+      args  = ["ui"]
 
       ports {
         container_port = 3000
@@ -697,9 +692,6 @@ resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
 }
 
 # ---------- Migrations job ----------
-# Dedicated litellm-migrations image — slim, ENTRYPOINT runs run.py which
-# assembles DATABASE_URL from the DATABASE_* env vars and runs `prisma
-# migrate deploy`. No proxy_config, no master key, no shell wrapper.
 resource "google_cloud_run_v2_job" "migrations" {
   count = var.create_runtime ? 1 : 0
 
@@ -718,7 +710,8 @@ resource "google_cloud_run_v2_job" "migrations" {
       }
 
       containers {
-        image = local.migrations_image
+        image = local.image
+        args  = ["migrations"]
 
         # Prisma's Node + Rust engine plus the v2 migration resolver
         # routinely peaks above 1 GiB while applying the schema, so 2 GiB

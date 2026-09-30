@@ -144,17 +144,15 @@ run "gateway_starts_through_the_pool_aware_launcher" {
 
   assert {
     condition = alltrue([
-      strcontains(local.gateway_launch_cmd, "exec python -m gateway.launch --host 0.0.0.0 --port 4000 --workers 4"),
-      strcontains(local.gateway_launch_cmd, "exec ddtrace-run python -m gateway.launch --host 0.0.0.0 --port 4000 --workers 4"),
-      !strcontains(local.gateway_launch_cmd, "uvicorn gateway.main:app"),
-      endswith(google_cloud_run_v2_service.gateway[0].template[0].containers[0].args[0], local.gateway_launch_cmd),
+      google_cloud_run_v2_service.gateway[0].template[0].containers[0].command == tolist(["sh", "-c"]),
+      endswith(google_cloud_run_v2_service.gateway[0].template[0].containers[0].args[0], " && exec /app/docker-entrypoint.sh gateway --workers 4"),
     ])
-    error_message = "The gateway must start through gateway.launch (with and without ddtrace) so the pooler starts once before uvicorn forks the workers."
+    error_message = "The gateway must start through the image's gateway component with the configured worker count so the pooler starts once before uvicorn forks the workers."
   }
 
   assert {
-    condition     = strcontains(local.backend_launch_cmd, "uvicorn backend.main:app")
-    error_message = "The backend has no workers to share a pooler and keeps starting uvicorn directly."
+    condition     = endswith(google_cloud_run_v2_service.backend[0].template[0].containers[0].args[0], " && exec /app/docker-entrypoint.sh backend")
+    error_message = "The backend has no workers to share a pooler and starts the plain backend component."
   }
 }
 
