@@ -177,6 +177,16 @@ def test_all_writes_require_full_admin(role: LitellmUserRoles, method: str, path
     assert client.request(method, path, json=body).status_code == 403
 
 
+@pytest.mark.parametrize("login", ("invalid.name", " ", "user/name"))
+@pytest.mark.parametrize("email", ("alice@example.com", None))
+def test_invalid_identity_login_returns_validation_error(login: str, email: str | None) -> None:
+    repository: Final = _ConfigRepository()
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    response: Final = client.put("/roi-calculator/identity-map", json={"github_login": login, "email": email})
+    assert response.status_code == 422
+    assert not repository.values
+
+
 def test_schedule_and_estimator_key_persist_without_exposing_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "roi-calculator-test-salt-key-0123456789")
     repository: Final = _ConfigRepository()

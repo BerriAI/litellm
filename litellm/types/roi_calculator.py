@@ -11,6 +11,15 @@ DEFAULT_PROMPT: Final = (
 )
 
 
+def _normalize_login(value: str) -> str:
+    import re
+
+    login: Final = value.strip().casefold()
+    if re.fullmatch(r"[A-Za-z0-9_\[\]-]+", login) is None:
+        raise ValueError("Enter a valid GitHub username.")
+    return login
+
+
 class ROISettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -81,15 +90,13 @@ class ROISettings(BaseModel):
     @field_validator("identity_map")
     @classmethod
     def normalize_identity_map(cls, values: Mapping[str, str]) -> Mapping[str, str]:
-        import re
-
         from litellm.proxy.roi_calculator.analytics import normalize_email
 
         normalized: Final[Mapping[str, str]] = MappingProxyType(
             {
-                login.strip().casefold(): normalize_email(address)
+                _normalize_login(login): normalize_email(address)
                 for login, address in values.items()
-                if re.fullmatch(r"[A-Za-z0-9_\[\]-]+", login.strip()) is not None and normalize_email(address)
+                if normalize_email(address)
             }
         )
         if len(normalized) != len(values):
@@ -420,6 +427,11 @@ class ROIReportResponse(BaseModel):
 class ROIIdentityMapUpdate(BaseModel):
     github_login: str
     email: str | None
+
+    @field_validator("github_login")
+    @classmethod
+    def normalize_login(cls, value: str) -> str:
+        return _normalize_login(value)
 
 
 class ROIIdentityMapResponse(BaseModel):

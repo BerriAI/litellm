@@ -179,6 +179,10 @@ describe("ROICalculatorView", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(warning);
     expect(screen.getByRole("button", { name: "Open estimate for org/repo pull request 42" })).toBeInTheDocument();
     expect(screen.queryByText("$3.00")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Calculation details"));
+    expect(
+      screen.getByText("Spend per estimated hour is unavailable until all selected repositories can be read."),
+    ).toBeVisible();
   });
 
   it("lets a view-only admin read the report without write controls", async () => {

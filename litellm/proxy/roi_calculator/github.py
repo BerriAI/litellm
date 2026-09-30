@@ -315,7 +315,7 @@ class GitHub:
     ) -> None:
         if client is not None and transport is not None:
             raise ValueError("Pass either an injected GitHub client or a transport.")
-        self._profiles: Mapping[str, str] = MappingProxyType({})
+        self._profiles: Mapping[str, str | None] = MappingProxyType({})
         token: Final = settings.github_token.get_secret_value()
         self._headers: Final[Mapping[str, str]] = (
             MappingProxyType(
@@ -494,25 +494,26 @@ class GitHub:
         }
         return evidence
 
-    async def profile_email(self, login: str) -> str:
+    async def profile_email(self, login: str, *, fallback: str = "") -> str:
         if login.casefold() in self._profiles:
-            return self._profiles[login.casefold()]
+            cached: Final = self._profiles[login.casefold()]
+            return cached if cached is not None else fallback
         address: Final = await self._load_profile_email(login)
         self._profiles = MappingProxyType({**self._profiles, login.casefold(): address})
-        return address
+        return address if address is not None else fallback
 
-    async def _load_profile_email(self, login: str) -> str:
+    async def _load_profile_email(self, login: str) -> str | None:
         try:
             response: Final = await self.client.get(
                 self._url(f"users/{quote(login, safe='')}"),
                 headers=self._headers,
             )
             if response.status_code != 200:
-                return ""
+                return None
             profile: Final = _GitHubUserProfile.model_validate(response.json())
             return normalize_email(profile.email)
         except (httpx.HTTPError, ValueError):
-            return ""
+            return None
 
     async def _commit_metadata(
         self, repo: str, number: int, detail: _PullDetail

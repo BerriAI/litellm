@@ -41,6 +41,10 @@ export function ROIOverview({
   const [pagination, setPagination] = React.useState({ query, visibleCount: 10 });
   const visibleCount = pagination.query === query ? pagination.visibleCount : 10;
   const metrics = summary.metrics;
+  const unavailableRate =
+    metrics.output_hours > 0
+      ? "Spend per estimated hour is unavailable until all selected repositories can be read."
+      : "A rate requires matched estimated hours greater than zero and access to all selected repositories.";
   return (
     <div className="space-y-6">
       <section aria-label="Spend and estimated engineering effort" className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -59,7 +63,7 @@ export function ROIOverview({
           <p>
             {metrics.cost_per_hour != null
               ? `${formatMoney(metrics.matched_spend)} gateway spend ÷ ${formatNumber(metrics.output_hours)} estimated engineering hours = ${formatMoney(metrics.cost_per_hour)} per estimated hour.`
-              : "A rate is available when matched estimated hours are greater than zero."}
+              : unavailableRate}
           </p>
           <p>
             The comparison includes {metrics.cohort_people} matched {metrics.cohort_people === 1 ? "person" : "people"}{" "}

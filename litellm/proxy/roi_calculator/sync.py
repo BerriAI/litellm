@@ -274,6 +274,11 @@ async def _read_repositories(github: GitHub, repos: tuple[str, ...], start: date
             "check repository access or try analysis again later."
         )
     queue: Final = tuple(chain.from_iterable(((group.repo, pull) for pull in group.pulls) for group in groups))
+    if unavailable and not queue:
+        raise SourceError(
+            f"GitHub could not read {', '.join(unavailable)}, and the accessible repositories returned no pull requests. "
+            "No new report was published; check repository access or try analysis again later."
+        )
     warnings: Final = (
         (
             (
@@ -297,6 +302,13 @@ def _processed_records(processed: tuple[_ProcessedPull, ...]) -> Mapping[int, RO
     if processed and all(item.metadata_unavailable for item in processed):
         raise SourceError(
             "GitHub could not provide PR metadata. No new report was published; try analysis again later."
+        )
+    if any(item.record["estimate"]["status"] == "error" for item in processed) and not any(
+        item.record["estimate"]["status"] == "estimated" for item in processed
+    ):
+        raise SourceError(
+            "The estimator could not score any pull requests. No new report was published; "
+            "check the estimator connection or try analysis again later."
         )
     return MappingProxyType({item.position: item.record for item in processed})
 
@@ -469,7 +481,9 @@ class SyncManager:
                     and cached_pull["estimate"]["status"] == "estimated"
                     and "commit_emails" in cached_pull
                 ):
-                    profile: Final = await github.profile_email(cached_pull["login"])
+                    profile: Final = await github.profile_email(
+                        cached_pull["login"], fallback=cached_pull.get("profile_email", "")
+                    )
                     cached_record: Final = TypeAdapter(ROIPullRecord).validate_python(
                         MappingProxyType(
                             {

@@ -460,7 +460,9 @@ async def test_one_unreadable_pr_preserves_other_estimates_in_report() -> None:
     assert manager.status.needs_attention == 1
 
 
-def _repository_outage_transport(status: int, *, all_unavailable: bool = False) -> httpx.MockTransport:
+def _repository_outage_transport(
+    status: int, *, all_unavailable: bool = False, healthy_empty: bool = False
+) -> httpx.MockTransport:
     baseline: Final = _transport()
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -468,6 +470,8 @@ def _repository_outage_transport(status: int, *, all_unavailable: bool = False) 
             return httpx.Response(status, json=[] if status == 200 else {"message": "Repository unavailable"})
         if all_unavailable and request.url.path.endswith("/pulls"):
             return httpx.Response(status)
+        if healthy_empty and request.url.path == "/repos/org/repo/pulls":
+            return httpx.Response(200, json=[])
         return baseline.handle_request(request)
 
     return httpx.MockTransport(respond)
@@ -512,7 +516,8 @@ async def test_unavailable_repository_publishes_flagged_partial_report_and_recov
 
 
 @pytest.mark.asyncio
-async def test_all_repository_outage_preserves_previous_report() -> None:
+@pytest.mark.parametrize("all_unavailable", (True, False))
+async def test_repository_outage_without_usable_pulls_preserves_previous_report(all_unavailable: bool) -> None:
     repository: Final = _ReportRepository()
     manager: Final = SyncManager(clock=_fixed_now)
     settings: Final = _settings().model_copy(update=MappingProxyType({"repos": ("org/repo", "org/unavailable")}))
@@ -521,9 +526,73 @@ async def test_all_repository_outage_preserves_previous_report() -> None:
     previous: Final = repository.values["roi_calculator_report"]
 
     assert await manager.start(
-        settings, repository, _spend_reader(), _completion(), _repository_outage_transport(403, all_unavailable=True)
+        settings,
+        repository,
+        _spend_reader(),
+        _completion(),
+        _repository_outage_transport(403, all_unavailable=all_unavailable, healthy_empty=not all_unavailable),
     )
     await _wait_until_finished(manager)
     assert manager.status.phase == "error"
     assert manager.status.error is not None and "No new report was published" in manager.status.error
     assert repository.values["roi_calculator_report"] == previous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_status", (200, 403, 429, 503))
+async def test_reused_profile_preserves_email_only_when_lookup_fails(profile_status: int) -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    baseline: Final = _transport()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/commits"):
+            return httpx.Response(200, content=_COMMITS_JSON.replace("alice@example.com", ""))
+        return baseline.handle_request(request)
+
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), httpx.MockTransport(respond))
+    await _wait_until_finished(manager)
+
+    def refreshed(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/alice":
+            return httpx.Response(profile_status, json={"email": None})
+        return baseline.handle_request(request)
+
+    async def unexpected_completion(request: ROICompletionRequest) -> object:
+        raise AssertionError("A reused estimate must not call the estimator")
+
+    assert await manager.start(
+        _settings(), repository, _spend_reader(), unexpected_completion, httpx.MockTransport(refreshed)
+    )
+    await _wait_until_finished(manager)
+    report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    expected: Final = "" if profile_status == 200 else "alice@example.com"
+    assert manager.status.phase == "complete"
+    assert manager.status.reused == 1
+    assert report["pulls"][0]["profile_email"] == expected
+    assert report["pulls"][0]["emails"] == ((expected,) if expected else ())
+    assert summarize(report, MappingProxyType({}))["metrics"]["cost_per_hour"] == (None if profile_status == 200 else 3)
+
+
+@pytest.mark.asyncio
+async def test_complete_estimator_outage_preserves_report_and_recovers() -> None:
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    await _wait_until_finished(manager)
+    previous: Final = repository.values["roi_calculator_report"]
+    changed: Final = _settings(estimator_prompt="Updated estimation instructions")
+
+    async def failed_completion(request: ROICompletionRequest) -> object:
+        raise httpx.ConnectError("Estimator unavailable")
+
+    assert await manager.start(changed, repository, _spend_reader(), failed_completion, _transport())
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "error"
+    assert manager.status.error is not None and "No new report was published" in manager.status.error
+    assert repository.values["roi_calculator_report"] == previous
+    assert await manager.start(changed, repository, _spend_reader(), _completion(), _transport())
+    await _wait_until_finished(manager)
+    assert manager.status.phase == "complete"
+    recovered: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert recovered["pulls"][0]["estimate"]["hours"] == 4
