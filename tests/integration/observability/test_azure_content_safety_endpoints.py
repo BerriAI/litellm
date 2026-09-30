@@ -228,3 +228,10 @@ def test_azure_prompt_shield_blocks_attack_in_responses_input(
         assert "Violated Azure Prompt Shield guardrail policy" in response.text
         assert _scanned_prompts(azure) == (prompt,)
         assert provider.drain() == ()
+        entry: Final = _guardrail_entry(model)
+        assert entry["guardrail_status"] == "guardrail_intervened", entry
+        assert entry["guardrail_usage"] == {
+            "requests": 1,
+            "input_characters": len(prompt),
+            "text_records": 1,
+        }, entry
