@@ -647,6 +647,10 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
+            return_value=oauth_server,
+        ),
         patch.object(
             session_manager_stateless,
             "handle_request",
@@ -733,6 +737,10 @@ async def test_admitted_subject_missing_stored_token_challenged_with_resource_me
         ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=oauth_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
             return_value=oauth_server,
         ),
         patch.object(
@@ -1030,6 +1038,10 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
+            return_value=oauth_server,
+        ),
         patch.object(
             session_manager_stateless,
             "handle_request",
@@ -1133,6 +1145,10 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_returns
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=delegated_server,
         ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
+            return_value=delegated_server,
+        ),
         patch.object(
             session_manager_stateful,
             "handle_request",
@@ -1219,6 +1235,10 @@ async def test_handle_streamable_http_mcp_token_exchange_without_subject_returns
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=obo_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
             return_value=obo_server,
         ),
         patch.object(
@@ -1318,6 +1338,10 @@ async def test_handle_streamable_http_mcp_oauth_delegate_without_token_returns_g
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=od_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
             return_value=od_server,
         ),
         patch.object(
@@ -1577,6 +1601,10 @@ async def test_handle_streamable_http_mcp_true_passthrough_without_token_surface
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=tp_server,
         ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
+            return_value=tp_server,
+        ),
         patch.object(
             session_manager_stateful,
             "handle_request",
@@ -1643,6 +1671,10 @@ async def test_handle_streamable_http_mcp_true_passthrough_dcr_bridge_challenges
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=bridge_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_answering_to",
             return_value=bridge_server,
         ),
         patch.object(
