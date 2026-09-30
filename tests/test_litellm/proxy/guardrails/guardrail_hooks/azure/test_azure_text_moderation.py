@@ -80,20 +80,6 @@ async def test_azure_text_moderation_scans_responses_input() -> None:
     assert mock_post.call_args.kwargs["json"]["text"] == "Review this response input"
 
 
-def _moderation_response(severity: int) -> Mock:
-    response = Mock()
-    response.json.return_value = {
-        "blocklistsMatch": [],
-        "categoriesAnalysis": [
-            {"category": "Hate", "severity": severity},
-            {"category": "Sexual", "severity": 0},
-            {"category": "SelfHarm", "severity": 0},
-            {"category": "Violence", "severity": 0},
-        ],
-    }
-    return response
-
-
 def _moderation_flagging(flagged: str):
     def azure_by_text(*args: object, **kwargs: object) -> Mock:
         body = kwargs["json"]
