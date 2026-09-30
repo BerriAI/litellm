@@ -446,3 +446,47 @@ async def test_managed_mcp_rejects_unavailable_authoritative_entitlements(
     assert failure.value.status_code == 503
     client.db.litellm_mcpservertable.find_many.assert_not_called()
     client.db.litellm_mcptoolsettable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_managed_agent_mcp_access_is_capped_at_the_invoking_callers_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The managed MCP path must honour the agent_caller ceiling the same way the unmanaged path does:
+    the agent's own policy grants slack and linear, but the team echoed back on the request reaches
+    only slack, so the agent may use slack alone."""
+    from litellm.proxy._types import AgentCaller
+
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_allowed_mcp_servers_for_team",
+        AsyncMock(return_value=["slack"]),
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_apply_user_server_ceiling",
+        AsyncMock(side_effect=lambda servers, _auth: (tuple(servers), False)),
+    )
+
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_team_object_permission",
+        AsyncMock(
+            return_value=LiteLLM_ObjectPermissionTable(
+                object_permission_id="caller-team-permissions",
+                mcp_servers=["slack"],
+                mcp_tool_permissions={"slack": ["read"]},
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_apply_user_tool_ceiling",
+        AsyncMock(side_effect=lambda tools, _server_id, _auth: tools),
+    )
+
+    auth: Final = actor(("read", "write"))
+    auth.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+
+    assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == {"slack"}
+    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == ["read"]

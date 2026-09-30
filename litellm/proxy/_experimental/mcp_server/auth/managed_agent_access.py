@@ -29,7 +29,9 @@ async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
             frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
             for ceiling in ceilings
         )
-        own: Final = frozenset(server for server in base if all(server in ceiling for ceiling in expanded))
+        grouped: Final = frozenset(server for server in base if all(server in ceiling for ceiling in expanded))
+        caller_capped, _ = await MCPRequestHandler._apply_agent_caller_ceiling(sorted(grouped), auth)
+        own: Final = frozenset(caller_capped)
         context: Final = auth.managed_agent_context
         if context is None or context.mode == "autonomous":
             return tuple(sorted(own))
@@ -52,7 +54,9 @@ async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str]
     if server_id not in await managed_agent_servers(auth):
         return []
     try:
-        own: Final = await MCPRequestHandler.get_agent_tool_permissions_for_server(server_id, auth)
+        granted: Final = await MCPRequestHandler.get_agent_tool_permissions_for_server(server_id, auth)
+        capped: Final = await MCPRequestHandler._apply_agent_caller_tool_ceiling(granted, server_id, auth)
+        own: Final = list(capped) if capped is not None else None
         context: Final = auth.managed_agent_context
         if context is None or context.mode == "autonomous":
             return own
