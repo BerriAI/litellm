@@ -146,6 +146,11 @@ _WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = Map
             "aws-external-anthropic:List*",
         ),
         "BedrockMantleLiteLLM": ("bedrock-mantle:CreateInference",),
+        "BedrockWebSearchLiteLLM": (
+            "bedrock-websearch:InvokeSearch",
+            "bedrock-websearch:InvokeFetch",
+            "bedrock-websearch:ExternalWebAccess",
+        ),
     }
 )
 
