@@ -5,7 +5,7 @@ from typing import Final
 import httpx
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, Scenario, object_value
+from tests.integration._support.client import Gateway, Scenario, eventually, object_value
 
 
 def _customer(scenario: Scenario, **fields: JsonValue) -> str:
@@ -16,11 +16,17 @@ def _customer(scenario: Scenario, **fields: JsonValue) -> str:
 
 
 def _chat(
-    gateway: Gateway, key: str, model: str, *, customer: str | None, headers: Mapping[str, str] | None = None
+    gateway: Gateway,
+    key: str,
+    model: str,
+    *,
+    customer: str | None,
+    headers: Mapping[str, str] | None = None,
+    text: str = "customer allowlist",
 ) -> httpx.Response:
     body: Final = {
         "model": model,
-        "messages": [{"role": "user", "content": "customer allowlist"}],
+        "messages": [{"role": "user", "content": text}],
         **({"user": customer} if customer is not None else {}),
     }
     return gateway.request("POST", "/v1/chat/completions", body, key=key, headers=headers)
@@ -110,3 +116,33 @@ def test_customer_models_allowlist_rejects_disallowed_client_fallback(gateway: G
             observed: Final = upstream.get(f"{gateway.upstream_url}/__observations")
             observed.raise_for_status()
             assert object_value(observed.json())["requests"] == [], observed.text
+
+
+def test_customer_without_models_can_call_every_key_model(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        first: Final = scenario.model()
+        second: Final = scenario.model()
+        key: Final = scenario.key(models=[first, second])
+        without_models: Final = _customer(scenario)
+        empty_models: Final = _customer(scenario, models=[])
+
+        with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as upstream:
+            for customer in (without_models, empty_models):
+                for model in (first, second):
+                    for headers in (None, {"x-litellm-customer-id": customer}):
+                        upstream.get("/__observations").raise_for_status()
+                        response: Final = _chat(
+                            gateway,
+                            key,
+                            model,
+                            customer=customer if headers is None else None,
+                            headers=headers,
+                            text=f"customer model allowlist {uuid.uuid4().hex}",
+                        )
+                        assert response.status_code == 200, response.text
+                        observed: Final = eventually(
+                            lambda: object_value(upstream.get("/__observations").json())["requests"],
+                            lambda requests: isinstance(requests, list) and len(requests) == 1,
+                        )
+                        assert len(observed) == 1, observed
+                        assert object_value(object_value(observed[0])["body"])["model"] == "gpt-4o-mini", observed
