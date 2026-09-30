@@ -55,14 +55,15 @@ run "metrics_port_adds_a_sidecar_volume_and_scrape_rule" {
       length(local.gateway_metrics_container) == 1,
       local.gateway_metrics_container[0].name == "metrics",
       local.gateway_metrics_container[0].essential == false,
-      join(" ", local.gateway_metrics_container[0].entryPoint) == "python -m litellm.proxy.prometheus_metrics_server",
-      join(" ", local.gateway_metrics_container[0].command) == "--port 9464",
+      local.gateway_metrics_container[0].image == var.image,
+      !can(local.gateway_metrics_container[0].entryPoint),
+      join(" ", local.gateway_metrics_container[0].command) == "metrics --port 9464",
       one(local.gateway_metrics_container[0].portMappings).containerPort == 9464,
       one(local.gateway_metrics_container[0].environment).value == "/tmp/litellm_prometheus_multiproc",
       one(local.gateway_metrics_container[0].mountPoints).sourceVolume == "prometheus-multiproc",
       strcontains(local.gateway_metrics_container[0].healthCheck.command[3], "9464"),
     ])
-    error_message = "The metrics sidecar must run prometheus_metrics_server on the configured port, share the multiproc volume, and health-check that port."
+    error_message = "The metrics sidecar must run the shared image's metrics component on the configured port, share the multiproc volume, and health-check that port."
   }
 
   assert {

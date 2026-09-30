@@ -12,7 +12,7 @@ Deploys the componentized LiteLLM proxy on AWS:
   - LLM data-plane prefixes (`/v1/chat/*`, `/v1/embeddings`, …) → `gateway`
   - UI assets (`/`, `/_next/*`, `/litellm-asset-prefix/*`, …) → `ui`
   - Everything else (management API: `/key/*`, `/user/*`, …) → `backend`
-- **One-off migration task** (`litellm-migrations`) that runs `prisma migrate deploy` from the dedicated `ghcr.io/berriai/litellm-migrations` image
+- **One-off migration task** (`litellm-migrations`) that runs `prisma migrate deploy` through the `migrations` component of the same image
 
 ## Bring your own networking, database, and Redis
 
@@ -248,8 +248,7 @@ this with `litellm_license`. To tune the export cadence, set
 (`python -m litellm.proxy.prometheus_metrics_server`) to the gateway task that
 aggregates the workers' samples over a shared task volume, so a scrape never
 runs on an inference worker. The ALB never routes to that port and the tasks
-security group only opens it to `gateway_metrics_scrape_cidrs`. Needs
-`gateway_image` v1.101.0 or newer. See
+security group only opens it to `gateway_metrics_scrape_cidrs`. See
 [Prometheus metrics](https://docs.litellm.ai/docs/proxy/prometheus) for the
 metrics themselves.
 
@@ -285,10 +284,10 @@ tokens the workers used to (see [Aurora + IAM auth](#aurora--iam-auth)): the
 pooler mints a token from the task role, renews it before it expires and hands
 the workers a loopback URL with a static password instead
 
-The componentized `gateway_image` starts through `python -m gateway.launch`,
+The image's `gateway` component starts through `python -m gateway.launch`,
 which reads these variables, starts the pooler once per task and hands the
-workers its loopback URL; the classic `litellm` image honours them the same
-way.
+workers its loopback URL; the monolithic `proxy` component honours them the
+same way.
 
 ### Scaling the gateway on requests and tokens
 
@@ -499,12 +498,19 @@ top — set org-wide tags there, per-deployment tags via the `tags` input.
 
 ## Image pulls
 
-The defaults pull from `ghcr.io/berriai/litellm-<component>:v1.86.0-dev`,
-which is anonymous-readable. There are four images: `litellm-gateway`,
-`litellm-backend`, `litellm-ui`, and `litellm-migrations` (slim image used
-only by the one-off migration task — runs `prisma migrate deploy` against
-the writer DB and exits). Bump them together when bumping LiteLLM. To pull
-from a private registry:
+`image` defaults to `ghcr.io/berriai/litellm:v1.104.0`, which is
+anonymous-readable. The gateway, backend and UI services, the metrics and
+collector sidecars and the one-off migration task all run that one image
+and pick their process through the entrypoint's first argument, so bumping
+LiteLLM is a single variable change. That entrypoint ships from v1.104.0;
+an older tag only knows how to run the monolithic proxy, so pinning one
+fails at container start.
+
+Migrating from the retired `gateway_image`, `backend_image`, `ui_image`
+and `migrations_image` inputs: drop them and set `image` once. Terraform
+rejects the old names at plan time (`An argument named "gateway_image"
+is not expected here`), so a stale `.tfvars` cannot silently keep pulling
+the per-component images. To pull from a private registry:
 
 - **ECR (same account)**: the execution role already has
   `AmazonECSTaskExecutionRolePolicy`, which grants ECR pull for repos in

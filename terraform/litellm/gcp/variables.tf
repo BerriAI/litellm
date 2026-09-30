@@ -119,63 +119,43 @@ variable "vpc_connector_cidr" {
   default     = "10.41.0.0/28"
 }
 
-# ---------- Component images ----------
+# ---------- Image ----------
 #
 # Cloud Run only pulls from Artifact Registry, [region.]gcr.io, or
-# docker.io — it rejects arbitrary registries (notably ghcr.io) at apply
-# time. The four images live on GHCR upstream, so any real deploy must
-# either set `image_registry` to an Artifact Registry remote repository
-# pointed at ghcr.io (e.g. `us-central1-docker.pkg.dev/my-proj/litellm/berriai`)
-# or override the per-component `*_image` vars individually with full URIs.
+# docker.io and rejects arbitrary registries (notably ghcr.io) at apply
+# time. The image lives on GHCR upstream, so any real deploy must either
+# set `image_registry` to an Artifact Registry remote repository pointed at
+# ghcr.io (e.g. `us-central1-docker.pkg.dev/my-proj/litellm/berriai`) or
+# set `image` to the full URI of a copy you mirrored yourself.
 
 variable "image_registry" {
   description = <<-EOT
-    Registry path prefix used to compose the four LiteLLM image URIs as
-    `<image_registry>/litellm-<component>:<image_tag>`. The default
-    (`ghcr.io/berriai`) only works on registries Cloud Run accepts — for
-    GHCR-backed deploys, create an Artifact Registry remote repository
-    pointed at `https://ghcr.io` and set this to that repo's path
+    Registry path prefix used to compose the LiteLLM image URI as
+    `<image_registry>/litellm:<image_tag>`. The default (`ghcr.io/berriai`)
+    only works on registries Cloud Run accepts: for GHCR-backed deploys,
+    create an Artifact Registry remote repository pointed at
+    `https://ghcr.io` and set this to that repo's path
     (e.g. `us-central1-docker.pkg.dev/<project>/<remote-repo>/berriai`).
-    Per-component overrides (`gateway_image`, `backend_image`, `ui_image`,
-    `migrations_image`) bypass this entirely when set.
+    `image` bypasses this entirely when set.
   EOT
   type        = string
   default     = "ghcr.io/berriai"
 }
 
 variable "image_tag" {
-  description = "Tag applied to all four litellm-* images when composed from `image_registry`. Bump in lockstep when bumping LiteLLM. Must match a tag actually published to GHCR — the split images use the `v`-prefixed semver convention (e.g. `v1.86.0-dev`)."
+  description = "Tag of the LiteLLM image when composed from `image_registry`. The component entrypoint ships from v1.104.0; older tags only run the monolithic proxy. Must match a tag actually published to GHCR (`v<semver>` for releases)."
   type        = string
-  default     = "v1.86.0-dev"
+  default     = "v1.104.0"
 }
 
-variable "gateway_image" {
-  description = "Full image URI for the gateway. Empty (default) composes from `image_registry` + `image_tag`. Public images or Artifact Registry only — Cloud Run won't authenticate against arbitrary private registries."
-  type        = string
-  default     = ""
-}
-
-variable "backend_image" {
-  description = "Full image URI for the backend. Empty (default) composes from `image_registry` + `image_tag`."
-  type        = string
-  default     = ""
-}
-
-variable "ui_image" {
-  description = "Full image URI for the UI. Empty (default) composes from `image_registry` + `image_tag`."
-  type        = string
-  default     = ""
-}
-
-variable "migrations_image" {
+variable "image" {
   description = <<-EOT
-    Full image URI for the one-off prisma migration Cloud Run Job. Empty
-    (default) composes from `image_registry` + `image_tag` as
-    `litellm-migrations`. Built from `migrations/Dockerfile` — slim image
-    whose ENTRYPOINT runs `python3 /app/run.py` (assembles DATABASE_URL
-    from DATABASE_* env vars via DatabaseURLSettings, then runs
-    `prisma migrate deploy`). Should track the same release tag as
-    gateway/backend/ui.
+    Full URI of the one LiteLLM image every Cloud Run service and the
+    migrations Job run. Its entrypoint picks the process from the first
+    argument (`gateway`, `backend`, `ui`, `migrations`, `metrics`,
+    `collector`). Empty (default) composes from `image_registry` +
+    `image_tag`. Public images or Artifact Registry only: Cloud Run won't
+    authenticate against arbitrary private registries.
   EOT
   type        = string
   default     = ""
@@ -563,8 +543,7 @@ variable "gateway_metrics_port" {
     Serve Prometheus /metrics from a `metrics` sidecar container in the
     gateway Cloud Run service on this port (a whole number 1-65535, not 4000
     or 13133), so the collector's scrape never runs on an inference worker.
-    The sidecar runs the gateway image with
-    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    The sidecar runs the `metrics` component of the image and aggregates the
     workers' PROMETHEUS_MULTIPROC_DIR samples over an in-memory volume shared
     with the gateway container. Cloud Run only routes ingress to the gateway
     container, so the sidecar port is reachable on localhost inside the
@@ -572,7 +551,7 @@ variable "gateway_metrics_port" {
     (gateway_metrics_collector_image) scrapes it and writes the series to
     Cloud Monitoring. The load balancer keeps serving the authenticated
     /metrics on the gateway port as before. Null (the default) leaves /metrics
-    on the gateway port only. Needs gateway_image v1.101.0 or newer.
+    on the gateway port only.
   EOT
   type        = number
   default     = null
@@ -660,7 +639,7 @@ variable "billing_metrics_ca_cert_pem" {
 # ---------- Collector sidecar ----------
 #
 # Opt-in offload of spend tracking from the gateway's uvicorn workers to a
-# `python -m litellm.proxy.collector` sidecar container in the same Cloud Run
+# `collector` component sidecar container in the same Cloud Run
 # instance (helm's `gateway.collector`, mirrors the AWS stack). Containers
 # in one instance share localhost, so the sidecar listens on loopback TCP.
 # Disabled (the default) adds nothing to the service.

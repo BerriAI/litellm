@@ -1,6 +1,6 @@
 # Curated surface for the one-command deploy path. The module (../../)
 # exposes far more knobs (per-component CPU/memory/instances, Cloud SQL
-# tier/edition, Memorystore tier, per-component image overrides, …). To
+# tier/edition, Memorystore tier, a full `image` override, …). To
 # tune those, set them directly on the `module "litellm"` block in
 # main.tf, or call the module from your own root config. Full per-variable
 # docs live in ../../variables.tf — the module is the source of truth.
@@ -75,17 +75,17 @@ variable "ui_password" {
 
 # Image source. Cloud Run rejects ghcr.io, so a real deploy must point
 # image_registry at an Artifact Registry remote repo (see README "Image
-# pulls"). Per-component overrides live in ../../variables.tf.
+# pulls"). The full `image` override lives in ../../variables.tf.
 variable "image_registry" {
-  description = "Registry path prefix; images composed as <image_registry>/litellm-<component>:<image_tag>."
+  description = "Registry path prefix; the image is composed as <image_registry>/litellm:<image_tag>."
   type        = string
   default     = "ghcr.io/berriai"
 }
 
 variable "image_tag" {
-  description = "Tag applied to all four litellm-* images. Bump in lockstep."
+  description = "Tag of the litellm image every workload runs."
   type        = string
-  default     = "v1.86.0-dev"
+  default     = "v1.104.0"
 }
 
 # TLS — provide DNS names for a managed cert, or opt into HTTP-only for dev.
