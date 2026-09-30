@@ -205,18 +205,21 @@ async fn spend_deduplication_preserves_subsecond_requests_and_retries(
     let database = database?;
     let writer = Connection::writer(&database.url, "default", "")?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
-    let start_time = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
+    let now_ms = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
+    let base_start_time = now_ms / 1000 * 1000;
+    let first_start_time = base_start_time + 100;
+    let second_start_time = base_start_time + 200;
     let first = serde_json::from_value(serde_json::json!({
         "request_id": "same-request", "team_id": "team-1", "spend": 1.0,
-        "start_time": start_time, "end_time": start_time + 1000
+        "start_time": first_start_time, "end_time": first_start_time + 1000
     }))?;
     let second = serde_json::from_value(serde_json::json!({
         "request_id": "same-request", "team_id": "team-1", "spend": 2.0,
-        "start_time": start_time + 100, "end_time": start_time + 1200
+        "start_time": second_start_time, "end_time": second_start_time + 1200
     }))?;
     let retry = serde_json::from_value(serde_json::json!({
         "request_id": "same-request", "team_id": "team-1", "spend": 1.0,
-        "start_time": start_time, "end_time": start_time + 2000
+        "start_time": first_start_time, "end_time": first_start_time + 2000
     }))?;
     insert_rows(&database, "spend_logs", vec![first]).await?;
     insert_rows(&database, "spend_logs", vec![second]).await?;
@@ -233,12 +236,12 @@ async fn spend_deduplication_preserves_subsecond_requests_and_retries(
         rows["data"],
         serde_json::json!([
             {
-                "start_time": start_time.to_string(),
-                "end_time": (start_time + 2000).to_string()
+                "start_time": first_start_time.to_string(),
+                "end_time": (first_start_time + 2000).to_string()
             },
             {
-                "start_time": (start_time + 100).to_string(),
-                "end_time": (start_time + 1200).to_string()
+                "start_time": second_start_time.to_string(),
+                "end_time": (second_start_time + 1200).to_string()
             }
         ])
     );
