@@ -2021,8 +2021,6 @@ async def test_auto_register_binds_api_key_to_token_hash():
 
 
 def _auto_register_patches(*, plaintext_key: str | None = "sk-minted-plaintext"):
-    """The two collaborators every _auto_register_jwt_mapping test patches the same
-    way: key minting (returns {"token": plaintext}) and IdentityStore.resolve."""
     from litellm.proxy.auth.auth_method import AuthMethod
     from litellm.proxy.auth.resolvers.models import CredentialRef
     from litellm.proxy.auth.resolvers.store import IdentityStore
@@ -2115,8 +2113,6 @@ async def test_auto_register_map_existing_key_reuses_users_key_but_never_an_auto
 
 @pytest.mark.asyncio
 async def test_auto_register_map_existing_key_mints_when_user_has_no_key():
-    """The flag must not leave a keyless user unmapped: with no existing key it
-    falls back to the mint path and maps the claim to the new key's hash."""
     from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
     from litellm.proxy.proxy_server import hash_token
 
@@ -2149,8 +2145,6 @@ async def test_auto_register_map_existing_key_mints_when_user_has_no_key():
 
 @pytest.mark.asyncio
 async def test_auto_register_default_never_looks_up_existing_keys():
-    """Without the flag the behavior is unchanged: no verification-token lookup at
-    all, a fresh key is always minted."""
     from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
 
     prisma_client = MagicMock()
@@ -2163,7 +2157,7 @@ async def test_auto_register_default_never_looks_up_existing_keys():
     user_api_key_cache.async_set_cache = AsyncMock()
 
     jwt_handler = MagicMock()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_mapping_cache_ttl=300)
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(user_id_jwt_field="sub", virtual_key_mapping_cache_ttl=300)
 
     generate_patch, resolve_patch = _auto_register_patches()
     with generate_patch as generate_key, resolve_patch:
@@ -2175,8 +2169,6 @@ async def test_auto_register_default_never_looks_up_existing_keys():
 
 @pytest.mark.asyncio
 async def test_auto_register_map_existing_key_race_loser_keeps_reused_key():
-    """A reused key is not ours to delete: when the unique-constraint race is lost,
-    the pre-existing user key must survive and the winner's mapping wins."""
     from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
 
     prisma_client = MagicMock()
@@ -2218,8 +2210,6 @@ async def test_auto_register_map_existing_key_race_loser_keeps_reused_key():
 
 @pytest.mark.asyncio
 async def test_auto_register_map_existing_key_user_id_none_mints():
-    """With no resolved user there is no key to reuse; the flag must not skip
-    minting, and the lookup must not run."""
     from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
 
     prisma_client = MagicMock()
