@@ -4414,6 +4414,80 @@ def _call_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncH
                 _is_async=is_async,
                 client=client,
             )
+        case "vector_store_file_content":
+            return handler.vector_store_file_content_handler(
+                vector_store_id="vs_missing",
+                file_id="file_missing",
+                vector_store_files_provider_config=OpenAIVectorStoreFilesConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_list":
+            return handler.list_evals_handler(
+                url="https://api.example.test/v1/evals",
+                query_params={},
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_get":
+            return handler.get_eval_handler(
+                url="https://api.example.test/v1/evals/eval_missing",
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_run_list":
+            return handler.list_runs_handler(
+                url="https://api.example.test/v1/evals/eval_missing/runs",
+                query_params={},
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "eval_run_get":
+            return handler.get_run_handler(
+                url="https://api.example.test/v1/evals/eval_missing/runs/run_missing",
+                evals_api_provider_config=OpenAIEvalsConfig(),
+                custom_llm_provider="openai",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "skill_list":
+            return handler.list_skills_handler(
+                url="https://api.example.test/v1/skills",
+                query_params={},
+                skills_api_provider_config=AnthropicSkillsConfig(),
+                custom_llm_provider="anthropic",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
+        case "skill_get":
+            return handler.get_skill_handler(
+                url="https://api.example.test/v1/skills/skill_missing",
+                skills_api_provider_config=AnthropicSkillsConfig(),
+                custom_llm_provider="anthropic",
+                litellm_params=vector_store_params,
+                logging_obj=Mock(),
+                client=client,
+                _is_async=is_async,
+            )
         case _:
             return handler.list_files(
                 purpose=None,
@@ -4439,8 +4513,15 @@ async def _run_lookup_handler(name: str, is_async: bool, client: HTTPHandler | A
         "vector_store_list",
         "vector_store_file_list",
         "vector_store_file_retrieve",
+        "vector_store_file_content",
         "file_retrieve",
         "file_list",
+        "eval_list",
+        "eval_get",
+        "eval_run_list",
+        "eval_run_get",
+        "skill_list",
+        "skill_get",
     ),
 )
 @pytest.mark.parametrize("is_async", (False, True))
