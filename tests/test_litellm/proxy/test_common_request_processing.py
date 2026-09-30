@@ -4309,14 +4309,19 @@ class TestStreamCloseOnDisconnect:
             serialize_error=lambda e: "data: error\n\n",
         )
 
+        released: list[object] = []
+
+        async def record_release(budget_reservation: object) -> None:
+            released.append(budget_reservation)
+
         with patch(
             "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel",
-            new=AsyncMock(),
-        ) as release:
+            new=record_release,
+        ):
             await gen.__anext__()
             await gen.aclose()
 
-        release.assert_awaited_once_with(reservation)
+        assert released == [reservation]
 
     async def test_async_streaming_data_generator_redacts_internal_details_on_error(
         self,
