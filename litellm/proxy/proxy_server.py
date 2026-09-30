@@ -9009,18 +9009,11 @@ class ProxyConfig:
         config: Final = await self.get_config(config_file_path=user_config_file_path)
         credential_list: Final = self.load_credential_list(config=config)
 
-        ## COMBINED LIST ##
-        combined_list: Final = db_credentials + credential_list
-
         ## DELETE ##
-        names_to_keep: Final = {cred.credential_name for cred in combined_list}
-        idx_to_delete: Final = [
-            idx
-            for idx, credential in enumerate(litellm.credential_list)
-            if credential.credential_name not in names_to_keep
-        ]
-        for idx in sorted(idx_to_delete, reverse=True):
-            litellm.credential_list.pop(idx)
+        names_to_keep: Final = {cred.credential_name for cred in db_credentials} | {
+            cred.credential_name for cred in credential_list
+        }
+        litellm.credential_list[:] = [cred for cred in litellm.credential_list if cred.credential_name in names_to_keep]
 
     async def get_credentials(self, prisma_client: PrismaClient):
         try:

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +26,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
+from litellm.types.utils import CredentialItem
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -1798,9 +1800,7 @@ def test_ProxyConfig_load_credential_list_invalid_entry_raises():
 # ---------------------------------------------------------------------------
 
 
-def _credential_item(name: str) -> "CredentialItem":
-    from litellm.types.utils import CredentialItem
-
+def _credential(name: str) -> CredentialItem:
     return CredentialItem(credential_name=name, credential_values={"api_key": f"key-{name}"}, credential_info={})
 
 
@@ -1810,50 +1810,35 @@ async def test_ProxyConfig_delete_credentials_drops_only_names_missing_from_db_a
 ) -> None:
     pc = ProxyConfig()
     monkeypatch.setattr(
-        litellm,
-        "credential_list",
-        [_credential_item("db-kept"), _credential_item("stale"), _credential_item("from-config")],
+        litellm, "credential_list", [_credential("db-kept"), _credential("stale"), _credential("from-config")]
+    )
+    monkeypatch.setattr(
+        pc, "get_config", AsyncMock(return_value={"credential_list": [_credential("from-config").model_dump()]})
     )
 
-    async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
-        return {
-            "credential_list": [
-                {"credential_name": "from-config", "credential_values": {"api_key": "cfg"}, "credential_info": {}}
-            ]
-        }
+    await pc.delete_credentials([_credential("db-kept")])
 
-    monkeypatch.setattr(pc, "get_config", fake_get_config)
-
-    await pc.delete_credentials([_credential_item("db-kept")])
-
-    assert [c.credential_name for c in litellm.credential_list] == ["db-kept", "from-config"]
+    assert [cred.credential_name for cred in litellm.credential_list] == ["db-kept", "from-config"]
 
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_delete_credentials_scales_linearly_with_credential_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Runs on the serving event loop every config reload; 20k credentials took ~40s with the previous
-    # nested scan and blocked every request and health probe for that long.
-    import time
-
     n = 20_000
     pc = ProxyConfig()
-    monkeypatch.setattr(litellm, "credential_list", [_credential_item(f"cred-{i}") for i in range(n)])
-
-    async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
-        return {}
-
-    monkeypatch.setattr(pc, "get_config", fake_get_config)
-    db_credentials = [_credential_item(f"cred-{i}") for i in range(n) if i != 7]
+    monkeypatch.setattr(litellm, "credential_list", [_credential(f"cred-{i}") for i in range(n)])
+    monkeypatch.setattr(pc, "get_config", AsyncMock(return_value={}))
+    db_credentials = [cred for cred in litellm.credential_list if cred.credential_name != "cred-7"]
 
     started = time.perf_counter()
     await pc.delete_credentials(db_credentials)
     elapsed = time.perf_counter() - started
 
-    assert len(litellm.credential_list) == n - 1
-    assert all(c.credential_name != "cred-7" for c in litellm.credential_list)
-    assert elapsed < 2.0, f"delete_credentials over {n} credentials took {elapsed:.1f}s; expected linear-time behaviour"
+    assert litellm.credential_list == db_credentials
+    assert elapsed < 2.0, (
+        f"delete_credentials over {n} credentials took {elapsed:.1f}s; the per-reload sync must stay linear"
+    )
 
 
 # ---------------------------------------------------------------------------
