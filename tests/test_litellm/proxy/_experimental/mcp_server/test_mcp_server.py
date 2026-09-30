@@ -1279,6 +1279,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else failing_server
     )
+    mock_manager.get_mcp_server_answering_to = lambda name, client_ip=None: None
     # Mock filter_server_ids_by_ip to return server_ids unchanged (no IP filtering)
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
         server_ids,
@@ -6764,6 +6765,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     ):
         mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["legacy-m2m-id"])
         mock_manager.get_mcp_server_by_id = MagicMock(return_value=legacy_server)
+        mock_manager.get_mcp_server_answering_to = MagicMock(return_value=None)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["legacy-m2m-id"], 0))
         mock_manager._get_tools_from_server = AsyncMock(side_effect=capture_extra_headers)
 
@@ -8589,6 +8591,39 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_known_alias_returns
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("alias_server_first", [True, False], ids=["alias-granted-first", "server-name-granted-first"])
+async def test_scoped_router_selects_the_server_the_connect_preflight_resolves(alias_server_first):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.server import _get_allowed_mcp_servers_from_mcp_server_names
+
+    by_alias = MCPServer(server_id="a-id", name="a", server_name="a", alias="gh", transport=MCPTransport.http)
+    by_server_name = MCPServer(server_id="b-id", name="b", server_name="Gh", transport=MCPTransport.http)
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update({"a-id": by_alias, "b-id": by_server_name})
+    granted_both = [by_alias, by_server_name] if alias_server_first else [by_server_name, by_alias]
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler._get_mcp_servers_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            for name in ("Gh", "gh", "GH"):
+                expected = global_mcp_server_manager.get_mcp_server_answering_to(name)
+                selected = await _get_allowed_mcp_servers_from_mcp_server_names(
+                    mcp_servers=[name], allowed_mcp_servers=granted_both
+                )
+                assert [s.server_id for s in selected] == [expected.server_id], name
+            only_b = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["gh"], allowed_mcp_servers=[by_server_name]
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert only_b == [], "a name the registry gives to an ungranted server must not fall through to another"
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_from_mcp_server_names_mixed_known_and_unknown():
     """
     Mixed scope (one valid + one unknown) returns only the resolved server,
@@ -9729,6 +9764,7 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     mock_manager.get_mcp_server_by_id = lambda server_id: (
         working_server if server_id == "working_server" else broken_server
     )
+    mock_manager.get_mcp_server_answering_to = lambda name, client_ip=None: None
     mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (server_ids, 0)
 
     async def mock_get_tools_from_server(server, **kwargs):

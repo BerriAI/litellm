@@ -455,15 +455,10 @@ async def _get_allowed_mcp_servers_from_mcp_server_names(
     # Filter servers based on mcp_servers parameter if provided
     if mcp_servers is not None:
         for server_or_group in mcp_servers:
-            server_name_matched = False
+            if (scoped := _scoped_server(server_or_group, allowed_mcp_servers)) is not None:
+                filtered_server[scoped.server_id] = scoped
 
-            for server in allowed_mcp_servers:
-                if server and _server_answers_to(server, server_or_group):
-                    filtered_server[server.server_id] = server
-                    server_name_matched = True
-                    break
-
-            if not server_name_matched:
+            if scoped is None:
                 try:
                     access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
                         [server_or_group]
@@ -498,6 +493,17 @@ def _http_detail_message(detail: object) -> str:
 
 def _server_answers_to(server: MCPServer, name: str) -> bool:
     return server_answers_to_name(server, name)
+
+
+def _scoped_server(name: str, allowed_mcp_servers: Sequence[MCPServer]) -> MCPServer | None:
+    """The granted server a scoped ``name`` selects: the registry's ``get_mcp_server_answering_to`` pick when
+    the caller holds it, so the router agrees with the connect preflight and discovery, and none when the
+    registry names a server the caller does not hold. Names the registry cannot place fall back to the first
+    granted server answering to them."""
+    registry_pick: Final = global_mcp_server_manager.get_mcp_server_answering_to(name)
+    if registry_pick is not None:
+        return next((s for s in allowed_mcp_servers if s.server_id == registry_pick.server_id), None)
+    return next((s for s in allowed_mcp_servers if s and _server_answers_to(s, name)), None)
 
 
 async def raise_denied_scoped_mcp_access(

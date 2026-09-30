@@ -924,6 +924,7 @@ async def test_get_tools_from_mcp_servers():
         mock_manager.get_mcp_server_by_id = lambda server_id: (
             mock_server_1 if server_id == "server1_id" else mock_server_2
         )
+        mock_manager.get_mcp_server_answering_to = MagicMock(return_value=None)
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
@@ -1002,6 +1003,7 @@ async def test_get_tools_from_mcp_servers():
             if server_id == "server1_id"
             else (mock_server_2 if server_id == "server2_id" else mock_server_3)
         )
+        mock_manager.get_mcp_server_answering_to = MagicMock(return_value=None)
         mock_manager._get_tools_from_server = AsyncMock(return_value=[mock_tool_1])
         # Mock filter_server_ids_by_ip_with_info to return input unchanged (no IP filtering in test)
         mock_manager.filter_server_ids_by_ip_with_info = MagicMock(

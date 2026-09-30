@@ -6231,6 +6231,28 @@ class TestMCPServerManager:
         assert manager.get_mcp_server_answering_to("GH_PUBLIC") is gh_public
         assert manager.get_mcp_server_answering_to("gh-id") is gh
 
+    @pytest.mark.parametrize("gh_first", [True, False], ids=["alias-listed-first", "server-name-listed-first"])
+    def test_answering_to_agrees_with_exact_name_before_case_folding(self, gh_first):
+        manager = MCPServerManager()
+        by_alias = MCPServer(
+            server_id="a-id",
+            name="a",
+            server_name="a",
+            alias="gh",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        by_server_name = MCPServer(server_id="b-id", name="b", server_name="Gh", transport=MCPTransport.http)
+        manager.registry = (
+            {"a-id": by_alias, "b-id": by_server_name} if gh_first else {"b-id": by_server_name, "a-id": by_alias}
+        )
+
+        for name in ("Gh", "gh"):
+            assert manager.get_mcp_server_answering_to(name) is manager.get_mcp_server_by_name(name), name
+        assert manager.get_mcp_server_answering_to("Gh") is by_server_name
+        assert manager.get_mcp_server_answering_to("gh") is by_alias
+        assert manager.get_mcp_server_answering_to("GH") is by_alias
+
     def test_remove_server_drops_only_its_own_tool_mapping_rows(self):
         manager = self._manager_with_deepwiki_and_huggingface()
 

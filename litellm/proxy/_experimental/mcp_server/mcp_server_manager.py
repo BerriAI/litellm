@@ -7200,8 +7200,12 @@ class MCPServerManager:
         return None
 
     def get_mcp_server_answering_to(self, name: str, client_ip: str | None = None) -> MCPServer | None:
-        """The server a scoped ``/mcp/{name}`` connect resolves to: alias, then server_name, then name, each
-        case-insensitive so ``/mcp/GH`` and ``/mcp/gh`` agree, then the router's prefix match."""
+        """The one server a ``/mcp/{name}`` segment denotes, shared by the connect preflight, the scoped
+        router, and RFC 9728 discovery so all three name the same server: the exact ``get_mcp_server_by_name``
+        priority first, then the same priority case-insensitively, then any prefix form routing accepts."""
+        exact: Final = self.get_mcp_server_by_name(name, client_ip=client_ip)
+        if exact is not None:
+            return exact
         requested: Final = name.lower()
         servers: Final = tuple(self.get_registry().values())
         identifiers: Final[tuple[Callable[[MCPServer], str | None], ...]] = (
