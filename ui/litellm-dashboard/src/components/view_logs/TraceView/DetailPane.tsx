@@ -67,7 +67,12 @@ function SpanPane({
 }) {
   const [tab, setTab] = useState<Tab>("content");
   const traceId = trace.summary.trace_id;
-  const detailQuery = useSpanDetail(accessToken, traceId, tab === "attributes" ? span.span_id : null);
+  const detailQuery = useSpanDetail(
+    accessToken,
+    traceId,
+    tab === "attributes" ? span.span_id : null,
+    trace.summary.trace_ref,
+  );
   const tokens = span.input_tokens + span.output_tokens;
   return (
     <aside className="flex h-full min-w-0 flex-col bg-background" aria-label="Span details">
@@ -103,7 +108,9 @@ function SpanPane({
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {tab === "content" && <DetailContent accessToken={accessToken} traceId={traceId} span={span} />}
+        {tab === "content" && (
+          <DetailContent accessToken={accessToken} traceId={traceId} traceRef={trace.summary.trace_ref} span={span} />
+        )}
         {tab === "request" && (
           <RequestDetail span={span} accessToken={accessToken} traceStartMs={Date.parse(trace.summary.start_time)} />
         )}
@@ -117,7 +124,11 @@ function SpanPane({
         )}
       </div>
       <PaneFooter>
-        <CopyButton value={agentHandoffText(traceId, span.span_id)} label="Copy step" copiedLabel="Command copied" />
+        <CopyButton
+          value={agentHandoffText(traceId, span.span_id, trace.summary.trace_ref)}
+          label="Copy step"
+          copiedLabel="Command copied"
+        />
         <div className="ml-auto flex items-center gap-3 font-mono text-[10px] tabular-nums text-muted-foreground">
           <Meta label="time" value={fmtMs(span.duration_ms)} />
           {tokens > 0 && <Meta label="tokens" value={fmtTok(tokens)} />}

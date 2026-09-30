@@ -1043,3 +1043,119 @@ async def test_managed_target_preserves_ordinary_actor_ceilings_after_key_reload
     assert await AgentRequestHandler.is_agent_allowed("target", auth) is (permitted and ceiling != "group-without-grant")
     database.get_data.assert_awaited_once()
     assert auth.agent_caller == (AgentCaller(team_id="caller-team") if ceiling == "caller-team" else None)
+
+
+@pytest.mark.parametrize(
+    "direct,teams,selected,explicit,expected",
+    [
+        (False, ("a",), "b", True, "denied"),
+        (False, ("a",), "a", True, "a"),
+        (False, ("a",), None, False, "a"),
+        (False, ("a",), "default-team", False, "a"),
+        (False, ("a", "b"), "b", True, "b"),
+        (False, ("b", "a"), None, False, "a"),
+        (False, ("b", "a"), "default-team", False, "a"),
+        (False, (), None, False, "denied"),
+        (True, (), None, False, None),
+        (True, ("a",), "b", True, "b"),
+    ],
+)
+async def test_delegated_team_selection_preserves_the_grant_source(
+    monkeypatch: pytest.MonkeyPatch,
+    direct: bool,
+    teams: tuple[str, ...],
+    selected: str | None,
+    explicit: bool,
+    expected: str | None,
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.auth import agent_permission_handler as permissions
+
+    sources: Final = [
+        (None, frozenset({"actor"}) if direct else frozenset()),
+        *((team, frozenset({"actor"})) for team in teams),
+    ]
+    monkeypatch.setattr(permissions, "_verified_human_agent_sources", AsyncMock(return_value=sources))
+    if expected == "denied":
+        with pytest.raises(HTTPException) as error:
+            await permissions.resolve_delegated_agent_team("human", "actor", selected, explicit_team=explicit)
+        assert error.value.status_code == 403
+    else:
+        assert (
+            await permissions.resolve_delegated_agent_team("human", "actor", selected, explicit_team=explicit)
+            == expected
+        )
+
+
+@pytest.mark.parametrize(
+    "team_id,expected", [(None, {"direct"}), ("a", {"direct", "a-only"}), ("b", {"direct", "b-only"})]
+)
+async def test_delegated_target_grants_do_not_borrow_another_teams_authority(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, expected: set[str]
+) -> None:
+    from litellm.proxy.agent_endpoints.auth import agent_permission_handler as permissions
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import ManagedAgentContext
+
+    sources: Final = [(None, frozenset({"direct"})), ("a", frozenset({"a-only"})), ("b", frozenset({"b-only"}))]
+    monkeypatch.setattr(permissions, "_verified_human_agent_sources", AsyncMock(return_value=sources))
+    auth: Final = UserAPIKeyAuth(agent_id="actor", team_id=team_id)
+    auth.managed_agent_context = ManagedAgentContext(agent_id="actor", mode="delegated", user_id="human")
+    auth.managed_agent_policy = AgentResponse(
+        agent_id="actor",
+        agent_name="Actor",
+        agent_card_params={},
+        object_permission={"object_permission_id": "own", "agents": ["direct", "a-only", "b-only"]},
+    )
+    assert await AgentRequestHandler.resolve_agent_access(auth) == RestrictedAgentAccess(frozenset(expected))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "managed,enabled,grant,outage,allowed",
+    [
+        (True, True, False, False, False),
+        (True, True, True, False, True),
+        (True, False, True, False, False),
+        (False, True, False, False, True),
+        (True, True, False, True, False),
+    ],
+)
+async def test_target_authorization_uses_live_policy_despite_stale_unmanaged_registry(
+    monkeypatch: pytest.MonkeyPatch, managed: bool, enabled: bool, grant: bool, outage: bool, allowed: bool
+) -> None:
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    stale: Final = AgentResponse(agent_id="target", agent_name="Target", agent_card_params={})
+    registry: Final = AgentRegistry()
+    registry.register_agent(stale)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    binding: Final = AgentIdentityBinding(
+        agent_id="target", provider="microsoft_entra", tenant_id="tenant", client_id="client",
+        issuer="issuer", revision="current",
+    )
+    current: Final = stale.model_copy(update={
+        "identity_managed": managed, "identity": binding if managed else None, "enabled": enabled,
+    })
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=current, side_effect=ConnectionError("writer unavailable") if outage else None,
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["target"])
+    auth: Final = UserAPIKeyAuth(object_permission=permission if grant else None)
+
+    if outage:
+        with pytest.raises(HTTPException) as denied:
+            await AgentRequestHandler.is_agent_allowed("target", auth)
+        assert denied.value.status_code == 503
+        return
+    assert await AgentRequestHandler.is_agent_allowed("target", auth) is allowed
