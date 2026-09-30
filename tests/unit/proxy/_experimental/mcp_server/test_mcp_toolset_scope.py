@@ -175,6 +175,49 @@ class TestApplyToolsetScope:
         granted.assert_awaited_once_with(admitted)
 
     @pytest.mark.asyncio
+    async def test_a_resource_scoped_admitted_user_is_denied_a_team_toolset_on_another_server(self):
+        """A gateway bearer scoped to server-own (RFC 8707 resource) cannot open a team toolset whose
+        servers lie outside that resource, even though the team grants it (Devin Review 4150024267)."""
+        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+
+        admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
+        admitted.mcp_admitted_user_subject = True
+        admitted.mcp_session_resource_server_id = "server-own"
+        admitted.requires_fresh_policy = True
+        granted = AsyncMock(return_value=frozenset({"toolset-123"}))
+        resolve = AsyncMock(return_value={"server-team": ["tool1"]})
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server."
+            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            new=resolve,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _apply_toolset_scope(admitted, "toolset-123", granted=granted)
+
+        assert exc_info.value.status_code == 403
+        resolve.assert_awaited_once_with(toolset_ids=["toolset-123"], requires_fresh_policy=True)
+
+    @pytest.mark.asyncio
+    async def test_a_resource_scoped_admitted_user_opens_a_toolset_inside_its_resource(self):
+        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+
+        admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
+        admitted.mcp_admitted_user_subject = True
+        admitted.mcp_session_resource_server_id = "server-team"
+        granted = AsyncMock(return_value=frozenset({"toolset-123"}))
+        resolve = AsyncMock(return_value={"server-team": ["tool1"], "server-other": ["tool2"]})
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server."
+            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            new=resolve,
+        ):
+            result = await _apply_toolset_scope(admitted, "toolset-123", granted=granted)
+
+        assert result.mcp_toolset_id == "toolset-123"
+        assert result.mcp_session_resource_server_id == "server-team"
+        resolve.assert_awaited_once_with(toolset_ids=["toolset-123"], requires_fresh_policy=False)
+
+    @pytest.mark.asyncio
     async def test_team_grant_for_another_toolset_does_not_admit_a_key_to_this_one(self):
         from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
 

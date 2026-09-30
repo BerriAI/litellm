@@ -8311,6 +8311,27 @@ class TestUserSubjectTeamUnion:
         assert unpinned_tools is None
         assert {call.kwargs["toolset_ids"][0] for call in resolve.await_args_list} == {"ts-1"}
 
+    async def test_a_fresh_policy_pinned_toolset_bypasses_the_toolset_permission_cache(self):
+        """A session admitted under requires_fresh_policy reads the pinned toolset from the writer, so a
+        tool revoked from the toolset is gone on the very next request (Devin Review 4150024092)."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        teams = {"team-a": _make_team("team-a", ["srv1", "srv2"])}
+        auth = _make_admitted_subject("sso-user")
+        auth.requires_fresh_policy = True
+        pinned = auth.model_copy(update={"mcp_toolset_id": "ts-1"})
+        resolve = AsyncMock(return_value={"srv1": ["add"]})
+        with (
+            self._patch(teams_by_id=teams, user_teams=["team-a"]),
+            patch.object(global_mcp_server_manager, "resolve_toolset_tool_permissions", resolve),
+        ):
+            servers = await MCPRequestHandler.resolve_admitted_subject_servers(pinned)
+            tools = await MCPRequestHandler.resolve_admitted_subject_tools("srv1", pinned)
+        assert servers == ["srv1"]
+        assert tools == ["add"]
+        assert resolve.await_args_list
+        assert all(call.kwargs == {"toolset_ids": ["ts-1"], "requires_fresh_policy": True} for call in resolve.await_args_list)
+
     async def test_key_based_caller_uses_single_team_only(self):
         """A key-based caller (api_key set) with a team_id sees ONLY that team, even though the
         same user belongs to other teams: key auth must be byte-identical to before."""

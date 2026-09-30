@@ -1967,7 +1967,9 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
-        return await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=[auth.mcp_toolset_id])
+        return await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            toolset_ids=[auth.mcp_toolset_id], requires_fresh_policy=auth.requires_fresh_policy
+        )
 
     @staticmethod
     async def _narrow_tools_to_toolset(
