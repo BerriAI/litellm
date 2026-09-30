@@ -7200,9 +7200,19 @@ class MCPServerManager:
         return None
 
     def get_mcp_server_answering_to(self, name: str, client_ip: str | None = None) -> MCPServer | None:
-        """The server a scoped ``/mcp/{name}`` connect resolves to: the alias-first exact lookup, then
-        the router's case-insensitive prefix match."""
-        return self.get_mcp_server_by_name(name, client_ip=client_ip) or next(
+        """The server a scoped ``/mcp/{name}`` connect resolves to: alias, then server_name, then name, each
+        case-insensitive so ``/mcp/GH`` and ``/mcp/gh`` agree, then the router's prefix match."""
+        requested: Final = name.lower()
+        servers: Final = tuple(self.get_registry().values())
+        identifiers: Final[tuple[Callable[[MCPServer], str | None], ...]] = (
+            lambda server: server.alias,
+            lambda server: server.server_name,
+            lambda server: server.name,
+        )
+        for identifier in identifiers:
+            if (found := next((s for s in servers if (identifier(s) or "").lower() == requested), None)) is not None:
+                return found if self._is_server_accessible_from_ip(found, client_ip) else None
+        return next(
             (
                 server
                 for server in self.get_filtered_registry(client_ip).values()

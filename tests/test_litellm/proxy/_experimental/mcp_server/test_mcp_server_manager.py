@@ -6225,6 +6225,8 @@ class TestMCPServerManager:
         )
 
         assert manager.get_mcp_server_answering_to("gh") is gh_public
+        assert manager.get_mcp_server_answering_to("GH") is gh_public
+        assert manager.get_mcp_server_answering_to("Gh_Public") is gh_public
         assert manager.get_mcp_server_answering_to("gh-public-id") is gh_public
         assert manager.get_mcp_server_answering_to("GH_PUBLIC") is gh_public
         assert manager.get_mcp_server_answering_to("gh-id") is gh
