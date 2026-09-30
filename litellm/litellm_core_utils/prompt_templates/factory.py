@@ -3826,7 +3826,7 @@ def _build_bedrock_tool_result_content_blocks(
         if tool_result_content_blocks:
             return tool_result_content_blocks, True
 
-    message_content: Final = message["content"]
+    message_content: Final = message.get("content")
     if isinstance(message_content, str):
         return [BedrockToolResultContentBlock(text=message_content)], False
     if isinstance(message_content, list):
@@ -4374,9 +4374,10 @@ class BedrockConverseMessagesProcessor:
                     message=messages[msg_i],
                     user_continue_message=user_continue_message,
                 )
-                if isinstance(message_block["content"], list):
+                message_content = message_block.get("content")
+                if isinstance(message_content, list):
                     _parts: list[BedrockContentBlock] = []
-                    for element in message_block["content"]:
+                    for element in message_content:
                         if isinstance(element, dict):
                             if element["type"] == "text":
                                 _part = BedrockContentBlock(text=element["text"])
@@ -4418,8 +4419,8 @@ class BedrockConverseMessagesProcessor:
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
                     user_content.extend(_parts)
-                elif message_block["content"] and isinstance(message_block["content"], str):
-                    _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                elif message_content and isinstance(message_content, str):
+                    _part = BedrockContentBlock(text=message_content)
                     _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         message_block, block_type="content_block", model=model
                     )
@@ -4746,9 +4747,10 @@ def _bedrock_converse_messages_pt(
                 message=messages[msg_i],
                 user_continue_message=user_continue_message,
             )
-            if isinstance(message_block["content"], list):
+            message_content = message_block.get("content")
+            if isinstance(message_content, list):
                 _parts: list[BedrockContentBlock] = []
-                for element in message_block["content"]:
+                for element in message_content:
                     if isinstance(element, dict):
                         if element["type"] == "text":
                             _part = BedrockContentBlock(text=element["text"])
@@ -4791,8 +4793,8 @@ def _bedrock_converse_messages_pt(
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
                 user_content.extend(_parts)
-            elif message_block["content"] and isinstance(message_block["content"], str):
-                _part = BedrockContentBlock(text=messages[msg_i]["content"])
+            elif message_content and isinstance(message_content, str):
+                _part = BedrockContentBlock(text=message_content)
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     message_block, block_type="content_block", model=model
                 )
