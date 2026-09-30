@@ -1759,8 +1759,10 @@ class LiteLLMCompletionResponsesConfig:
         )
         function_call_cache_control = function_call.get("cache_control")
         if function_call_cache_control:
-            chat_completion_response_message["cache_control"] = cast(  # cast-ok: Responses input uses the shared cache-control shape
-                "ChatCompletionCachedContent", function_call_cache_control
+            chat_completion_response_message["cache_control"] = (
+                cast(  # cast-ok: Responses input uses the shared cache-control shape
+                    "ChatCompletionCachedContent", function_call_cache_control
+                )
             )
 
         return [chat_completion_response_message]
