@@ -967,6 +967,9 @@ async def common_checks(
         team_id=valid_token.team_id if valid_token is not None else None,
     )
 
+    if valid_token is not None and end_user_object is not None:
+        valid_token.end_user_models = end_user_object.models
+
     skip_all_budget_checks: Final = skip_budget_checks or route_skips_budget_checks(route=route)
 
     membership_user_id: Final = (
@@ -1080,17 +1083,18 @@ async def common_checks(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
-    if _model and end_user_object is not None and end_user_object.models:
+    if end_user_object is not None and end_user_object.models:
         with tracer.trace("litellm.proxy.auth.common_checks.can_customer_call_model"):
-            _can_object_call_model(
-                model=_model,
-                llm_router=llm_router,
-                models=end_user_object.models,
-                team_model_aliases=valid_token.team_model_aliases if valid_token else None,
-                team_id=valid_token.team_id if valid_token else None,
-                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-                object_type="customer",
-            )
+            if _model:
+                _can_object_call_model(
+                    model=_model,
+                    llm_router=llm_router,
+                    models=end_user_object.models,
+                    team_model_aliases=valid_token.team_model_aliases if valid_token else None,
+                    team_id=valid_token.team_id if valid_token else None,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                    object_type="customer",
+                )
             for fallback_model in request_fallback_model_names(request_body):
                 _can_object_call_model(
                     model=fallback_model,
@@ -3965,6 +3969,7 @@ def _copy_user_api_key_auth_for_cache(
     copied_key_obj.budget_throttle_pct = None
     copied_key_obj.parent_otel_span = None
     copied_key_obj.request_route = None
+    copied_key_obj.end_user_models = None
     return copied_key_obj
 
 
@@ -4975,45 +4980,18 @@ async def can_key_call_model(
         raise
 
 
-async def _check_customer_model_access_for_resolved_model(
+def _check_customer_model_access_for_resolved_model(
     model: str,
     valid_token: UserAPIKeyAuth,
     llm_router: litellm.Router | None,
 ) -> None:
-    if valid_token.end_user_id is None:
-        return
-
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        return
-
-    try:
-        customer_object: Final = await get_end_user_object(
-            end_user_id=valid_token.end_user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=valid_token.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-            token_end_user_max_budget=valid_token.end_user_max_budget,
-        )
-    except ProxyException:
-        raise
-    except Exception as e:  # noqa: BLE001  # This optional lookup follows the main auth path's best-effort behavior
-        verbose_proxy_logger.debug("Unable to fetch customer for resolved model authorization. Error - %s", e)
-        return
-
-    if customer_object is None or not customer_object.models:
+    if not valid_token.end_user_models:
         return
 
     _can_object_call_model(
         model=model,
         llm_router=llm_router,
-        models=customer_object.models,
+        models=valid_token.end_user_models,
         team_model_aliases=valid_token.team_model_aliases,
         team_id=valid_token.team_id,
         key_model_aliases=key_model_aliases_for_auth_check(valid_token),
@@ -5115,7 +5093,7 @@ async def can_key_call_resolved_model(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
-    await _check_customer_model_access_for_resolved_model(
+    _check_customer_model_access_for_resolved_model(
         model=model,
         valid_token=valid_token,
         llm_router=llm_router,

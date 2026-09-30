@@ -3355,6 +3355,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
     created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
+    end_user_models: list[str] | None = Field(default=None, exclude=True)
     end_user_object_permission: LiteLLM_ObjectPermissionTable | None = None
     # Team object_permission preloaded in auth (e.g. get_team_object) to avoid
     # per-request object_permission fetches in downstream checks (vector stores, etc.)

@@ -2840,6 +2840,7 @@ class JWTAuthManager:
             team_id=result["team_id"],
             org_id=result["org_id"],
             end_user_id=result["end_user_id"],
+            end_user_models=(result["end_user_object"].models if result["end_user_object"] is not None else None),
             parent_otel_span=parent_otel_span,
             jwt_claims=result["jwt_claims"],
             agent_id=result.get("agent_id"),

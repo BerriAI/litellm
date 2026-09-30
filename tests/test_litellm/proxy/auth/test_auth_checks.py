@@ -4475,6 +4475,17 @@ async def test_budget_throttle_decision_cleared_before_caching():
     assert cached.rpm_limit == 100
 
 
+def test_customer_model_list_is_cleared_before_key_caching():
+    from litellm.proxy.auth.auth_checks import _copy_user_api_key_auth_for_cache
+
+    cached = _copy_user_api_key_auth_for_cache(
+        user_api_key_obj=UserAPIKeyAuth(end_user_id="customer-1", end_user_models=["m1"])
+    )
+
+    assert cached.end_user_models is None
+    assert "end_user_models" not in cached.model_dump()
+
+
 @pytest.mark.asyncio
 async def test_budget_exceeded_throttle_no_configured_limits(monkeypatch):
     monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
@@ -8821,7 +8832,7 @@ async def _run_common_checks(
 
 async def _common_checks_for_customer_model(
     *,
-    model: str,
+    model: str | None,
     customer_models: list[str],
     team_object: LiteLLM_TeamTable | None = None,
     valid_token: UserAPIKeyAuth | None = None,
@@ -8883,6 +8894,22 @@ async def test_common_checks_denies_customer_fallback_outside_allowlist(
             model="m1",
             customer_models=["m1"],
             request_overrides=request_overrides,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
+    assert exc_info.value.message == (
+        "The requested model 'm2' is not in the allowed models for this customer. "
+        "Check the models this customer can use and try again."
+    )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_denies_customer_fallback_without_primary_model() -> None:
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _common_checks_for_customer_model(
+            model=None,
+            customer_models=["m1"],
+            request_overrides={"fallbacks": ["m2"]},
         )
 
     assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
@@ -8966,30 +8993,22 @@ async def test_common_checks_denies_customer_allowlist_when_team_alias_target_is
     )
 
 
-@pytest.mark.parametrize(("model", "is_denied"), [("m1", False), ("m2", True)])
+@pytest.mark.parametrize(
+    ("model", "customer_models", "is_denied"),
+    [
+        ("m1", ["m1"], False),
+        ("m2", ["m1"], True),
+        ("m2", None, False),
+        ("m2", [], False),
+    ],
+)
 @pytest.mark.asyncio
 async def test_can_key_call_resolved_model_checks_customer_allowlist(
-    monkeypatch: pytest.MonkeyPatch, model: str, is_denied: bool
+    model: str, customer_models: list[str] | None, is_denied: bool
 ) -> None:
     from litellm.proxy.auth import auth_checks
 
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
-    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
-    monkeypatch.setattr(
-        auth_checks,
-        "get_end_user_object",
-        AsyncMock(
-            return_value=LiteLLM_EndUserTable(
-                user_id="customer-1",
-                blocked=False,
-                models=["m1"],
-            )
-        ),
-    )
-    valid_token: Final = UserAPIKeyAuth(end_user_id="customer-1")
+    valid_token: Final = UserAPIKeyAuth(end_user_id="customer-1", end_user_models=customer_models)
 
     if is_denied:
         with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
@@ -9000,6 +9019,10 @@ async def test_can_key_call_resolved_model_checks_customer_allowlist(
                 llm_router=None,
             )
         assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
+        assert exc_info.value.message == (
+            "The requested model 'm2' is not in the allowed models for this customer. "
+            "Check the models this customer can use and try again."
+        )
         return
 
     await auth_checks.can_key_call_resolved_model(
@@ -9010,35 +9033,28 @@ async def test_can_key_call_resolved_model_checks_customer_allowlist(
     )
 
 
-@pytest.mark.parametrize(
-    ("lookup_result", "lookup_error"),
-    [(None, None), (None, RuntimeError("customer lookup unavailable"))],
-)
 @pytest.mark.asyncio
-async def test_can_key_call_resolved_model_skips_missing_customer_lookup(
+async def test_can_key_call_resolved_model_does_not_look_up_customer_in_prisma(
     monkeypatch: pytest.MonkeyPatch,
-    lookup_result: LiteLLM_EndUserTable | None,
-    lookup_error: Exception | None,
 ) -> None:
     from litellm.proxy.auth import auth_checks
 
-    import litellm.proxy.proxy_server as proxy_server
-
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    prisma_client = MagicMock()
+    customer_lookup = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
     monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
-    monkeypatch.setattr(
-        auth_checks,
-        "get_end_user_object",
-        AsyncMock(return_value=lookup_result, side_effect=lookup_error),
-    )
+    monkeypatch.setattr(auth_checks, "get_end_user_object", customer_lookup)
 
     await auth_checks.can_key_call_resolved_model(
-        model="m2",
+        model="m1",
         llm_model_list=None,
-        valid_token=UserAPIKeyAuth(end_user_id="customer-1"),
+        valid_token=UserAPIKeyAuth(end_user_id="customer-1", end_user_models=["m1"]),
         llm_router=None,
     )
+
+    customer_lookup.assert_not_awaited()
+    assert prisma_client.mock_calls == []
 
 
 @pytest.mark.asyncio

@@ -5,15 +5,18 @@ from collections.abc import Mapping, Sequence
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import HTTPException
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
+    JWTAuthBuilderResult,
     JWTLiteLLMRoleMap,
+    LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
     LiteLLM_TeamMembership,
@@ -26,7 +29,6 @@ from litellm.proxy._types import (
     RoleBasedPermissions,
     ScopeMapping,
 )
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import (
@@ -41,6 +43,30 @@ from litellm.proxy.auth.handle_jwt import (
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.types.agents import AgentResponse
+
+
+def test_jwt_auth_token_carries_customer_models() -> None:
+    result: JWTAuthBuilderResult = {
+        "is_proxy_admin": False,
+        "team_object": None,
+        "user_object": None,
+        "end_user_object": LiteLLM_EndUserTable(user_id="customer-1", blocked=False, models=["m1"]),
+        "org_object": None,
+        "token": "jwt-token",
+        "team_id": None,
+        "user_id": None,
+        "user_email": None,
+        "end_user_id": "customer-1",
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {},
+        "managed_agent_context": None,
+        "agent_id": None,
+    }
+
+    token = JWTAuthManager.user_api_key_auth_from_result(result)
+
+    assert token.end_user_models == ["m1"]
 
 
 @pytest.mark.asyncio

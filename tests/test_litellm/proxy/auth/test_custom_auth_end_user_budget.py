@@ -1,14 +1,16 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 import litellm
-from litellm.proxy.auth.user_api_key_auth import (
-    _run_post_custom_auth_checks,
-    update_valid_token_with_end_user_params,
-)
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     UserAPIKeyAuth,
+)
+from litellm.proxy.auth.user_api_key_auth import (
+    _run_post_custom_auth_checks,
+    update_valid_token_with_end_user_params,
 )
 
 
@@ -171,6 +173,33 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
             parent_otel_span=None,
         )
         mock_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_token_carries_customer_models() -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy.auth.user_api_key_auth import _lookup_end_user_and_apply_budget
+
+    customer = LiteLLM_EndUserTable(user_id="customer-1", blocked=False, models=["m1"])
+    token = UserAPIKeyAuth(token="test_token", end_user_id="customer-1")
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+        new_callable=AsyncMock,
+        return_value=customer,
+    ):
+        result, end_user_object = await _lookup_end_user_and_apply_budget(
+            valid_token=token,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert result.end_user_models == ["m1"]
+    assert end_user_object is customer
 
 
 @pytest.mark.asyncio
