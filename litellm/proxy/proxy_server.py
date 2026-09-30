@@ -9074,7 +9074,7 @@ class ProxyConfig:
         credential_object.credential_values = decrypted_credential_values
         return credential_object
 
-    async def delete_credentials(self, db_credentials: list[CredentialItem]):
+    async def delete_credentials(self, db_credentials: Sequence[CredentialItem]) -> None:
         """
         Create all-up list of db credentials + local credentials
         Compare to the litellm.credential_list
@@ -9085,10 +9085,8 @@ class ProxyConfig:
         credential_list: Final = self.load_credential_list(config=config)
 
         ## DELETE ##
-        names_to_keep: Final = {cred.credential_name for cred in db_credentials} | {
-            cred.credential_name for cred in credential_list
-        }
-        litellm.credential_list[:] = [cred for cred in litellm.credential_list if cred.credential_name in names_to_keep]
+        names_to_keep: Final = frozenset(cred.credential_name for cred in (*db_credentials, *credential_list))
+        litellm.credential_list[:] = (cred for cred in litellm.credential_list if cred.credential_name in names_to_keep)
 
     async def get_credentials(self, prisma_client: PrismaClient):
         try:

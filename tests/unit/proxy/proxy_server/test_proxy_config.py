@@ -1845,11 +1845,6 @@ def test_ProxyConfig_load_credential_list_invalid_entry_raises():
         pc.load_credential_list({"credential_list": [{"missing_required": True}]})
 
 
-# ---------------------------------------------------------------------------
-# ProxyConfig.delete_credentials
-# ---------------------------------------------------------------------------
-
-
 def _credential(name: str) -> CredentialItem:
     return CredentialItem(credential_name=name, credential_values={"api_key": f"key-{name}"}, credential_info={})
 
