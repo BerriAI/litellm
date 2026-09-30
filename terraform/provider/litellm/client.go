@@ -126,11 +126,16 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	updateData := map[string]interface{}{
 		"key":              key.Key,
 		"team_id":          key.TeamID,
-		"key_alias":        key.KeyAlias,
 		"aliases":          key.Aliases,
 		"permissions":      key.Permissions,
 		"model_max_budget": key.ModelMaxBudget,
 		"blocked":          key.Blocked,
+	}
+
+	if key.KeyAlias != "" {
+		updateData["key_alias"] = key.KeyAlias
+	} else if key.clearKeyAlias {
+		updateData["key_alias"] = nil
 	}
 
 	// The proxy keeps the stored metadata only when the field is absent, so nil means omit.

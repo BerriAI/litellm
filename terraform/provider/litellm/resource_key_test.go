@@ -321,6 +321,98 @@ func TestUpdateKeyOmitsEmptyBudgetDuration(t *testing.T) {
 	}
 }
 
+func TestUpdateKeyOmitsEmptyKeyAlias(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key": "sk-test"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	if _, err := client.UpdateKey(&Key{Key: "sk-test"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if _, present := captured["key_alias"]; present {
+		t.Errorf("update payload contains empty key_alias: %v", captured["key_alias"])
+	}
+
+	if _, err := client.UpdateKey(&Key{Key: "sk-test", KeyAlias: "alias-1"}); err != nil {
+		t.Fatalf("UpdateKey returned error: %v", err)
+	}
+	if captured["key_alias"] != "alias-1" {
+		t.Errorf("key_alias = %v, want alias-1", captured["key_alias"])
+	}
+}
+
+func TestResourceKeyAliasChangesConverge(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		priorAlias      string
+		configuredAlias interface{}
+		wantAlias       string
+		wantPresent     bool
+		wantNull        bool
+	}{
+		{name: "aliasless"},
+		{name: "remove", priorAlias: "alias-1", wantPresent: true, wantNull: true},
+		{name: "blank", priorAlias: "alias-1", configuredAlias: "", wantPresent: true, wantNull: true},
+		{name: "assign", configuredAlias: "alias-1", wantAlias: "alias-1", wantPresent: true},
+		{name: "rename", priorAlias: "alias-1", configuredAlias: "alias-2", wantAlias: "alias-2", wantPresent: true},
+		{name: "retain", priorAlias: "alias-1", configuredAlias: "alias-1", wantAlias: "alias-1", wantPresent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storedAlias := tc.priorAlias
+			updates := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if req.URL.Path == "/key/update" {
+					updates++
+					var payload map[string]interface{}
+					if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+						t.Error(err)
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					value, present := payload["key_alias"]
+					if present != tc.wantPresent || (present && (value == nil) != tc.wantNull) {
+						t.Errorf("key_alias = %#v, present = %v; want present = %v, null = %v", value, present, tc.wantPresent, tc.wantNull)
+					}
+					if present {
+						storedAlias, _ = value.(string)
+					}
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"key":  "hash-1",
+					"info": map[string]interface{}{"key_alias": storedAlias, "team_id": "team-1"},
+				})
+			}))
+			defer srv.Close()
+			res := resourceKey()
+			priorData := newKeyResourceData(t, map[string]interface{}{"key_alias": tc.priorAlias, "team_id": "team-1", "max_budget": 10.0})
+			priorData.SetId("hash-1")
+			config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_alias": tc.configuredAlias, "team_id": "team-1", "max_budget": 25.0})
+			diff, err := res.Diff(context.Background(), priorData.State(), config, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, diags := res.Apply(context.Background(), priorData.State(), diff, NewClient(srv.URL, "test-key", true))
+			if diags.HasError() {
+				t.Fatalf("apply failed: %v", diags)
+			}
+			if updates != 1 || storedAlias != tc.wantAlias || state.Attributes["key_alias"] != tc.wantAlias {
+				t.Fatalf("updates = %d, stored alias = %q, state alias = %q; want %q", updates, storedAlias, state.Attributes["key_alias"], tc.wantAlias)
+			}
+			nextDiff, err := res.Diff(context.Background(), state, config, nil)
+			if err != nil || (nextDiff != nil && !nextDiff.Empty()) {
+				t.Fatalf("subsequent plan not clean: diff = %v, error = %v", nextDiff, err)
+			}
+		})
+	}
+}
+
 func TestResourceKeyUpdateFailureKeepsPriorState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
