@@ -20291,7 +20291,11 @@ async def test_update_key_row_with_soft_budget_updates_budget_and_key_in_transac
     existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
     created_row = MagicMock(budget_id="budget-new")
     updated_row = MagicMock()
-    updated_row.model_dump.return_value = {"token": "hashed", "budget_id": "budget-new"}
+    updated_row.model_dump.return_value = {
+        "token": "hashed",
+        "budget_id": "budget-new",
+        "object_permission": {"mcp_servers": ["srv-1"], "mcp_tool_permissions": {"srv-1": ["read"]}},
+    }
     tx = MagicMock()
     tx.litellm_budgettable.create = AsyncMock(return_value=created_row)
     tx.litellm_verificationtoken.update = AsyncMock(return_value=updated_row)
@@ -20312,10 +20316,15 @@ async def test_update_key_row_with_soft_budget_updates_budget_and_key_in_transac
     )
 
     assert set(result) == {"token", "data"}
-    assert result["data"] == {"token": "hashed", "budget_id": "budget-new"}
+    assert result["data"] == {
+        "token": "hashed",
+        "budget_id": "budget-new",
+        "object_permission": {"mcp_servers": ["srv-1"], "mcp_tool_permissions": {"srv-1": ["read"]}},
+    }
     tx.litellm_verificationtoken.update.assert_awaited_once()
     update_call = tx.litellm_verificationtoken.update.await_args
     assert update_call.kwargs["where"] == {"token": result["token"]}
+    assert update_call.kwargs["include"] == {"object_permission": True}
     assert update_call.kwargs["data"]["budget_id"] == "budget-new"
     assert "soft_budget" not in update_call.kwargs["data"]
 

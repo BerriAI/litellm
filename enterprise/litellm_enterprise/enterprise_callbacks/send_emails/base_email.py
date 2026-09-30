@@ -32,6 +32,7 @@ from litellm.integrations.email_templates.key_rotated_email import (
 from litellm.integrations.email_templates.templates import (
     MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
+    TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE,
     TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE,
 )
 from litellm.integrations.email_templates.user_invitation_email import (
@@ -46,6 +47,12 @@ from litellm.proxy._types import (
 )
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
+
+
+def _max_budget_alert_id(user_info: CallInfo) -> str:
+    if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
+        return f"team_member:{user_info.user_id}:{user_info.team_id}"
+    return user_info.token or user_info.user_id or "default_id"
 
 
 def _parse_email_list(raw) -> List[str]:
@@ -373,17 +380,31 @@ class BaseEmailLogger(CustomLogger):
             greeting = html.escape(
                 event.user_email or event.key_alias or event.token or ""
             )
-            email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
-                email_logo_url=email_params.logo_url,
-                recipient_email=greeting,
-                percentage=percentage,
-                spend=spend_str,
-                max_budget=max_budget_str,
-                alert_threshold=alert_threshold_str,
-                base_url=email_params.base_url,
-                email_support_contact=email_params.support_contact,
-                email_footer=email_params.signature,
-            )
+            if event.event_group == Litellm_EntityType.TEAM_MEMBER:
+                email_html_content = TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+                    email_logo_url=email_params.logo_url,
+                    member=html.escape(event.user_email or event.user_id or ""),
+                    team_alias=html.escape(event.team_alias or event.team_id or ""),
+                    percentage=percentage,
+                    spend=spend_str,
+                    max_budget=max_budget_str,
+                    alert_threshold=alert_threshold_str,
+                    base_url=email_params.base_url,
+                    email_support_contact=email_params.support_contact,
+                    email_footer=email_params.signature,
+                )
+            else:
+                email_html_content = MAX_BUDGET_ALERT_EMAIL_TEMPLATE.format(
+                    email_logo_url=email_params.logo_url,
+                    recipient_email=greeting,
+                    percentage=percentage,
+                    spend=spend_str,
+                    max_budget=max_budget_str,
+                    alert_threshold=alert_threshold_str,
+                    base_url=email_params.base_url,
+                    email_support_contact=email_params.support_contact,
+                    email_footer=email_params.signature,
+                )
             await self.send_email(
                 from_email=self.DEFAULT_LITELLM_EMAIL,
                 to_email=recipient_emails,
@@ -607,7 +628,7 @@ class BaseEmailLogger(CustomLogger):
             if user_info.spend < threshold_amount:
                 continue
 
-            _id = user_info.token or user_info.user_id or "default_id"
+            _id = _max_budget_alert_id(user_info)
             _cache_key = (
                 f"email_budget_alerts:max_budget_alert:{threshold_pct}:{_id}"
             )
@@ -618,7 +639,7 @@ class BaseEmailLogger(CustomLogger):
                 emails.append(user_info.user_email)
             if not emails:
                 verbose_proxy_logger.warning(
-                    "No recipients for %d%% threshold on key %s, skipping alert",
+                    "No recipients for %d%% threshold on %s, skipping alert",
                     threshold_pct,
                     _id,
                 )
@@ -633,7 +654,11 @@ class BaseEmailLogger(CustomLogger):
             if send_count is not None and send_count > 1:
                 continue
 
-            event_message = f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
+            event_message = (
+                f"Team Member Budget Alert - {threshold_pct}% of Team Member Budget Reached"
+                if user_info.event_group == Litellm_EntityType.TEAM_MEMBER
+                else f"Max Budget Alert - {threshold_pct}% of Maximum Budget Reached"
+            )
             webhook_event = WebhookEvent(
                 event="max_budget_alert",
                 event_message=event_message,

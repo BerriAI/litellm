@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import (
     _get_user_role,
     _is_model_cost_zero,
     _is_user_proxy_admin,
+    _team_member_max_budget_alert_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -72,7 +73,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
-from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects
+from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects, prefetch_identity_keys
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
@@ -119,6 +120,9 @@ from litellm.proxy.common_utils.model_listing_utils import claude_code_requested
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
+    model_access_group_registry_cache_key,
     team_membership_auth_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
@@ -1891,6 +1895,11 @@ async def _user_api_key_auth_builder(
             proxy_logging_obj=proxy_logging_obj,
             route=route,
         )
+        if prisma_client is not None:
+            await prefetch_identity_keys(
+                _identity_cache_keys(api_key, end_user_id=end_user_id, key_is_resolved=valid_token is not None),
+                user_api_key_cache=user_api_key_cache,
+            )
         if end_user_id:
             try:
                 end_user_params["end_user_id"] = end_user_id
@@ -2287,6 +2296,19 @@ async def _user_api_key_auth_builder(
                                     max_budget=team_member_budget,
                                 )
                             if team_member_spend >= team_member_budget:
+                                # common_checks sends this alert on requests that get past here, so only the
+                                # request rejected here sends it from the builder.
+                                _team_member_max_budget_alert_check(
+                                    team_id=_team_id,
+                                    team_alias=valid_token.team_alias,
+                                    team_metadata=valid_token.team_metadata,
+                                    organization_id=valid_token.org_id,
+                                    user_id=_user_id,
+                                    user_email=user_obj.user_email if user_obj is not None else None,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                    spend=team_member_spend,
+                                    max_budget=team_member_budget,
+                                )
                                 _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,
@@ -2992,40 +3014,39 @@ async def _run_centralized_common_checks(
             skip_budget_checks=skip_budget_checks,
             project_object=project_object,
         )
+        if not skip_budget_checks:
+            await _check_team_model_budget(
+                valid_token=user_api_key_auth_obj,
+                model_max_budget_limiter=model_max_budget_limiter,
+                models=_get_model_names_for_budget_checks(
+                    model=_get_model_from_request_context(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                        llm_router=llm_router,
+                        team_id=user_api_key_auth_obj.team_id,
+                    )
+                ),
+            )
+
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request=request,
+            request_data=request_data,
+            route=route,
+            llm_router=llm_router,
+            team_object=team_object,
+            user_object=user_object,
+            end_user_id=end_user_id,
+            end_user_object=end_user_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            skip_budget_checks=skip_budget_checks,
+            general_settings=general_settings,
+        )
     finally:
         release_spend_counter_batch()
-
-    if not skip_budget_checks:
-        await _check_team_model_budget(
-            valid_token=user_api_key_auth_obj,
-            model_max_budget_limiter=model_max_budget_limiter,
-            models=_get_model_names_for_budget_checks(
-                model=_get_model_from_request_context(
-                    request_data=request_data,
-                    route=route,
-                    request=request,
-                    llm_router=llm_router,
-                    team_id=user_api_key_auth_obj.team_id,
-                )
-            ),
-        )
-
-    await _reserve_budget_after_common_checks(
-        user_api_key_auth_obj=user_api_key_auth_obj,
-        request=request,
-        request_data=request_data,
-        route=route,
-        llm_router=llm_router,
-        team_object=team_object,
-        user_object=user_object,
-        end_user_id=end_user_id,
-        end_user_object=end_user_object,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-        skip_budget_checks=skip_budget_checks,
-        general_settings=general_settings,
-    )
 
 
 async def _noop_none() -> None:
@@ -3233,6 +3254,21 @@ def _spend_counter_redis_cache() -> RedisCache | None:
     from litellm.proxy.proxy_server import spend_counter_cache
 
     return spend_counter_cache.redis_cache
+
+
+def _identity_cache_keys(api_key: str, *, end_user_id: str | None, key_is_resolved: bool) -> tuple[str, ...]:
+    """Cache keys auth reads before it knows the key's owners, all known from the request alone. A key object is
+    cached under the hash of the bearer, so the bearer itself never reaches Redis."""
+    return tuple(
+        key
+        for key in (
+            None if key_is_resolved else hash_token(api_key),
+            None if not end_user_id else end_user_cache_key(end_user_id),
+            None if not end_user_id else end_user_restricted_registry_cache_key(),
+            model_access_group_registry_cache_key(),
+        )
+        if key is not None
+    )
 
 
 async def _prefetch_referenced_auth_objects(

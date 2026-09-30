@@ -5,14 +5,9 @@ These tests verify that ssl_verify parameters are correctly propagated
 through the call stack without requiring live API credentials.
 """
 
-import sys
-from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-
-# Add litellm to path
-sys.path.insert(0, str(Path(__file__).parent))
 
 import litellm.proxy.guardrails.guardrail_hooks.aim.aim as _aim_module
 import litellm.proxy.guardrails.guardrail_hooks.cato_networks.cato_networks as _cato_networks_module

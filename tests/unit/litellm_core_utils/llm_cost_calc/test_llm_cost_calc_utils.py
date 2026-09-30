@@ -1145,6 +1145,35 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens(_local_model_cost_map):
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    [
+        (100_000, 1.2e-05, 1.2e-06, 6e-05),
+        (300_000, 2.4e-05, 2.4e-06, 9e-05),
+    ],
+)
+def test_generic_cost_per_token_azure_eu_gpt_6_astra_tiers(
+    _local_model_cost_map, prompt_tokens, input_rate, cache_read_rate, output_rate
+):
+    """azure/eu/gpt-6-astra bills Azure's Data Zone rates, doubling input and cache read past 272K."""
+    cached_tokens = 20_000
+    completion_tokens = 1_000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="azure/eu/gpt-6-astra",
+        usage=usage,
+        custom_llm_provider="azure",
+    )
+    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
+
+
 def test_generic_cost_per_token_minimax_m3_above_512k_tokens(_local_model_cost_map):
     """MiniMax-M3: prompts >512K input tokens priced at 2x input, output, and cache read."""
     model = "minimax/MiniMax-M3"
@@ -3789,3 +3818,15 @@ def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
         assert azure_ai_info[field] == base
         assert azure_us_info[field] == pytest.approx(1.1 * base)
         assert azure_eu_info[field] == pytest.approx(1.2 * base)
+
+
+@pytest.mark.parametrize("region_prefix", ["azure/", "azure/us/", "azure/eu/"])
+def test_azure_gpt_5_6_alias_matches_sol_pricing(_local_model_cost_map, region_prefix):
+    """The bare gpt-5.6 alias routes to GPT-5.6 Sol, so every Azure region must bill the
+    alias exactly like the Sol entry (including the Sept 2026 $4/$20 promo)."""
+    alias = litellm.model_cost[f"{region_prefix}gpt-5.6"]
+    sol = litellm.model_cost[f"{region_prefix}gpt-5.6-sol"]
+    shared_cost_fields = [f for f in alias if "cost" in f and f in sol and not isinstance(alias[f], dict)]
+    assert shared_cost_fields
+    for field in shared_cost_fields:
+        assert alias[field] == sol[field], field

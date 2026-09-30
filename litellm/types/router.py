@@ -611,6 +611,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## CUSTOM PRICING ##
     input_cost_per_token: float | None
     output_cost_per_token: float | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]

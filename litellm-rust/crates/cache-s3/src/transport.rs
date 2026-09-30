@@ -9,7 +9,7 @@ use aws_smithy_runtime_api::client::{
 use aws_smithy_types::body::SdkBody;
 
 #[derive(Clone, Debug)]
-pub(crate) struct ReqwestHttpClient(pub(crate) reqwest::Client);
+pub(crate) struct ReqwestHttpClient(pub(crate) litellm_http::Client);
 
 impl HttpClient for ReqwestHttpClient {
     fn http_connector(

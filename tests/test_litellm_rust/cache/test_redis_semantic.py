@@ -16,15 +16,15 @@ import redis
 import litellm
 from litellm.caching.caching import Cache
 from litellm.caching.redis_semantic_cache import RedisSemanticCache
+from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.custom_llm import CustomLLMItem
 from litellm.types.utils import EmbeddingResponse
 from tests.test_litellm_rust.support.cache import (
-    CacheTestHandle,
     CacheTestResolver,
+    activate_native,
     assert_native_runtime,
     request,
-    require_rust,
 )
 from tests.test_litellm_rust.support.isolation import rebound
 
@@ -198,7 +198,7 @@ def semantic_facade(url: str, index: str, *, similarity_threshold: float = 0.8) 
         redis_semantic_cache_embedding_model=SEMANTIC_EMBEDDING_MODEL,
         redis_semantic_cache_index_name=index,
     )
-    CacheTestHandle.redis_semantic(facade.cache)._bind_facade(facade)
+    activate_native(facade)
     return facade
 
 
@@ -214,9 +214,7 @@ def test_redis_semantic_constructor_identity_and_provenance(
     assert backend._index_name == index  # pyright: ignore[reportPrivateUsage]  # provenance check needs the projected config
     assert backend.similarity_threshold == 0.8
     assert backend.embedding_model == SEMANTIC_EMBEDDING_MODEL
-    handle: Final = cast(object, getattr(facade, "_native_cache_handle"))
-    assert isinstance(handle, CacheTestHandle)
-    assert handle.backend == "redis_semantic"
+    assert_native_runtime(facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     assert binding.kind == "native"
 
@@ -508,7 +506,7 @@ def test_redis_semantic_scope_overrides_the_tag_and_isolates_entries(
     client.close()
 
 
-def test_redis_semantic_configuration_drift_falls_back_to_python(
+def test_selected_redis_semantic_runtime_declines_configuration_drift(
     redis_stack: tuple[str, str],
     semantic_embedding: DeterministicEmbedding,
     monkeypatch: pytest.MonkeyPatch,
@@ -519,86 +517,42 @@ def test_redis_semantic_configuration_drift_falls_back_to_python(
     assert resolver.resolve().kind == "native"
 
     with rebound(facade.cache, "similarity_threshold", 0.5):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
     with rebound(facade, "semantic_cache_scope", "end_user"):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
     with rebound(facade.cache, "embedding_model", "other-model"):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
     with rebound(facade.cache, "_index_name", "other-index"):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
     with rebound(facade.cache, "CACHE_KEY_FIELD_NAME", "other-field"):
-        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(_native.RustBridgeDeclined):
+            resolver.resolve()
 
     def patched_embedding(self: object, prompt: str, metadata: object = None) -> list[float]:
         return _semantic_embedding(prompt)
 
     monkeypatch.setattr(RedisSemanticCache, "_get_embedding", patched_embedding)
-    assert resolver.resolve().kind == "python_callback"
+    with pytest.raises(_native.RustBridgeDeclined):
+        resolver.resolve()
 
 
-def test_redis_semantic_handle_rejects_wrong_backends(
-    redis_stack: tuple[str, str], semantic_embedding: DeterministicEmbedding
-) -> None:
-    url, index = redis_stack
-
-    class CustomSemanticCache(RedisSemanticCache):
-        pass
-
-    with pytest.raises(TypeError, match="built-in RedisSemanticCache"):
-        CacheTestHandle.redis_semantic(object())
-    with pytest.raises(TypeError, match="built-in RedisSemanticCache"):
-        CacheTestHandle.redis_semantic(
-            CustomSemanticCache(
-                redis_url=url,
-                similarity_threshold=0.8,
-                embedding_model=SEMANTIC_EMBEDDING_MODEL,
-                index_name=f"{index}_subclass",
-            )
-        )
-
-    facade: Final = semantic_facade(url, index)
-    with pytest.raises(TypeError, match="backend types must match"):
-        CacheTestHandle.redis(url)._bind_facade(facade)
-
-    subclassed_facade: Final = Cache(
-        type=LiteLLMCacheType.REDIS_SEMANTIC,
-        redis_url=url,
-        similarity_threshold=0.8,
-        redis_semantic_cache_embedding_model=SEMANTIC_EMBEDDING_MODEL,
-        redis_semantic_cache_index_name=index,
-    )
-    subclassed_facade.cache = CustomSemanticCache(  # pyright: ignore[reportAttributeAccessIssue]  # facade backend slot is not declared
-        redis_url=url,
-        similarity_threshold=0.8,
-        embedding_model=SEMANTIC_EMBEDDING_MODEL,
-        index_name=index,
-    )
-    with pytest.raises(TypeError):
-        CacheTestHandle.redis_semantic(subclassed_facade.cache)._bind_facade(subclassed_facade)
-
-    replacement_facade: Final = Cache(
-        type=LiteLLMCacheType.REDIS_SEMANTIC,
-        redis_url=url,
-        similarity_threshold=0.8,
-        redis_semantic_cache_embedding_model=SEMANTIC_EMBEDDING_MODEL,
-        redis_semantic_cache_index_name=index,
-    )
-    with pytest.raises(TypeError, match="must be the native embedder"):
-        CacheTestHandle.redis_semantic(facade.cache)._bind_facade(replacement_facade)
-
-
-async def test_redis_semantic_rust_required_rule_activates_natively(
+async def test_redis_semantic_explicit_selection_activates_natively(
     redis_stack: tuple[str, str], semantic_embedding: DeterministicEmbedding, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     del semantic_embedding
     url, index = redis_stack
-    require_rust(monkeypatch, LiteLLMCacheType.REDIS_SEMANTIC)
-    facade: Final = Cache(
-        type=LiteLLMCacheType.REDIS_SEMANTIC,
-        redis_url=url,
-        similarity_threshold=0.8,
-        redis_semantic_cache_embedding_model=SEMANTIC_EMBEDDING_MODEL,
-        redis_semantic_cache_index_name=index,
+    facade: Final = activate_native(
+        Cache(
+            type=LiteLLMCacheType.REDIS_SEMANTIC,
+            redis_url=url,
+            similarity_threshold=0.8,
+            redis_semantic_cache_embedding_model=SEMANTIC_EMBEDDING_MODEL,
+            redis_semantic_cache_index_name=index,
+        )
     )
     assert_native_runtime(facade)
     kwargs: Final = {"model": "gpt-4o", "messages": semantic_messages("name a primary color")}
