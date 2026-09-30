@@ -46,7 +46,10 @@ def model_for(harness: Harness) -> str:
 
 def harness_available(harness: Harness) -> bool:
     if harness is Harness.DEEPAGENTS:
-        return all(importlib.util.find_spec(m) is not None for m in ("deepagents", "langchain_litellm"))
+        return all(
+            importlib.util.find_spec(m) is not None
+            for m in ("deepagents", "langchain_litellm")
+        )
     return shutil.which(BINARIES[harness]) is not None
 
 
@@ -55,7 +58,9 @@ def harness_params() -> list:
         pytest.param(
             h,
             id=h.value,
-            marks=pytest.mark.skipif(not harness_available(h), reason=f"{h.value} runtime not installed"),
+            marks=pytest.mark.skipif(
+                not harness_available(h), reason=f"{h.value} runtime not installed"
+            ),
         )
         for h in Harness
     ]
