@@ -150,7 +150,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
               <Circle
                 className={`size-2 ${connected ? "fill-emerald-500 text-emerald-500" : "fill-amber-500 text-amber-500"}`}
               />
-              {connected ? "Worker connected" : "Connect worker"}
+              {connected ? "Analyzer connected" : "Set up analysis"}
             </Button>
             {engines.length > 0 && (
               <Button onClick={() => setEditing("new")}>
@@ -485,7 +485,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                   ))}
                   {!job?.sample?.executions.length && (
                     <p className="py-4 text-sm text-muted-foreground">
-                      The selected runs appear here when a worker starts the scan.
+                      The selected runs appear here when an analyzer starts the scan.
                     </p>
                   )}
                 </div>

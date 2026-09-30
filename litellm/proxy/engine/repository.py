@@ -46,12 +46,19 @@ class EngineRepository:
         return engine
 
     async def update(self, engine_id: str, transform: Callable[[Engine], Engine], attempts: int = 8) -> Engine | None:
+        for _ in range(attempts):
+            completed, updated = await self._try_update(engine_id, transform)
+            if completed:
+                return updated
+        return None
+
+    async def _try_update(self, engine_id: str, transform: Callable[[Engine], Engine]) -> tuple[bool, Engine | None]:
         previous: Final = await self.get(engine_id)
-        if previous is None or attempts == 0:
-            return None
+        if previous is None:
+            return True, None
         candidate: Final = transform(previous)
         if candidate == previous:
-            return previous
+            return True, previous
         updated: Final = candidate.model_copy(update=MappingProxyType({"version": previous.version + 1}))
         count: Final = await self.db.execute_raw(
             'UPDATE "LiteLLM_Engine" SET data=$1::jsonb, version=version+1 WHERE id=$2 AND version=$3',
@@ -59,7 +66,7 @@ class EngineRepository:
             engine_id,
             previous.version,
         )
-        return updated if count else await self.update(engine_id, transform, attempts - 1)
+        return bool(count), updated
 
     async def workers(self) -> tuple[Worker, ...]:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_EngineWorker"'))

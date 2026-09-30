@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -39,6 +39,11 @@ export function WorkerSetup({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [address, setAddress] = useState(initialProxyAddress);
   const [copied, setCopied] = useState(false);
   const [created, setCreated] = useState<WorkerCreated | null>(null);
@@ -51,7 +56,7 @@ export function WorkerSetup({
       setCreated(
         await apiClient.post<WorkerCreated>("/engine/workers/register", {
           accessToken,
-          body: { name: "Lens worker" },
+          body: { name: "Lens analyzer" },
         }),
       );
       onChanged();
@@ -70,23 +75,17 @@ export function WorkerSetup({
     >
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Connect a worker</DialogTitle>
+          <DialogTitle>Set up Lens analysis</DialogTitle>
           <DialogDescription>
-            Run a small Lens worker alongside your existing LiteLLM proxy or on another server. One worker can serve all
-            your lenses.
+            Lens reads your agents’ logs and finds issues in the background. Run its analyzer once with Docker.
           </DialogDescription>
         </DialogHeader>
-        <p className="text-sm">
-          LiteLLM already handles your lenses and results. This Docker container runs their analysis in the background.
-          Generate a command below, then run it on a server with Docker. It connects automatically.
-        </p>
         <label className="grid gap-2 text-sm">
-          LiteLLM address
+          Your LiteLLM deployment URL
           <Input value={address} onChange={(event) => setAddress(event.target.value)} />
         </label>
         <p className="text-xs text-muted-foreground">
-          Use an address the container can reach. If you run Docker on another server, enter this proxy’s network
-          address.
+          The analyzer connects to this deployment to read logs and save findings.
         </p>
         {created ? (
           <div className="space-y-3">
@@ -107,15 +106,12 @@ export function WorkerSetup({
               {copied ? "Copied" : "Copy Docker command"}
             </Button>
             <p className="text-xs text-muted-foreground">
-              The command includes a private worker token, shown only here. It lets this worker run your lenses; no
-              other API key is needed. Keep the command private.
+              Keep this command private. It includes the analyzer’s access token.
             </p>
             <p className="text-sm" role="status">
-              {workers.some(
-                (worker) => worker.id === created.worker.id && Date.now() - Date.parse(worker.last_seen) < 120000,
-              )
-                ? "Worker connected. You can start a scan."
-                : "Waiting for your worker to connect…"}
+              {workers.some((worker) => worker.id === created.worker.id && now - Date.parse(worker.last_seen) < 120000)
+                ? "Analyzer connected. You can start a scan."
+                : "Waiting for your analyzer to connect…"}
             </p>
           </div>
         ) : (
@@ -123,15 +119,16 @@ export function WorkerSetup({
             {busy ? "Generating…" : "Generate setup command"}
           </Button>
         )}
-        <p className="text-xs text-muted-foreground">
-          A compatible worker image is already selected. One worker can serve all your lenses and keeps running when you
-          close this page. You can stop its access below.
-        </p>
         {workers
           ?.filter((w) => !w.revoked)
           .map((worker) => (
             <div key={worker.id} className="flex justify-between items-center border-t pt-3 text-sm">
-              <span>{worker.name}</span>
+              <span>
+                {worker.name}
+                <span className="block text-xs text-muted-foreground">
+                  {now - Date.parse(worker.last_seen) < 120000 ? "Connected · ready to analyze" : "Not connected"}
+                </span>
+              </span>
               <Button
                 variant="ghost"
                 size="sm"

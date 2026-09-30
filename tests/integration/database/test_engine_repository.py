@@ -1,7 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Final
 from uuid import uuid4
 
@@ -23,7 +23,7 @@ async def engine_db() -> AsyncIterator[Prisma]:
 
 @pytest.mark.asyncio
 async def test_concurrent_workers_cannot_both_acquire_the_same_job(engine_db: Prisma) -> None:
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
     scope: Final = Scope(team_id=uuid4().hex)
     repo: Final = EngineRepository(WriterDatabase(PrismaWrapper(engine_db)))
     engine: Final = Engine(
@@ -51,7 +51,7 @@ async def test_concurrent_workers_cannot_both_acquire_the_same_job(engine_db: Pr
 
 @pytest.mark.asyncio
 async def test_heartbeat_never_restores_revoked_access(engine_db: Prisma) -> None:
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
     repo: Final = EngineRepository(WriterDatabase(PrismaWrapper(engine_db)))
     worker: Final = Worker(id=uuid4().hex, name="worker", scope=Scope(team_id=uuid4().hex), last_seen=now)
     token_hash: Final = uuid4().hex

@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from functools import reduce
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
@@ -106,13 +107,22 @@ def evidence_valid(evidence: Evidence, parts: tuple[TracePart, ...]) -> bool:
     )
 
 
+BatchItem = TypeVar("BatchItem")
+
+
+def partition_items(
+    items: tuple[BatchItem, ...], size: Callable[[BatchItem], int], limit: int
+) -> tuple[tuple[BatchItem, ...], ...]:
+    def append_item(batches: tuple[tuple[BatchItem, ...], ...], item: BatchItem) -> tuple[tuple[BatchItem, ...], ...]:
+        if not batches or sum(size(value) for value in batches[-1]) + size(item) > limit:
+            return (*batches, (item,))
+        return (*batches[:-1], (*batches[-1], item))
+
+    return reduce(append_item, items, ())
+
+
 def partition_content(parts: tuple[TracePart, ...], limit: int = 24000) -> tuple[tuple[TracePart, ...], ...]:
-    if not parts:
-        return ()
-    end: Final = next(
-        (i for i in range(1, len(parts)) if sum(len(p.content) for p in parts[: i + 1]) > limit), len(parts)
-    )
-    return (parts[:end], *partition_content(parts[end:], limit))
+    return partition_items(parts, lambda part: len(part.content), limit)
 
 
 def extraction_prompt(claim: Claim, execution: Execution, parts: tuple[TracePart, ...]) -> str:
@@ -362,14 +372,4 @@ async def investigate_candidates(
 
 
 def observation_batches(observations: tuple[Observation, ...]) -> tuple[tuple[Observation, ...], ...]:
-    if not observations:
-        return ()
-    end: Final = next(
-        (
-            i
-            for i in range(1, len(observations))
-            if sum(len(o.model_dump_json()) for o in observations[: i + 1]) > 45000
-        ),
-        len(observations),
-    )
-    return (observations[:end], *observation_batches(observations[end:]))
+    return partition_items(observations, lambda observation: len(observation.model_dump_json()), 45000)

@@ -35,11 +35,11 @@ export function sortedFindings(findings: Finding[]): Finding[] {
 
 export function engineStatus(engine: Engine, connected: boolean): string {
   const active = engine.jobs?.find((job) => ["queued", "running"].includes(job.status ?? ""));
-  if (active) return connected ? active.stage ?? "Queued" : "Waiting for worker";
+  if (active) return connected ? active.stage ?? "Queued" : "Waiting for analyzer";
   const spent = engine.budget_month === new Date().toISOString().slice(0, 7) ? engine.spent ?? 0 : 0;
   if (spent >= (engine.settings.monthly_budget ?? 20)) return "Budget reached";
   if (!engine.settings.enabled) return "Paused";
-  return connected ? "Monitoring" : "Worker disconnected";
+  return connected ? "Monitoring" : "Analyzer disconnected";
 }
 
 export function evidenceTarget(id: string): { source: string; team: string; id: string; traceRef?: string } | null {
@@ -67,10 +67,10 @@ export function analysisProgress(job: Job) {
   if (job.status === "queued") {
     return {
       step: -1,
-      title: "Waiting for a worker",
+      title: "Waiting for an analyzer",
       done: 0,
       total: 0,
-      detail: "Analysis will start when a worker is available.",
+      detail: "Analysis will start when an analyzer is available.",
     };
   }
   if (job.stage === "Grouping observations") {
@@ -142,16 +142,23 @@ export function durationLabel(value: number, base: "minutes" | "hours" = "minute
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
+const nextCheckTimeFormat: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+};
+
 export function nextCheckStatus(engine: Engine, now: number): string | null {
   if (!engine.settings.enabled) return null;
   const active = engine.jobs.find((job) => job.status === "queued" || job.status === "running");
   if (active?.status === "running") return "Next check scheduled after this scan finishes";
-  if (active?.status === "queued") return "Waiting for a worker";
+  if (active?.status === "queued") return "Waiting for an analyzer";
   const next = new Date(engine.next_run_at);
   const remaining = next.getTime() - now;
-  if (remaining <= 0) return "Due now · waiting for a worker";
+  if (remaining <= 0) return "Due now · waiting for an analyzer";
   const minutes = Math.ceil(remaining / 60000);
   const relative = minutes === 1 ? "in less than a minute" : `in ${minutes} minutes`;
-  const time = next.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const time = next.toLocaleString(undefined, nextCheckTimeFormat);
   return `Next check ${time} · ${relative}`;
 }

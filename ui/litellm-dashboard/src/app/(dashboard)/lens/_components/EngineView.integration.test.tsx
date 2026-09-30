@@ -159,12 +159,12 @@ it("shows the actual next schedule and avoids a stale countdown during active sc
     next_run_at: "2026-09-30T10:12:00Z",
   };
   expect(nextCheckStatus(monitoring, now)).toContain("in 12 minutes");
-  expect(nextCheckStatus(monitoring, now + 12 * 60000)).toBe("Due now · waiting for a worker");
+  expect(nextCheckStatus(monitoring, now + 12 * 60000)).toBe("Due now · waiting for an analyzer");
   expect(nextCheckStatus({ ...monitoring, jobs: [{ ...engine.jobs[0], status: "running" }] }, now)).toBe(
     "Next check scheduled after this scan finishes",
   );
   expect(nextCheckStatus({ ...monitoring, jobs: [{ ...engine.jobs[0], status: "queued" }] }, now)).toBe(
-    "Waiting for a worker",
+    "Waiting for an analyzer",
   );
   expect(nextCheckStatus(engine, now)).toBeNull();
 });

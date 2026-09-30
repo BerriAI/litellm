@@ -35,6 +35,7 @@ pub struct NativeTraceStorage {
 #[pymethods]
 impl NativeTraceStorage {
     #[new]
+    #[pyo3(signature = (database, url, reader_url = None))]
     fn new(database: String, url: &str, reader_url: Option<&str>) -> PyResult<Self> {
         litellm_traces::schema_statements(&database, 1, 1).map_err(map_error)?;
         Ok(Self {

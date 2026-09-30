@@ -95,7 +95,7 @@ describe("Analysis progress", () => {
     expect(analysisProgress({ ...job, status: "queued" })).toMatchObject({
       step: -1,
       total: 0,
-      title: "Waiting for a worker",
+      title: "Waiting for an analyzer",
     });
   });
 

@@ -1,6 +1,7 @@
 import hashlib
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from functools import reduce
 from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 from uuid import uuid4
@@ -93,7 +94,7 @@ async def assigned(engine_id: str, job_id: str, worker: Worker) -> tuple[Engine,
         or job.status != "running"
         or job.worker_id != worker.id
         or job.lease_until is None
-        or job.lease_until <= datetime.now(UTC)
+        or job.lease_until <= datetime.now(timezone.utc)
     ):
         raise HTTPException(409, "This worker no longer owns the job")
     return engine, job
@@ -136,7 +137,7 @@ async def list_engines(auth: Auth) -> EngineList:
 async def create_engine(settings: EngineSettings, auth: Auth) -> Engine:
     scope: Final = user_scope(auth, write=True)
     validate_model(settings, auth)
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
     engine: Final = Engine(
         id=str(uuid4()),
         scope=scope,
@@ -170,7 +171,7 @@ async def update_engine(engine_id: str, settings: EngineSettings, auth: Auth) ->
 @router.post("/{engine_id}/runs", response_model=Engine)
 async def run_engine(engine_id: str, body: RunRequest, auth: Auth) -> Engine:
     await get_engine(engine_id, user_scope(auth, write=True))
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
     job_id: Final = str(uuid4())
     return required(await repository().update(engine_id, lambda e: queue_job(e, now, job_id, body.lookback_hours)))
 
@@ -178,7 +179,7 @@ async def run_engine(engine_id: str, body: RunRequest, auth: Auth) -> Engine:
 @router.post("/{engine_id}/cancel", response_model=Engine)
 async def cancel_engine(engine_id: str, auth: Auth) -> Engine:
     await get_engine(engine_id, user_scope(auth, write=True))
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
 
     def cancel(e: Engine) -> Engine:
         job: Final = current_job(e)
@@ -220,7 +221,7 @@ class Preview(BaseModel):
 
 @router.post("/preview/sample", response_model=Sample)
 async def preview_sample(body: Preview, auth: Auth) -> Sample:
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
     return await source_reader().sample(
         user_scope(auth),
         body.settings,
@@ -237,7 +238,9 @@ class WorkerName(BaseModel):
 async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
     scope: Final = user_scope(auth, write=True)
     token: Final = "lens-" + secrets.token_urlsafe(40)
-    worker: Final = Worker(id=str(uuid4()), name=body.name, scope=scope, last_seen=datetime(1970, 1, 1, tzinfo=UTC))
+    worker: Final = Worker(
+        id=str(uuid4()), name=body.name, scope=scope, last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc)
+    )
     await repository().save_worker(worker, hashlib.sha256(token.encode()).hexdigest())
     return WorkerCreated(worker=worker, token=token)
 
@@ -254,7 +257,7 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 
 @router.post("/worker/claim", response_model=Claim | None)
 async def claim(worker: WorkerAuth) -> Claim | None:
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
     await repository().heartbeat(worker.id, now.isoformat())
     for candidate in await repository().engines():
         if not can_access(worker.scope, candidate.scope):
@@ -267,7 +270,7 @@ async def claim(worker: WorkerAuth) -> Claim | None:
 @router.post("/worker/{engine_id}/{job_id}/progress", response_model=bool)
 async def progress(engine_id: str, job_id: str, body: Progress, worker: WorkerAuth) -> bool:
     await assigned(engine_id, job_id, worker)
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
 
     def renew(e: Engine) -> Engine:
         job: Final = current_job(e)
@@ -345,7 +348,7 @@ async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) 
     if old and old.status in ("completed", "failed") and old.worker_id == worker.id:
         return engine
     _, job = await assigned(engine_id, job_id, worker)
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
     selected: Final = job.sample or Sample(executions=(), eligible=0)
     allowed: Final = frozenset(e.id for e in selected.executions)
     check_ids: Final = frozenset(c.id for c in job.settings.checks if c.enabled)
@@ -390,15 +393,13 @@ async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) 
 
 
 def merge_results(engine: Engine, result: Result, revision: int, now: datetime) -> Engine:
-    if not result.findings:
-        return engine
-    finding: Final = merge_finding(engine, result.findings[0], revision, now)
-    updated: Final = engine.model_copy(
-        update=MappingProxyType({"findings": (finding, *(f for f in engine.findings if f.id != finding.id))})
-    )
-    return merge_results(
-        updated, result.model_copy(update=MappingProxyType({"findings": result.findings[1:]})), revision, now
-    )
+    def merge_one(current: Engine, draft: FindingDraft) -> Engine:
+        finding: Final = merge_finding(current, draft, revision, now)
+        return current.model_copy(
+            update=MappingProxyType({"findings": (finding, *(f for f in current.findings if f.id != finding.id))})
+        )
+
+    return reduce(merge_one, result.findings, engine)
 
 
 @router.post("/worker/{engine_id}/{job_id}/heartbeat", response_model=bool)

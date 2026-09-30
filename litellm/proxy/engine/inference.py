@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
@@ -95,7 +95,7 @@ async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker_id: s
     if not deployments:
         raise HTTPException(400, "Analysis model is no longer available")
     estimate: Final = quote(deployments, body.prompt)
-    now: Final = datetime.now(UTC)
+    now: Final = datetime.now(timezone.utc)
 
     def reserve(e: Engine) -> Engine:
         current: Final = renew_budget(e, now)

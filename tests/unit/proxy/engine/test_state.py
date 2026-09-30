@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
@@ -6,7 +6,7 @@ import pytest
 from litellm.proxy.engine.models import Check, Engine, EngineSettings, Evidence, FindingDraft, Scope, Worker
 from litellm.proxy.engine.state import can_access, claim_job, current_job, merge_finding, queue_job, renew_budget
 
-NOW: Final = datetime(2026, 1, 15, tzinfo=UTC)
+NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
 
 def engine() -> Engine:
@@ -91,7 +91,7 @@ def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
 
 def test_monthly_budget_renews_without_erasing_job_costs() -> None:
     spent: Final = queue_job(engine(), NOW, "job").model_copy(update={"spent": 12})
-    renewed: Final = renew_budget(spent, datetime(2026, 2, 1, tzinfo=UTC))
+    renewed: Final = renew_budget(spent, datetime(2026, 2, 1, tzinfo=timezone.utc))
     assert renewed.spent == 0
     assert renewed.jobs == spent.jobs
     assert renew_budget(spent, NOW) is spent
