@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Union, cast, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -557,40 +557,38 @@ def extract_nested_form_metadata(
     return metadata
 
 
+def _tags_from_metadata_value(value: object) -> list[str]:
+    from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+    metadata: Final[object] = safe_json_loads(value) if isinstance(value, str) else value
+    if not isinstance(metadata, dict):
+        return []
+    metadata_map: Final = cast(Mapping[str, object], metadata)  # cast-ok: dict checked above; only a string key is read
+    tags: Final[object] = metadata_map.get("tags")
+    if not isinstance(tags, list):
+        return []
+    tag_values: Final = cast(list[object], tags)  # cast-ok: list checked above; elements are filtered below
+    return [tag for tag in tag_values if isinstance(tag, str)]
+
+
 def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
-    """
-    Extract tags from request body metadata.
-
-    Args:
-        request_body: The request body dictionary
-
-    Returns:
-        List of tag names (strings), empty list if no valid tags found
-    """
+    """Extract tags from both metadata buckets and the request body."""
     metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_body)
-    metadata = request_body.get(metadata_variable_name)
-    # metadata can arrive as a JSON string from multipart/form-data or extra_body;
-    # coerce defensively so .get() below never raises AttributeError.
-    if isinstance(metadata, str):
-        from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-
-        parsed: Final[object] = safe_json_loads(metadata)
-        metadata = parsed if isinstance(parsed, dict) else {}
-    elif not isinstance(metadata, dict):
-        metadata = {}
-    tags_in_metadata: Final[object] = metadata.get("tags", [])
-    tags_in_request_body: Final[object] = request_body.get("tags", [])
-    combined_tags: Final[list[str]] = []
-
-    ######################################
-    # Only combine tags if they are lists
-    ######################################
-    if isinstance(tags_in_metadata, list):
-        combined_tags.extend(tags_in_metadata)
-    if isinstance(tags_in_request_body, list):
-        combined_tags.extend(tags_in_request_body)
-    ######################################
-    return [tag for tag in combined_tags if isinstance(tag, str)]
+    metadata_tags: Final = _tags_from_metadata_value(request_body.get(metadata_variable_name))
+    caller_metadata_tags: Final = (
+        _tags_from_metadata_value(request_body.get("metadata")) if metadata_variable_name == "litellm_metadata" else []
+    )
+    root_tags: Final[object] = request_body.get("tags")
+    root_tag_values: Final = (
+        cast(list[object], root_tags)  # cast-ok: list checked by the condition; elements are filtered below
+        if isinstance(root_tags, list)
+        else []
+    )
+    return [
+        *metadata_tags,
+        *caller_metadata_tags,
+        *(tag for tag in root_tag_values if isinstance(tag, str)),
+    ]
 
 
 def populate_request_with_path_params(request_data: dict, request: Request) -> dict:

@@ -642,6 +642,26 @@ def test_get_tags_from_request_body_with_litellm_metadata_tags():
     assert result == ["tag1", "tag2", "tag3"]
 
 
+def test_get_tags_from_responses_body_after_metadata_preseed():
+    request_body = {
+        "model": "gpt-4o-mini",
+        "input": "hello",
+        "metadata": {"tags": ["service:reporting"]},
+        "litellm_metadata": {},
+    }
+
+    assert get_tags_from_request_body(request_body) == ["service:reporting"]
+
+
+def test_get_tags_from_both_metadata_fields():
+    request_body = {
+        "metadata": {"tags": ["service:reporting"]},
+        "litellm_metadata": {"tags": ["harness:codex"]},
+    }
+
+    assert get_tags_from_request_body(request_body) == ["harness:codex", "service:reporting"]
+
+
 def test_get_tags_from_request_body_with_root_tags():
     """
     Test that tags are correctly extracted from root level of request body.
