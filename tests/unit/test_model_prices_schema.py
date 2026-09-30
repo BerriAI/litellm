@@ -533,3 +533,36 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+@pytest.mark.parametrize("model", ("gpt-realtime-2.1", "gpt-realtime-2.1-mini"))
+def test_realtime_family_cache_image_rate_tracks_azure(prices: dict, model: str):
+    openai: Final = prices[model]
+    azure: Final = prices[f"azure/{model}"]
+
+    assert openai["cache_read_input_image_token_cost"] > 0
+    assert azure["cache_read_input_image_token_cost"] == openai["cache_read_input_image_token_cost"]
+    assert azure["input_cost_per_image_token"] >= azure["cache_read_input_image_token_cost"]
+
+
+@pytest.mark.parametrize(
+    "model,mode",
+    (
+        ("gpt-realtime-translate", "realtime"),
+        ("gpt-live-transcribe", "audio_transcription"),
+        ("gpt-transcribe", "audio_transcription"),
+    ),
+)
+def test_azure_realtime_specialized_models_follow_openai_modes(prices: dict, model: str, mode: str):
+    openai: Final = prices[model]
+    azure: Final = prices[f"azure/{model}"]
+
+    assert openai["mode"] == azure["mode"] == mode
+    assert azure["supports_audio_input"] is True
+    assert azure["supported_endpoints"]
+
+
+def test_model_prices_backup_is_synchronized(prices: dict):
+    backup: Final = json.loads(BACKUP_PRICES_PATH.read_text())
+
+    assert backup == prices

@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import set_provider_response_header
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
+    sdk_compatible_transcription_request_data,
 )
 from litellm.types.utils import FileTypes
 from litellm.utils import (
@@ -31,11 +32,17 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         timeout: float | httpx.Timeout,
     ):
         try:
-            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
+            sdk_data: Final = sdk_compatible_transcription_request_data(data)
+            if data.get("stream") is True:
+                stream_response: Final = await openai_aclient.audio.transcriptions.create(**sdk_data, timeout=timeout)
+                return {}, stream_response  # mutable-ok: response headers use the existing mutable mapping contract
+            raw_response: Final = await openai_aclient.audio.transcriptions.with_raw_response.create(
+                **sdk_data, timeout=timeout
+            )  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
             headers: Final = dict(raw_response.headers)
-            response: Final = raw_response.parse()
+            parsed_response: Final = raw_response.parse()
 
-            return headers, response
+            return headers, parsed_response
         except Exception as e:
             raise e
 
@@ -46,7 +53,13 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         timeout: float | httpx.Timeout,
     ):
         try:
-            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
+            sdk_data: Final = sdk_compatible_transcription_request_data(data)
+            if data.get("stream") is True:
+                stream_response: Final = openai_client.audio.transcriptions.create(**sdk_data, timeout=timeout)
+                return None, stream_response
+            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(
+                **sdk_data, timeout=timeout
+            )
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
             return headers, response
@@ -125,6 +138,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         )
         logging_obj.model_call_details["response_headers"] = headers
 
+        if data.get("stream") is True:
+            return response
+
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
         else:
@@ -187,6 +203,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 timeout=timeout,
             )
             logging_obj.model_call_details["response_headers"] = headers
+            if data.get("stream") is True:
+                return response
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()
             else:

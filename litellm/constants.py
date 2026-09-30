@@ -838,7 +838,10 @@ OPENAI_CHAT_COMPLETION_PARAMS: Final = [
 
 OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "language",
+    "languages",
+    "keywords",
     "response_format",
+    "stream",
     "timestamp_granularities",
 ]
 

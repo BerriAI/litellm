@@ -259,6 +259,21 @@ async def test_construct_url_v1_protocol():
     assert url.count("/realtime") == 1
 
 
+def test_construct_url_translation_protocol():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    url = AzureOpenAIRealtime()._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="translate-deployment",
+        api_version=None,
+        realtime_protocol="GA",
+        query_params={"model": "translate-deployment"},
+        realtime_mode="translation",
+    )
+
+    assert url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime/translations?model=translate-deployment"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["ga", "Ga", "gA", "V1", "v1", "GA"])
 async def test_construct_url_case_insensitive_protocol(protocol):

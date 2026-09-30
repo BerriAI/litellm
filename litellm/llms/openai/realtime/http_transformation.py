@@ -27,6 +27,18 @@ class OpenAIRealtimeHTTPConfig(BaseRealtimeHTTPConfig):
         base = base.removesuffix("/v1")
         return f"{base}/v1/realtime/transcription_sessions"
 
+    def get_translation_client_secret_url(
+        self, api_base: str | None, model: str, api_version: str | None = None
+    ) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        base = base.removesuffix("/v1")
+        return f"{base}/v1/realtime/translations/client_secrets"
+
+    def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        base = self.get_api_base(api_base).rstrip("/")
+        base = base.removesuffix("/v1")
+        return f"{base}/v1/realtime/translations/calls"
+
     def validate_environment(
         self,
         headers: dict,
