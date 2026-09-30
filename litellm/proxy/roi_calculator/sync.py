@@ -245,6 +245,14 @@ class _ProcessedPull(NamedTuple):
     metadata_unavailable: bool = False
 
 
+def _processed_records(processed: tuple[_ProcessedPull, ...]) -> Mapping[int, ROIPullRecord]:
+    if processed and all(item.metadata_unavailable for item in processed):
+        raise SourceError(
+            "GitHub could not provide PR metadata. No new report was published; try analysis again later."
+        )
+    return MappingProxyType({item.position: item.record for item in processed})
+
+
 class SyncManager:
     def __init__(
         self,
@@ -479,13 +487,7 @@ class SyncManager:
                     if not worker_task.done():
                         worker_task.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
-            if processed and all(item.metadata_unavailable for item in processed):
-                raise SourceError(
-                    "GitHub could not provide PR metadata. No new report was published; try analysis again later."
-                )
-            processed_by_index: Final[Mapping[int, ROIPullRecord]] = MappingProxyType(
-                {item.position: item.record for item in processed}
-            )
+            processed_by_index: Final = _processed_records(processed)
             report: Final = ROIReport(
                 mode="live",
                 start=start.isoformat(),

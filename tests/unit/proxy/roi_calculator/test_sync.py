@@ -295,12 +295,18 @@ async def test_metadata_outage_keeps_previous_report_and_retries_on_next_run() -
     assert manager.status.needs_attention == 1
     assert manager.status.error is not None and "No new report was published" in manager.status.error
     assert repository.values["roi_calculator_report"] == previous
-    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    assert await manager.start(
+        _settings(estimator_prompt="New prompt invalidates saved estimates"),
+        repository,
+        _spend_reader(),
+        _completion(),
+        _transport(),
+    )
     await _wait_until_finished(manager)
     recovered: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
     assert recovered["pulls"][0]["estimate"]["status"] == "estimated"
     assert recovered["pulls"][0]["estimate"]["hours"] == 4
-    assert manager.status.reused == 1
+    assert manager.status.reused == 0
 
 
 @pytest.mark.asyncio
