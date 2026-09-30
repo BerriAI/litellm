@@ -9,6 +9,9 @@ directory busts ``CreateDirectoryW`` at 248. Microsoft Store Python has the
 deepest common ``site-packages``: 134 characters plus the profile folder name
 (learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
 and the Store install layout, checked 2026-09-30).
+
+The install must go through pip, not uv: uv writes files from Rust, which
+switches to extended-length paths on its own and never hits MAX_PATH.
 """
 
 import glob
@@ -76,10 +79,10 @@ def main(argv):
 
     venv = _deep_venv_dir()
     os.makedirs(os.path.dirname(venv), exist_ok=True)
-    if _run(["uv", "venv", venv]) != 0:
+    if _run([sys.executable, "-m", "venv", venv]) != 0:
         return 1
     python = os.path.join(venv, "Scripts", "python.exe")
-    if _run(["uv", "pip", "install", "--python", python, wheel]) != 0:
+    if _run([python, "-m", "pip", "install", wheel]) != 0:
         print(
             f"::error::installing {os.path.basename(wheel)} into a deep prefix failed"
         )
