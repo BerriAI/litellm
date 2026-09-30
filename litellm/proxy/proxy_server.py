@@ -11327,9 +11327,8 @@ class ProxyStartupEvent:
         tracing_endpoints.receiver = None
         if settings.get("store") != "clickhouse":
             return
-        missing: Final = tuple(name for name in ("CLICKHOUSE_URL", "CLICKHOUSE_READER_URL") if not os.getenv(name))
-        if missing:
-            raise ValueError(f"Agent tracing requires {', '.join(missing)} when tracing.store is clickhouse")
+        if not os.getenv("CLICKHOUSE_URL"):
+            raise ValueError("Agent tracing requires CLICKHOUSE_URL when tracing.store is clickhouse")
         tracing = TraceReceiver.from_env()
         try:
             await tracing.start()

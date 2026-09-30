@@ -29,21 +29,17 @@ fn map_error(error: Error) -> PyErr {
 pub struct NativeTraceStorage {
     database: String,
     writer: Connection,
-    reader: Option<Connection>,
+    reader: Connection,
 }
 
 #[pymethods]
 impl NativeTraceStorage {
     #[new]
-    #[pyo3(signature = (database, url, reader_url=None))]
-    fn new(database: String, url: &str, reader_url: Option<&str>) -> PyResult<Self> {
+    fn new(database: String, url: &str) -> PyResult<Self> {
         litellm_traces::schema_statements(&database, 1, 1).map_err(map_error)?;
         Ok(Self {
             writer: Connection::writer(url).map_err(map_error)?,
-            reader: reader_url
-                .map(|value| Connection::reader(value, &database))
-                .transpose()
-                .map_err(map_error)?,
+            reader: Connection::reader(url, &database).map_err(map_error)?,
             database,
         })
     }
@@ -104,9 +100,7 @@ impl NativeTraceStorage {
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
         let query = ReadQuery::parse(query).map_err(map_error)?;
-        let connection = self.reader.clone().ok_or_else(|| {
-            PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
-        })?;
+        let connection = self.reader.clone();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         crate::execution::run_async(
             py,

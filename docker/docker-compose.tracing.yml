@@ -12,7 +12,6 @@ services:
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
       CLICKHOUSE_URL: http://default:local-tracing-write@clickhouse:8123
-      CLICKHOUSE_READER_URL: http://litellm_traces_reader:local-tracing-read@clickhouse:8123
       CLICKHOUSE_DATABASE: default
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
@@ -55,10 +54,8 @@ services:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: local-tracing-write
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
-      LITELLM_TRACES_READER_PASSWORD: local-tracing-read
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./../litellm-rust/crates/traces/config/reader.xml:/etc/clickhouse-server/users.d/litellm-reader.xml:ro
     ports:
       - "127.0.0.1:18123:8123"
     healthcheck:

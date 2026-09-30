@@ -31,7 +31,7 @@ class DecodedSpan(TypedDict):
 
 
 class NativeStore(Protocol):
-    def __init__(self, database: str, url: str, reader_url: str | None = None) -> None: ...
+    def __init__(self, database: str, url: str) -> None: ...
 
     def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> Awaitable[None]: ...
 
@@ -75,8 +75,8 @@ def decode_otlp(
 
 
 class TraceStorage:
-    def __init__(self, database: str, url: str, reader_url: str | None = None) -> None:
-        self._native: Final = _native().NativeTraceStorage(database, url, reader_url)
+    def __init__(self, database: str, url: str) -> None:
+        self._native: Final = _native().NativeTraceStorage(database, url)
 
     async def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> None:
         await self._native.ensure_schema(trace_retention_days, spend_log_retention_days)

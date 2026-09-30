@@ -57,14 +57,27 @@ async def test_tracing_without_clickhouse_disables_receiver(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tracing_requires_both_clickhouse_urls(monkeypatch):
+async def test_tracing_requires_clickhouse_url(monkeypatch):
     monkeypatch.delenv("CLICKHOUSE_URL", raising=False)
-    monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
 
-    with pytest.raises(ValueError, match="CLICKHOUSE_URL, CLICKHOUSE_READER_URL"):
+    with pytest.raises(ValueError, match="CLICKHOUSE_URL"):
         await proxy_server_module.ProxyStartupEvent._init_tracing({"tracing": {"store": "clickhouse"}})
 
     assert proxy_server_module.tracing_endpoints.receiver is None
+
+
+@pytest.mark.asyncio
+async def test_tracing_starts_with_only_clickhouse_url(monkeypatch):
+    receiver = MagicMock()
+    receiver.start = AsyncMock()
+    monkeypatch.setattr(proxy_server_module, "TraceReceiver", MagicMock(from_env=MagicMock(return_value=receiver)))
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://clickhouse:8123")
+    monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
+
+    await proxy_server_module.ProxyStartupEvent._init_tracing({"tracing": {"store": "clickhouse"}})
+
+    assert proxy_server_module.tracing_endpoints.receiver is receiver
+    receiver.start.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -73,7 +86,6 @@ async def test_tracing_fails_startup_when_clickhouse_schema_cannot_initialize(mo
     receiver.start = AsyncMock(side_effect=RuntimeError("connection failed"))
     monkeypatch.setattr(proxy_server_module, "TraceReceiver", MagicMock(from_env=MagicMock(return_value=receiver)))
     monkeypatch.setenv("CLICKHOUSE_URL", "http://clickhouse:8123")
-    monkeypatch.setenv("CLICKHOUSE_READER_URL", "http://reader:8123")
 
     with pytest.raises(RuntimeError, match="could not initialize the ClickHouse schema"):
         await proxy_server_module.ProxyStartupEvent._init_tracing({"tracing": {"store": "clickhouse"}})

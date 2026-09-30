@@ -8,8 +8,7 @@ export const TRACING_SETUP_SNIPPET = `# proxy config
 general_settings:
   tracing:
     store: clickhouse
-export CLICKHOUSE_URL=<ClickHouse writer URL>
-export CLICKHOUSE_READER_URL=<ClickHouse read-only URL>
+export CLICKHOUSE_URL=<ClickHouse URL>
 # your agent app
 export LANGSMITH_TRACING=true LANGSMITH_TRACING_MODE=otel
 export OTEL_EXPORTER_OTLP_ENDPOINT=<proxy url>

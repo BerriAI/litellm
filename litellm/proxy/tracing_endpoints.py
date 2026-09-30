@@ -37,7 +37,7 @@ def get_receiver() -> TraceReceiver:
             status_code=501,
             detail=(
                 "Agent tracing is not enabled. Set general_settings.tracing.store to clickhouse "
-                "and configure CLICKHOUSE_URL and CLICKHOUSE_READER_URL on the proxy."
+                "and configure CLICKHOUSE_URL on the proxy."
             ),
         )
     return receiver

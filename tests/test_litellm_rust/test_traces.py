@@ -15,8 +15,8 @@ pytestmark = pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
 async def test_trace_reader_projects_connection_and_parameters(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [{"trace_id": "trace-1"}]}))
-    reader_url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, reader_url + "?database=wrong")
+    url: Final = recording_server.base_url.replace("http://", "http://writer:p%40ss%2Fword%25@")
+    storage: Final = NativeTraceStorage("trace_test", url + "?database=wrong")
     rows: Final = json.loads(await storage.query("span_detail", {"trace_id": "trace-1", "span_id": "span-1"}))["data"]
     request: Final = recording_server.requests[0]
     parameters: Final = parse_qs(urlsplit(request.path).query)
@@ -27,13 +27,13 @@ async def test_trace_reader_projects_connection_and_parameters(recording_server:
     assert parameters["readonly"] == ["1"]
     assert "user" not in parameters
     assert "password" not in parameters
-    assert request.headers["authorization"] == "Basic " + base64.b64encode(b"reader:p@ss/word%").decode()
+    assert request.headers["authorization"] == "Basic " + base64.b64encode(b"writer:p@ss/word%").decode()
 
 
 @pytest.mark.asyncio
 async def test_trace_reader_rejects_success_status_with_embedded_error(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [], "exception": "query failed"}))
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url)
     with pytest.raises(RuntimeError, match="invalid or failed JSON"):
         await storage.query("span_detail", {})
 
@@ -41,7 +41,7 @@ async def test_trace_reader_rejects_success_status_with_embedded_error(recording
 @pytest.mark.asyncio
 async def test_trace_reader_rejects_raw_sql(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = 0
-    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    storage: Final = NativeTraceStorage("trace_test", recording_server.base_url)
     with pytest.raises(ValueError, match="invalid trace read query"):
         await storage.query("SELECT * FROM otel_traces", {})
     assert recording_server.requests == []

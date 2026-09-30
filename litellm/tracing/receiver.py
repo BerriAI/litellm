@@ -70,7 +70,6 @@ class TraceReceiver:
                 TraceStorage(
                     database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
                     url=os.environ["CLICKHOUSE_URL"],
-                    reader_url=os.environ["CLICKHOUSE_READER_URL"],
                 )
             )
         )
