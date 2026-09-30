@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { BarChart3, RefreshCw } from "lucide-react";
+import { Calculator, RefreshCw } from "lucide-react";
 
 import { apiClient } from "@/components/networking";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -220,7 +220,7 @@ export default function ROICalculatorView({
   return (
     <main className="w-full space-y-6 p-8">
       <PageHeader
-        icon={<BarChart3 />}
+        icon={<Calculator />}
         title="ROI Calculator"
         subtitle={
           <>

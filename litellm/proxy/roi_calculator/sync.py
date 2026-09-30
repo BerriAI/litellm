@@ -4,7 +4,7 @@ from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, runtime_checkable
+from typing import Final, Literal, NamedTuple, Protocol, runtime_checkable
 from uuid import uuid4
 
 import httpx
@@ -239,6 +239,12 @@ async def _unavailable_record(github: GitHub, repo: str, pull: GitHubPullListIte
     )
 
 
+class _ProcessedPull(NamedTuple):
+    position: int
+    record: ROIPullRecord
+    metadata_unavailable: bool = False
+
+
 class SyncManager:
     def __init__(
         self,
@@ -398,7 +404,7 @@ class SyncManager:
 
             async def process(
                 item: tuple[int, str, GitHubPullListItem, str | None],
-            ) -> tuple[int, ROIPullRecord]:
+            ) -> _ProcessedPull:
                 index, repo, pull, key = item
                 saved: Final = await repository.get_param("roi_calculator_pull_" + key) if key is not None else None
                 cached_pull: Final = (
@@ -426,13 +432,13 @@ class SyncManager:
                         )
                     )
                     self._update_estimate_progress(cached_record["estimate"])
-                    return index, cached_record
+                    return _ProcessedPull(index, cached_record)
                 try:
                     evidence: Final = await github.evidence(repo, pull)
                 except SourceError as exc:
                     unavailable: Final = await _unavailable_record(github, repo, pull, exc)
                     self._update_estimate_progress(unavailable["estimate"])
-                    return index, unavailable
+                    return _ProcessedPull(index, unavailable, metadata_unavailable=True)
                 estimate: Final = await _estimate_with_fallback(estimator, evidence)
                 evidence_item: Final = GitHubPullListItem.model_validate(
                     MappingProxyType(
@@ -457,9 +463,9 @@ class SyncManager:
                         ),
                     )
                 self._update_estimate_progress(estimate)
-                return index, record
+                return _ProcessedPull(index, record)
 
-            async def worker(offset: int) -> tuple[tuple[int, ROIPullRecord], ...]:
+            async def worker(offset: int) -> tuple[_ProcessedPull, ...]:
                 return tuple(
                     [await process(indexed_queue[index]) for index in range(offset, len(indexed_queue), PR_CONCURRENCY)]
                 )
@@ -473,8 +479,12 @@ class SyncManager:
                     if not worker_task.done():
                         worker_task.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
+            if processed and all(item.metadata_unavailable for item in processed):
+                raise SourceError(
+                    "GitHub could not provide PR metadata. No new report was published; try analysis again later."
+                )
             processed_by_index: Final[Mapping[int, ROIPullRecord]] = MappingProxyType(
-                {index: pull for index, pull in processed}
+                {item.position: item.record for item in processed}
             )
             report: Final = ROIReport(
                 mode="live",

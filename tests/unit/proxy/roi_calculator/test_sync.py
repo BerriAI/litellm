@@ -275,12 +275,15 @@ async def test_read_spend_joins_user_emails_and_preserves_unmatched_identities()
 
 
 @pytest.mark.asyncio
-async def test_unreadable_pr_is_reported_and_retried_on_next_run() -> None:
+async def test_metadata_outage_keeps_previous_report_and_retries_on_next_run() -> None:
     repository: Final = _ReportRepository()
     manager: Final = SyncManager(clock=_fixed_now)
 
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    await _wait_until_finished(manager)
+    previous: Final = repository.values["roi_calculator_report"]
     assert await manager.start(
-        _settings(),
+        _settings(estimator_prompt="New prompt invalidates saved estimates"),
         repository,
         _spend_reader(),
         _completion(),
@@ -288,19 +291,16 @@ async def test_unreadable_pr_is_reported_and_retried_on_next_run() -> None:
     )
     await _wait_until_finished(manager)
 
-    assert manager.status.phase == "complete"
+    assert manager.status.phase == "error"
     assert manager.status.needs_attention == 1
-    failed: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
-    assert failed["pulls"][0]["estimate"]["status"] == "needs_review"
-    assert failed["pulls"][0]["estimate"]["hours"] is None
-    assert failed["pulls"][0]["incomplete_metadata"] is True
-    assert failed["pulls"][0]["cache_key"] is None
+    assert manager.status.error is not None and "No new report was published" in manager.status.error
+    assert repository.values["roi_calculator_report"] == previous
     assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
     await _wait_until_finished(manager)
     recovered: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
     assert recovered["pulls"][0]["estimate"]["status"] == "estimated"
     assert recovered["pulls"][0]["estimate"]["hours"] == 4
-    assert manager.status.reused == 0
+    assert manager.status.reused == 1
 
 
 @pytest.mark.asyncio
