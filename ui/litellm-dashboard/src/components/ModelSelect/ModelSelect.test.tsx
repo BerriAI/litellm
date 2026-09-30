@@ -1,6 +1,6 @@
 import type { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
 import type { Organization } from "@/components/networking";
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -659,5 +659,97 @@ describe("ModelSelect", () => {
     expect(screen.getByLabelText("model-0")).toBeInTheDocument();
     expect(screen.getByLabelText("model-4")).toBeInTheDocument();
     expect(screen.queryByLabelText("model-5")).not.toBeInTheDocument();
+  });
+
+  it("should let a selected model that is no longer offered be found and deselected", async () => {
+    const user = userEvent.setup();
+    const liveModels: ProxyModel[] = Array.from({ length: 6 }, (_, i) => ({
+      id: `model-${i}`,
+      object: "model",
+      created: 1234567890,
+      owned_by: "test",
+    }));
+    mockUseAllProxyModels.mockReturnValue({
+      data: { data: liveModels },
+      isLoading: false,
+    } as unknown as ReturnType<typeof useAllProxyModels>);
+    const liveIds = liveModels.map((m) => m.id);
+
+    renderWithProviders(<ModelSelect onChange={mockOnChange} value={[...liveIds, "retired-model"]} context="global" />);
+
+    await openModelList(user);
+    await user.type(screen.getAllByRole("combobox")[0], "retired");
+    const retired = await screen.findByRole("option", { name: "retired-model" });
+    expect(retired).toHaveAttribute("aria-selected", "true");
+
+    await user.click(retired);
+
+    expect(mockOnChange).toHaveBeenCalledWith(liveIds);
+  });
+
+  it("should list selections that are no longer offered in an Unavailable group ahead of every other group", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["gpt-4", "retired-model"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
+      />,
+    );
+
+    await openModelList(user);
+
+    const groups = within(screen.getByRole("listbox")).getAllByRole("group");
+    expect(
+      groups.map((group) =>
+        within(group)
+          .getAllByRole("option")
+          .map((option) => option.textContent),
+      ),
+    ).toEqual([
+      ["retired-model"],
+      ["All Proxy Models", "No Default Models"],
+      ["All Openai models", "All Anthropic models"],
+      ["gpt-4", "claude-3"],
+    ]);
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  });
+
+  it("should keep an unavailable selection removable while a special option is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["all-proxy-models", "retired-model"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
+      />,
+    );
+
+    await openModelList(user);
+    const retired = screen.getByRole("option", { name: "retired-model" });
+    expect(retired).not.toHaveAttribute("aria-disabled", "true");
+
+    await user.click(retired);
+
+    expect(mockOnChange).toHaveBeenCalledWith(["all-proxy-models"]);
+  });
+
+  it("should not show an Unavailable group when every selection is offered", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["gpt-4", "openai/*"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true }}
+      />,
+    );
+
+    await openModelList(user);
+
+    expect(screen.getByRole("option", { name: "gpt-4" })).toHaveAttribute("aria-selected", "true");
+    expectNotOffered("Unavailable");
   });
 });

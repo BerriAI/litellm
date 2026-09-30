@@ -171,7 +171,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
 
   const { wildcard, regular } = splitWildcardModels(filteredModels);
 
-  const groups: ModelOptionGroup[] = [
+  const offeredGroups: ModelOptionGroup[] = [
     ...(includeSpecialOptions
       ? [
           {
@@ -228,8 +228,10 @@ export const ModelSelect = (props: ModelSelectProps) => {
     },
   ];
 
-  const optionsByValue = new Map(groups.flatMap((group) => group.items).map((option) => [option.value, option]));
-  const selectedOptions = value.map((v) => optionsByValue.get(v) ?? { label: v, value: v });
+  const offeredByValue = new Map(offeredGroups.flatMap((group) => group.items).map((option) => [option.value, option]));
+  const selectedOptions = value.map((v) => offeredByValue.get(v) ?? { label: v, value: v });
+  const unavailableOptions = selectedOptions.filter((option) => !offeredByValue.has(option.value));
+  const groups: ModelOptionGroup[] = [{ label: "Unavailable", items: unavailableOptions }, ...offeredGroups];
   const overflowOptions = selectedOptions.slice(MAX_VISIBLE_MODEL_CHIPS);
 
   return (
