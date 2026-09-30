@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,13 @@ import { DataTable } from "@/components/shared/DataTable";
 
 import type { LogEntry } from "./columns";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
+
+const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
+
+vi.mock("@/utils/dataUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/dataUtils")>()),
+  copyToClipboard: copyToClipboardMock,
+}));
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
   request_id: "req-1",
@@ -271,31 +278,59 @@ describe("batch rows", () => {
 
     expect(screen.getByText("chatcmpl-42")).toBeInTheDocument();
     expect(screen.queryByText("batch cost")).not.toBeInTheDocument();
-    expect(screen.queryByText("call id")).not.toBeInTheDocument();
   });
 });
 
 describe("Request ID column", () => {
-  it("shows the x-litellm-call-id under the request id when they differ", () => {
+  it("shows only the request id in the cell and the x-litellm-call-id in its tooltip when they differ", async () => {
+    const user = userEvent.setup();
     renderRows([logEntry({ request_id: "chatcmpl-9", litellm_call_id: "call-uuid-9" })]);
 
     expect(screen.getByText("chatcmpl-9")).toBeInTheDocument();
-    expect(screen.getByText("call-uuid-9")).toBeInTheDocument();
-    expect(screen.getByText("call id")).toBeInTheDocument();
+    expect(screen.queryByText("call-uuid-9")).not.toBeInTheDocument();
+
+    await user.hover(screen.getByText("chatcmpl-9"));
+    expect(await screen.findByText("x-litellm-call-id: call-uuid-9")).toBeInTheDocument();
   });
 
-  it("shows the id once when request id and call id are the same", () => {
+  it("copies the x-litellm-call-id from the tooltip without opening the row", async () => {
+    const user = userEvent.setup();
+    const onRowClick = vi.fn();
+    render(
+      <DataTable
+        data={[logEntry({ request_id: "chatcmpl-9", litellm_call_id: "call-uuid-9" })]}
+        columns={getRequestLogsTableColumns(noopDeps)}
+        getRowId={(row) => row.request_id}
+        size="compact"
+        onRowClick={onRowClick}
+      />,
+    );
+
+    await user.hover(screen.getByText("chatcmpl-9"));
+    // fireEvent rather than user.click: jsdom has no layout, so moving the pointer off the trigger
+    // closes the tooltip before the click lands. The browser keeps it open while the popup is hovered.
+    fireEvent.click(await screen.findByRole("button", { name: "Copy x-litellm-call-id" }));
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("call-uuid-9");
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it("keeps the plain id tooltip when request id and call id are the same", async () => {
+    const user = userEvent.setup();
     renderRows([logEntry({ request_id: "same-id-7", litellm_call_id: "same-id-7" })]);
 
-    expect(screen.getAllByText("same-id-7")).toHaveLength(1);
-    expect(screen.queryByText("call id")).not.toBeInTheDocument();
+    await user.hover(screen.getByText("same-id-7"));
+    await waitFor(() => expect(screen.getAllByText("same-id-7")).toHaveLength(2));
+    expect(screen.queryByText(/x-litellm-call-id/)).not.toBeInTheDocument();
   });
 
-  it("shows only the request id when the row carries no call id", () => {
+  it("keeps the plain id tooltip when the row carries no call id", async () => {
+    const user = userEvent.setup();
     renderRows([logEntry({ request_id: "chatcmpl-no-call", litellm_call_id: null })]);
 
-    expect(screen.getByText("chatcmpl-no-call")).toBeInTheDocument();
-    expect(screen.queryByText("call id")).not.toBeInTheDocument();
+    await user.hover(screen.getByText("chatcmpl-no-call"));
+    await waitFor(() => expect(screen.getAllByText("chatcmpl-no-call")).toHaveLength(2));
+    expect(screen.queryByText(/x-litellm-call-id/)).not.toBeInTheDocument();
   });
 });
 

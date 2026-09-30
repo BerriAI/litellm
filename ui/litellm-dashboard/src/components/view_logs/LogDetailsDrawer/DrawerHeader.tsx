@@ -91,10 +91,13 @@ export function DrawerHeader({
           <CopyableId value={log.request_id} label="Request ID" fontSize={FONT_SIZE_HEADER} />
           {callId && (
             <div className="flex items-center gap-1">
-              <span className="text-muted-foreground" style={{ fontSize: 10 }}>
-                call id
+              <span
+                className="text-muted-foreground"
+                style={{ fontSize: FONT_SIZE_MEDIUM, fontFamily: FONT_FAMILY_MONO, whiteSpace: "nowrap" }}
+              >
+                x-litellm-call-id:
               </span>
-              <CopyableId value={callId} label="Call ID" fontSize={FONT_SIZE_MEDIUM} muted />
+              <CopyableId value={callId} label="x-litellm-call-id" fontSize={FONT_SIZE_MEDIUM} muted />
             </div>
           )}
         </div>

@@ -63,16 +63,16 @@ describe("DrawerHeader sidebar toggle", () => {
 
     expect(screen.getByText("chatcmpl-h")).toBeInTheDocument();
     expect(screen.getByText("call-h")).toBeInTheDocument();
-    expect(screen.getByText("call id")).toBeInTheDocument();
+    expect(screen.getByText("x-litellm-call-id:")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy Request ID" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy Call ID" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy x-litellm-call-id" })).toBeInTheDocument();
   });
 
-  it("omits the call id caption and button when the ids match", () => {
+  it("omits the x-litellm-call-id line and button when the ids match", () => {
     renderHeader(logEntry({ request_id: "same-h", litellm_call_id: "same-h" }), false);
 
-    expect(screen.queryByText("call id")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy Call ID" })).not.toBeInTheDocument();
+    expect(screen.queryByText("x-litellm-call-id:")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy x-litellm-call-id" })).not.toBeInTheDocument();
   });
 
   it("falls back to the request id row when the log names no model", () => {

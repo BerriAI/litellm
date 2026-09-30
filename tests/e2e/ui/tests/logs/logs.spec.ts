@@ -115,13 +115,14 @@ test.describe("Logs page", () => {
 
     const row = requestLogsRows(page).filter({ hasText: requestId });
     await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });
-    await expect(row, `Logs row for ${requestId} does not display its x-litellm-call-id ${callId}`).toContainText(
-      callId,
-    );
+    await expect(row, "the row itself shows only the request id").not.toContainText(callId);
 
     await row.click();
     const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
+    await expect(drawer.getByText("x-litellm-call-id:"), "drawer header lacks the x-litellm-call-id line").toBeVisible({
+      timeout: 10_000,
+    });
     await expect(
       drawer.getByText(callId, { exact: false }).first(),
       `drawer does not show x-litellm-call-id ${callId}`,
