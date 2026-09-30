@@ -9354,3 +9354,30 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
     ], "admission and reservation share one snapshot, and read-then-write callers go to Redis once it closes"
     assert redis.async_batch_get_cache.await_count == 1
     assert "spend:key:hashed" in redis.async_batch_get_cache.await_args.kwargs["key_list"]
+
+
+def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
+    from litellm.proxy.auth.user_api_key_auth import _identity_cache_keys
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        end_user_cache_key,
+        end_user_restricted_registry_cache_key,
+        model_access_group_registry_cache_key,
+    )
+    from litellm.proxy.utils import hash_token
+
+    assert _identity_cache_keys("sk-1234", end_user_id="eu-1", key_is_resolved=False) == (
+        hash_token("sk-1234"),
+        end_user_cache_key("eu-1"),
+        end_user_restricted_registry_cache_key(),
+        model_access_group_registry_cache_key(),
+    )
+    assert _identity_cache_keys("a" * 64, end_user_id=None, key_is_resolved=False) == (
+        hash_token("a" * 64),
+        model_access_group_registry_cache_key(),
+    )
+    master_key_keys = _identity_cache_keys("my-master-key", end_user_id=None, key_is_resolved=False)
+    assert master_key_keys == (hash_token("my-master-key"), model_access_group_registry_cache_key())
+    assert "my-master-key" not in master_key_keys, "a bearer that is not an sk- key must not be sent to Redis as is"
+    assert _identity_cache_keys("sk-1234", end_user_id=None, key_is_resolved=True) == (
+        model_access_group_registry_cache_key(),
+    )

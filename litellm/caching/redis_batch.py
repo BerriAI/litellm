@@ -47,6 +47,7 @@ class _RedisPipeline(Protocol):
     def incrbyfloat(self, name: str, amount: float) -> object: ...
     def expire(self, name: str, time: timedelta) -> object: ...
     def set(self, name: str, value: str, ex: timedelta | None = None) -> object: ...
+    def delete(self, *names: str) -> object: ...
     async def execute(self, raise_on_error: bool = True) -> list[object]: ...
 
 
@@ -233,6 +234,27 @@ class _Set(_Op[None]):
         await self._redis_cache.async_set_cache_pipeline_with_ttls(((self._key, self._value, self._ttl),))
 
 
+class _Delete(_Op[None]):
+    """DEL of one key, the pipelined twin of ``async_delete_cache``."""
+
+    __slots__ = ("_key", "_redis_cache")
+
+    def __init__(self, redis_cache: RedisCache, key: str) -> None:
+        super().__init__()
+        self._redis_cache: Final = redis_cache
+        self._key: Final = key
+
+    def enqueue(self, pipe: _RedisPipeline) -> int:
+        pipe.delete(self._redis_cache.check_and_fix_namespace(key=self._key))
+        return 1
+
+    def resolve(self, replies: Sequence[object]) -> None:
+        return None
+
+    async def run_alone(self) -> None:
+        await self._redis_cache.async_delete_cache(self._key)
+
+
 class BatchResult(Generic[_T]):
     """Awaitable handle for one declared operation; awaiting it flushes the batch it belongs to."""
 
@@ -269,10 +291,23 @@ class RedisBatch:
     _pending: list[_Op[object]] = field(default_factory=list)  # mutable-ok: drained by flush
     _flush_hooks: list[Callable[[], None]] = field(default_factory=list)  # mutable-ok: append-only registry
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _misses: set[str] = field(default_factory=set)  # mutable-ok: keys an MGET of this request read as absent
     flushes: int = 0
 
     def mget(self, keys: Sequence[str]) -> BatchResult[Mapping[str, object]]:
-        return self._declare(_MGet(self.redis_cache, keys))
+        op: Final = _MGet(self.redis_cache, keys)
+        op.future.add_done_callback(self._note_misses)
+        return self._declare(op)
+
+    def _note_misses(self, future: asyncio.Future[Mapping[str, object]]) -> None:
+        if future.cancelled() or future.exception() is not None:
+            return
+        self._misses.update(key for key, value in future.result().items() if value is None)
+
+    def read_as_missing(self, key: str) -> bool:
+        """True when an MGET on this batch already found no value under ``key`` and nothing has set it since,
+        so a per-key GET later in the same request can be answered without another round trip."""
+        return key in self._misses
 
     def script(
         self, source: str, run: RegisteredScript, keys: Sequence[str], args: Sequence[_ScriptArg]
@@ -283,7 +318,12 @@ class RedisBatch:
         return self._declare(_Increment(self.redis_cache, key, value, ttl))
 
     def set(self, key: str, value: object, ttl: float | None = None) -> BatchResult[None]:
+        self._misses.discard(key)
         return self._declare(_Set(self.redis_cache, key, value, ttl))
+
+    def delete(self, key: str) -> BatchResult[None]:
+        self._misses.add(key)
+        return self._declare(_Delete(self.redis_cache, key))
 
     def add_flush_hook(self, hook: Callable[[], None]) -> None:
         """Called at the start of every flush so lazily bound readers can declare their keys into the same trip."""

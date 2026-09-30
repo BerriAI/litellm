@@ -7,15 +7,16 @@ import asyncio
 import hashlib
 import json
 from typing import Any, Final
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import active_request_redis_batches, request_redis_batch_scope
-from litellm.proxy._types import LiteLLM_UserTable
-from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back
+from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import _cache_team_object
+from litellm.proxy.auth.auth_object_prefetch import _CacheEntry, _write_back, prefetch_identity_keys
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     CHECK_AND_INCREMENT_BY_N_SCRIPT,
@@ -27,7 +28,7 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.routing_read_batch import RoutingPrefetch
 
-from .test_redis_batch import FakeClient, FakeRedisCache
+from .test_redis_batch import FakeClient, FakeRedisCache, replies
 
 _MODEL_GROUP = "claude"
 _FAR_FUTURE = 4_102_444_800.0  # 2100-01-01, a cooldown stamped then is still active
@@ -528,3 +529,91 @@ async def test_auth_write_back_outside_a_scope_writes_through_as_before():
     assert [(op[0], [(key, ttl) for key, _value, ttl in op[1]]) for op in redis_cache.alone] == [
         ("SET_PIPELINE", [("user-1", 42)])
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_key_the_request_mget_read_as_absent_is_not_read_again_by_a_per_key_get():
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+    with request_redis_batch_scope() as request:
+        assert await request.batch(redis_cache).mget(["absent-key"]) == {"absent-key": None}
+        assert await cache.async_get_cache("absent-key") is None
+        assert redis_cache.alone == [] and len(client.pipelines) == 1
+        await cache.async_set_cache("absent-key", {"v": 1}, ttl=5)
+        await request.flush_all()
+    assert [c[:2] for c in client.pipelines[1].commands] == [("SET", "absent-key")]
+
+
+@pytest.mark.asyncio
+async def test_management_object_writes_inside_a_request_ride_its_pipeline_and_write_through_outside():
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+    with request_redis_batch_scope() as request:
+        await cache.async_set_cache("team_id:t1", {"team_id": "t1"}, ttl=60)
+        await cache.async_set_cache("hashed-key-object", {"token": "hashed-key-object"}, ttl=60)
+        assert client.pipelines == []
+        assert cache.in_memory_cache.get_cache("team_id:t1") == {"team_id": "t1"}
+        assert await cache.async_get_cache("hashed-key-object") == {"token": "hashed-key-object"}
+        await request.flush_all()
+    assert sorted((c[0], c[1], c[3]) for c in client.pipelines[0].commands) == [
+        ("SET", "hashed-key-object", 60),
+        ("SET", "team_id:t1", 60),
+    ]
+    await cache.async_set_cache("team_id:t2", {"team_id": "t2"}, ttl=60)
+    assert len(client.pipelines) == 1
+    assert redis_cache.alone == [("SET", "team_id:t2", {"team_id": "t2"})]
+
+
+@pytest.mark.asyncio
+async def test_a_team_refresh_inside_a_request_sends_its_set_and_alias_del_in_one_pipeline_before_returning():
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+    usage_cache = DualCache(redis_cache=redis_cache)
+    usage_cache.in_memory_cache.set_cache("team_id:t1", "stale team")
+    usage_cache.in_memory_cache.set_cache("team_alias:alpha", "stale alias")
+    cache.in_memory_cache.set_cache("team_alias:alpha", "stale alias")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.internal_usage_cache = InternalUsageCache(dual_cache=usage_cache)
+    team = LiteLLM_TeamTableCachedObj(team_id="t1", team_alias="alpha")
+    with request_redis_batch_scope() as request:
+        await _cache_team_object("t1", team, cache, proxy_logging_obj)
+        assert [c[:2] for c in client.pipelines[0].commands] == [("SET", "team_id:t1"), ("DEL", "team_alias:alpha")], (
+            "the alias DEL must reach Redis before the refresh returns, or another request can refill memory from it"
+        )
+        assert redis_cache.alone == []
+        assert usage_cache.in_memory_cache.get_cache("team_id:t1") is None
+        assert usage_cache.in_memory_cache.get_cache("team_alias:alpha") is None
+        assert cache.in_memory_cache.get_cache("team_alias:alpha") is None
+        assert cache.in_memory_cache.get_cache("team_id:t1")["team_id"] == "t1"
+        await request.flush_all()
+    assert len(client.pipelines) == 1 and redis_cache.alone == []
+
+
+@pytest.mark.asyncio
+async def test_a_pipelined_management_write_without_a_ttl_expires_in_redis_like_the_direct_path():
+    client = FakeClient(_lua_ok_replies)
+    redis_cache = FakeRedisCache(client)
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+    cache.update_cache_ttl(default_in_memory_ttl=5, default_redis_ttl=None)
+    with request_redis_batch_scope() as request:
+        await cache.async_set_cache("team_id:t1", {"team_id": "t1"})
+        await request.flush_all()
+    assert [(c[0], c[1], c[3]) for c in client.pipelines[0].commands] == [("SET", "team_id:t1", 5)]
+
+
+@pytest.mark.asyncio
+async def test_identity_prefetch_is_one_mget_after_which_hits_and_misses_alike_cost_no_read():
+    client = FakeClient(replies)
+    redis_cache = FakeRedisCache(client)
+    cache = UserApiKeyCache(redis_cache=redis_cache)
+    with request_redis_batch_scope():
+        await prefetch_identity_keys(["key-hit", "end_user_id:eu-miss", "key-hit"], cache)
+        assert [c[0] for c in client.pipelines[0].commands] == ["MGET"]
+        assert sorted(client.pipelines[0].commands[0][1:]) == ["end_user_id:eu-miss", "key-hit"]
+        assert await cache.async_get_cache("key-hit") == {"k": "key-hit"}
+        assert await cache.async_get_cache("end_user_id:eu-miss") is None
+    assert len(client.pipelines) == 1 and redis_cache.alone == []
+    assert cache.in_memory_cache.get_cache("end_user_id:eu-miss") is None
