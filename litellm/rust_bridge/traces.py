@@ -41,6 +41,8 @@ class NativeStore(Protocol):
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, JsonValue]]) -> Awaitable[None]: ...
 
+    def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
+
     def query(self, name: ReadQueryName, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
 
@@ -95,3 +97,16 @@ class TraceStorage:
             name, QUERY_PARAMETERS.validate_python(parameters or MappingProxyType({}))
         )
         return QueryResponse.model_validate_json(result).data
+
+    async def _lens_query(self, name: str, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        result: Final = await self._native.lens_query(name, QUERY_PARAMETERS.validate_python(parameters))
+        return QueryResponse.model_validate_json(result).data
+
+    async def lens_sample(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("sample", parameters)
+
+    async def lens_content(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("content", parameters)
+
+    async def lens_evidence(self, parameters: Mapping[str, object]) -> list[dict[str, JsonValue]]:
+        return await self._lens_query("evidence", parameters)
