@@ -1,0 +1,130 @@
+suite: test ingress routing in monolith mode
+templates:
+  - ingress.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: componentized mode still splits traffic across ui, gateway and backend Services
+    set:
+      ingress.enabled: true
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: RELEASE-NAME-litellm-ui
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /v1/chat
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - equal:
+          path: spec.rules[0].http.paths[-1].backend.service.name
+          value: RELEASE-NAME-litellm-backend
+
+  - it: monolith mode routes a single catch-all to the monolith Service and nothing else
+    set:
+      monolith.enabled: true
+      ingress.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0]
+          value:
+            path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm
+                port:
+                  number: 4000
+      - notMatchRegexRaw:
+          pattern: RELEASE-NAME-litellm-(gateway|backend|ui)
+
+  - it: monolith mode uses the gateway service port for the catch-all
+    set:
+      monolith.enabled: true
+      ingress.enabled: true
+      gateway.service.port: 8080
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8080
+
+  - it: monolith mode sends every extraPaths entry to the monolith Service regardless of its service field
+    set:
+      monolith.enabled: true
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /watsonx
+        - path: /admin
+          service: backend
+          pathType: Exact
+        - path: /dashboard
+          service: ui
+    asserts:
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 4
+      - equal:
+          path: spec.rules[0].http.paths[0]
+          value:
+            path: /watsonx
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm
+                port:
+                  number: 4000
+      - equal:
+          path: spec.rules[0].http.paths[1].backend.service.name
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.rules[0].http.paths[1].pathType
+          value: Exact
+      - equal:
+          path: spec.rules[0].http.paths[2].backend.service.name
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.rules[0].http.paths[3].path
+          value: /
+
+  - it: monolith mode keeps rejecting an extra path at the root
+    set:
+      monolith.enabled: true
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /
+    asserts:
+      - failedTemplate:
+          errorPattern: "ingress.extraPaths\\[0\\]: path / is already routed"
+
+  - it: monolith mode keeps the host, TLS and class settings
+    set:
+      monolith.enabled: true
+      ingress.enabled: true
+      ingress.className: nginx
+      ingress.controller: nginx
+      ingress.host: llm.example.com
+      ingress.tls:
+        - hosts:
+            - llm.example.com
+          secretName: llm-tls
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: llm.example.com
+      - equal:
+          path: spec.tls[0].secretName
+          value: llm-tls
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: RELEASE-NAME-litellm

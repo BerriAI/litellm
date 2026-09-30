@@ -1,21 +1,26 @@
 {{- if .Values.ingress.enabled -}}
+{{- $monolith := .Values.monolith.enabled -}}
 {{- $gatewayName := include "litellm.gateway.fullname" . -}}
 {{- $backendName := include "litellm.backend.fullname" . -}}
 {{- $uiName := include "litellm.ui.fullname" . -}}
 {{- $gatewayPort := .Values.gateway.service.port -}}
 {{- $backendPort := .Values.backend.service.port -}}
 {{- $uiPort := .Values.ui.service.port -}}
+{{- $proxyName := include "litellm.proxy.fullname" . -}}
 {{- $controller := .Values.ingress.controller | default "alb" -}}
 {{- if not (has $controller (list "alb" "nginx")) }}
 {{- fail (printf "ingress.controller: unknown controller %q, expected one of alb, nginx" $controller) }}
 {{- end }}
 {{/*
   Backends addressable from ingress.extraPaths, keyed by the `service` field.
+  In monolith mode the one proxy Service serves every component, so every
+  key resolves to it and an entry's `service` only has to be a known name.
 */}}
+{{- $proxyBackend := dict "name" $proxyName "port" $gatewayPort -}}
 {{- $extraPathBackends := dict
-    "gateway" (dict "name" $gatewayName "port" $gatewayPort)
-    "backend" (dict "name" $backendName "port" $backendPort)
-    "ui" (dict "name" $uiName "port" $uiPort)
+    "gateway" (ternary $proxyBackend (dict "name" $gatewayName "port" $gatewayPort) $monolith)
+    "backend" (ternary $proxyBackend (dict "name" $backendName "port" $backendPort) $monolith)
+    "ui" (ternary $proxyBackend (dict "name" $uiName "port" $uiPort) $monolith)
 -}}
 {{/*
   UI paths (Next.js static export).
@@ -89,7 +94,7 @@
   at "/" Prefix would swallow the whole backend management API) instead of
   adding to it.
 */}}
-{{- $builtinPathKeys := list "/test|Exact" "/debug/memory/summary|Exact" "/|Prefix" -}}
+{{- $builtinPathKeys := ternary (list "/|Prefix") (list "/test|Exact" "/debug/memory/summary|Exact" "/|Prefix") $monolith -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -114,6 +119,7 @@ spec:
       {{- end }}
       http:
         paths:
+          {{- if not $monolith }}
           # --- UI (Next.js static export) ---
           {{- range $uiPaths }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" .path "pathType" .pathType) }}
@@ -155,6 +161,7 @@ spec:
                 name: {{ $gatewayName }}
                 port:
                   number: {{ $gatewayPort }}
+          {{- end }}
           {{- end }}
           {{- /*
             --- Operator-supplied extra paths (ingress.extraPaths) ---
@@ -198,6 +205,16 @@ spec:
                 port:
                   number: {{ $target.port }}
           {{- end }}
+          {{- if $monolith }}
+          # --- Monolith: the proxy serves the UI, the data plane and the management API ---
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $proxyName }}
+                port:
+                  number: {{ $gatewayPort }}
+          {{- else }}
           # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
           - path: /
             pathType: Prefix
@@ -206,4 +223,5 @@ spec:
                 name: {{ $backendName }}
                 port:
                   number: {{ $backendPort }}
+          {{- end }}
 {{- end }}

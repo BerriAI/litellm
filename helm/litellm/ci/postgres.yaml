@@ -1,0 +1,58 @@
+# Throwaway PostgreSQL for the CircleCI helm_chart_testing job. Applied with
+# kubectl before `helm install`; the chart itself ships no database.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-ci-postgres
+type: Opaque
+stringData:
+  username: litellm
+  password: litellm-ci
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-ci-postgres
+spec:
+  selector:
+    app: litellm-ci-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-ci-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm-ci-postgres
+  template:
+    metadata:
+      labels:
+        app: litellm-ci-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16.10-alpine@sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4378742297
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: litellm
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-ci-postgres
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: litellm-ci-postgres
+                  key: password
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, litellm, -d, litellm]
+            periodSeconds: 2

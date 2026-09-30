@@ -1,0 +1,54 @@
+suite: the chart ships no PostgreSQL or Redis of its own
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - migrations-job.yaml
+tests:
+  - it: rejects the retired postgresql block instead of silently ignoring it
+    set:
+      postgresql.enabled: true
+      postgresql.auth.password: super-secret
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects the retired redis.enabled flag instead of silently ignoring it
+    set:
+      redis.enabled: true
+    asserts:
+      - failedTemplate: {}
+
+  - it: wires the writer straight from database.writer with no subchart in between
+    template: gateway/deployment.yaml
+    set:
+      database.writer.host: postgres.example.com
+      database.writer.dbname: proxydb
+      database.writer.passwordSecret.name: pg-secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            value: postgres.example.com
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME
+            value: proxydb
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: pg-secret
+                key: password
+
+  - it: keeps the migrations Job a pre-install hook whenever the Helm hook is enabled
+    template: migrations-job.yaml
+    set:
+      database.writer.host: postgres.example.com
+      database.writer.dbname: litellm
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade

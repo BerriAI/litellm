@@ -1,0 +1,53 @@
+{{- if include "litellm.workload.render" . }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "litellm.fullname" . }}-test-connection
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  {{- with .Values.gateway.podSecurityContext }}
+  securityContext:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: health
+      image: {{ include "litellm.image" . | quote }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      {{- with .Values.gateway.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      env:
+        - name: LITELLM_READINESS_URL
+          value: http://{{ include "litellm.workload.fullname" . }}:{{ .Values.gateway.service.port }}/health/readiness
+      args:
+        - python
+        - -c
+        - |
+          import json, os, sys, time, urllib.error, urllib.request
+          url = os.environ["LITELLM_READINESS_URL"]
+          for attempt in range(1, 31):
+              try:
+                  with urllib.request.urlopen(url, timeout=5) as response:
+                      body = response.read().decode()
+                      print(url, response.status, body)
+                      db = json.loads(body).get("db")
+                      if db != "connected":
+                          print(f"readiness reports db={db!r}: the proxy is not using the configured database")
+                          sys.exit(1)
+                      sys.exit(0)
+              except (urllib.error.URLError, OSError) as error:
+                  print(f"attempt {attempt}: {url}: {error}")
+                  time.sleep(2)
+          sys.exit(1)
+{{- end }}

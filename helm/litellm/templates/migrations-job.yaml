@@ -1,7 +1,7 @@
 {{- if .Values.migrationJob.enabled -}}
 # Pre-install / pre-upgrade hook that runs `prisma migrate deploy` against
-# the writer database before the gateway and backend Deployments are rolled
-# out. Required because the gateway and backend both spin up Prisma at
+# the writer database before the application Deployments are rolled out.
+# Required because the proxy, gateway and backend all spin up Prisma at
 # startup and assume the LiteLLM schema (LiteLLM_Config,
 # LiteLLM_VerificationToken, LiteLLM_SpendLogs, ...) already exists.
 #
@@ -16,9 +16,10 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: migrations
-  {{- if or .Values.migrationJob.hooks.helm.enabled .Values.migrationJob.hooks.argocd.enabled }}
+  {{- $helmHook := .Values.migrationJob.hooks.helm.enabled }}
+  {{- if or $helmHook .Values.migrationJob.hooks.argocd.enabled }}
   annotations:
-    {{- if .Values.migrationJob.hooks.helm.enabled }}
+    {{- if $helmHook }}
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-delete-policy: before-hook-creation
     helm.sh/hook-weight: {{ .Values.migrationJob.hooks.helm.weight | default "0" | quote }}
@@ -55,14 +56,20 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.migrationJob.extraInitContainers }}
+      initContainers:
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
       containers:
         - name: prisma-migrations
-          image: "{{ .Values.migrationJob.image.repository }}:{{ .Values.migrationJob.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.migrationJob.image.pullPolicy }}
+          image: {{ include "litellm.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.migrationJob.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          args:
+            - migrations
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.migrationJob) | nindent 12 }}
           {{- with .Values.migrationJob.volumeMounts }}
@@ -73,6 +80,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- with .Values.migrationJob.extraContainers }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
       {{- with .Values.migrationJob.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}
