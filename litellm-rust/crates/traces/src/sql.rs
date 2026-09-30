@@ -19,20 +19,27 @@ pub enum Parameter {
 impl Parameter {
     fn encoded(&self) -> String {
         match self {
-            Self::Text(value) => value.clone(),
+            Self::Text(value) => escaped(value),
             Self::Integer(value) => value.to_string(),
             Self::Strings(values) => format!(
                 "[{}]",
                 values
                     .iter()
-                    .map(|value| {
-                        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-                    })
+                    .map(|value| format!("'{}'", escaped(value).replace('\'', "\\'")))
                     .collect::<Vec<_>>()
                     .join(",")
             ),
         }
     }
+}
+
+fn escaped(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\0', "\\0")
 }
 
 pub async fn execute_read(
