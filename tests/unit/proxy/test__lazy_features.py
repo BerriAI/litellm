@@ -1,5 +1,5 @@
 import sys
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from types import ModuleType
 from typing import Final
@@ -7,6 +7,7 @@ from typing import Final
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 from litellm.proxy._lazy_features import (
     LazyFeature,
@@ -18,6 +19,15 @@ from litellm.proxy._lazy_features import (
 
 FLAG: Final = "LITELLM_DISABLE_LAZY_ROUTES"
 WARMUP_PATH: Final = "/lazy/warm/{name}"
+
+
+class _Operation(BaseModel):
+    tags: tuple[str, ...]
+
+
+class _WarmupBody(BaseModel):
+    stub_path: str
+    paths: Mapping[str, Mapping[str, _Operation]]
 
 
 def _feature_module(monkeypatch: pytest.MonkeyPatch, name: str, path: str) -> LazyFeature:
@@ -132,3 +142,26 @@ def test_flag_hides_the_swagger_warmup_plugin(monkeypatch: pytest.MonkeyPatch) -
     assert lazy_tag_to_prefix() != {}, "control: without the flag and without a snapshot the plugin has tags"
     monkeypatch.setenv(FLAG, "true")
     assert lazy_tag_to_prefix() == {}
+
+
+def test_without_the_flag_the_warmup_route_registers_a_feature_and_returns_its_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    features: Final = (
+        _feature_module(monkeypatch, "alpha", "/alpha/list"),
+        _feature_module(monkeypatch, "beta", "/beta/list"),
+    )
+    app: Final = FastAPI()
+    attach_lazy_features(app, features)
+
+    with TestClient(app) as client:
+        assert client.post("/lazy/warm/zeta").status_code == 404
+        warmed: Final = client.post("/lazy/warm/alpha")
+        assert warmed.status_code == 200, warmed.text
+        body: Final = _WarmupBody.model_validate_json(warmed.text)
+        assert body.stub_path == "/alpha/list"
+        assert set(body.paths) == {"/alpha/list"}
+        assert body.paths["/alpha/list"]["get"].tags == ("alpha",)
+        assert loaded_lazy_modules(app) == {features[0].module_path}
+        assert "/alpha/list" in _paths(app) and "/beta/list" not in _paths(app)
