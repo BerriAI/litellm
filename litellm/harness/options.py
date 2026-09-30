@@ -9,8 +9,7 @@ from typing import Any, Literal
 
 @dataclass(frozen=True)
 class ClaudeCodeOptions:
-    max_turns: int | None = None
-    small_model: str | None = None
+    config: Mapping[str, Any] = field(default_factory=dict)
     env: Mapping[str, str] = field(default_factory=dict)
 
 
