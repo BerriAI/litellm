@@ -6,7 +6,7 @@ import { ApiError } from "@/lib/http/client";
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
-import { AgentTracesSection, filterRuns } from "./AgentTracesSection";
+import { AgentTracesSection, filterRuns, newestStart } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
 vi.mock("../../networking", () => ({
@@ -149,6 +149,27 @@ describe("AgentTracesSection", () => {
     const ok = filterRuns(runs, "", "all", "ok");
     expect(ok.every((r) => r.error_count === 0)).toBe(true);
     expect(failed.length + ok.length).toBe(runs.length);
+  });
+
+  it("keeps the OTLP endpoint pill in the toolbar and opens the full guide from it", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    renderSection();
+    await screen.findByTestId("runs-table");
+
+    const pill = screen.getByRole("button", { name: "OpenTelemetry endpoint" });
+    expect(pill).toHaveTextContent("localhost:4000");
+    fireEvent.click(pill);
+    fireEvent.click(await screen.findByRole("button", { name: /Full setup guide/ }));
+
+    expect(await screen.findByTestId("tracing-setup-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("runs-table")).not.toBeInTheDocument();
+  });
+
+  it("picks the newest loaded run for the endpoint status", () => {
+    const older = { ...runs[0], start_time: "2026-09-30T10:00:00Z" };
+    const newer = { ...runs[0], start_time: "2026-09-30T12:00:00Z" };
+    expect(newestStart([older, newer, older])).toBe(newer.start_time);
+    expect(newestStart([])).toBeNull();
   });
 
   it("opens the run in place and goes back to the list", async () => {
