@@ -9701,6 +9701,9 @@ async def test_enterprise_custom_auth_key_return_stays_a_proxy_validated_key(mon
         ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "message/stream", "params": {}}, True),
         ("POST", "/a2a/agent", {"method": "message/send", "model": "free-model", "params": {}}, True),
         ("POST", "/a2a/agent", {"method": "message/stream", "model": "free-model", "params": {}}, True),
+        ("POST", "/v1/chat/completions", {"model": "a2a/agent", "method": "tasks/get"}, True),
+        ("POST", "/chat/completions", {"model": "a2a/agent", "method": "tasks/cancel", "stream": True}, True),
+        ("POST", "/v1/a2a/agent/message/send", {"method": "tasks/get", "params": {}}, True),
     ],
 )
 async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and_stream_do(

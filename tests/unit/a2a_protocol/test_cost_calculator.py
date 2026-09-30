@@ -117,6 +117,7 @@ class CostLogger(CustomLogger):
 
     def __init__(self):
         self.response_cost: Optional[float] = None
+        self.logged: asyncio.Event = asyncio.Event()
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -125,6 +126,7 @@ class CostLogger(CustomLogger):
             self.response_cost = (
                 slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
             )
+        self.logged.set()
 
 
 @pytest.mark.asyncio
@@ -449,3 +451,69 @@ async def test_asend_message_streaming_triggers_callbacks():
     assert callback_logger.agent_id == test_agent_id, (
         f"Expected agent_id '{test_agent_id}', got '{callback_logger.agent_id}'"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("claimed_fee", (None, 0.0, 99.0))
+async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, claimed_fee: float | None
+) -> None:
+    import json
+    from typing import Final
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
+    from litellm.types.agents import AgentResponse
+
+    await _reset_callbacks_and_settle_pending_logs()
+    logger: Final = CostLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    target: Final = AgentResponse(
+        agent_id="fee-target", agent_name="fee-target",
+        agent_card_params={"url": "https://agent.test/", "capabilities": {"streaming": True}},
+        litellm_params={"cost_per_query": 0.25},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    auth.invoked_agent_policy = target
+    auth.invoked_agent_id = target.agent_id
+    auth.agent_invocation_cost = 0.25
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        assert body["method"] == ("message/stream" if stream else "message/send")
+        result: Final = {
+            "jsonrpc": "2.0", "id": body["id"],
+            "result": {"kind": "message", "messageId": "reply", "role": "agent",
+                       "parts": [{"kind": "text", "text": "Paid reply"}]},
+        }
+        if stream:
+            return httpx.Response(200, text=f"data: {json.dumps(result)}\n\n", headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=result)
+
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(reply))
+    try:
+        pending: Final = await route_a2a_agent_request(
+            data={"model": "a2a/fee-target", "messages": [{"role": "user", "content": "Hello"}],
+                  "stream": stream, "client": client,
+                  **({"cost_per_query": claimed_fee} if claimed_fee is not None else {})},
+            route_type="acompletion", user_api_key_dict=auth,
+        )
+        response: Final = await pending
+        if stream:
+            chunks: Final = tuple([chunk async for chunk in response])
+            assert any(chunk.choices[0].delta.content == "Paid reply" for chunk in chunks)
+        else:
+            assert response.choices[0].message.content == "Paid reply"
+        await asyncio.wait_for(logger.logged.wait(), timeout=10.0)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+        assert logger.response_cost == pytest.approx(0.25)
+    finally:
+        await client.close()
