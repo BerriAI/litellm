@@ -39,7 +39,7 @@ def _native() -> NativeTraces:
     native: Final = get_native_bridge()
     if native is None:
         raise RuntimeError("Agent tracing requires the Rust extension")
-    return cast(NativeTraces, native)
+    return cast(NativeTraces, native)  # cast-ok: the native extension is validated against this protocol at call sites
 
 
 async def ensure_schema(
