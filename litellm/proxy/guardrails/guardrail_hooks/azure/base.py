@@ -1,5 +1,8 @@
 import re
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import Any, Final, cast
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -9,9 +12,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-
-if TYPE_CHECKING:
-    from litellm.types.llms.openai import AllMessageValues
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.openai import AllMessageValues, ResponseInputParam
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
@@ -22,6 +24,7 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
+_RESPONSE_INPUT_PARAM_ADAPTER: Final = TypeAdapter(ResponseInputParam)
 
 
 def resolve_content_safety_api_version(configured: str | None) -> str:
@@ -131,16 +134,19 @@ class AzureGuardrailBase:
 
         return chunks
 
-    def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
-        """
-        Get the last consecutive block of messages from the user.
+    def get_user_prompt_from_request(self, data: Mapping[str, object]) -> str | None:
+        messages: Final = data.get("messages")
+        if isinstance(messages, list):
+            return get_last_user_message(cast(list[AllMessageValues], messages))
 
-        Example:
-        messages = [
-            {"role": "user", "content": "Hello, how are you?"},
-            {"role": "assistant", "content": "I'm good, thank you!"},
-            {"role": "user", "content": "What is the weather in Tokyo?"},
-        ]
-        get_user_prompt(messages) -> "What is the weather in Tokyo?"
-        """
-        return get_last_user_message(messages)
+        responses_input: Final = data.get("input")
+        if not isinstance(responses_input, (str, list)):
+            return None
+
+        validated_input: Final = (
+            responses_input
+            if isinstance(responses_input, str)
+            else _RESPONSE_INPUT_PARAM_ADAPTER.validate_python(responses_input)
+        )
+        chat_messages: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input)
+        return get_last_user_message(chat_messages)

@@ -1,13 +1,14 @@
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
     AzureContentSafetyTextModerationGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -47,6 +48,38 @@ async def test_azure_text_moderation_guardrail_pre_call_hook():
 
         mock_async_make_request.assert_called_once()
         assert mock_async_make_request.call_args.kwargs["text"] == "Hello, how are you?"
+
+
+@pytest.mark.asyncio
+async def test_azure_text_moderation_scans_responses_input() -> None:
+    guardrail: Final = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+    response: Final = Mock()
+    response.json.return_value = {
+        "blocklistsMatch": [],
+        "categoriesAnalysis": [
+            {"category": "Hate", "severity": 2},
+            {"category": "Sexual", "severity": 0},
+            {"category": "SelfHarm", "severity": 0},
+            {"category": "Violence", "severity": 0},
+        ],
+    }
+
+    with patch.object(guardrail.async_handler, "post", return_value=response) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
+                cache=None,
+                data={"input": "Review this response input"},
+                call_type="aresponses",
+            )
+
+    assert exc_info.value.status_code == 400
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["json"]["text"] == "Review this response input"
 
 
 @pytest.mark.asyncio
