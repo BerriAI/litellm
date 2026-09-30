@@ -23,6 +23,7 @@ from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import HARNESS_EVENT_QUEUE_MAX_SIZE
 from litellm.harness.context import ApprovalHandler, GatewayTarget, SessionContext
 from litellm.harness.endpoint import ModelEndpoint
 from litellm.harness.errors import (
@@ -313,7 +314,8 @@ async def pump_events(
                 if max_turns is not None and tool_calls > max_turns:
                     end = _End(reason="max_turns")
                     break
-            queue.put_nowait(event)
+            # Backpressure: a runtime that streams faster than the consumer waits here.
+            await queue.put(event)
     except asyncio.CancelledError:
         end = _End(reason="cancelled")
         raise
@@ -321,7 +323,14 @@ async def pump_events(
         end = _End(error=e)
     finally:
         await _aclose(events)
-        queue.put_nowait(end)
+        _put_end(queue, end)
+
+
+def _put_end(queue: asyncio.Queue[Event | _End], end: _End) -> None:
+    """The end marker must always land, even when the queue is full after a cancel."""
+    while queue.full():
+        queue.get_nowait()
+    queue.put_nowait(end)
 
 
 async def call_approval_handler(handler: ApprovalHandler, approval: Approval) -> None:
@@ -358,7 +367,7 @@ class _Turn:
         self.prompt = prompt
         self.control = control
         self.interactive = interactive
-        self.queue: asyncio.Queue[Event | _End] = asyncio.Queue()
+        self.queue: asyncio.Queue[Event | _End] = asyncio.Queue(maxsize=HARNESS_EVENT_QUEUE_MAX_SIZE)
         self.events: list[Event] = []
         self.text_parts: list[str] = []
         self.emitted_files: set[tuple[str, str]] = set()
