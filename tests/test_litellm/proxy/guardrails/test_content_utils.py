@@ -7,6 +7,8 @@ from litellm.proxy.guardrails._content_utils import (
     is_non_conversational_call_type,
     is_string_batch_input,
     iter_message_text,
+    iter_request_messages,
+    message_text,
     walk_user_text,
 )
 
@@ -741,3 +743,58 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
     """A call type this module has never heard of must still be inspected —
     failing closed is the point of the deny-list."""
     assert is_non_conversational_call_type("some_future_call_type") is False
+
+
+# ── iter_request_messages / message_text ─────────────────────────────────────────
+
+
+def test_iter_request_messages_puts_a_top_level_system_prompt_first():
+    data = {
+        "system": [{"type": "text", "text": "anthropic rules"}],
+        "messages": [{"role": "user", "content": "hi"}, "not a message", {"role": "assistant", "content": "yo"}],
+    }
+    assert list(iter_request_messages(data)) == [
+        {"role": "system", "content": [{"type": "text", "text": "anthropic rules"}]},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "yo"},
+    ]
+
+
+def test_iter_request_messages_puts_responses_instructions_before_input():
+    data = {"instructions": "be brief", "input": [{"role": "developer", "content": "id=agent"}, "question"]}
+    assert list(iter_request_messages(data)) == [
+        {"role": "system", "content": "be brief"},
+        {"role": "developer", "content": "id=agent"},
+        {"role": "user", "content": "question"},
+    ]
+
+
+def test_iter_request_messages_yields_nothing_for_an_unknown_shape():
+    data = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}], "system": "", "instructions": None}
+    assert list(iter_request_messages(data)) == []
+
+
+def test_message_text_joins_text_parts_only():
+    message = {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "first"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            "bare string part",
+            {"text": "bedrock converse block"},
+        ],
+    }
+    assert message_text(message) == "first\nbare string part\nbedrock converse block"
+
+
+def test_message_text_of_a_message_without_content_is_empty():
+    assert message_text({"role": "system"}) == ""
+
+
+def test_iter_request_messages_ignores_top_level_prompts_that_carry_no_text():
+    data = {
+        "instructions": 1,
+        "system": {"not": "text"},
+        "messages": [{"role": "developer", "content": "id=agent"}],
+    }
+    assert list(iter_request_messages(data)) == [{"role": "developer", "content": "id=agent"}]
