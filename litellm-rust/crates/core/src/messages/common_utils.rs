@@ -3,7 +3,7 @@ pub(super) use litellm_http::request::truncate_error_body;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
-    base_llm::messages::transformation::BaseAnthropicMessagesConfig,
+    base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -30,7 +30,7 @@ impl MessagesProvider {
         .into()
     }
 
-    pub(crate) fn config(self) -> &'static dyn BaseAnthropicMessagesConfig {
+    pub(crate) fn config(self) -> &'static dyn BaseMessagesConfig {
         match self {
             Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,

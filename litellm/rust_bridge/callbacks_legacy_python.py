@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Final,
+    Literal,
     Protocol,
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
@@ -231,6 +232,10 @@ def defer_success(logger: LoggingSurface, pending: object) -> None:
     setattr(logger, "_native_pending_logging", pending)
 
 
+def _cache_hit(logger: LoggingSurface) -> Literal[True] | None:
+    return True if logger.model_call_details.get("cache_hit") is True else None
+
+
 def sync_success_for_async_call(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> None:
@@ -238,7 +243,7 @@ def sync_success_for_async_call(
         result=response,
         start_time=start,
         end_time=end,
-        cache_hit=True if logger.model_call_details.get("cache_hit") is True else None,
+        cache_hit=_cache_hit(logger),
     )
 
 
@@ -265,16 +270,14 @@ def submit_success(logger: LoggingSurface, response: object, start: datetime.dat
         response,
         start,
         end,
-        cache_hit=True if logger.model_call_details.get("cache_hit") is True else None,
+        cache_hit=_cache_hit(logger),
     )
 
 
 def async_success_handler(
     logger: LoggingSurface, response: object, start: datetime.datetime, end: datetime.datetime
 ) -> Coroutine[object, object, None]:
-    return logger.async_success_handler(
-        response, start, end, cache_hit=True if logger.model_call_details.get("cache_hit") is True else None
-    )
+    return logger.async_success_handler(response, start, end, cache_hit=_cache_hit(logger))
 
 
 def enqueue_logging(coroutine: Coroutine[object, object, None]) -> None:

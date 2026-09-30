@@ -21,7 +21,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import HTTPException
+from mcp.types import CallToolResult, TextContent
 
+import litellm
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
@@ -29,6 +31,7 @@ from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
     PanwPrismaAirsHandler,
     initialize_guardrail,
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.utils import (
     ChatCompletionCustomToolCallPayload,
@@ -2027,6 +2030,30 @@ class TestPanwAirsShouldRunGuardrail:
             ),
             pytest.param(
                 True,
+                "post_call",
+                _simple_data(),
+                GuardrailEventHooks.post_mcp_call,
+                False,
+                id="post_call_mode_does_not_run_for_post_mcp_call",
+            ),
+            pytest.param(
+                True,
+                "post_mcp_call",
+                _simple_data(),
+                GuardrailEventHooks.post_mcp_call,
+                True,
+                id="explicit_post_mcp_call_mode",
+            ),
+            pytest.param(
+                True,
+                "post_mcp_call",
+                _simple_data(),
+                GuardrailEventHooks.post_call,
+                False,
+                id="post_mcp_call_mode_does_not_run_for_regular_post_call",
+            ),
+            pytest.param(
+                True,
                 "pre_call",
                 _simple_data(),
                 GuardrailEventHooks.during_mcp_call,
@@ -2046,6 +2073,66 @@ class TestPanwAirsShouldRunGuardrail:
     def test_should_run_guardrail(self, default_on, event_hook, data, query_event, expected):
         handler = make_handler(default_on=default_on, event_hook=event_hook)
         assert handler.should_run_guardrail(data, query_event) is expected
+
+
+class TestPanwAirsPostMcpCall:
+    """Explicit MCP output scans use the existing AIRS response contract."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["allow", "block", "mask"])
+    async def test_post_mcp_call_scans_tool_result(self, monkeypatch: pytest.MonkeyPatch, action: str) -> None:
+        original: Final = "ssn 123-45-6789"
+        masked: Final = "ssn ***********"
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            payload: Final = json.loads(request.content)
+            assert request.url.path.endswith("/v1/scan/sync/request")
+            assert payload["contents"] == [{"response": original}]
+            assert payload["ai_profile"] == {"profile_name": "test_profile"}
+            return httpx.Response(
+                200,
+                json={
+                    "action": "block" if action == "block" else "allow",
+                    "category": "malicious" if action == "block" else "benign",
+                    "scan_id": "s1",
+                    "report_id": "r1",
+                    "profile_name": "test_profile",
+                    **({"response_masked_data": {"data": masked}} if action == "mask" else {}),
+                },
+            )
+
+        transport_handler: Final = MagicMock(side_effect=respond)
+        http_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(transport_handler))
+        handler: Final = make_handler(
+            event_hook="post_mcp_call",
+            default_on=True,
+            mask_response_content=True,
+            http_client=http_client,
+        )
+        monkeypatch.setattr(litellm, "callbacks", [handler])
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        result: Final = CallToolResult(content=[TextContent(type="text", text=original)], isError=False)
+        try:
+            if action == "block":
+                with pytest.raises(HTTPException) as exc_info:
+                    await proxy_logging.post_mcp_call_hook(
+                        response=result,
+                        request_data={"litellm_call_id": "c1"},
+                        user_api_key_dict=None,
+                    )
+                assert exc_info.value.status_code == 400
+                transport_handler.assert_called_once()
+                return
+            returned: Final = await proxy_logging.post_mcp_call_hook(
+                response=result,
+                request_data={"litellm_call_id": "c1"},
+                user_api_key_dict=None,
+            )
+            transport_handler.assert_called_once()
+            assert returned.model_dump(by_alias=True)["isError"] is False
+            assert returned.content == [TextContent(type="text", text=masked if action == "mask" else original)]
+        finally:
+            await http_client.client.aclose()
 
 
 class TestPanwAirsToolEventIsResponseFix:
