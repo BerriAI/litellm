@@ -32,6 +32,7 @@ from litellm.types.proxy.agent_identity import AgentIdentityFailure
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+    from prisma.types import LiteLLM_RetiredAgentIdentityWhereUniqueInput
 
 
 class AgentObjectPermissionRecord(Protocol):
@@ -178,20 +179,19 @@ async def _managed_fields(
     if history is None:
         return result
     entry: Final = history["create"]
-    prior: Final = await RetiredAgentIdentityRepository(client, use_writer=True).table.find_unique(
-        where={
-            "provider_tenant_id_client_id": {
-                "provider": entry["provider"],
-                "tenant_id": entry["tenant_id"],
-                "client_id": entry["client_id"],
-            }
+    where: Final[LiteLLM_RetiredAgentIdentityWhereUniqueInput] = {
+        "provider_tenant_id_client_id": {
+            "provider": entry["provider"],
+            "tenant_id": entry["tenant_id"],
+            "client_id": entry["client_id"],
         }
-    )
+    }
+    prior: Final = await RetiredAgentIdentityRepository(client, use_writer=True).table.find_unique(where=where)
     if prior is None:
         return result
     if existing is None or prior.agent_id != existing.agent_id:
         raise HTTPException(409, "Entra application was already registered to another agent")
-    return {key: value for key, value in result.items() if key != "retired_identities"}
+    return MappingProxyType({key: value for key, value in result.items() if key != "retired_identities"})
 
 
 def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
