@@ -465,6 +465,7 @@ def test_turn_request_argv_and_session_continuation():
     assert list(first.argv) == [
         "opencode",
         "run",
+        "--pure",
         "--format",
         "json",
         "--thinking",
@@ -551,6 +552,7 @@ async def test_turn_argv_env_and_session_continuation():
     assert first["cmd"] == [
         "opencode",
         "run",
+        "--pure",
         "--format",
         "json",
         "--thinking",
@@ -703,6 +705,18 @@ async def test_model_falls_back_to_endpoint_model():
     await collect(handler, ctx, "x")
     assert "litellm/gw-model" in sandbox.execs[0]["cmd"]
     assert exec_config(sandbox)["provider"]["litellm"]["models"] == {"gw-model": {}}
+
+
+def test_turn_request_never_loads_plugins():
+    """A repo's .opencode/plugin/*.js would run as the host user at startup; --pure blocks it."""
+    ctx = make_ctx()
+    argv = list(CONFIG.transform_turn_request(ctx, setup_for(ctx), PRIVATE, "hi", None).argv)
+    assert argv[:3] == ["opencode", "run", "--pure"]
+
+
+def test_options_config_cannot_add_plugins():
+    with pytest.raises(OptionsMismatch, match="plugin"):
+        validate_user_config({"plugin": ["./evil.js"]})
 
 
 def test_endpoint_request_fixture_documents_contract():
