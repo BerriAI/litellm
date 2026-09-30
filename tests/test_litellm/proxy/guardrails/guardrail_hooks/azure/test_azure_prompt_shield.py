@@ -407,8 +407,6 @@ async def test_responses_input_is_scanned_and_billing_is_logged(responses_input:
 
 @pytest.mark.asyncio
 async def test_empty_messages_stub_does_not_hide_responses_input() -> None:
-    """Cursor sends /v1/responses bodies with an empty messages list plus the real
-    input; a messages-first selector would scan nothing and let the prompt through."""
     guardrail: Final = _priced_shield_guardrail(cost_tier="paid", price_per_1000_text_records=0.38)
     prompt: Final = "summarize the thread"
     data: Final[dict[str, object]] = {"messages": [], "input": prompt}
