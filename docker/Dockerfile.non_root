@@ -104,7 +104,7 @@ ENV LITELLM_NON_ROOT=true
 
 RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
     cp -r /app/litellm/proxy/_experimental/out/. /var/lib/litellm/ui/ && \
-    cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
+    cp /app/litellm/proxy/logo.png /var/lib/litellm/assets/logo.png && \
     touch /var/lib/litellm/ui/.litellm_ui_ready
 
 RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \

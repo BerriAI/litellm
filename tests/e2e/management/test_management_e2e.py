@@ -37,6 +37,7 @@ from models import (
     OrgUpdateBody,
     TagListEntry,
     TagNewBody,
+    TeamMemberEntry,
     TeamNewBody,
     TeamUpdateBody,
     UserNewBody,
@@ -48,6 +49,7 @@ pytestmark = pytest.mark.e2e
 
 REGENERATE_GRACE_PERIOD = "15s"
 REGENERATE_GRACE_SECONDS = 15.0
+TEAM_DELETE_POOL_OVERFLOW_MEMBERS = 250
 
 
 def _poll[T](client: ManagementClient, attempt: Callable[[], T | None], failure: str) -> T:
@@ -477,6 +479,43 @@ class TestTeamRoutes:
 
         _ = _poll(
             client, rejected, "team-bound key was still accepted on chat (never rejected 401) after team deletion"
+        )
+
+    @pytest.mark.covers("mgmt.team.delete.membership_larger_than_db_pool")
+    def test_team_delete_succeeds_for_team_larger_than_db_pool(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        """Customer repro: /team/delete fans one transaction per member out over a
+        Prisma pool of 10 connections, each queued on the team's advisory lock,
+        so a team bigger than the pool must still delete cleanly instead of
+        answering 500 P2028."""
+        team_id = _create_team(client, resources, f"e2e-mgmt-team-{unique_marker()}", [])
+        user_ids = tuple(
+            _create_user(
+                client,
+                resources,
+                UserNewBody(
+                    user_email=f"e2e-mgmt-bulk-{i}-{unique_marker()}@example.com",
+                    user_role="internal_user",
+                ),
+            )
+            for i in range(TEAM_DELETE_POOL_OVERFLOW_MEMBERS)
+        )
+        client.add_team_members(team_id, [TeamMemberEntry(role="user", user_id=user_id) for user_id in user_ids])
+        seated = len(client.team_info(team_id).members_with_roles)
+        assert seated >= len(user_ids), (
+            f"/team/info lists {seated} members after the bulk /team/member_add, expected at least {len(user_ids)}"
+        )
+
+        outcome = client.delete_team_status(team_id)
+
+        assert outcome.status_code == 200, (
+            f"/team/delete on a {len(user_ids)}-member team must succeed, got "
+            f"{outcome.status_code}: {outcome.body[:500]}"
+        )
+        probe = client.team_info_status(team_id)
+        assert probe.status_code == 404, (
+            f"deleted team {team_id} still resolves: /team/info returned {probe.status_code}: {probe.body[:300]}"
         )
 
     @pytest.mark.covers("mgmt.team.member_add.persists")

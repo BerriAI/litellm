@@ -6852,7 +6852,6 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
     exists_calls = []
 
     def exists_side_effect(path):
@@ -6887,8 +6886,7 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
-        # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
-        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
+        assets_logo_path = "/var/lib/litellm/assets/logo.png"
         assert any(assets_logo_path in str(call) for call in exists_calls), f"Should check if {assets_logo_path} exists"
 
         # Verify FileResponse was called (with fallback logo)
@@ -7002,7 +7000,7 @@ async def test_get_image_default_logo_ignores_stale_cache(monkeypatch, tmp_path)
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(cache_path.resolve())
-    assert served_path.endswith("logo.jpg")
+    assert served_path.endswith("/logo.png")
 
 
 @pytest.mark.asyncio
@@ -7034,7 +7032,7 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(custom_logo_path), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith("logo.jpg")
+    assert served_path.endswith("/logo.png")
 
 
 @pytest.mark.asyncio
@@ -7067,7 +7065,7 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(custom_logo_path), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith("logo.jpg"), f"Expected fallback to default logo.jpg, got {served_path}"
+    assert served_path.endswith("/logo.png"), f"Expected fallback to default logo.png, got {served_path}"
 
 
 def test_get_config_normalizes_string_callbacks(monkeypatch):
@@ -12064,6 +12062,45 @@ def test_db_config_sync_restores_a_code_callback_it_replaced(monkeypatch: pytest
 
     pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
     assert litellm.success_callback == ["langfuse_otel"]
+
+
+@pytest.mark.parametrize(
+    ("setting_key", "event", "list_name"),
+    [
+        ("success_callback", "success", "_async_success_callback"),
+        ("failure_callback", "failure", "_async_failure_callback"),
+    ],
+)
+def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
+    monkeypatch: pytest.MonkeyPatch, setting_key: str, event: str, list_name: str
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    _reset_runtime_callbacks(monkeypatch)
+    for extra_list in ("input_callback", "service_callback"):
+        monkeypatch.setattr(litellm, extra_list, [])
+    monkeypatch.setattr(ps, "open_telemetry_logger", None)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("OTEL_EXPORTER", "console")
+    monkeypatch.setenv("ARIZE_API_KEY", "test-arize-key")
+    monkeypatch.setenv("ARIZE_SPACE_ID", "test-space-id")
+    monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "http://127.0.0.1:4318/v1/traces")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        getattr(litellm.logging_callback_manager, f"add_litellm_{event}_callback")("helicone")
+        _add_custom_logger_callback_to_specific_event("otel", event)
+        pc = ps.ProxyConfig()
+        for _ in range(2):
+            pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: ["arize"]}})
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+    v2_names: Final = [cb.callback_name for cb in getattr(litellm, list_name) if isinstance(cb, OpenTelemetryV2)]
+    assert len(v2_names) == 2
+    assert "arize" in v2_names
 
 
 @pytest.mark.asyncio
