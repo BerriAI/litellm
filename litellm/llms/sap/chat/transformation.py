@@ -192,21 +192,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def map_openai_params(
-        self,
-        non_default_params: dict,  # mutable-ok: mirrors base class signature
-        optional_params: dict,  # mutable-ok: mirrors base class signature
-        model: str,
-        drop_params: bool,
-    ) -> dict:  # mutable-ok: mirrors base class signature
-        supported = self.get_supported_openai_params(model)
-        optional_params.update(
-            {  # mutable-ok: comprehension passed directly to update, never stored separately
-                p: v for p, v in non_default_params.items() if p in supported
-            }
-        )
-        return optional_params
-
     def get_supported_openai_params(self, model):
         params: Final = [
             "frequency_penalty",
