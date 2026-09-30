@@ -31,6 +31,7 @@ class httpxSpecialProvider(str, Enum):
     A2A = "a2a"
     PromptManagement = "prompt_management"
     UI = "ui"
+    ROICalculator = "roi_calculator"
     Sandbox = "sandbox"
     ModelCostMap = "model_cost_map"
     PasswordBreachCheck = "password_breach_check"
