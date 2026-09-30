@@ -21,7 +21,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.path_utils import safe_join
+from litellm.proxy.common_utils.path_utils import is_within, safe_join
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     await_with_timeout,
@@ -1440,12 +1441,16 @@ async def get_guardrail_ui_settings():
     )
 
 
+def content_filter_data_roots() -> tuple[str, ...]:
+    return DATA_ROOTS
+
+
 @router.get(
     "/guardrails/ui/category_yaml/{category_name}",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_category_yaml(category_name: str):
+async def get_category_yaml(category_name: str, roots: tuple[str, ...] = Depends(content_filter_data_roots)):
     """
     Get the YAML or JSON content for a specific content filter category.
 
@@ -1455,35 +1460,20 @@ async def get_category_yaml(category_name: str):
     Returns:
         The raw YAML or JSON content of the category file with file type indicator
     """
-    # Get the categories directory path
-    categories_dir: Final = os.path.join(
-        os.path.dirname(__file__),
-        "guardrail_hooks",
-        "litellm_content_filter",
-        "categories",
-    )
-
-    # Try to find the file with either .yaml or .json extension
     try:
-        yaml_path: Final = safe_join(categories_dir, f"{category_name}.yaml")
-        json_path: Final = safe_join(categories_dir, f"{category_name}.json")
+        safe_join(CATEGORIES_DIR, f"{category_name}.yaml")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid category name")
 
-    category_file_path = None
-    file_type = None
-
-    if os.path.exists(yaml_path):
-        category_file_path = yaml_path
-        file_type = "yaml"
-    elif os.path.exists(json_path):
-        category_file_path = json_path
-        file_type = "json"
-    else:
+    category_file_path: Final = find_category_file(category_name, roots)
+    if category_file_path is None:
         raise HTTPException(
             status_code=404,
             detail=f"Category file not found: {category_name} (tried .yaml and .json)",
         )
+    if not any(is_within(category_file_path, category_dir) for category_dir in category_dirs(roots)):
+        raise HTTPException(status_code=400, detail="Invalid category name")
+    file_type: Final = "yaml" if category_file_path.endswith(".yaml") else "json"
 
     try:
         # Read and return the raw content

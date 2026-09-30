@@ -323,6 +323,8 @@ include = [
 exclude = [
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
+    "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks",
+    "litellm/proxy/guardrails/guardrail_hooks/litellm_content_filter/guardrail_benchmarks/**",
     "**/__pycache__",
     "**/__pycache__/**",
     "**/.pytest_cache",
