@@ -463,7 +463,7 @@ def test_map_openai_params_sends_max_tokens_as_max_completion_tokens():
     mapped = cfg.map_openai_params(
         non_default_params={"max_tokens": 64, "temperature": 0.1},
         optional_params={},
-        model="global.openai.gpt-5.6-sol",
+        model="us.xai.grok-4.6",
         drop_params=False,
     )
     assert mapped == {"max_completion_tokens": 64, "temperature": 0.1}
@@ -599,13 +599,18 @@ def test_supported_params_include_reasoning_effort_for_gpt56(local_cost_map):
     [
         (
             "bedrock/global.openai.gpt-5.6-sol",
-            ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs", "n"),
-            ("temperature", "top_p", "logit_bias", "reasoning_effort", "tools", "functions", "stop"),
+            ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs", "temperature", "top_p", "n"),
+            ("logit_bias", "reasoning_effort", "tools", "functions", "stop"),
+        ),
+        (
+            "bedrock/us.openai.gpt-6.1-sol",
+            ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs", "temperature", "top_p", "n"),
+            ("logit_bias", "reasoning_effort", "tools", "functions", "stop"),
         ),
         (
             "us.xai.grok-4.6",
             ("frequency_penalty", "presence_penalty", "n"),
-            ("stop", "logprobs", "top_p", "logit_bias", "reasoning_effort"),
+            ("stop", "logprobs", "temperature", "top_p", "logit_bias", "reasoning_effort"),
         ),
         (
             "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
@@ -625,6 +630,9 @@ def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, mod
     [
         ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"frequency_penalty": 0.5}),
         ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"logprobs": True, "top_logprobs": 2}),
+        ("bedrock/chat_completions/global.openai.gpt-5.6-sol", {"temperature": 0.2}),
+        ("bedrock/chat_completions/global.openai.gpt-6-sol", {"top_p": 0.9}),
+        ("bedrock/chat_completions/global.openai.gpt-6-sol", {"presence_penalty": 0.5}),
         ("bedrock/chat_completions/us.xai.grok-4.6", {"presence_penalty": 0.5}),
         ("bedrock/chat_completions/openai.gpt-oss-20b-1:0", {"logit_bias": {"1": 1}}),
     ],

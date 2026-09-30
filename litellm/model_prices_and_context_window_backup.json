@@ -58479,6 +58479,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -58516,6 +58517,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -58553,6 +58555,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -58590,6 +58593,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -58626,6 +58630,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-sol": {
@@ -58659,6 +58664,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -58695,6 +58701,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.openai.gpt-6-luna": {
@@ -58728,6 +58735,7 @@
         "supports_reasoning": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -79359,6 +79367,7 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "supports_xhigh_reasoning_effort": true
     },
     "openai.gpt-6.1-sol": {
@@ -79391,6 +79400,7 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock_mantle/openai.gpt-6.1-sol": {
@@ -79466,6 +79476,7 @@
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "supports_xhigh_reasoning_effort": true
     },
     "vertex_ai/gemini-3.8-flash-tts": {

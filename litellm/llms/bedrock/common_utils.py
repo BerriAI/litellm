@@ -882,6 +882,19 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
     return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_response_format")
 
 
+def bedrock_model_supports_sampling_params(model: str) -> bool:
+    """Whether the model takes ``temperature`` and ``top_p``: false only when a price-map row says so.
+
+    The GPT 5.6 and newer rows carry ``supports_sampling_params: false`` because AWS answers either param with
+    a 400 on Converse and on native Chat Completions alike, so both routes drop them under ``drop_params`` and
+    refuse them otherwise.
+    """
+    return not any(
+        entry is not None and entry.get("supports_sampling_params") is False
+        for entry in _bedrock_price_map_entries(model)
+    )
+
+
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
     (
         "guardrailConfig",

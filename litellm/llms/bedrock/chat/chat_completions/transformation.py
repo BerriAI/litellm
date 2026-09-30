@@ -32,7 +32,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import BedrockError, split_bedrock_region_path
+from litellm.llms.bedrock.common_utils import (
+    BedrockError,
+    bedrock_model_supports_sampling_params,
+    split_bedrock_region_path,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -46,26 +50,37 @@ if TYPE_CHECKING:
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
 
+GPT_CHAT_COMPLETIONS_REFUSED_PARAMS: Final = frozenset(
+    ("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs")
+)
 CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
     {
-        "openai.gpt-5": frozenset(("frequency_penalty", "presence_penalty", "logprobs", "top_logprobs")),
+        "openai.gpt-5": GPT_CHAT_COMPLETIONS_REFUSED_PARAMS,
+        "openai.gpt-6": GPT_CHAT_COMPLETIONS_REFUSED_PARAMS,
         "openai.gpt-oss": frozenset(("logit_bias",)),
         "xai.": frozenset(("frequency_penalty", "presence_penalty")),
     }
 )
 
 
+CHAT_COMPLETIONS_SAMPLING_PARAMS: Final = frozenset(("temperature", "top_p"))
+
+
 def chat_completions_params_refused_for(model: str) -> frozenset[str]:
     """The OpenAI params AWS's Chat Completions endpoint rejects for this model whatever else the request says.
 
-    Each family answers them with a 400 (GPT-5.6, gpt-oss) or a 503 (Grok), where Converse dropped the same
-    params under ``drop_params``, so the native config leaves them out of its supported list and the usual
-    drop-or-raise handling applies before the request reaches AWS.
+    Each family answers them with a 400 (GPT 5.6 and newer, gpt-oss) or a 503 (Grok), and a model whose price-map row
+    says ``supports_sampling_params: false`` answers ``temperature`` and ``top_p`` with a 400 too, where
+    Converse dropped the same params under ``drop_params``, so the native config leaves them out of its
+    supported list and the usual drop-or-raise handling applies before the request reaches AWS.
     """
     model_id: Final = split_bedrock_region_path(model)[1]
-    return frozenset().union(
+    family_refused: Final = frozenset().union(
         *(refused for family, refused in CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY.items() if family in model_id)
     )
+    if bedrock_model_supports_sampling_params(model):
+        return family_refused
+    return family_refused | CHAT_COMPLETIONS_SAMPLING_PARAMS
 
 
 CHAT_COMPLETIONS_REFUSED_REASONING_EFFORTS_BY_FAMILY: Final = MappingProxyType({"xai.": frozenset(("none",))})
