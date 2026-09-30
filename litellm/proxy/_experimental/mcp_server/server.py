@@ -1589,7 +1589,7 @@ if MCP_AVAILABLE:
     ) -> bool:
         """Sign-in challenges are issued only on a single-server connect the key's grant admits, so a key
         without access gets the grant's 403 instead of a sign-in it could not use."""
-        if len(mcp_servers or []) != 1:
+        if len(mcp_servers or ()) != 1:
             return False
         allowed: Final = await operations._get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
@@ -1746,8 +1746,8 @@ if MCP_AVAILABLE:
                 await operations._get_allowed_mcp_servers(
                     user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
                 )
-                if server and len(mcp_servers or []) == 1
-                else []
+                if server and len(mcp_servers or ()) == 1
+                else ()
             )
             if (
                 server

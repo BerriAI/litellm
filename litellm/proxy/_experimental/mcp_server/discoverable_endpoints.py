@@ -2625,9 +2625,9 @@ def _caller_sign_in_protected_resource_response(
     if sign_in is None or not sign_in.issuers:
         return None
     return {
-        "authorization_servers": list(sign_in.issuers),
+        "authorization_servers": sign_in.issuers,
         "resource": resource_url,
-        "scopes_supported": list(sign_in.scopes),
+        "scopes_supported": sign_in.scopes,
     }
 
 

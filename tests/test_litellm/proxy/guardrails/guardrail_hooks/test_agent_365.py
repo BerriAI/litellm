@@ -193,9 +193,7 @@ def _make_guardrail(
     )
 
 
-def _default_fallback_guardrail(
-    handler: FakeHandler, exchanger: StubTokenExchanger | None = None
-) -> Agent365Guardrail:
+def _default_fallback_guardrail(handler: FakeHandler, exchanger: StubTokenExchanger | None = None) -> Agent365Guardrail:
     return _make_guardrail(handler, exchanger=exchanger)
 
 
@@ -416,7 +414,7 @@ class TestAllowFlow:
         handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
         schema: Final = {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]}
-        await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_tool_input_schema=schema))
+        await _run(guardrail, _mcp_data(mcp_tool_description="Send an email", mcp_input_schema=schema))
         assert handler.calls[0].json["tool"] == {
             "name": "send_email",
             "description": "Send an email",
@@ -431,7 +429,7 @@ class TestAllowFlow:
     async def test_evaluate_payload_omits_missing_or_malformed_tool_metadata(self, description, schema):
         handler: Final = FakeHandler([_allow_response()])
         guardrail: Final = _make_guardrail(handler)
-        await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_tool_input_schema=schema))
+        await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_input_schema=schema))
         assert handler.calls[0].json["tool"] == {"name": "send_email"}
 
     @pytest.mark.asyncio
@@ -617,9 +615,7 @@ class TestFailOpenOptIn:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("responses", "exchange_results"), AVAILABILITY_FAILURES)
     async def test_constructor_default_blocks_each_availability_failure_with_503(self, responses, exchange_results):
-        guardrail: Final = _default_fallback_guardrail(
-            FakeHandler(responses), StubTokenExchanger(exchange_results)
-        )
+        guardrail: Final = _default_fallback_guardrail(FakeHandler(responses), StubTokenExchanger(exchange_results))
         assert guardrail.unreachable_fallback == "fail_closed"
         with pytest.raises(HTTPException) as exc_info:
             await _run(guardrail, _mcp_data())
@@ -846,7 +842,9 @@ class TestUnreachableFallback:
 
     @pytest.mark.asyncio
     async def test_exchange_upstream_unavailable_follows_fail_open(self):
-        exchanger: Final = StubTokenExchanger([Error(CredError.of_upstream_unavailable("Entra throttled the exchange"))])
+        exchanger: Final = StubTokenExchanger(
+            [Error(CredError.of_upstream_unavailable("Entra throttled the exchange"))]
+        )
         handler: Final = FakeHandler([])
         guardrail: Final = _make_guardrail(handler, exchanger=exchanger, unreachable_fallback="fail_open")
         data: Final = _mcp_data()

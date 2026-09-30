@@ -136,7 +136,7 @@ def caller_sign_in_for(server: MCPServer, user_api_key_auth: UserAPIKeyAuth | No
     """The merged sign-in requirement for ``server``: the OBO server's own issuer/scopes plus every
     registered provider's contribution. ``None`` when nothing requires sign-in, which is also the gate the
     connect-time challenge branches on."""
-    contributions: Final = [
+    contributions: Final = tuple(
         contribution
         for contribution in (
             *(
@@ -147,7 +147,7 @@ def caller_sign_in_for(server: MCPServer, user_api_key_auth: UserAPIKeyAuth | No
             *(provider.caller_sign_in(server, user_api_key_auth) for provider in _providers()),
         )
         if contribution is not None
-    ]
+    )
     if not contributions:
         return None
     issuers: Final = tuple(dict.fromkeys(itertools.chain.from_iterable(c.issuers for c in contributions)))

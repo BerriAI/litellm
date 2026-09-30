@@ -447,8 +447,10 @@ class Agent365Guardrail(CustomGuardrail):
         if not (self.default_on and server.keeps_caller_authorization):
             return None
         if user_api_key_auth is not None:
-            probe: Final[dict[str, Mapping[str, object]]] = {  # pyright: ignore[reportUnknownVariableType]  # UserAPIKeyAuth metadata dicts are untyped
-                "metadata": {
+            probe: Final[
+                dict[str, Mapping[str, object]]
+            ] = {  # mutable-ok: should_run_guardrail takes a mutable data dict  # pyright: ignore[reportUnknownVariableType]  # UserAPIKeyAuth metadata dicts are untyped
+                "metadata": {  # mutable-ok: should_run_guardrail takes a mutable data dict
                     "user_api_key_metadata": user_api_key_auth.metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a raw dict
                     "user_api_key_team_metadata": user_api_key_auth.team_metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.team_metadata is a raw dict
                 }
