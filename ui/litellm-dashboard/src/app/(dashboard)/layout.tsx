@@ -99,11 +99,18 @@ export function AgentControlPlaneView() {
   );
 }
 
+const FULL_BLEED_SEGMENTS = new Set(["logs"]);
+
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
-  const isPlayground = routeSegmentForPathname(usePathname()) === "playground";
+  const routeSegment = routeSegmentForPathname(usePathname());
+  const isPlayground = routeSegment === "playground";
+  const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
+  // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
+  const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
+  const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
+  const toggleSidebar = () => setSidebarOverride({ segment: routeSegment, collapsed: !sidebarCollapsed });
 
   const isGateway = mode === "ai-gateway";
 
@@ -133,7 +140,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // so the page can't be dragged past the end of the nav.
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((v) => !v)} />
+      <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <DashboardHeader />
         <DebugWarningBanner accessToken={accessToken} />
