@@ -106,3 +106,7 @@ def test_base_url_alias_is_reported_as_the_api_base():
         )
         == "https://explicit.internal/v1"
     )
+    assert (
+        litellm.get_api_base(model="groq/whisper-large-v3", optional_params={"base_url": ""})
+        == "https://api.groq.com/openai/v1"
+    )

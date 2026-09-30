@@ -7928,10 +7928,10 @@ def transcription(
     timeout=600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
-    base_url: str | None = None,
     api_version: str | None = None,
     max_retries: int | None = None,
     custom_llm_provider=None,
+    base_url: str | None = None,
     **kwargs,
 ) -> TranscriptionResponse | Coroutine[object, object, TranscriptionResponse]:
     """
@@ -8225,7 +8225,6 @@ def speech(
     voice: str | dict | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
-    base_url: str | None = None,
     api_version: str | None = None,
     organization: str | None = None,
     project: str | None = None,
@@ -8239,6 +8238,7 @@ def speech(
     headers: dict | None = None,
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
+    base_url: str | None = None,
     **kwargs,
 ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
     user: Final = kwargs.get("user", None)
@@ -8552,7 +8552,7 @@ def speech(
             extra_headers=headers,
             base_llm_http_handler=base_llm_http_handler,
             aspeech=aspeech or False,
-            api_base=generic_optional_params.api_base,
+            api_base=api_base,
             api_key=None,  # Vertex AI uses OAuth, not API key
             **kwargs,
         )

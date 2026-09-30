@@ -61,7 +61,7 @@ def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | No
         return _optional_params.api_base
     extra_params: Final = _optional_params.model_extra
     base_url_alias: Final = extra_params.get("base_url") if extra_params is not None else None
-    if isinstance(base_url_alias, str):
+    if isinstance(base_url_alias, str) and base_url_alias:
         return base_url_alias
 
     if litellm.model_alias_map and model in litellm.model_alias_map:
