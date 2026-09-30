@@ -568,7 +568,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrailed_inputs: GenericGuardrailAPIInputs,
     ) -> None:
         returned_texts: Final = guardrailed_inputs.get("texts")
-        if returned_texts is None:
+        if not returned_texts:
             return
         rewritten_texts: Final = tuple(returned_texts)
         offset: Final = 0 if extracted.instructions is None else 1

@@ -356,31 +356,13 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert data["input"] == original["input"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("answered_texts", [None, ()], ids=["no_texts_key", "empty_texts"])
     @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
-    async def test_empty_texts_answer_is_rejected_instead_of_forwarding_the_raw_request(
-        self, data_input: str | list[dict[str, str]]
-    ) -> None:
-        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
-
-        handler = OpenAIResponsesHandler()
-        guardrail = TextsReplacingGuardrail(guardrail_name="emptier", texts=())
-        data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
-        original = copy.deepcopy(data)
-
-        with pytest.raises(UnappliableRequestRewrite) as excinfo:
-            await handler.process_input_messages(data, guardrail)
-
-        assert excinfo.value.guardrail_name == "emptier"
-        assert data["instructions"] == original["instructions"]
-        assert data["input"] == original["input"]
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
-    async def test_answer_without_texts_key_leaves_instructions_and_input_untouched(
-        self, data_input: str | list[dict[str, str]]
+    async def test_answer_without_texts_leaves_instructions_and_input_untouched_like_chat_completions(
+        self, answered_texts: tuple[str, ...] | None, data_input: str | list[dict[str, str]]
     ) -> None:
         handler = OpenAIResponsesHandler()
-        guardrail = TextsReplacingGuardrail(guardrail_name="silent", texts=None)
+        guardrail = TextsReplacingGuardrail(guardrail_name="silent", texts=answered_texts)
         data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
         original = copy.deepcopy(data)
 
