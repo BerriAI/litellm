@@ -317,16 +317,16 @@ tests:
           path: spec.template.spec.containers[0].env[1].value
           value: "true"
       - equal:
-          path: spec.template.spec.containers[0].env[10].name
+          path: spec.template.spec.containers[0].env[12].name
           value: LITELLM_CORS_ORIGINS
       - equal:
-          path: spec.template.spec.containers[0].env[10].value
+          path: spec.template.spec.containers[0].env[12].value
           value: https://backend-override.example.com
       - equal:
-          path: spec.template.spec.containers[0].env[11].name
+          path: spec.template.spec.containers[0].env[13].name
           value: LITELLM_CORS_ALLOW_CREDENTIALS
       - equal:
-          path: spec.template.spec.containers[0].env[11].value
+          path: spec.template.spec.containers[0].env[13].value
           value: "false"
 
   - it: exposes the public UI origin to the gateway without enabling credentials
@@ -390,10 +390,10 @@ tests:
           path: spec.template.spec.containers[0].env[0].value
           value: https://ui.example.com
       - equal:
-          path: spec.template.spec.containers[0].env[9].name
+          path: spec.template.spec.containers[0].env[11].name
           value: LITELLM_CORS_ORIGINS
       - equal:
-          path: spec.template.spec.containers[0].env[9].value
+          path: spec.template.spec.containers[0].env[11].value
           value: https://gateway-override.example.com
 
 ---

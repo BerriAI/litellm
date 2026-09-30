@@ -14,7 +14,7 @@ tests:
     chart:
       appVersion: 9.8.7
     set:
-      backend.image.tag: gateway-9.8.7
+      image.tag: gateway-9.8.7
       lensWorker.image.tag: 2.3.4
     asserts:
       - equal:
@@ -24,7 +24,7 @@ tests:
     chart:
       appVersion: 9.8.7
     set:
-      backend.image.tag: gateway-9.8.7
+      image.tag: gateway-9.8.7
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image

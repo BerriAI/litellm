@@ -1,9 +1,114 @@
 {{/*
-Common naming + label helpers shared by gateway, backend, and ui templates.
+Common naming + label helpers shared by gateway, backend, ui, and monolith templates.
 */}}
 
 {{- define "litellm.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+The one image reference every container in the chart uses. `repository:tag`,
+or `repository:tag@digest` when image.digest is set; the tag falls back to
+the chart appVersion.
+*/}}
+{{- define "litellm.image" -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s:%s@%s" .Values.image.repository $tag .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Componentized mode renders the gateway / backend / ui Deployments only when
+monolith mode is off.
+*/}}
+{{- define "litellm.gateway.render" -}}
+{{- if and .Values.gateway.enabled (not .Values.monolith.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.backend.render" -}}
+{{- if and .Values.backend.enabled (not .Values.monolith.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.ui.render" -}}
+{{- if and .Values.ui.enabled (not .Values.monolith.enabled) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The proxy Deployment (monolith mode) and the gateway Deployment
+(componentized mode) are the same pod spec fed by .Values.gateway, so the
+templates that serve both (HPA, KEDA, PDB, metrics Service, ServiceMonitor)
+resolve their name, component label and selector through these.
+*/}}
+{{- define "litellm.proxy.fullname" -}}
+{{- include "litellm.fullname" . -}}
+{{- end -}}
+
+{{- define "litellm.proxy.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "litellm.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: proxy
+{{- end -}}
+
+{{- define "litellm.workload.componentName" -}}
+{{- if .Values.monolith.enabled -}}proxy{{- else -}}gateway{{- end -}}
+{{- end -}}
+
+{{- define "litellm.workload.fullname" -}}
+{{- if .Values.monolith.enabled -}}
+{{- include "litellm.proxy.fullname" . -}}
+{{- else -}}
+{{- include "litellm.gateway.fullname" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.workload.selectorLabels" -}}
+{{- if .Values.monolith.enabled -}}
+{{- include "litellm.proxy.selectorLabels" . -}}
+{{- else -}}
+{{- include "litellm.gateway.selectorLabels" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.workload.render" -}}
+{{- if or .Values.monolith.enabled .Values.gateway.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Container arguments for the proxy (monolith) container. The image entrypoint
+dispatches on the first argument.
+*/}}
+{{- define "litellm.proxy.args" -}}
+- proxy
+- --port
+- "4000"
+{{- if .Values.gateway.config.create }}
+- --config
+- /app/config/config.yaml
+{{- end }}
+{{- with .Values.monolith.extraArgs }}
+{{ toYaml . }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Master key Secret reference. `masterKey.secretName` when set, otherwise the
+Secret the chart generates when `masterKey.generate` is true.
+*/}}
+{{- define "litellm.masterKey.generatedSecretName" -}}
+{{- printf "%s-masterkey" (include "litellm.fullname" .) -}}
+{{- end -}}
+
+{{- define "litellm.masterKey.secretName" -}}
+{{- if .Values.masterKey.secretName -}}
+{{- .Values.masterKey.secretName -}}
+{{- else if .Values.masterKey.generate -}}
+{{- include "litellm.masterKey.generatedSecretName" . -}}
+{{- else -}}
+{{- fail "masterKey.secretName is required (the chart never accepts an inline master key); set it to an existing Secret or set masterKey.generate: true" -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "litellm.fullname" -}}
@@ -137,6 +242,7 @@ Each component (gateway, backend, ui) has its own SA config under
 .Values.serviceAccounts.<component>. When `create` is true and `name` is
 empty the chart defaults to "<release>-litellm-<component>". When `create`
 is false the chart uses the provided name, or the namespace `default` SA.
+The monolith pod runs as the gateway ServiceAccount.
 */}}
 {{- define "litellm.gateway.serviceAccountName" -}}
 {{- if .Values.serviceAccounts.gateway.create -}}
@@ -216,6 +322,22 @@ by the controller rather than declared, so nothing there can collide.
 {{- end -}}
 
 {{/*
+LITELLM_MASTER_KEY, and PROXY_MASTER_KEY for configs copied from litellm-helm,
+for the app containers only. The migrations Job runs as a
+pre-install hook, before the chart's generated master key Secret exists, and
+migrations/run.py never reads the key, so the Job must not reference it.
+*/}}
+{{- define "litellm.masterKeyEnv" -}}
+{{- range list "LITELLM_MASTER_KEY" "PROXY_MASTER_KEY" }}
+- name: {{ . }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.masterKey.secretName" $ }}
+      key: {{ $.Values.masterKey.secretKey | default "master-key" }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Master-key + database + redis env block — shared by gateway, backend, and the
 migrations Job.
 
@@ -258,11 +380,6 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 {{- define "litellm.serverEnv" -}}
 {{- $root := .root -}}
 {{- $component := .component -}}
-- name: LITELLM_MASTER_KEY
-  valueFrom:
-    secretKeyRef:
-      name: {{ required "masterKey.secretName is required (the chart no longer accepts an inline master key)" $root.Values.masterKey.secretName }}
-      key: {{ $root.Values.masterKey.secretKey | default "master-key" }}
 {{- if $component.logLevel }}
 - name: LITELLM_LOG
   value: {{ $component.logLevel | quote }}
@@ -304,6 +421,11 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
   valueFrom:
     secretKeyRef:
       name: {{ required "database.writer.passwordSecret.name is required" .passwordSecret.name }}
+      key: {{ .passwordSecret.usernameKey | default "username" }}
+- name: DATABASE_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: {{ .passwordSecret.name }}
       key: {{ .passwordSecret.usernameKey | default "username" }}
 - name: DATABASE_NAME
   value: {{ required "database.writer.dbname is required" .dbname | quote }}
@@ -502,7 +624,7 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end -}}
 
 {{/*
-In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+In-container PgBouncer env for the gateway and proxy containers. Under IAM or Entra auth the pooler mints and renews the database token itself.
 */}}
 {{- define "litellm.connectionPoolEnv" -}}
 {{- with .Values.database.connectionPool -}}
@@ -539,7 +661,7 @@ than silently replaced by the fallback.
 {{- $max := $component.pdb.maxUnavailable -}}
 {{- $minSet := not (or (kindIs "invalid" $min) (eq (printf "%v" $min) "")) -}}
 {{- $maxSet := not (or (kindIs "invalid" $max) (eq (printf "%v" $max) "")) -}}
-{{- if and $component.enabled $component.pdb $component.pdb.enabled }}
+{{- if and .enabled $component.pdb $component.pdb.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -595,6 +717,16 @@ ImplementationSpecific
 {{- else -}}
 {{- .pathType -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Service spec fields shared by the component and monolith Services.
+Invoke with the component's `service` dict.
+*/}}
+{{- define "litellm.service.extras" -}}
+{{- if and (eq .type "LoadBalancer") .loadBalancerClass -}}
+loadBalancerClass: {{ .loadBalancerClass | quote }}
+{{- end }}
 {{- end -}}
 
 {{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
@@ -724,4 +856,35 @@ shutdown drain window.
 {{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default (trimSuffix "/lens-ingest" $ingestion)) -}}
 {{- end -}}
 {{- include (printf "lens.%s" .resource) (dict "Values" $values "Release" $root.Release "Chart" $root.Subcharts.lens.Chart "Capabilities" $root.Capabilities) -}}
+{{- end -}}
+
+{{/*
+LiteAdmin worker wiring for the pod that serves the /liteadmin routes (the
+backend in componentized mode, the monolith in monolith mode). `component`
+supplies the extraEnv list so a user-provided PROXY_BASE_URL takes precedence
+over liteadmin.gatewayUrl.
+*/}}
+{{- define "litellm.liteadminEnv" -}}
+{{- $root := .root -}}
+{{- with $root.Values.liteadmin }}
+{{- if .enabled }}
+- name: LITELLM_ADMIN_AGENT_URL
+  value: {{ printf "http://%s-liteadmin:10000" (include "litellm.fullname" $root | trunc 53 | trimSuffix "-") | quote }}
+- name: ADMIN_AGENT_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ required "liteadmin.existingSecret is required" .existingSecret }}
+      key: ADMIN_AGENT_SERVICE_TOKEN
+{{- $hasProxyBaseUrl := false }}
+{{- range $.component.extraEnv }}
+{{- if eq .name "PROXY_BASE_URL" }}
+{{- $hasProxyBaseUrl = true }}
+{{- end }}
+{{- end }}
+{{- if not $hasProxyBaseUrl }}
+- name: PROXY_BASE_URL
+  value: {{ required "liteadmin.gatewayUrl is required" .gatewayUrl | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end -}}

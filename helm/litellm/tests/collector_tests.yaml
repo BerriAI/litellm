@@ -34,7 +34,7 @@ tests:
       gateway.collector.enabled: true
       gateway.collector.bufferSize: 250
       gateway.collector.onUnavailable: drop
-      gateway.image.tag: v1.102.0
+      image.tag: v1.102.0
       gateway.numWorkers: 4
       database.connectionPool.enabled: true
       database.connectionPool.maxDbConnections: 8
@@ -80,14 +80,12 @@ tests:
         template: gateway/deployment.yaml
       - equal:
           path: spec.template.spec.containers[1].image
-          value: ghcr.io/berriai/litellm-gateway:v1.102.0
+          value: ghcr.io/berriai/litellm:v1.102.0
         template: gateway/deployment.yaml
       - equal:
-          path: spec.template.spec.containers[1].command
+          path: spec.template.spec.containers[1].args
           value:
-            - python
-            - -m
-            - litellm.proxy.collector
+            - collector
         template: gateway/deployment.yaml
       - contains:
           path: spec.template.spec.containers[1].env
