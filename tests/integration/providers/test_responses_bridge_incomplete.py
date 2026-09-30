@@ -12,6 +12,8 @@ def test_chat_over_responses_deployment_returns_length_when_output_tokens_run_ou
     identity: Final = "responses-incomplete-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST" and request.target == "/responses", request.target
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         body: Final = json.loads(request.body)
@@ -56,7 +58,7 @@ def test_chat_over_responses_deployment_returns_length_when_output_tokens_run_ou
         )
         assert response.status_code == 200, response.text
         body: Final = response.json()
-        assert len(wire.drain()) == 1
+        assert len(tuple(request for request in wire.drain() if request.method == "POST")) == 1
         assert [choice["finish_reason"] for choice in body["choices"]] == ["length"], response.text
         assert body["choices"][0]["message"]["content"] == "", response.text
         assert body["choices"][0]["message"]["role"] == "assistant", response.text
@@ -69,6 +71,8 @@ def test_messages_over_responses_deployment_with_max_tokens_1_is_clamped_to_16_i
     identity: Final = "responses-clamp-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST" and request.target == "/responses", request.target
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         body: Final = json.loads(request.body)
@@ -132,7 +136,7 @@ def test_messages_over_responses_deployment_with_max_tokens_1_is_clamped_to_16_i
         )
         assert response.status_code == 200, response.text
         body: Final = response.json()
-        assert len(wire.drain()) == 1
+        assert len(tuple(request for request in wire.drain() if request.method == "POST")) == 1
         assert body["role"] == "assistant", response.text
         assert body["content"] == [{"type": "text", "text": "ok"}], response.text
         assert body["stop_reason"] == "end_turn", response.text
@@ -143,6 +147,8 @@ def test_messages_over_responses_deployment_with_max_tokens_one_reaches_openai_a
     identity: Final = "responses-min-tokens-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
         assert request.method == "POST" and request.target == "/responses", request.target
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         body: Final = json.loads(request.body)
@@ -185,6 +191,6 @@ def test_messages_over_responses_deployment_with_max_tokens_one_reaches_openai_a
         )
         assert response.status_code == 200, response.text
         body: Final = response.json()
-        assert len(wire.drain()) == 1
+        assert len(tuple(request for request in wire.drain() if request.method == "POST")) == 1
         assert body["content"] == [{"type": "text", "text": "ok"}], response.text
         assert body["usage"]["input_tokens"] == 9 and body["usage"]["output_tokens"] == 1, response.text

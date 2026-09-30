@@ -46,6 +46,7 @@ legacy_paths() {
       echo tests/unit/google_genai
       echo tests/unit/router_strategy
       echo tests/unit/router_utils
+      echo tests/unit/proxy/common_utils/test_cache_aware_routing.py
       echo tests/unit/enterprise/enterprise_callbacks/send_emails
       echo tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
       echo tests/unit/enterprise/proxy/test_batch_retrieve_input_file_id.py
@@ -88,6 +89,7 @@ legacy_paths() {
     proxy-db-auth-checks)
       echo tests/unit/proxy/auth/test_auth_checks.py
       echo tests/unit/proxy/auth/test_user_api_key_auth.py
+      echo tests/unit/proxy/test_credential_slot_registry.py
       echo tests/unit/proxy/test_deprecated_key_grace_period.py ;;
     proxy-db-budgets)
       echo tests/unit/proxy/auth/test_default_end_user_budget_simple.py

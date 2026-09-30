@@ -9290,3 +9290,94 @@ async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
     assert result.budget_reservation == reservation
     assert websocket.state.budget_reservation is reservation
     assert websocket.scope["state"]["budget_reservation"] is reservation
+
+
+@pytest.mark.asyncio
+async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_one_redis_mget():
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.spend_tracking.spend_counter_batch import (
+        read_batched_spend_counter,
+        spend_counter_batch_scope,
+    )
+
+    token = UserAPIKeyAuth(api_key="sk-test", token="hashed", max_budget=10.0)
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+    reads: list[tuple[str, tuple[float | None, bool] | None]] = []
+
+    async def _admission_reads_spend(**kwargs):
+        reads.append(("admission", await read_batched_spend_counter("spend:key:hashed")))
+
+    async def _reservation_reads_spend(**kwargs):
+        reads.append(("reservation", await read_batched_spend_counter("spend:key:hashed")))
+
+    redis = MagicMock()
+    redis.async_batch_get_cache = AsyncMock(return_value={"spend:key:hashed": 4.0})
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "prisma_client": MagicMock(),
+        "spend_counter_cache": MagicMock(redis_cache=redis),
+    }
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: authorization has its own tests above; this one checks the shared counter read
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new=AsyncMock(side_effect=_admission_reads_spend),
+            ),
+            patch(  # test-quality-ok: the reservation helper imports reserve_budget_for_request in its body
+                "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+                side_effect=_reservation_reads_spend,
+            ),
+            spend_counter_batch_scope(redis),
+        ):
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "hi"}]},
+                route="/chat/completions",
+            )
+            reads.append(("after admission", await read_batched_spend_counter("spend:key:hashed")))
+    finally:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, originals[k])
+
+    assert reads == [
+        ("admission", (4.0, True)),
+        ("reservation", (4.0, True)),
+        ("after admission", None),
+    ], "admission and reservation share one snapshot, and read-then-write callers go to Redis once it closes"
+    assert redis.async_batch_get_cache.await_count == 1
+    assert "spend:key:hashed" in redis.async_batch_get_cache.await_args.kwargs["key_list"]
+
+
+def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
+    from litellm.proxy.auth.user_api_key_auth import _identity_cache_keys
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        end_user_cache_key,
+        end_user_restricted_registry_cache_key,
+        model_access_group_registry_cache_key,
+    )
+    from litellm.proxy.utils import hash_token
+
+    assert _identity_cache_keys("sk-1234", end_user_id="eu-1", key_is_resolved=False) == (
+        hash_token("sk-1234"),
+        end_user_cache_key("eu-1"),
+        end_user_restricted_registry_cache_key(),
+        model_access_group_registry_cache_key(),
+    )
+    assert _identity_cache_keys("a" * 64, end_user_id=None, key_is_resolved=False) == (
+        hash_token("a" * 64),
+        model_access_group_registry_cache_key(),
+    )
+    master_key_keys = _identity_cache_keys("my-master-key", end_user_id=None, key_is_resolved=False)
+    assert master_key_keys == (hash_token("my-master-key"), model_access_group_registry_cache_key())
+    assert "my-master-key" not in master_key_keys, "a bearer that is not an sk- key must not be sent to Redis as is"
+    assert _identity_cache_keys("sk-1234", end_user_id=None, key_is_resolved=True) == (
+        model_access_group_registry_cache_key(),
+    )

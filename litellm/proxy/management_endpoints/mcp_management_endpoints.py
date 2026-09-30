@@ -159,6 +159,7 @@ if MCP_AVAILABLE:
         merge_user_env_vars,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
+        set_mcp_server_pinned_tools,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
@@ -237,7 +238,7 @@ if MCP_AVAILABLE:
         MCPGatewaySessionsTerminateResponse,
         normalize_upstream_header_name,
     )
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 
     @dataclass
     class _TemporaryMCPServerEntry:
@@ -650,7 +651,16 @@ if MCP_AVAILABLE:
         if hasattr(redacted_server, "credentials"):
             setattr(redacted_server, "credentials", _preserved_admin_config_credentials(redacted_server.credentials))
 
-        return redacted_server
+        is_public: Final = global_mcp_server_manager.is_mcp_server_public(redacted_server.server_id)
+        return redacted_server.model_copy(
+            update={
+                "mcp_info": {
+                    **(redacted_server.mcp_info or {}),
+                    "is_public": is_public,
+                    "is_public_explicit": is_public and redacted_server.server_id in (litellm.public_mcp_servers or ()),
+                }
+            }
+        )
 
     def _preserved_admin_config_credentials(
         credentials: "MCPCredentials | str | None",
@@ -757,6 +767,7 @@ if MCP_AVAILABLE:
         """
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.pinned_tools = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
         # similar tokens in the OpenAPI spec URL.
@@ -801,6 +812,7 @@ if MCP_AVAILABLE:
 
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.pinned_tools = None
 
         # Remove potentially sensitive config + identity fields.
         sanitized.url = None
@@ -832,10 +844,10 @@ if MCP_AVAILABLE:
         sanitized.updated_at = None
 
         # `mcp_info` is arbitrary metadata; keep only an explicit safe subset.
-        is_public = False
-        if isinstance(sanitized.mcp_info, dict):
-            is_public = bool(sanitized.mcp_info.get("is_public"))
-        sanitized.mcp_info = {"is_public": True} if is_public else None
+        sanitized.mcp_info = {
+            "is_public": (sanitized.mcp_info or {}).get("is_public") is True,
+            "is_public_explicit": (sanitized.mcp_info or {}).get("is_public_explicit") is True,
+        }
 
         return sanitized
 
@@ -1260,14 +1272,6 @@ if MCP_AVAILABLE:
             for server in redacted_mcp_servers:
                 server.connected_app_reachable = server.server_id in reachable_ids
 
-        # augment the mcp servers with public status
-        if litellm.public_mcp_servers is not None:
-            for server in redacted_mcp_servers:
-                if server.server_id in litellm.public_mcp_servers:
-                    if server.mcp_info is None:
-                        server.mcp_info = {}
-                    server.mcp_info["is_public"] = True
-
         # Annotate has_user_credential for BYOK servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
 
@@ -1296,6 +1300,12 @@ if MCP_AVAILABLE:
 
         return redacted_mcp_servers
 
+    def _mcp_health_status_for_response(
+        health_status: Literal["healthy", "reachable", "unhealthy", "unknown"] | None,
+        include_reachability: bool,
+    ) -> Literal["healthy", "reachable", "unhealthy", "unknown"] | None:
+        return "unknown" if health_status == "reachable" and not include_reachability else health_status
+
     @router.get(
         "/server/health",
         description="Health check for MCP servers",
@@ -1307,6 +1317,10 @@ if MCP_AVAILABLE:
             description="Server IDs to check. If not provided, checks all accessible servers.",
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        include_reachability: Annotated[
+            bool,
+            Query(description="Allow the 'reachable' status for responding servers whose authentication is unchecked."),
+        ] = False,
     ):
         """
         Perform health checks on one or more MCP servers.
@@ -1331,21 +1345,31 @@ if MCP_AVAILABLE:
 
         if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
-            return [{"server_id": server.server_id, "status": server.status} for server in servers]
+            return [
+                {
+                    "server_id": server.server_id,
+                    "status": _mcp_health_status_for_response(server.status, include_reachability),
+                }
+                for server in servers
+            ]
 
         auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_status_map: Final[dict[str, Literal["healthy", "unhealthy", "unknown"] | None]] = {}
+        server_status_map: Final[dict[str, Literal["healthy", "reachable", "unhealthy", "unknown"] | None]] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
                 server_ids=server_ids,
+                checked_server_ids=frozenset(server_status_map),
             )
             for server in servers:
                 if server.server_id not in server_status_map:
                     server_status_map[server.server_id] = server.status
 
-        return [{"server_id": server_id, "status": status} for server_id, status in server_status_map.items()]
+        return [
+            {"server_id": server_id, "status": _mcp_health_status_for_response(status, include_reachability)}
+            for server_id, status in server_status_map.items()
+        ]
 
     @router.post(
         "/server/register",
@@ -1514,6 +1538,90 @@ if MCP_AVAILABLE:
             submissions.items = _sanitize_mcp_server_list_for_non_admin(submissions.items)
         return submissions
 
+    @router.post(
+        "/server/{server_id}/pin",
+        description=(
+            "Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list "
+            "serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=dict[str, PinnedMCPTool],
+    )
+    @management_endpoint_wrapper
+    async def pin_mcp_server_tools(
+        server_id: str,
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    ) -> dict[str, PinnedMCPTool]:
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to pin MCP server tools."},
+            )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        stored: Final = await get_mcp_server(prisma_client, server_id)
+        server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if stored is None or server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found in the database."},
+            )
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import fetch_pinnable_tool_catalog
+
+        snapshot: Final = await fetch_pinnable_tool_catalog(server, request, user_api_key_dict)
+        if not snapshot:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": f"MCP server '{server_id}' exposes no tools that pass the guardrails; nothing to pin."
+                },
+            )
+        await _store_pinned_tools(server_id, snapshot, user_api_key_dict)
+        return snapshot
+
+    @router.delete(
+        "/server/{server_id}/pin",
+        description="Unpin the server's tool list (admin only); tools/list serves the live upstream catalog again.",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    @management_endpoint_wrapper
+    async def unpin_mcp_server_tools(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    ) -> dict[str, str]:
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to unpin MCP server tools."},
+            )
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        stored: Final = await get_mcp_server(prisma_client, server_id)
+        if stored is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found in the database."},
+            )
+        await _store_pinned_tools(server_id, None, user_api_key_dict)
+        return {"server_id": server_id, "status": "unpinned"}
+
+    async def _store_pinned_tools(
+        server_id: str, pinned_tools: Mapping[str, PinnedMCPTool] | None, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        record: Final = await set_mcp_server_pinned_tools(
+            prisma_client,
+            server_id,
+            pinned_tools,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found in the database."},
+            )
+        await global_mcp_server_manager.update_server(record)
+        await global_mcp_server_manager.reload_servers_from_database()
+
     @router.put(
         "/server/{server_id}/approve",
         description="Approve a pending MCP server submission (admin only). Mirrors PUT /guardrails/{id}/approve.",
@@ -1615,6 +1723,10 @@ if MCP_AVAILABLE:
         request: Request,
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        include_reachability: Annotated[
+            bool,
+            Query(description="Allow the 'reachable' status for responding servers whose authentication is unchecked."),
+        ] = False,
     ):
         """
         Get the info on the mcp server specified by the `server_id`
@@ -1672,7 +1784,7 @@ if MCP_AVAILABLE:
         try:
             health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
             # Update the server object with health check results
-            mcp_server.status = health_result.status if health_result.status else "unknown"
+            mcp_server.status = _mcp_health_status_for_response(health_result.status, include_reachability) or "unknown"
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
@@ -3017,9 +3129,6 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            if litellm.public_mcp_servers is None:
-                litellm.public_mcp_servers = []
-
             for server_id in request.mcp_server_ids:
                 server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
                 if server is None:
@@ -3028,16 +3137,15 @@ if MCP_AVAILABLE:
                         detail=f"MCP Server with ID {server_id} not found",
                     )
 
-            litellm.public_mcp_servers = request.mcp_server_ids
-
             # Update config with new settings
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}
 
-            config["litellm_settings"]["public_mcp_servers"] = litellm.public_mcp_servers
+            config["litellm_settings"]["public_mcp_servers"] = request.mcp_server_ids
 
             # Save the updated config
             await proxy_config.save_config(new_config=config)
+            litellm.public_mcp_servers = request.mcp_server_ids
 
             verbose_proxy_logger.debug(
                 "Updated public mcp servers to: %s by user: %s", litellm.public_mcp_servers, user_api_key_dict.user_id

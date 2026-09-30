@@ -10,10 +10,7 @@ use litellm_auth_gcp::{
     CredentialSource, VertexAuth, VertexAuthFuture, VertexProviderLoader, VertexTokenSource,
 };
 use litellm_core::{
-    ocr::{
-        client::perform,
-        wire::{OcrWireRequest, decode_request},
-    },
+    ocr::wire::{OcrWireRequest, decode_request},
     resources::CoreResources,
 };
 use litellm_http::{HttpSettings, Resolution};
@@ -105,17 +102,16 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             ..HttpSettings::default()
         })
         .config;
-        let client = owner
-            .ocr_client(
-                &http,
-                Default::default(),
-                OcrSettings {
-                    vertex_location: Some(location.into()),
-                    ..OcrSettings::default()
-                },
-                Arc::new(RecordingSecrets::new([("VERTEXAI_CREDENTIALS", identity)])),
-            )
-            .unwrap();
+        let route = support::build_ocr_route(
+            owner,
+            &http,
+            Default::default(),
+            OcrSettings {
+                vertex_location: Some(location.into()),
+                ..OcrSettings::default()
+            },
+            Arc::new(RecordingSecrets::new([("VERTEXAI_CREDENTIALS", identity)])),
+        );
         let request = decode_request(OcrWireRequest {
             model: "vertex_ai/mistral-ocr-maas".into(),
             document: json!({"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}),
@@ -127,7 +123,7 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             input_sources: Default::default(),
             timeout_seconds: Some(5.0),
         }).unwrap();
-        let result = perform(&client, request).await.unwrap();
+        let result = route.execute(request, &(), None).await.unwrap();
         assert!(!result.pages.is_empty());
     }
     let requests = upstream.received_requests().await.unwrap();
