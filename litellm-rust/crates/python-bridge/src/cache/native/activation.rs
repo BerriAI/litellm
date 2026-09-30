@@ -1,5 +1,5 @@
 use crate::cache::cache_error;
-use crate::logger::run_sync_value;
+use crate::execution::run_sync_value;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 use litellm_cache_redis_semantic::RedisSemanticConfig;
 use litellm_host_python::release_gil;
