@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Download, FileText, FileWarning, Trash2, TriangleAlert, Upload } from "lucide-react";
 import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
 import Papa from "papaparse";
@@ -798,7 +806,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                           <TableHead>Email</TableHead>
                           <TableHead>Role</TableHead>
                           <TableHead>Teams</TableHead>
-                          <TableHead>Budget</TableHead>
+                          <TableHead className={NUMERIC_CELL_CLASS}>Budget</TableHead>
                           <TableHead>Status</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -809,7 +817,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                             <TableCell className="whitespace-normal break-words">{record.user_email}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.user_role}</TableCell>
                             <TableCell className="whitespace-normal break-words">{record.teams}</TableCell>
-                            <TableCell>{record.max_budget}</TableCell>
+                            <TableCell className={NUMERIC_CELL_CLASS}>{record.max_budget}</TableCell>
                             <TableCell className="whitespace-normal break-words">{renderStatusCell(record)}</TableCell>
                           </TableRow>
                         ))}

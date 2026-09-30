@@ -7,6 +7,11 @@ every string leaf of the call arguments as ``texts`` so text guardrails can
 detect and mask sensitive values in the payload. Works with the synthetic
 request from ProxyLogging._convert_mcp_to_llm_format.
 
+A discovery scan (``list_mcp_tools``) hands the same handler the tool's
+description and input schema instead of call arguments: the description and
+every ``description`` string in the schema lead ``texts``, so a guardrail that
+blocks or masks them decides what the client gets to see in ``tools/list``.
+
 Note: For MCP tool definitions (schema) -> OpenAI tools=[], see
 litellm.experimental_mcp_client.tools.transform_mcp_tool_to_openai_tool
 when you have a full MCP Tool from list_tools. Here we only have the call
@@ -58,23 +63,39 @@ def _too_deeply_nested() -> HTTPException:
     )
 
 
-def _argument_replacements(
-    argument_leaves: tuple[tuple[JSONLeafPath, str], ...],
-    masked_texts: Sequence[str] | None,
-) -> Mapping[JSONLeafPath, str]:
-    """Positionally pair the guardrail's returned texts with the leaves they came from.
+def _masked_texts(guarded: Mapping[str, object] | None, scanned: int) -> Sequence[str] | None:
+    """The guardrail's returned texts, or None when it returned nothing to write back.
 
-    Only leaves the guardrail actually rewrote are returned, so a guardrail that
-    detects nothing leaves the outbound tool call byte-identical. A guardrail that
-    returns the wrong number of texts fails closed, because a positional write-back
-    would scramble the arguments rather than mask them.
+    A guardrail that returns the wrong number of texts fails closed, because the
+    positional write-back would scramble the payload rather than mask it.
     """
-    if masked_texts is not None and len(masked_texts) != len(argument_leaves):
+    masked: Final[object] = guarded.get("texts") if guarded else None
+    if masked is None:
+        return None
+    if not isinstance(masked, Sequence) or isinstance(masked, str) or len(masked) != scanned:
         raise _blocked(
-            f"guardrail returned {len(masked_texts)} texts for {len(argument_leaves)} MCP tool call argument strings, "
-            "so the redaction cannot be mapped back to the arguments"
+            f"guardrail returned {len(masked) if isinstance(masked, Sequence) else 'no'} texts for {scanned} "
+            "MCP tool strings, so the redaction cannot be mapped back"
         )
-    return {path: masked for (path, original), masked in zip(argument_leaves, masked_texts or ()) if masked != original}
+    return tuple(str(text) for text in masked)
+
+
+def _leaf_replacements(
+    leaves: tuple[tuple[JSONLeafPath, str], ...],
+    masked_texts: Sequence[str],
+) -> Mapping[JSONLeafPath, str]:
+    """Only the leaves the guardrail actually rewrote, so a guardrail that detects nothing leaves the payload byte-identical."""
+    return {path: masked for (path, original), masked in zip(leaves, masked_texts) if masked != original}
+
+
+def _schema_description_leaves(input_schema: object) -> tuple[tuple[JSONLeafPath, str], ...]:
+    leaves: Final = json_string_leaves(input_schema) if isinstance(input_schema, Mapping) else ()
+    if leaves is None:
+        raise _blocked(
+            f"MCP tool input schema exceeds the maximum nesting depth of {MAX_STRUCTURED_CONTENT_SCAN_DEPTH} "
+            "and cannot be scanned by the configured guardrail"
+        )
+    return tuple((path, text) for path, text in leaves if path and path[-1] == "description")
 
 
 def _conflicting_rewrite_paths(
@@ -125,6 +146,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         mcp_tool_name: Final = data.get("mcp_tool_name") or data.get("name")
         mcp_arguments: Final[object] = data.get("mcp_arguments") or data.get("arguments")
         mcp_tool_description: Final = data.get("mcp_tool_description") or data.get("description")
+        mcp_input_schema: Final[object] = data.get("mcp_input_schema")
 
         if not mcp_tool_name:
             verbose_proxy_logger.debug("MCP Guardrail: mcp_tool_name missing")
@@ -135,7 +157,9 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         mcp_tool: Final = MCPTool(
             name=mcp_tool_name,
             description=mcp_tool_description or "",
-            input_schema={},  # mutable-ok: call payload has no schema; guardrail gets args from request_data
+            input_schema=dict(mcp_input_schema)
+            if isinstance(mcp_input_schema, Mapping)
+            else {},  # mutable-ok: SDK dict field
         )
         openai_tool: Final = transform_mcp_tool_to_openai_tool(mcp_tool)
         fn: Final = openai_tool["function"]
@@ -153,12 +177,19 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
                 strict=fn.get("strict", False) or False,  # Default to False if None
             ),
         }
+        description_texts: Final = (str(mcp_tool_description),) if mcp_tool_description else ()
+        schema_leaves: Final = _schema_description_leaves(mcp_input_schema)
         argument_leaves: Final = json_string_leaves(mcp_arguments)
         if argument_leaves is None:
             raise _too_deeply_nested()
+        scanned_texts: Final = (
+            *description_texts,
+            *(text for _, text in schema_leaves),
+            *(text for _, text in argument_leaves),
+        )
         inputs: Final[GenericGuardrailAPIInputs] = GenericGuardrailAPIInputs(
             tools=[tool_def],
-            texts=[text for _, text in argument_leaves],
+            texts=list(scanned_texts),
         )
 
         guarded: Final = await guardrail_to_apply.apply_guardrail(
@@ -167,10 +198,18 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
             input_type="request",
             logging_obj=litellm_logging_obj,
         )
-        replacements: Final = _argument_replacements(
-            argument_leaves=argument_leaves,
-            masked_texts=guarded.get("texts") if guarded else None,
-        )
+        masked_texts: Final = _masked_texts(guarded, len(scanned_texts))
+        if masked_texts is None:
+            return data
+        schema_start: Final = len(description_texts)
+        argument_start: Final = schema_start + len(schema_leaves)
+        if description_texts and masked_texts[0] != description_texts[0]:
+            data["mcp_tool_description"] = masked_texts[0]  # rebind-ok: serve the masked description
+        schema_replacements: Final = _leaf_replacements(schema_leaves, masked_texts[schema_start:argument_start])
+        if schema_replacements:
+            masked_schema: Final = with_json_string_leaves(mcp_input_schema, schema_replacements)
+            data["mcp_input_schema"] = masked_schema  # rebind-ok: serve the masked schema
+        replacements: Final = _leaf_replacements(argument_leaves, masked_texts[argument_start:])
         if not replacements:
             return data
 
