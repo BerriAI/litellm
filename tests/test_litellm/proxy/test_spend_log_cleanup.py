@@ -828,6 +828,29 @@ async def test_health_check_retention_alone_cleans_only_the_health_check_table()
 
 
 @pytest.mark.asyncio
+async def test_daily_tag_spend_retention_alone_prunes_only_that_table_by_calendar_day():
+    client = _mock_prisma_for_retention([0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_daily_tag_spend_retention_period": "90d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
+    assert len(tables) == 1
+    assert '"LiteLLM_DailyTagSpend"' in tables[0]
+    cutoff_day = client.db.execute_raw.call_args[0][1]
+    assert cutoff_day == (datetime.now(timezone.utc) - timedelta(days=90)).date().isoformat()
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_retention_alone_keeps_daily_tag_spend_forever():
+    client = _mock_prisma_for_retention([0, 0])
+    cleaner = SpendLogCleanup(general_settings={"maximum_spend_logs_retention_period": "7d"})
+    cleaner.pod_lock_manager = None
+    await cleaner.cleanup_old_spend_logs(client)
+    tables = [call[0][0] for call in client.db.execute_raw.call_args_list]
+    assert not any('"LiteLLM_DailyTagSpend"' in sql for sql in tables)
+
+
+@pytest.mark.asyncio
 async def test_each_retention_key_cuts_off_at_its_own_horizon():
     client = _mock_prisma_for_retention([0, 0, 0, 0, 0])
     cleaner = SpendLogCleanup(

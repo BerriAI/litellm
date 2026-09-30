@@ -79,6 +79,7 @@ _PREVIOUSLY_DB_WINS: Final[tuple[str, ...]] = (
     "maximum_spend_logs_retention_period",
     "maximum_autorouter_session_retention_period",
     "maximum_health_check_retention_period",
+    "maximum_daily_tag_spend_retention_period",
     "maximum_spend_logs_cleanup_batch_size",
     "maximum_spend_logs_cleanup_max_batches",
     "maximum_spend_logs_cleanup_run_budget",

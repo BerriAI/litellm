@@ -336,7 +336,7 @@ Each translation is isolated in its own file, making it easy to test and modify 
 | `/v1/chat/completions` | Gemini | `llms/gemini/chat/transformation.py` |
 | `/v1/chat/completions` | Vertex AI | `llms/vertex_ai/gemini/transformation.py` |
 | `/v1/chat/completions` | OpenAI | `llms/openai/chat/gpt_transformation.py` |
-| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/experimental_pass_through/messages/transformation.py` |
+| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/pass_through/messages/transformation.py` |
 | `/v1/messages` (passthrough) | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py` |
 | `/v1/messages` (passthrough) | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/experimental_pass_through/transformation.py` |
 | Passthrough endpoints | All | `proxy/pass_through_endpoints/llm_provider_handlers/` |
