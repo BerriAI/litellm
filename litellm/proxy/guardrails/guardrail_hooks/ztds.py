@@ -219,11 +219,13 @@ class ZTDSGuardrail(CustomGuardrail):
                 ]
 
         # Attach ZTDS audit receipt to metadata
-        if "metadata" not in data or data["metadata"] is None:
-            data["metadata"] = {}
-        data["metadata"]["ztds_sanitized"] = True
-        data["metadata"]["ztds_standard"] = "RFC v1.0 (IETF draft-sibiryakov-ztds-protocol-02)"
-        data["metadata"]["ztds_invariants_verified"] = [1, 2, 3, 4]
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            data["metadata"] = metadata
+        metadata["ztds_sanitized"] = True
+        metadata["ztds_standard"] = "RFC v1.0 (IETF draft-sibiryakov-ztds-protocol-02)"
+        metadata["ztds_invariants_verified"] = [1, 2, 3, 4]
 
         return data
 
