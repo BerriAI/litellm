@@ -40,7 +40,11 @@ fn dashboard(directory: TempDir) -> App {
     let export = directory.path().join("public");
     std::fs::create_dir_all(export.join("_next/static")).unwrap();
     std::fs::create_dir_all(export.join("assets/logos")).unwrap();
-    std::fs::write(export.join("assets/logos/litellm_logo.jpg"), "logo bytes").unwrap();
+    std::fs::write(
+        export.join("assets/logos/litellm_monogram.svg"),
+        "logo bytes",
+    )
+    .unwrap();
     std::fs::write(export.join("favicon.ico"), "icon bytes").unwrap();
     std::fs::write(export.join("_next/static/app.js"), "window.app = true;").unwrap();
     App {
@@ -130,7 +134,7 @@ async fn missing_paths_never_fall_back_to_dashboard(app: App, #[case] path: &str
 )]
 #[case::root_assets("/_next/static/app.js", "window.app = true;", "text/javascript")]
 #[case::nested_assets("/ui/_next/static/app.js", "window.app = true;", "text/javascript")]
-#[case::logo("/get_image", "logo bytes", "image/jpeg")]
+#[case::logo("/get_image", "logo bytes", "image/svg+xml")]
 #[case::favicon("/get_favicon", "icon bytes", "image/x-icon")]
 #[tokio::test]
 async fn dashboard_adapter_preserves_existing_urls(

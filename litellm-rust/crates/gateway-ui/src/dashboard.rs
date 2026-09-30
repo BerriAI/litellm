@@ -24,7 +24,7 @@ pub fn dashboard_assets(directory: impl AsRef<Path>) -> Router {
         )
         .route_service(
             "/get_image",
-            ServeFile::new(directory.join("assets/logos/litellm_logo.jpg")),
+            ServeFile::new(directory.join("assets/logos/litellm_monogram.svg")),
         )
         .route_service(
             "/get_favicon",

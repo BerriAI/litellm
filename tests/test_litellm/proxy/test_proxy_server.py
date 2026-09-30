@@ -6852,7 +6852,7 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
+    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.png
     exists_calls = []
 
     def exists_side_effect(path):
@@ -6887,8 +6887,8 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
-        # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
-        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
+        # Verify that exists was called to check /var/lib/litellm/assets/logo.png
+        assets_logo_path = "/var/lib/litellm/assets/logo.png"
         assert any(assets_logo_path in str(call) for call in exists_calls), f"Should check if {assets_logo_path} exists"
 
         # Verify FileResponse was called (with fallback logo)
@@ -7002,7 +7002,7 @@ async def test_get_image_default_logo_ignores_stale_cache(monkeypatch, tmp_path)
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(cache_path.resolve())
-    assert served_path.endswith("logo.jpg")
+    assert served_path.endswith("/logo.png")
 
 
 @pytest.mark.asyncio
@@ -7034,7 +7034,7 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(custom_logo_path), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith("logo.jpg")
+    assert served_path.endswith("/logo.png")
 
 
 @pytest.mark.asyncio
@@ -7067,7 +7067,7 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(custom_logo_path), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith("logo.jpg"), f"Expected fallback to default logo.jpg, got {served_path}"
+    assert served_path.endswith("/logo.png"), f"Expected fallback to default logo.png, got {served_path}"
 
 
 def test_get_config_normalizes_string_callbacks(monkeypatch):
