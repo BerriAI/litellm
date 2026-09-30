@@ -2580,7 +2580,12 @@ class TestGuardrailsSeeAuthenticatedIdentity:
         vendor_payloads: list[dict[str, object]] = []
         key = _cli_session_key("/anthropic/v1/messages")
         forged_bucket = {bucket: {"user_api_key_token": "forged-hash"}} if bucket else {}
-        data = {"guardrail_to_apply": self._generic_guardrail(vendor_payloads), "prompt": "hello", **forged_bucket}
+        data = {
+            "guardrail_to_apply": self._generic_guardrail(vendor_payloads),
+            "prompt": "hello",
+            "proxy_server_request": {"headers": {"x-tenant": "tenant-real"}},
+            **forged_bucket,
+        }
 
         await UnifiedLLMGuardrails().async_pre_call_hook(
             user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.pass_through.value
@@ -2590,6 +2595,7 @@ class TestGuardrailsSeeAuthenticatedIdentity:
         assert vendor_payloads[0]["request_data"]["user_api_key_hash"] == "cli-session-alice"
         assert _RAW_CLI_SESSION_TOKEN not in json.dumps(vendor_payloads[0])
         assert vendor_payloads[0]["texts"] == ['{"prompt": "hello"}']
+        assert vendor_payloads[0]["request_headers"] == {"x-tenant": "[present]"}
 
     @pytest.mark.asyncio
     async def test_token_only_key_drops_forged_token_already_in_proxy_bucket(self, monkeypatch) -> None:

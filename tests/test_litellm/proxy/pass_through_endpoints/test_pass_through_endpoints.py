@@ -28,6 +28,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
+    _extract_inbound_headers,
+)
+from litellm.proxy.litellm_pre_call_utils import _REDACTED_HEADER_VALUE
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -7667,7 +7671,7 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
         "headers": {"x-authenticated-user": "admin@corp"},
         "trace_label": "nightly",
     }
-    forged_headers = {"x-authenticated-user": "admin@corp", "x-litellm-end-user-id": "victim"}
+    forged_headers = {"x-authenticated-user": "admin@corp", "x-litellm-end-user-id": "victim", "x-tenant": "forged"}
     body = {
         "prompt": "hello",
         "metadata": forged,
@@ -7677,14 +7681,26 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
     }
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.headers = Headers(
+        {
+            "content-type": "application/json",
+            "x-tenant": "tenant-real",
+            "authorization": "Bearer sk-real-caller-key",
+            "x-my-key": "sk-custom-header-key",
+            "x-mcp-github-authorization": "Bearer mcp-upstream-token",
+            "cookie": "session=secret",
+        }
+    )
     mock_request.query_params = QueryParams({})
     mock_request.body = AsyncMock(return_value=json.dumps(body).encode())
 
     try:
-        with patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
-        ):  # test-quality-ok: read at call time
+        with (
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            ),  # test-quality-ok: read at call time
+            patch("litellm.proxy.proxy_server.general_settings", {"litellm_key_header_name": "x-my-key"}),
+        ):
             response = await pass_through_request(
                 request=mock_request,
                 target="https://upstream.test/v1/generate",
@@ -7696,6 +7712,82 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
 
     assert response.status_code == 200
     assert hook_data == [
-        {"prompt": "hello", "metadata": {"trace_label": "nightly"}, "litellm_metadata": {"trace_label": "nightly"}}
+        {
+            "prompt": "hello",
+            "metadata": {"trace_label": "nightly"},
+            "litellm_metadata": {"trace_label": "nightly"},
+            "proxy_server_request": {
+                "headers": {
+                    "content-type": "application/json",
+                    "x-tenant": "tenant-real",
+                    "cookie": _REDACTED_HEADER_VALUE,
+                }
+            },
+        }
     ]
+    vendor_headers = _extract_inbound_headers(request_data=hook_data[0], logging_obj=None, extra_allowlist={"x-tenant"})
+    assert vendor_headers is not None and vendor_headers["x-tenant"] == "tenant-real"
     assert upstream_bodies == [{"prompt": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_post_call_guardrails_receive_real_inbound_headers():
+    """Post-call guardrails run on a copy of the body the litellm-param pop already stripped, so without an explicit
+    re-attach an operator's extra_headers allowlist forwarded nothing on the response side."""
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"completion": "hi"})
+
+    real_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
+
+    post_call_data = []
+
+    def record_post_call(data, user_api_key_dict, response):
+        post_call_data.append(data)
+        return response
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=record_post_call)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers(
+        {"content-type": "application/json", "x-tenant": "tenant-real", "authorization": "Bearer sk-real-caller-key"}
+    )
+    mock_request.query_params = QueryParams({})
+    mock_request.body = AsyncMock(
+        return_value=json.dumps({"prompt": "hello", "headers": {"x-tenant": "forged"}}).encode()
+    )
+
+    try:
+        with patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+        ):  # test-quality-ok: read at call time
+            response = await pass_through_request(
+                request=mock_request,
+                target="https://upstream.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app"),
+                guardrails_config=["gg"],
+            )
+    finally:
+        cache_dict[cache_key] = real_handler
+
+    assert response.status_code == 200
+    assert len(post_call_data) == 1, "the post-call guardrail hook did not run"
+    assert post_call_data[0]["proxy_server_request"] == {
+        "headers": {"content-type": "application/json", "x-tenant": "tenant-real"}
+    }
+    vendor_headers = _extract_inbound_headers(
+        request_data=post_call_data[0], logging_obj=None, extra_allowlist={"x-tenant"}
+    )
+    assert vendor_headers is not None and vendor_headers["x-tenant"] == "tenant-real"
