@@ -39,6 +39,7 @@ class TestNomaV2Configuration:
         assert "api_key" in noma_v2_params
         assert "api_base" in noma_v2_params
         assert "application_id" in noma_v2_params
+        assert "gateway_name" in noma_v2_params
         assert "monitor_mode" in noma_v2_params
         assert "block_failures" in noma_v2_params
 

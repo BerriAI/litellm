@@ -1,7 +1,6 @@
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Final, TypeAlias, cast
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -9,10 +8,11 @@ from uuid import uuid4
 import pytest
 
 from litellm.caching.caching import Cache
-from litellm.rust_bridge.response_cache import NativeResponseCacheRuntime, ResponseCacheRuntime, resolve_response_cache
+from litellm.rust_bridge import _native
+from litellm.rust_bridge.response_cache import NativeResponseCacheRuntime, ResponseCacheRuntime
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.utils import EmbeddingResponse
-from tests.test_litellm_rust.support.cache import assert_native_runtime, completion_kwargs, require_rust
+from tests.test_litellm_rust.support.cache import activate_native, assert_native_runtime, completion_kwargs
 from tests.test_litellm_rust.support.s3_stub import S3Stub
 
 pytestmark: Final = pytest.mark.requires_rust_extension
@@ -69,11 +69,6 @@ ROUND_TRIP_BACKENDS: Final = (
 SHARED_STORE_BACKENDS: Final = (LiteLLMCacheType.DISK, LiteLLMCacheType.REDIS, LiteLLMCacheType.S3)
 
 
-@pytest.mark.parametrize("backend", list(LiteLLMCacheType))
-def test_shipped_rules_keep_every_backend_on_python(backend: LiteLLMCacheType) -> None:
-    assert resolve_response_cache(cast(Cache, SimpleNamespace(type=backend))) is None
-
-
 @pytest.mark.parametrize(
     "cache_factory",
     [
@@ -87,7 +82,7 @@ def test_shipped_rules_keep_every_backend_on_python(backend: LiteLLMCacheType) -
     ],
     indirect=True,
 )
-def test_shipped_rules_construct_python_backed_facades(cache_factory: CacheFactory) -> None:
+def test_legacy_constructor_keeps_python_backends(cache_factory: CacheFactory) -> None:
     assert cache_factory()._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
 
 
@@ -104,19 +99,17 @@ def test_shipped_rules_construct_python_backed_facades(cache_factory: CacheFacto
     ],
     indirect=True,
 )
-def test_rust_required_rule_activates_the_native_backend(
+def test_explicit_selection_activates_the_native_backend(
     cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    assert_native_runtime(cache_factory())
+    assert_native_runtime(activate_native(cache_factory()))
 
 
 @pytest.mark.parametrize("cache_factory", ROUND_TRIP_BACKENDS, indirect=True)
 async def test_facade_storage_calls_round_trip_through_the_native_backend(
     cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    facade: Final = cache_factory()
+    facade: Final = activate_native(cache_factory())
     assert_native_runtime(facade)
 
     sync_kwargs: Final = completion_kwargs("sync")
@@ -130,8 +123,7 @@ async def test_facade_storage_calls_round_trip_through_the_native_backend(
 
 
 async def test_memory_facade_writes_bypass_the_python_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    require_rust(monkeypatch, LiteLLMCacheType.LOCAL)
-    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    facade: Final = activate_native(Cache(type=LiteLLMCacheType.LOCAL))
     assert_native_runtime(facade)
     kwargs: Final = completion_kwargs("memory")
     facade.add_cache({"answer": 1}, **kwargs)
@@ -145,8 +137,7 @@ async def test_native_and_python_facades_share_one_wire_format(
 ) -> None:
     python_facade: Final = cache_factory()
     assert python_facade._native_cache is None  # pyright: ignore[reportPrivateUsage]  # the activation under test has no public accessor
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    native_facade: Final = cache_factory()
+    native_facade: Final = activate_native(cache_factory())
     assert_native_runtime(native_facade)
 
     native_written: Final = completion_kwargs("native")
@@ -170,8 +161,7 @@ async def test_native_and_python_facades_share_one_wire_format(
 async def test_embedding_pipeline_stores_one_native_entry_per_input(
     cache_factory: CacheFactory, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
-    require_rust(monkeypatch, cast(LiteLLMCacheType, request.node.callspec.params["cache_factory"]))
-    facade: Final = cache_factory()
+    facade: Final = activate_native(cache_factory())
     assert_native_runtime(facade)
     inputs: Final = [f"alpha {uuid4().hex}", f"beta {uuid4().hex}"]
     result: Final = EmbeddingResponse(
@@ -224,9 +214,8 @@ async def test_embedding_pipeline_stores_one_native_entry_per_input(
 def test_semantic_settings_the_native_client_cannot_honor_decline(
     monkeypatch: pytest.MonkeyPatch, backend: LiteLLMCacheType, settings: dict[str, object], message: str
 ) -> None:
-    require_rust(monkeypatch, backend)
-    with pytest.raises(RuntimeError, match=f"declined the cache: {message}"):
-        Cache(type=backend, **settings)
+    with pytest.raises(_native.RustBridgeDeclined, match=message):
+        activate_native(Cache(type=backend, **settings))
 
 
 class _SemanticHit:

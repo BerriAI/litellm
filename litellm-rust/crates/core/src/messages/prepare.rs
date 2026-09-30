@@ -3,22 +3,21 @@ use std::time::Duration;
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
-    get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
-    get_provider_specific_headers::get_provider_specific_headers,
-    settings::Lookup,
+    get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
+use litellm_llms_types::formats::messages::MessagesRequest;
 use litellm_secrets::source::SecretSource;
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 
 use super::{
     Error, MessagesCall,
-    common_utils::{MessagesProvider, string_headers},
+    common_utils::{MessagesProvider, messages_provider, string_headers},
     types::invalid_request,
 };
+use crate::provider::resolve_llm_provider;
 
 struct ResolvedProvider {
     model: String,
@@ -28,13 +27,14 @@ struct ResolvedProvider {
 pub(super) struct ProviderMessagesRequest {
     pub(super) provider: MessagesProvider,
     pub(super) url: String,
-    pub(super) body: AnthropicMessagesRequest,
+    pub(super) body: MessagesRequest,
     pub(super) environment: ValidatedEnvironment,
     pub(super) timeout: Option<Duration>,
     /// The caller's own credential, reported to the host beside the wire request.
     pub(super) api_key: Option<SecretValue>,
 }
 
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub(super) async fn prepare(
     call: MessagesCall,
     secrets: &dyn SecretSource,
@@ -50,26 +50,11 @@ fn resolve_provider(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<ResolvedProvider, Error> {
-    let CustomLlmProvider {
-        model,
-        custom_llm_provider: provider,
-    } = get_custom_llm_provider(model, custom_llm_provider)
-        .or_else(|| {
-            custom_llm_provider.map(|provider| CustomLlmProvider {
-                model,
-                custom_llm_provider: provider,
-            })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for messages request".to_string(),
-            )
-        })?;
-    let provider = provider
-        .parse()
-        .map_err(|_| Error::InvalidProvider(provider.to_string()))?;
+    let resolved = resolve_llm_provider(model, custom_llm_provider, "messages")?;
+    let provider = messages_provider(resolved.provider)
+        .ok_or_else(|| Error::InvalidProvider(<&str>::from(resolved.provider).to_string()))?;
     Ok(ResolvedProvider {
-        model: model.to_string(),
+        model: resolved.model.to_string(),
         provider,
     })
 }
@@ -94,7 +79,7 @@ fn prepare_provider_request(
     let env_lookup = |key: &str| secrets.get(key);
 
     let sanitized = config.shape_request(
-        AnthropicMessagesRequest { model, ..body },
+        MessagesRequest { model, ..body },
         shaping.reasoning_auto_summary,
     )?;
     let trimmed = without_additional_drop_params(sanitized, &shaping.additional_drop_params)?;
@@ -139,9 +124,9 @@ fn prepare_provider_request(
 }
 
 fn without_additional_drop_params(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     paths: &[String],
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     if paths.is_empty() {
         return Ok(request);
     }
@@ -149,7 +134,7 @@ fn without_additional_drop_params(
     let trimmed = paths
         .iter()
         .fold(params, |params, path| delete_nested_value(params, path));
-    Ok(AnthropicMessagesRequest {
+    Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
     })
@@ -158,7 +143,7 @@ fn without_additional_drop_params(
 #[cfg(test)]
 mod tests {
     use litellm_llms::base_llm::auth::resolve_auth;
-    use litellm_types::utils::ProviderSpecificHeaders;
+    use litellm_llms_types::headers::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
 
@@ -170,7 +155,7 @@ mod tests {
         MessagesShaping::default()
     }
 
-    fn body(value: Value) -> AnthropicMessagesRequest {
+    fn body(value: Value) -> MessagesRequest {
         serde_json::from_value(value).unwrap()
     }
 

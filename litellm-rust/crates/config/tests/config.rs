@@ -233,6 +233,9 @@ finetune_settings:
   - custom_llm_provider: openai
 mcp_tools:
   - name: lookup
+mcp_servers:
+  docs:
+    url: https://example.test/mcp
 vector_store_registry:
   - vector_store_name: docs
 worker_registry:
@@ -262,6 +265,7 @@ include:
     assert_eq!(config.files_settings.len(), 1);
     assert_eq!(config.finetune_settings.len(), 1);
     assert_eq!(config.mcp_tools.len(), 1);
+    assert_eq!(config.mcp_servers.len(), 1);
     assert_eq!(config.vector_store_registry.len(), 1);
     assert_eq!(config.worker_registry.len(), 1);
     assert_eq!(config.agents.len(), 1);
@@ -340,4 +344,32 @@ fn resolves_nested_includes_once_in_breadth_first_order() {
         "third"
     );
     assert!(config.include.is_empty());
+}
+
+#[rstest]
+fn mcp_config_redacts_nested_credentials_and_preserves_policy_for_validation() {
+    let config = Config::from_yaml("mcp_servers:\n  docs:\n    url: https://example.test/private-secret/mcp\n    authentication_token: upstream-secret\n    static_headers: {x-token: header-secret}\n    env: {TOKEN: env-secret}\n    args: [argument-secret]\n    client_secret: oauth-secret\n    allowed_tools: [search]\n").unwrap();
+    let server = &config.mcp_servers["docs"];
+    assert_eq!(server.allowed_tools.as_deref().unwrap(), ["search"]);
+    assert!(server.unsupported.contains_key("client_secret"));
+    let debug = format!("{config:?}");
+    for secret in [
+        "private-secret",
+        "upstream-secret",
+        "header-secret",
+        "env-secret",
+        "oauth-secret",
+        "argument-secret",
+    ] {
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[rstest]
+#[case::transport("transport: invalid")]
+#[case::auth("auth_type: invalid")]
+#[case::concurrency("max_concurrent_requests: -1")]
+#[case::headers("static_headers: {x-token: [not, a, string]}")]
+fn rejects_invalid_typed_mcp_settings(#[case] setting: &str) {
+    assert!(Config::from_yaml(&format!("mcp_servers:\n  docs:\n    {setting}\n")).is_err());
 }

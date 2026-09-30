@@ -1,13 +1,11 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::stream::BoxStream;
+use litellm_host::call::CallOutput;
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
-use litellm_types::{
-    llms::anthropic_messages::{
-        anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
-    },
-    utils::ProviderSpecificHeaders,
+use litellm_llms_types::{
+    formats::messages::{MessagesRequest, MessagesResponse},
+    headers::ProviderSpecificHeaders,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -15,7 +13,7 @@ use serde_json::{Map, Value};
 use super::Error;
 
 pub struct MessagesCall {
-    pub body: AnthropicMessagesRequest,
+    pub body: MessagesRequest,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
@@ -25,24 +23,16 @@ pub struct MessagesCall {
     pub shaping: MessagesShaping,
 }
 
-pub fn messages_body(body: Map<String, Value>) -> Result<AnthropicMessagesRequest, Error> {
+pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
-        "Anthropic messages request",
-        err,
-    ))
+    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
 }
 
-pub enum MessagesResponse {
-    Message(Box<AnthropicMessagesResponse>),
-    Stream {
-        headers: Vec<(String, String)>,
-        chunks: BoxStream<'static, Result<Bytes, Error>>,
-    },
-}
+pub type MessagesCallResponse =
+    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {

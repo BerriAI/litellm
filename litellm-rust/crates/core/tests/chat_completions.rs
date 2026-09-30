@@ -1,10 +1,13 @@
+use litellm_host::interceptors::RawResponse;
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use std::time::Duration;
 
-use litellm_core::chat_completions::{
-    Error, chat_completions, chat_completions_decline_reason, types::ChatCompletionsRequest,
-};
+use litellm_core::chat_completions::{Error, types::ChatCompletionsRequest};
 use litellm_http::transport::Error as TransportError;
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;
@@ -15,13 +18,7 @@ use support::*;
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions(
-        &support::resources(),
-        &http_config(),
-        &RecordingSecrets::empty(),
-        request,
-    )
-    .await
+    chat_completions_route().execute(request, &(), None).await
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -162,8 +159,6 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
     assert_eq!(response.usage.total_tokens, 15);
 }
 
-/// The provider already answered and billed these, so the host must not retry them on
-/// its own path: they surface as `InvalidResponse`, never as a pre-send decline.
 #[rstest]
 #[case::missing_usage(
     r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#
@@ -215,10 +210,9 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     );
 }
 
-/// Nothing was sent, so nothing was billed and the host can still serve the request.
 #[rstest]
 #[tokio::test]
-async fn a_connection_that_is_never_established_declines_instead_of_failing(
+async fn a_connection_that_is_never_established_returns_a_connect_error(
     request: ChatCompletionsRequest<'static>,
 ) {
     let error = complete(ChatCompletionsRequest {
@@ -236,9 +230,7 @@ async fn a_connection_that_is_never_established_declines_instead_of_failing(
 
 #[rstest]
 #[tokio::test]
-async fn a_timeout_after_sending_is_not_a_pre_send_decline(
-    request: ChatCompletionsRequest<'static>,
-) {
+async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletionsRequest<'static>) {
     let upstream =
         upstream([anthropic_response(ANTHROPIC_MESSAGE).set_delay(Duration::from_secs(5))]).await;
     let base = upstream.uri();
@@ -258,235 +250,147 @@ async fn a_timeout_after_sending_is_not_a_pre_send_decline(
 }
 
 #[rstest]
-#[case::accepted("anthropic/claude-sonnet-4-5", None, hi(), json!({"max_tokens": 16}), None)]
-#[case::accepted_bedrock("bedrock/anthropic.claude-sonnet-4-5", None, hi(), json!({}), None)]
-#[case::unknown_provider(
-    "gpt-4o",
-    Some("openai"),
-    hi(),
-    json!({}),
-    Some("provider is not on the rust chat completions path")
-)]
-#[case::unreadable_messages(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    json!("hi"),
-    json!({}),
-    Some("unreadable message list")
-)]
-#[case::empty_messages("anthropic/claude-sonnet-4-5", None, json!([]), json!({}), Some("empty message list"))]
-#[case::streaming(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    hi(),
-    json!({"stream": true}),
-    Some("streaming")
-)]
-#[case::unrecognized_param(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    hi(),
-    json!({"not_a_param": 1}),
-    Some("unrecognized request parameter")
-)]
-#[case::opens_on_assistant_turn(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    json!([{"role": "assistant", "content": "hi"}]),
-    json!({}),
-    Some("conversation does not open on a user turn")
-)]
-fn decline_reason_names_why_the_core_would_not_serve_the_request(
-    #[case] model: &str,
-    #[case] provider: Option<&str>,
-    #[case] messages: Value,
-    #[case] params: Value,
-    #[case] reason: Option<&str>,
-) {
-    assert_eq!(
-        chat_completions_decline_reason(model, provider, messages, &object(params)),
-        reason
-    );
-}
-
-/// A request the decline check accepts must not be declined by the call itself.
-#[rstest]
+#[case::direct(false)]
+#[case::hosted(true)]
 #[tokio::test]
-async fn a_declined_request_fails_the_call_before_sending(
+async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     request: ChatCompletionsRequest<'static>,
+    #[case] hosted: bool,
 ) {
+    use litellm_core::chat_completions::route::ChatCompletions;
+    use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
+
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
-
-    let error = complete(ChatCompletionsRequest {
-        optional_params: object(json!({"stream": true})),
-        api_base: Some(&base),
-        ..request
-    })
-    .await
-    .expect_err("streaming is declined");
-
-    assert_eq!(error, Error::Unsupported("streaming"));
-    assert!(received(&upstream).await.is_empty());
-}
-
-#[rstest]
-#[case::source_key(None, "source-key")]
-#[case::explicit_key(Some("explicit-key"), "explicit-key")]
-#[tokio::test]
-async fn injected_secrets_supply_credentials_and_endpoint(
-    request: ChatCompletionsRequest<'static>,
-    #[case] api_key: Option<&'static str>,
-    #[case] expected_key: &str,
-) {
-    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
-    let secrets = RecordingSecrets::new([
-        ("ANTHROPIC_API_KEY", "source-key"),
-        ("ANTHROPIC_API_BASE", upstream.uri().as_str()),
-    ]);
-    let response = chat_completions(
-        &support::resources(),
-        &http_config(),
-        &secrets,
+    let host = RecordingCall::<ChatCompletions>::new(
         ChatCompletionsRequest {
-            api_key,
-            api_base: None,
+            api_base: Some(&base),
             ..request
-        },
-    )
-    .await
-    .unwrap();
-    let sent = only_request(&upstream).await;
-    assert_eq!(sent.header("x-api-key"), Some(expected_key));
-    assert_eq!(sent.url.path(), "/v1/messages");
+        }
+        .into(),
+    );
+    let response = if hosted {
+        let result = litellm_host_native::in_process::run_hosted(
+            chat_completions_route()
+                .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
+            host.runtime(),
+        )
+        .await
+        .unwrap();
+        let HostedCompletion::Complete(response) = result else {
+            panic!("expected a complete response")
+        };
+        response
+    } else {
+        let call = host.request.lock().unwrap().take().unwrap();
+        chat_completions_route()
+            .execute(
+                ChatCompletionsRequest {
+                    model: &call.model,
+                    messages: call.messages,
+                    optional_params: call.optional_params,
+                    api_key: call.api_key.as_deref(),
+                    api_base: call.api_base.as_deref(),
+                    custom_llm_provider: call.custom_llm_provider.as_deref(),
+                    extra_headers: call.extra_headers,
+                    timeout: call.timeout,
+                },
+                &host,
+                Some(host.events.0.sender.clone()),
+            )
+            .await
+            .unwrap()
+    };
     assert_eq!(
         response.choices[0].message.content.as_deref(),
         Some("hello")
     );
-}
-
-#[rstest]
-#[case::accepted(false)]
-#[case::declined(true)]
-#[tokio::test]
-async fn secret_failure_stops_before_sending_and_declines_skip_resolution(
-    request: ChatCompletionsRequest<'static>,
-    #[case] declined: bool,
-) {
-    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
-    let base = upstream.uri();
-    let secrets = RecordingSecrets::failing();
-    let result = chat_completions(
-        &support::resources(),
-        &http_config(),
-        &secrets,
-        ChatCompletionsRequest {
-            api_base: Some(&base),
-            optional_params: if declined {
-                object(json!({"stream": true}))
-            } else {
-                request.optional_params.clone()
-            },
-            ..request
-        },
-    )
-    .await;
-    if declined {
-        assert!(matches!(result, Err(Error::Unsupported(_))));
-        assert!(secrets.requested().is_empty());
-    } else {
-        assert!(matches!(result, Err(Error::Secret(_))));
-        assert!(!secrets.requested().is_empty());
-    }
-    assert!(received(&upstream).await.is_empty());
-}
-
-#[rstest]
-#[case::bearer(true)]
-#[case::signed(false)]
-#[tokio::test]
-async fn bedrock_chat_uses_the_injected_credential_source(
-    request: ChatCompletionsRequest<'static>,
-    #[case] bearer: bool,
-) {
-    let upstream = upstream([json_response(json!({
-        "output": {"message": {"content": [{"text": "hello"}]}},
-        "usage": {"inputTokens": 1, "outputTokens": 1}
-    }))])
-    .await;
-    let base = upstream.uri();
-    let secrets = RecordingSecrets::new(
+    assert_eq!(
+        only_request(&upstream).await.header("x-hook"),
+        Some("called")
+    );
+    let events = host.events.0.lock().unwrap();
+    assert!(matches!(
+        &events[..],
         [
-            ("AWS_ACCESS_KEY_ID", "injected-access-key"),
-            ("AWS_SECRET_ACCESS_KEY", "injected-secret-key"),
-            ("AWS_REGION_NAME", "eu-west-1"),
+            CallEvent::Started { .. },
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
+            CallEvent::Succeeded { .. }
         ]
-        .into_iter()
-        .chain(bearer.then_some(("AWS_BEARER_TOKEN_BEDROCK", "injected-bearer"))),
-    );
-    let response = chat_completions(
-        &support::resources(),
-        &http_config(),
-        &secrets,
-        ChatCompletionsRequest {
-            model: "test-model",
-            custom_llm_provider: Some("bedrock"),
-            api_key: None,
-            api_base: Some(&base),
-            optional_params: Map::new(),
-            ..request
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        response.choices[0].message.content.as_deref(),
-        Some("hello")
-    );
-    let sent = only_request(&upstream).await;
-    let authorization = sent.header("authorization").unwrap();
-    if bearer {
-        assert_eq!(authorization, "Bearer injected-bearer");
-    } else {
-        assert!(authorization.contains("Credential=injected-access-key/"));
-        assert!(authorization.contains("/eu-west-1/bedrock/aws4_request"));
-    }
-    assert!(!sent.body_text().contains("injected-secret-key"));
+    ));
 }
 
 #[rstest]
 #[tokio::test]
-async fn openai_compatible_chat_resolves_its_injected_endpoint_and_key(
+async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     request: ChatCompletionsRequest<'static>,
 ) {
-    let upstream = upstream([json_response(json!({
-        "id": "test-response",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-    }))]).await;
-    let secrets = RecordingSecrets::new([
-        ("OPENAI_LIKE_API_BASE", upstream.uri().as_str()),
-        ("OPENAI_LIKE_API_KEY", "injected-key"),
-    ]);
-    let response = chat_completions(
-        &support::resources(),
-        &http_config(),
-        &secrets,
-        ChatCompletionsRequest {
-            model: "test-model",
-            custom_llm_provider: Some("openai_like"),
-            api_key: None,
-            api_base: None,
+    use litellm_host::interceptors::{Interceptors, RequestContext, WireRequest};
+    struct FailingHook;
+    impl Interceptors<Error> for FailingHook {
+        async fn before_provider_request(
+            &self,
+            wire: WireRequest,
+            _: RequestContext,
+        ) -> Result<WireRequest, Error> {
+            Ok(wire)
+        }
+        async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
+            Err(Error::InvalidRequest("callback rejected".into()))
+        }
+    }
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let base = upstream.uri();
+    let error = chat_completions_route()
+        .execute(
+            ChatCompletionsRequest {
+                api_base: Some(&base),
+                ..request
+            },
+            &FailingHook,
+            None,
+        )
+        .await
+        .unwrap_err();
+    let Error::PostCallHook(source) = error else {
+        panic!("expected retained callback error")
+    };
+    assert_eq!(*source, Error::InvalidRequest("callback rejected".into()));
+    assert_eq!(received(&upstream).await.len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn completed_chat_records_route_and_resolved_provider(
+    request: ChatCompletionsRequest<'static>,
+    traces: TraceCapture,
+) {
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let base = upstream.uri();
+    let model = request.model;
+    traces
+        .logger()
+        .instrument(complete(ChatCompletionsRequest {
+            api_base: Some(&base),
             ..request
-        },
-    )
-    .await
-    .unwrap();
+        }))
+        .await
+        .unwrap();
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["route"], "chat_completions");
+    assert_eq!(summaries[0]["model"], model);
+    assert_eq!(summaries[0]["provider"], "anthropic");
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
-        Some("hello")
+        summaries[0]["resolved_model"],
+        only_request(&upstream).await.json()["model"]
     );
-    let sent = only_request(&upstream).await;
-    assert_eq!(sent.url.path(), "/chat/completions");
-    assert_eq!(sent.header("authorization"), Some("Bearer injected-key"));
+    assert_eq!(summaries[0]["outcome"], "success");
+    assert_eq!(summaries[0]["stream"], false);
 }

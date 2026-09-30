@@ -1,6 +1,8 @@
 use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
-use litellm_types::llms::anthropic::{AnthropicBeta, BetaSet};
-use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::{
+    headers::{ProviderSpecificHeader, ProviderSpecificHeaders},
+    providers::anthropic::{AnthropicBeta, BetaSet},
+};
 use rstest::rstest;
 
 use super::*;
@@ -87,8 +89,7 @@ async fn a_call_without_credentials_fails_before_sending(
         ..call
     })
     .await
-    .err()
-    .expect("a call without credentials fails");
+    .expect_err("a call without credentials fails");
 
     assert!(
         matches!(
@@ -158,8 +159,7 @@ async fn unsupported_providers_are_rejected_before_sending(
         ..with_model(call, model)
     })
     .await
-    .err()
-    .expect("unsupported provider errors");
+    .expect_err("unsupported provider errors");
 
     assert_eq!(error, Error::InvalidProvider(reported.into()));
 }
@@ -405,8 +405,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
 
     let error = run(shaped(false))
         .await
-        .err()
-        .expect("an unsupported param is rejected without drop_params");
+        .expect_err("an unsupported param is rejected without drop_params");
     assert!(
         matches!(&error, Error::InvalidRequest(message) if message.to_string().contains(rejected_as)),
         "{error:?}"
@@ -601,8 +600,7 @@ async fn an_invalid_request_fails_before_sending(call: MessagesCall, #[case] fie
         fields,
     ))
     .await
-    .err()
-    .expect("the request is rejected");
+    .expect_err("the request is rejected");
 
     assert!(error.is_request(), "{error:?}");
     assert!(received(&upstream).await.is_empty());
@@ -705,7 +703,7 @@ async fn provider_validation_runs_before_caller_parameter_removal(
         json!({"metadata": {"user_id": 7}}),
     ))
     .await;
-    let error = result.err().expect("metadata is validated before removal");
+    let error = result.expect_err("metadata is validated before removal");
     assert!(
         error
             .to_string()

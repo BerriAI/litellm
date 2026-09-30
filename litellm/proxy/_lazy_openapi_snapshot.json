@@ -2521,6 +2521,91 @@
           "title": "AgentExtension",
           "type": "object"
         },
+        "AgentIdentityBinding": {
+          "properties": {
+            "active": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            },
+            "agent_id": {
+              "title": "Agent Id",
+              "type": "string"
+            },
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "last_authenticated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Authenticated At"
+            },
+            "provider": {
+              "const": "microsoft_entra",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_roles": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Roles",
+              "type": "array"
+            },
+            "required_scopes": {
+              "default": [
+                "user_impersonation"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "service_principal_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Principal Id"
+            },
+            "tenant_id": {
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id",
+            "provider",
+            "tenant_id",
+            "client_id",
+            "issuer",
+            "revision"
+          ],
+          "title": "AgentIdentityBinding",
+          "type": "object"
+        },
         "AgentInterface": {
           "description": "Declares a combination of a target URL and a transport protocol.",
           "properties": {
@@ -2972,6 +3057,21 @@
               ],
               "title": "Created By"
             },
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "default": "autonomous",
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -2985,6 +3085,26 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentIdentityBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_managed": {
+              "default": false,
+              "title": "Identity Managed",
+              "type": "boolean"
+            },
+            "jwt_auth_configured": {
+              "default": false,
+              "title": "Jwt Auth Configured",
+              "type": "boolean"
             },
             "keys": {
               "anyOf": [
@@ -3313,18 +3433,6 @@
         },
         "DailySpendMetadata": {
           "properties": {
-            "api_key_limit": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
-              "title": "Api Key Limit"
-            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3334,18 +3442,6 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
-            },
-            "total_api_keys": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
-              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -11368,18 +11464,6 @@
               "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
               "title": "Advisory System Message"
             },
-            "agent_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.",
-              "title": "Agent Id"
-            },
             "akto_account_id": {
               "anyOf": [
                 {
@@ -12169,6 +12253,18 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "gateway_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans",
+              "title": "Gateway Name"
+            },
             "grounding_check": {
               "anyOf": [
                 {
@@ -12950,18 +13046,6 @@
               ],
               "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
               "title": "Realtime Violation Message"
-            },
-            "resource_app_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.",
-              "title": "Resource App Id"
             },
             "rules": {
               "anyOf": [
@@ -32078,6 +32162,20 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PinnedMCPTool"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -33165,6 +33263,24 @@
             }
           },
           "title": "NewMCPServerRequest",
+          "type": "object"
+        },
+        "PinnedMCPTool": {
+          "additionalProperties": false,
+          "description": "One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.",
+          "properties": {
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "input_schema": {
+              "additionalProperties": true,
+              "title": "Input Schema",
+              "type": "object"
+            }
+          },
+          "title": "PinnedMCPTool",
           "type": "object"
         },
         "RegisterGuardrailRequest": {
@@ -35135,6 +35251,20 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "pinned_tools": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/PinnedMCPTool"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned Tools"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -37100,6 +37230,24 @@
           "title": "NewMCPToolsetRequest",
           "type": "object"
         },
+        "PinnedMCPTool": {
+          "additionalProperties": false,
+          "description": "One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.",
+          "properties": {
+            "description": {
+              "default": "",
+              "title": "Description",
+              "type": "string"
+            },
+            "input_schema": {
+              "additionalProperties": true,
+              "title": "Input Schema",
+              "type": "object"
+            }
+          },
+          "title": "PinnedMCPTool",
+          "type": "object"
+        },
         "RejectMCPServerRequest": {
           "properties": {
             "review_notes": {
@@ -38662,6 +38810,108 @@
             }
           ],
           "summary": "Get Mcp Oauth User Credential Status",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/{server_id}/pin": {
+        "delete": {
+          "description": "Unpin the server's tool list (admin only); tools/list serves the live upstream catalog again.",
+          "operationId": "unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Unpin Mcp Server Tools V1 Mcp Server  Server Id  Pin Delete",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Unpin Mcp Server Tools",
+          "tags": [
+            "mcp_management"
+          ]
+        },
+        "post": {
+          "description": "Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.",
+          "operationId": "pin_mcp_server_tools_v1_mcp_server__server_id__pin_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/PinnedMCPTool"
+                    },
+                    "title": "Response Pin Mcp Server Tools V1 Mcp Server  Server Id  Pin Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Pin Mcp Server Tools",
           "tags": [
             "mcp_management"
           ]
@@ -40577,6 +40827,463 @@
           "summary": "List Tool Rest Api",
           "tags": [
             "mcp_rest"
+          ]
+        }
+      }
+    }
+  },
+  "model_insights": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "ModelInsightDailyMetric": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "failed_requests": {
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "model_group": {
+              "title": "Model Group",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "provider": {
+              "title": "Provider",
+              "type": "string"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "title": "Successful Requests",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "model_group",
+            "model",
+            "provider",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests",
+            "successful_requests",
+            "failed_requests",
+            "date"
+          ],
+          "title": "ModelInsightDailyMetric",
+          "type": "object"
+        },
+        "ModelInsightMetric": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "failed_requests": {
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "model_group": {
+              "title": "Model Group",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "provider": {
+              "title": "Provider",
+              "type": "string"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "title": "Successful Requests",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "model_group",
+            "model",
+            "provider",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests",
+            "successful_requests",
+            "failed_requests"
+          ],
+          "title": "ModelInsightMetric",
+          "type": "object"
+        },
+        "ModelInsightTaskSummary": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "leader": {
+              "title": "Leader",
+              "type": "string"
+            },
+            "provider": {
+              "title": "Provider",
+              "type": "string"
+            },
+            "share": {
+              "title": "Share",
+              "type": "number"
+            },
+            "task_type": {
+              "title": "Task Type",
+              "type": "string"
+            },
+            "value": {
+              "title": "Value",
+              "type": "number"
+            }
+          },
+          "required": [
+            "task_type",
+            "label",
+            "category",
+            "value",
+            "share",
+            "leader",
+            "provider"
+          ],
+          "title": "ModelInsightTaskSummary",
+          "type": "object"
+        },
+        "ModelInsightTasksResponse": {
+          "properties": {
+            "end_date": {
+              "title": "End Date",
+              "type": "string"
+            },
+            "start_date": {
+              "title": "Start Date",
+              "type": "string"
+            },
+            "tasks": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightTaskSummary"
+              },
+              "title": "Tasks",
+              "type": "array"
+            }
+          },
+          "required": [
+            "start_date",
+            "end_date",
+            "tasks"
+          ],
+          "title": "ModelInsightTasksResponse",
+          "type": "object"
+        },
+        "ModelInsightsResponse": {
+          "properties": {
+            "daily": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightDailyMetric"
+              },
+              "title": "Daily",
+              "type": "array"
+            },
+            "end_date": {
+              "title": "End Date",
+              "type": "string"
+            },
+            "start_date": {
+              "title": "Start Date",
+              "type": "string"
+            },
+            "top_models": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightMetric"
+              },
+              "title": "Top Models",
+              "type": "array"
+            }
+          },
+          "required": [
+            "start_date",
+            "end_date",
+            "daily",
+            "top_models"
+          ],
+          "title": "ModelInsightsResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/model-insights": {
+        "get": {
+          "operationId": "get_model_insights_model_insights_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD, defaults to 365 days ago",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to 365 days ago",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD, defaults to today",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to today",
+                "title": "End Date"
+              }
+            },
+            {
+              "description": "Metric the top models are ranked by",
+              "in": "query",
+              "name": "metric",
+              "required": false,
+              "schema": {
+                "default": "tokens",
+                "description": "Metric the top models are ranked by",
+                "enum": [
+                  "requests",
+                  "spend",
+                  "tokens"
+                ],
+                "title": "Metric",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelInsightsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Model Insights",
+          "tags": [
+            "model_insights"
+          ]
+        }
+      },
+      "/model-insights/tasks": {
+        "get": {
+          "operationId": "get_model_insight_tasks_model_insights_tasks_get",
+          "parameters": [
+            {
+              "description": "YYYY-MM-DD, defaults to 365 days ago",
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to 365 days ago",
+                "title": "Start Date"
+              }
+            },
+            {
+              "description": "YYYY-MM-DD, defaults to today",
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "YYYY-MM-DD, defaults to today",
+                "title": "End Date"
+              }
+            },
+            {
+              "description": "Metric task shares are computed from",
+              "in": "query",
+              "name": "metric",
+              "required": false,
+              "schema": {
+                "default": "spend",
+                "description": "Metric task shares are computed from",
+                "enum": [
+                  "requests",
+                  "spend",
+                  "tokens"
+                ],
+                "title": "Metric",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelInsightTasksResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Model Insight Tasks",
+          "tags": [
+            "model_insights"
           ]
         }
       }

@@ -1,3 +1,4 @@
+use crate::provider::LlmProviders;
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_llms::{
     aws_textract::ocr::{
@@ -13,8 +14,7 @@ use litellm_llms::{
         error::Error,
         handler::{self, CallHooks, OcrClient},
         transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrCredentialInputs, OcrDocument, OcrResponseFormat,
-            PreparedOcrRequest, ResolvedOcrCredentials,
+            BaseOcrConfig, OcrCredentialInputs, PreparedOcrRequest, ResolvedOcrCredentials,
         },
     },
     cohere::ocr::transformation::CohereParseConfig,
@@ -24,7 +24,7 @@ use litellm_llms::{
         deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
     },
 };
-use strum::{EnumString, IntoStaticStr};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 macro_rules! with_config {
     ($kind:expr, $config:ident => $body:expr) => {
@@ -93,16 +93,16 @@ pub(crate) enum OcrConfigKind {
 }
 
 impl OcrConfigKind {
-    pub(crate) const fn provider(self) -> OcrProvider {
+    pub(crate) const fn provider(self) -> LlmProviders {
         match self {
-            Self::AwsTextract | Self::AwsTextractAnalyze => OcrProvider::AwsTextract,
-            Self::Cohere => OcrProvider::Cohere,
-            Self::Mistral => OcrProvider::Mistral,
+            Self::AwsTextract | Self::AwsTextractAnalyze => LlmProviders::AwsTextract,
+            Self::Cohere => LlmProviders::Cohere,
+            Self::Mistral => LlmProviders::Mistral,
             Self::AzureAi | Self::AzureCohere | Self::AzureDocumentIntelligence => {
-                OcrProvider::AzureAi
+                LlmProviders::AzureAi
             }
-            Self::ReductoLegacy | Self::ReductoV3 => OcrProvider::Reducto,
-            Self::VertexAi | Self::VertexDeepSeek => OcrProvider::VertexAi,
+            Self::ReductoLegacy | Self::ReductoV3 => LlmProviders::Reducto,
+            Self::VertexAi | Self::VertexDeepSeek => LlmProviders::VertexAi,
         }
     }
 
@@ -133,9 +133,9 @@ impl OcrConfigKind {
         self,
         client: &OcrClient,
         request: &PreparedOcrRequest,
-        hooks: &dyn CallHooks<Error>,
+        interceptors: &dyn CallHooks<Error>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        with_config!(self, config => handler::ocr(&config, client, request, hooks).await)
+        with_config!(self, config => handler::ocr(&config, client, request, interceptors).await)
     }
 }
 
@@ -187,17 +187,6 @@ pub fn passthrough_response(
         .map(Some)
 }
 
-#[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq)]
-#[strum(serialize_all = "snake_case")]
-pub(crate) enum OcrProvider {
-    AwsTextract,
-    Cohere,
-    Mistral,
-    AzureAi,
-    Reducto,
-    VertexAi,
-}
-
 pub(crate) fn resolve_provider_config(
     model: &str,
     custom_llm_provider: Option<&str>,
@@ -205,37 +194,45 @@ pub(crate) fn resolve_provider_config(
     let provider =
         get_custom_llm_provider(model, custom_llm_provider).unwrap_or(CustomLlmProvider {
             model,
-            custom_llm_provider: OcrProvider::Mistral.into(),
+            custom_llm_provider: LlmProviders::Mistral.into(),
         });
-    let ocr_provider = provider
+    let llm_provider = provider
         .custom_llm_provider
-        .parse::<OcrProvider>()
+        .parse::<LlmProviders>()
         .map_err(|_| Error::InvalidProvider(provider.custom_llm_provider.to_string()))?;
-    let config = match ocr_provider {
-        OcrProvider::AwsTextract => match TextractOperation::from_model(provider.model)? {
+    let config = match llm_provider {
+        LlmProviders::AwsTextract => match TextractOperation::from_model(provider.model)? {
             TextractOperation::DetectDocumentText => OcrConfigKind::AwsTextract,
             TextractOperation::AnalyzeDocument => OcrConfigKind::AwsTextractAnalyze,
         },
-        OcrProvider::Cohere => OcrConfigKind::Cohere,
-        OcrProvider::Mistral => OcrConfigKind::Mistral,
-        OcrProvider::AzureAi if is_document_intelligence_model(provider.model) => {
+        LlmProviders::Cohere => OcrConfigKind::Cohere,
+        LlmProviders::Mistral => OcrConfigKind::Mistral,
+        LlmProviders::AzureAi if is_document_intelligence_model(provider.model) => {
             OcrConfigKind::AzureDocumentIntelligence
         }
-        OcrProvider::AzureAi
+        LlmProviders::AzureAi
             if provider.model.to_ascii_lowercase().contains("cohere")
                 && provider.model.to_ascii_lowercase().contains("parse") =>
         {
             OcrConfigKind::AzureCohere
         }
-        OcrProvider::AzureAi => OcrConfigKind::AzureAi,
-        OcrProvider::Reducto if provider.model.eq_ignore_ascii_case("parse-legacy") => {
+        LlmProviders::AzureAi => OcrConfigKind::AzureAi,
+        LlmProviders::Reducto if provider.model.eq_ignore_ascii_case("parse-legacy") => {
             OcrConfigKind::ReductoLegacy
         }
-        OcrProvider::Reducto => OcrConfigKind::ReductoV3,
-        OcrProvider::VertexAi if provider.model.to_ascii_lowercase().contains("deepseek") => {
+        LlmProviders::Reducto => OcrConfigKind::ReductoV3,
+        LlmProviders::VertexAi if provider.model.to_ascii_lowercase().contains("deepseek") => {
             OcrConfigKind::VertexDeepSeek
         }
-        OcrProvider::VertexAi => OcrConfigKind::VertexAi,
+        LlmProviders::VertexAi => OcrConfigKind::VertexAi,
+        LlmProviders::Anthropic
+        | LlmProviders::Bedrock
+        | LlmProviders::Openai
+        | LlmProviders::OpenaiLike => {
+            return Err(Error::InvalidProvider(
+                provider.custom_llm_provider.to_string(),
+            ));
+        }
     };
     Ok((provider.model.to_string(), config))
 }

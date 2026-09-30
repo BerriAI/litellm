@@ -2,99 +2,144 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
-use litellm_auth::AuthServices;
-use litellm_host::{
-    event::{MachineEvent, RawResponse, RequestContext, WireRequest},
-    hooks::RouteHooks,
-};
+use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
         streaming::{ByteStream, StreamDecoder, encode_anthropic_sse},
-        transformation::BaseAnthropicMessagesConfig,
+        transformation::BaseMessagesConfig,
     },
 };
-use litellm_tracing::{ByteChunk, debug};
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_llms_types::formats::messages::MessagesResponse;
+use litellm_tracing::ByteChunk;
 use serde_json::Value;
 
 use super::{
-    Error, MessagesResponse, common_utils::truncate_error_body, prepare::ProviderMessagesRequest,
+    Error, MessagesCallResponse, MessagesRoute, common_utils::truncate_error_body,
+    prepare::ProviderMessagesRequest,
 };
-use crate::{constants::MESSAGES_TIMEOUT_SECS, outbound::outbound_request};
+use crate::{constants::MESSAGES_TIMEOUT_SECS, context::CallContext, outbound::outbound_request};
 
-pub(super) async fn execute(
-    http: &litellm_http::Client,
-    auth: &AuthServices,
-    request: ProviderMessagesRequest,
-    hooks: &impl RouteHooks<Error>,
-) -> Result<MessagesResponse, Error> {
-    let ProviderMessagesRequest {
-        provider,
-        url,
-        body,
-        environment,
-        timeout,
-        api_key,
-    } = request;
-    let stream = body.params.stream == Some(true);
-    let context = RequestContext {
-        model: body.model.clone(),
-        custom_llm_provider: provider.as_str().to_string(),
-        optional_params: serde_json::to_value(&body.params).map_err(serialize_failure)?,
-        secret_fields: Vec::new(),
-        api_key,
-    };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
-    let wire = hooks
-        .before_send(
-            WireRequest {
-                url,
-                headers: authenticated.headers,
-                body: serde_json::to_value(&body).map_err(serialize_failure)?,
+pub(super) struct ProviderCall {
+    pub identity: ProviderIdentity,
+    pub wire: WireRequest,
+    provider: super::common_utils::MessagesProvider,
+    signer: Option<litellm_auth_aws::SigV4Signer>,
+    timeout: Option<Duration>,
+    stream: bool,
+}
+
+impl ProviderCall {
+    pub fn cacheable(&self) -> bool {
+        self.signer.is_none()
+    }
+}
+
+impl MessagesRoute {
+    pub(super) async fn prepare_outbound(
+        &self,
+        request: ProviderMessagesRequest,
+        context: &CallContext<'_, impl Interceptors<Error>>,
+    ) -> Result<ProviderCall, Error> {
+        let ProviderMessagesRequest {
+            provider,
+            url,
+            body,
+            environment,
+            timeout,
+            api_key,
+        } = request;
+        let request_context = RequestContext {
+            model: body.model.clone(),
+            custom_llm_provider: provider.as_str().to_string(),
+            optional_params: serde_json::to_value(&body.params).map_err(serialize_failure)?,
+            secret_fields: Vec::new(),
+            api_key,
+        };
+        let authenticated =
+            resolve_auth(&self.auth, environment, &|key| std::env::var(key).ok()).await?;
+        let identity = ProviderIdentity {
+            model: request_context.model.clone(),
+            provider: request_context.custom_llm_provider.clone(),
+        };
+        let wire = context
+            .interceptors
+            .before_provider_request(
+                WireRequest {
+                    url,
+                    headers: authenticated.headers,
+                    body: serde_json::to_value(&body).map_err(serialize_failure)?,
+                },
+                request_context,
+            )
+            .await?;
+        let stream = match wire.body.get("stream") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(stream)) => *stream,
+            Some(value) => {
+                return Err(Error::InvalidRequest(
+                    litellm_llms::ErrorDetail::InvalidValue {
+                        field: "stream",
+                        expected: "a boolean",
+                        actual: value.clone(),
+                    },
+                ));
+            }
+        };
+        Ok(ProviderCall {
+            identity,
+            wire,
+            provider,
+            signer: authenticated.signer,
+            timeout,
+            stream,
+        })
+    }
+
+    pub(super) async fn call_provider(
+        &self,
+        request: ProviderCall,
+        context: &CallContext<'_, impl Interceptors<Error>>,
+    ) -> Result<MessagesCallResponse, Error> {
+        let ProviderCall {
+            identity,
+            wire,
+            provider,
+            signer,
+            timeout,
+            stream,
+        } = request;
+        let provider_name = provider.as_str();
+        log_request_body(provider_name, stream, &wire.body);
+        let response = send(
+            &self.http,
+            Authenticated {
+                headers: wire.headers,
+                signer,
             },
-            context,
+            &wire.url,
+            &wire.body,
+            timeout,
         )
         .await?;
-    let provider_name = provider.as_str();
-    debug!(provider = provider_name, stream, body = %wire.body, "provider request");
-    let response = send(
-        http,
-        Authenticated {
-            headers: wire.headers,
-            signer: authenticated.signer,
-        },
-        &wire.url,
-        &wire.body,
-        timeout,
-    )
-    .await?;
-    debug!(
-        provider = provider_name,
-        status = response.status().as_u16(),
-        "provider response headers"
-    );
-    if !response.status().is_success() {
-        return Err(provider_error(response).await);
+        if !response.status().is_success() {
+            return Err(provider_error(response).await);
+        }
+        let config = provider.config();
+        if stream {
+            return Ok(streaming_response(
+                response,
+                config.stream_decoder(),
+                provider_name,
+            ));
+        }
+        let text = response.text().await.map_err(network)?;
+        log_response_body(&text);
+        context.response_received(&text).await?;
+        decode_response(config, &identity.model, &text)
+            .map(|message| MessagesCallResponse::Complete(Box::new(message)))
     }
-    let config = provider.config();
-    if stream {
-        return Ok(streaming_response(
-            response,
-            config.stream_decoder(),
-            provider_name,
-        ));
-    }
-    let text = response.text().await.map_err(network)?;
-    debug!(body = text.as_str(), "provider response body");
-    hooks
-        .emit(MachineEvent::ResponseReceived {
-            raw: RawResponse { body: text.clone() },
-        })
-        .await?;
-    decode_response(config, &body.model, &text)
-        .map(|message| MessagesResponse::Message(Box::new(message)))
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -121,14 +166,14 @@ async fn send(
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
-    request.send(http).await.map_err(network)
+    crate::outbound::send(request, http).await.map_err(network)
 }
 
 async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
     match response.text().await {
         Ok(text) => {
-            litellm_tracing::debug!(status, body = text.as_str(), "provider error body");
+            log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
                 body: truncate_error_body(&text),
@@ -139,10 +184,10 @@ async fn provider_error(response: reqwest::Response) -> Error {
 }
 
 fn decode_response(
-    config: &dyn BaseAnthropicMessagesConfig,
+    config: &dyn BaseMessagesConfig,
     model: &str,
     text: &str,
-) -> Result<AnthropicMessagesResponse, Error> {
+) -> Result<MessagesResponse, Error> {
     let response = serde_json::from_str(text).map_err(|err| {
         Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
             "messages response JSON",
@@ -158,7 +203,7 @@ fn streaming_response(
     response: reqwest::Response,
     decoder: Option<StreamDecoder>,
     provider: &'static str,
-) -> MessagesResponse {
+) -> MessagesCallResponse {
     let headers = response
         .headers()
         .iter()
@@ -175,7 +220,10 @@ fn streaming_response(
         .boxed(),
         Some(decode) => decoded_chunks(response, decode, provider),
     };
-    MessagesResponse::Stream { headers, chunks }
+    MessagesCallResponse::Stream {
+        head: super::route::MessagesStreamHead { headers },
+        chunks,
+    }
 }
 
 fn decoded_chunks(
@@ -199,9 +247,21 @@ fn decoded_chunks(
     .boxed()
 }
 
-fn log_chunk(provider: &str, stage: &str, data: &Bytes) {
+fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
+    tracing::debug!(provider, stream, body = %body, "provider request");
+}
+
+fn log_response_body(body: &str) {
+    tracing::debug!(body, "provider response body");
+}
+
+fn log_error_body(status: u16, body: &str) {
+    tracing::debug!(status, body, "provider error body");
+}
+
+fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {
     let chunk = ByteChunk::new(data);
-    debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
+    tracing::debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
 }
 
 #[cfg(test)]
@@ -217,6 +277,7 @@ mod tests {
         "data: {\"type\":\"ping\"}\n\n",
         Some("event: ping\ndata: {\"type\":\"ping\"}\n\n")
     )]
+    #[rstest::rstest]
     #[case::invalid_event("data: invalid\n\ndata: {\"type\":\"ping\"}\n\n", None)]
     #[tokio::test]
     async fn decoded_streams_encode_events_and_stop_at_the_first_error(
@@ -233,7 +294,7 @@ mod tests {
             .send()
             .await
             .unwrap();
-        let MessagesResponse::Stream { mut chunks, .. } =
+        let MessagesCallResponse::Stream { mut chunks, .. } =
             streaming_response(response, Some(anthropic_sse_event_stream), "test")
         else {
             panic!("a streaming response returns chunks");

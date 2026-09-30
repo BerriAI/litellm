@@ -1,17 +1,23 @@
 import json
 import queue
+import threading
 import uuid
-from urllib.parse import parse_qs, urlsplit
-from typing import Final, Literal
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Final, Literal
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
-
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import McpPeer, call_tool, mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
+from pydantic import TypeAdapter
+
+_Upstream = Callable[[Request], Reply]
 
 
 @pytest.mark.covers("other.mcp.oauth.discovery_cannot_erase_configured_authorization_endpoint")
@@ -102,6 +108,129 @@ def test_partial_discovery_and_unrelated_edit_keep_actual_authorization_destinat
                     "PUT", "/v1/mcp/server", {"server_id": identity, "server_name": alias + "renamed"}
                 )
                 assert updated.status_code == 202, updated.text
+
+
+@dataclass(frozen=True, slots=True)
+class _Hold:
+    armed: threading.Event = field(default_factory=threading.Event)
+    released: threading.Event = field(default_factory=threading.Event)
+
+
+def _idp_upstream(origin: Callable[[], str], moved: threading.Event, hold: _Hold | None = None) -> _Upstream:
+    def issuer() -> str:
+        return origin() + ("/idp-after" if moved.is_set() else "/idp-before")
+
+    def respond(request: Request) -> Reply:
+        if "oauth-authorization-server" in request.target or "openid-configuration" in request.target:
+            current: Final = issuer()
+            return Reply(
+                body=json.dumps(
+                    {
+                        "issuer": current,
+                        "authorization_endpoint": current + "/authorize",
+                        "token_endpoint": current + "/token",
+                    }
+                ).encode()
+            )
+        if request.target.startswith("/.well-known/oauth-protected-resource"):
+            body: Final = json.dumps({"resource": origin() + "/mcp", "authorization_servers": [issuer()]}).encode()
+            if hold is not None and hold.armed.is_set():
+                assert hold.released.wait(timeout=15), "the held upstream metadata reply was never released"
+            return Reply(body=body)
+        return Reply(status=404, body=b'{"error":"unexpected"}')
+
+    return respond
+
+
+def _register_pass_through(scenario: Scenario, wire: Wire, alias: str) -> str:
+    return register_mcp(scenario, McpPeer(wire.url + "/mcp", queue.Queue()), alias, auth_type="true_passthrough")
+
+
+def _wire_requests(wire: Wire, seen: list[Request]) -> Callable[[], tuple[Request, ...]]:
+    def observed() -> tuple[Request, ...]:
+        seen.extend(wire.drain())
+        return tuple(seen)
+
+    return observed
+
+
+def _registration_discovery_settled(requests: tuple[Request, ...]) -> bool:
+    return any(
+        "oauth-authorization-server" in item.target or "openid-configuration" in item.target for item in requests
+    )
+
+
+def _advertised_authorization_servers(gateway: Gateway, alias: str) -> tuple[str, ...]:
+    response: Final = gateway.client.get(f"/.well-known/oauth-protected-resource/{alias}/mcp")
+    assert response.status_code == 200, response.text
+    return tuple(TypeAdapter(list[str]).validate_python(response.json()["authorization_servers"]))
+
+
+def _eventually_advertises(gateway: Gateway, alias: str, issuer: str) -> None:
+    eventually(
+        lambda: gateway.client.get(f"/.well-known/oauth-protected-resource/{alias}/mcp"),
+        lambda response: response.status_code == 200 and response.json()["authorization_servers"] == [issuer],
+        seconds=40,
+    )
+
+
+def test_saving_a_pass_through_server_refetches_its_upstream_oauth_metadata(gateway: Gateway) -> None:
+    moved: Final = threading.Event()
+    with wire_server(_idp_upstream(lambda: wire.url, moved)) as wire, gateway.scenario() as scenario:
+        alias: Final = "pt" + uuid.uuid4().hex[:8]
+        identity: Final = _register_pass_through(scenario, wire, alias)
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-before",)
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-before",)
+        moved.set()
+        wire.drain()
+        saved: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "IdP moved"})
+        assert saved.status_code == 202, saved.text
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-after",)
+        assert any(request.target.startswith("/.well-known/oauth-protected-resource") for request in wire.drain()), (
+            "the save must send protected-resource discovery back to the upstream"
+        )
+
+
+def test_peer_worker_stops_advertising_the_old_idp_after_a_save_on_another_worker(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    moved: Final = threading.Event()
+    with wire_server(_idp_upstream(lambda: wire.url, moved)) as wire, gateway.scenario() as scenario:
+        alias: Final = "pt" + uuid.uuid4().hex[:8]
+        identity: Final = _register_pass_through(scenario, wire, alias)
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-before",)
+        _eventually_advertises(peer, alias, wire.url + "/idp-before")
+        moved.set()
+        saved: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "IdP moved"})
+        assert saved.status_code == 202, saved.text
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-after",)
+        _eventually_advertises(peer, alias, wire.url + "/idp-after")
+
+
+def test_metadata_fetched_before_a_save_cannot_repopulate_the_cache_after_it(gateway: Gateway) -> None:
+    moved: Final = threading.Event()
+    hold: Final = _Hold()
+    with (
+        wire_server(_idp_upstream(lambda: wire.url, moved, hold)) as wire,
+        gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        alias: Final = "pt" + uuid.uuid4().hex[:8]
+        identity: Final = _register_pass_through(scenario, wire, alias)
+        seen: Final[list[Request]] = []
+        observed: Final = _wire_requests(wire, seen)
+        eventually(observed, _registration_discovery_settled, seconds=10)
+        settled: Final = len(seen)
+        hold.armed.set()
+        stale: Final = pool.submit(_advertised_authorization_servers, gateway, alias)
+        eventually(observed, lambda requests: len(requests) > settled, seconds=10)
+        assert seen[settled].target.startswith("/.well-known/oauth-protected-resource"), seen[settled:]
+        moved.set()
+        saved: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "IdP moved"})
+        assert saved.status_code == 202, saved.text
+        hold.released.set()
+        assert stale.result(timeout=30) == (wire.url + "/idp-before",)
+        assert _advertised_authorization_servers(gateway, alias) == (wire.url + "/idp-after",)
 
 
 @pytest.mark.covers("other.mcp.oauth.same_url_credentials_are_isolated_by_user_and_server")

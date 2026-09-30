@@ -5043,6 +5043,7 @@ class TestRouterPreRoutingAliasOverrides:
                         "model": "auto_router/complexity_router",
                         "input_cost_per_token": 0.0,
                         "output_cost_per_token": 0.0,
+                        "cost_per_second": 0.0,
                         "input_cost_per_second": 0.0,
                         "drop_params": True,
                         "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
@@ -5064,7 +5065,12 @@ class TestRouterPreRoutingAliasOverrides:
         assert result is not None
         # Non-pricing alias params still carry over.
         assert request_kwargs["drop_params"] is True
-        for field in ("input_cost_per_token", "output_cost_per_token", "input_cost_per_second"):
+        for field in (
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "cost_per_second",
+            "input_cost_per_second",
+        ):
             assert field not in request_kwargs
 
     @pytest.mark.asyncio
