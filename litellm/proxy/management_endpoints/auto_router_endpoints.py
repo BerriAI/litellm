@@ -542,9 +542,10 @@ async def preview_auto_router_routing(
             },
         )
     resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
-    reject_non_admin_jev_secret_reference(
-        resolved.complexity_router_config.model_dump(exclude_none=True), user_api_key_dict.user_role
-    )
+    if data.saved_model_id is None:
+        reject_non_admin_jev_secret_reference(
+            resolved.complexity_router_config.model_dump(exclude_none=True), user_api_key_dict.user_role
+        )
     actor: Final = (
         await _authorize_member_dry_run_config(
             config=resolved.complexity_router_config.model_dump(exclude_none=True),

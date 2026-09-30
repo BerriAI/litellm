@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -122,6 +122,39 @@ async def test_team_admin_cannot_save_jev_server_secret_reference(operation: str
             incoming_model_params=incoming,
         )
     assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_team_admin_can_patch_unrelated_field_on_admin_configured_jev_router() -> None:
+    deployment = Deployment.model_validate(
+        {
+            "model_name": "team-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": "jev",
+                    "tiers": {"SIMPLE": "allowed"},
+                    "jev_classifier_config": {
+                        "api_key": "os.environ/ADMIN_CONFIGURED_KEY",
+                        "api_base": "https://admin-configured.example",
+                    },
+                },
+            },
+            "model_info": {"team_id": "team-a"},
+        }
+    )
+    prisma = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    with pytest.raises(HTTPException) as denied:
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=deployment,
+            user_api_key_dict=_actor(user_role=LitellmUserRoles.TEAM),
+            prisma_client=prisma,
+            premium_user=True,
+            member_operation="update",
+            incoming_model_params=updateDeployment.model_validate({"litellm_params": {"api_key": "new-key"}}),
+        )
+    assert denied.value.status_code == 400
 
 
 @pytest.fixture

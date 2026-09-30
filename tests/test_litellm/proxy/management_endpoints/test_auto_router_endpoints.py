@@ -3226,6 +3226,41 @@ async def test_non_admin_jev_secret_reference_is_rejected_before_routing(
 
 
 @pytest.mark.asyncio
+async def test_team_admin_can_preview_saved_admin_jev_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    class PreviewReached(Exception):
+        pass
+
+    monkeypatch.setattr(auto_router_endpoints, "_authorize_router_dry_run", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        auto_router_endpoints, "_authorize_models_this_test_can_call", AsyncMock(side_effect=PreviewReached)
+    )
+    reject = MagicMock(side_effect=AssertionError("saved configuration was treated as caller input"))
+    monkeypatch.setattr(auto_router_endpoints, "reject_non_admin_jev_secret_reference", reject)
+    saved = AutoRouterRoutingTestRequest.model_validate(
+        {
+            "prompt": "route this",
+            "team_id": "team-a",
+            "saved_model_id": "saved-router",
+            "complexity_router_config": {
+                "tiers": TIERS,
+                "classifier_type": "jev",
+                "jev_classifier_config": {
+                    "api_key": "os.environ/ADMIN_CONFIGURED_KEY",
+                    "api_base": "https://admin-configured.example",
+                },
+            },
+        }
+    )
+    monkeypatch.setattr(auto_router_endpoints, "_resolve_saved_routing_test", AsyncMock(return_value=saved))
+    actor = UserAPIKeyAuth(user_role=LitellmUserRoles.TEAM, api_key="sk-team", user_id="owner")
+
+    with pytest.raises(PreviewReached):
+        await preview_auto_router_routing(saved, actor, ROUTING_HTTP_REQUEST)
+    reject.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["allowed", "opt-out", "limited-key"])
 async def test_member_preview_and_validation_follow_team_opt_in(monkeypatch: pytest.MonkeyPatch, access: str) -> None:
     from litellm.proxy import proxy_server

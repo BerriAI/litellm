@@ -2118,9 +2118,9 @@ class ModelManagementAuthChecks:
                 if incoming_model_params is not None
                 else model_params.litellm_params
             )
-            existing_params = model_params.litellm_params if member_operation == "update" else None
             reject_non_admin_jev_secret_reference(
-                _effective_complexity_router_config(incoming_params, existing_params), user_api_key_dict.user_role
+                incoming_params.complexity_router_config if incoming_params is not None else None,
+                user_api_key_dict.user_role,
             )
         ## Check team model auth
         if model_params.model_info.team_id is not None:
