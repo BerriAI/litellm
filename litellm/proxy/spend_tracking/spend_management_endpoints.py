@@ -2444,7 +2444,7 @@ def _build_spend_log_search_condition(
         f"(request_id = {raw} OR ("
         f"\"startTime\" >= ({window_start}::timestamptz AT TIME ZONE 'UTC') "
         f"AND \"startTime\" <= ({window_end}::timestamptz AT TIME ZONE 'UTC') "
-        f'AND (api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
+        f'AND (litellm_call_id = {raw} OR api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
         f"OR session_id = {raw} OR model_id = {raw})))"
     )
     return _SpendLogSearchCondition(sql=sql, params=(search, start_date, end_date))
@@ -2557,7 +2557,7 @@ async def ui_view_spend_logs(
     search: str | None = fastapi.Query(
         default=None,
         description=(
-            "Match a log whose request_id, api_key (hash), team_id, user, end_user, "
+            "Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, "
             "session_id, or model_id equals this value. request_id matches across all time; the other columns "
             "match inside start_date/end_date, which stay required"
         ),

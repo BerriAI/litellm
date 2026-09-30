@@ -57,7 +57,7 @@ def _filter_logs_by_date_range(logs, where):
 _SEARCH_CLAUSE_RE = re.compile(
     r'\(request_id = \$(\d+) OR \("startTime" >= \(\$(\d+)::timestamptz AT TIME ZONE \'UTC\'\) '
     r'AND "startTime" <= \(\$(\d+)::timestamptz AT TIME ZONE \'UTC\'\) '
-    r'AND \(api_key = \$\1 OR team_id = \$\1 OR "user" = \$\1 OR end_user = \$\1 '
+    r'AND \(litellm_call_id = \$\1 OR api_key = \$\1 OR team_id = \$\1 OR "user" = \$\1 OR end_user = \$\1 '
     r"OR session_id = \$\1 OR model_id = \$\1\)\)\)"
 )
 
@@ -68,7 +68,7 @@ def _matches_spend_log_search(log, search):
         return True
     if not _filter_logs_by_date_range([log], {"startTime": {"gte": search["gte"], "lte": search["lte"]}}):
         return False
-    columns = ("api_key", "team_id", "user", "end_user", "session_id", "model_id")
+    columns = ("litellm_call_id", "api_key", "team_id", "user", "end_user", "session_id", "model_id")
     return any(log.get(col) == search["value"] for col in columns)
 
 
@@ -2986,7 +2986,7 @@ def test_build_spend_log_search_condition_windows_every_branch_except_request_id
     assert condition.sql == (
         "(request_id = $3 OR (\"startTime\" >= ($4::timestamptz AT TIME ZONE 'UTC') "
         "AND \"startTime\" <= ($5::timestamptz AT TIME ZONE 'UTC') "
-        'AND (api_key = $3 OR team_id = $3 OR "user" = $3 OR end_user = $3 OR session_id = $3 OR model_id = $3)))'
+        'AND (litellm_call_id = $3 OR api_key = $3 OR team_id = $3 OR "user" = $3 OR end_user = $3 OR session_id = $3 OR model_id = $3)))'
     )
     assert condition.params == ("key-hash-7", start, end)
 
@@ -3012,6 +3012,8 @@ def _search_fixture_logs(today):
         {**base, "request_id": "req-user", "user": "user-7", "startTime": recent},
         {**base, "request_id": "req-end-user", "end_user": "cust-7", "startTime": recent},
         {**base, "request_id": "req-model", "model_id": "mdl-7", "startTime": recent},
+        {**base, "request_id": "chatcmpl-x", "litellm_call_id": "call-recent", "startTime": recent},
+        {**base, "request_id": "chatcmpl-old", "litellm_call_id": "call-old", "startTime": old},
     ]
 
 
@@ -3046,6 +3048,8 @@ def _five_day_window(today):
         ("user-7", {"req-user"}),
         ("cust-7", {"req-end-user"}),
         ("mdl-7", {"req-model"}),
+        ("call-recent", {"chatcmpl-x"}),
+        ("call-old", set()),
         ("no-such-id", set()),
     ],
 )
