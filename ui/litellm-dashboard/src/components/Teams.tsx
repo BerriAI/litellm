@@ -51,6 +51,8 @@ import NumericalInput from "./shared/numerical_input";
 import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
+import { searchToolPermissionCopy } from "./search_tools/searchToolPermissionCopy";
+import { useDefaultSearchListDeny } from "@/app/(dashboard)/hooks/uiSettings/useDefaultSearchListDeny";
 import SkillSelector from "./skills/SkillSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -210,6 +212,7 @@ const getAdminOrganizations = (
 // @deprecated
 const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser = false }) => {
   const { data: organizationsData } = useOrganizations();
+  const searchToolCopy = searchToolPermissionCopy(useDefaultSearchListDeny());
   const organizations = organizationsData ?? null;
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
@@ -1190,10 +1193,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         control={form.control}
                         name="object_permission_search_tools"
                         className="mt-4"
-                        label={labelWithHint(
-                          "Allowed Search Tools",
-                          "Select which search tools this team can access. Leave empty to allow all search tools.",
-                        )}
+                        label={labelWithHint("Allowed Search Tools", searchToolCopy.hint)}
                         description="Restrict which configured search tools keys on this team may call."
                       >
                         {({ value, onChange }) => (
@@ -1201,7 +1201,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                             onChange={onChange}
                             value={value}
                             accessToken={accessToken || ""}
-                            placeholder="Select search tools (optional, empty = all allowed)"
+                            placeholder={searchToolCopy.placeholder}
                           />
                         )}
                       </FormField>

@@ -3137,6 +3137,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #12905)."
         ),
     )
+    default_search_list_deny: bool | None = Field(
+        None,
+        description=(
+            "If True, a key, team or user with no search tool grants is denied every search tool instead of "
+            "being allowed all of them. A team key uses its team's grants, a personal key uses its user's "
+            "grants, and any other non-empty key or user allowlist only narrows that. Proxy admins are exempt. "
+            "Defaults to False, where an empty search tool list allows every search tool."
+        ),
+    )
     user_url_validation: bool | None = Field(
         None,
         description=(

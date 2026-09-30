@@ -13,7 +13,13 @@ from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.types.utils import LlmProviders
 
 
@@ -584,6 +590,116 @@ async def test_execute_search_enforces_team_search_tool_permission(monkeypatch):
 
     mock_get_team_object.assert_awaited_once()
     mock_asearch.assert_not_awaited()
+
+
+def _single_search_tool_router(search_tool_name):
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": search_tool_name,
+            "litellm_params": {"search_provider": "tavily", "api_key": "fake-ui-key"},
+        }
+    ]
+    return router
+
+
+@pytest.mark.parametrize(
+    "general_settings, team_search_tools, expect_search",
+    [
+        ({}, [], True),
+        ({"default_search_list_deny": True}, [], False),
+        ({"default_search_list_deny": True}, None, False),
+        ({"default_search_list_deny": True}, ["team-search"], True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_execute_search_team_key_follows_default_search_list_deny(
+    monkeypatch, general_settings, team_search_tools, expect_search
+):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="team-search")
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        object_permission=(
+            None
+            if team_search_tools is None
+            else LiteLLM_ObjectPermissionTable(object_permission_id="op-team", search_tools=team_search_tools)
+        ),
+    )
+
+    monkeypatch.setattr(proxy_server, "llm_router", _single_search_tool_router("team-search"))
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", AsyncMock(return_value=team_object))
+    kwargs = {"metadata": {"user_api_key_auth": UserAPIKeyAuth(team_id="team-1")}}
+
+    if expect_search:
+        await logger._execute_search("what is litellm", kwargs=kwargs)
+        mock_asearch.assert_awaited_once()
+    else:
+        with pytest.raises(ProxyException):
+            await logger._execute_search("what is litellm", kwargs=kwargs)
+        mock_asearch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_search_key_without_grant_is_denied_under_default_search_list_deny(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"], search_tool_name="any-search")
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+
+    monkeypatch.setattr(proxy_server, "llm_router", _single_search_tool_router("any-search"))
+    monkeypatch.setattr(proxy_server, "general_settings", {"default_search_list_deny": True})
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    with pytest.raises(ProxyException):
+        await logger._execute_search(
+            "what is litellm",
+            kwargs={"metadata": {"user_api_key_auth": UserAPIKeyAuth()}},
+        )
+
+    mock_asearch.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_role, expect_search",
+    [
+        ({}, None, True),
+        ({"default_search_list_deny": False}, None, True),
+        ({"default_search_list_deny": True}, None, False),
+        ({"default_search_list_deny": True}, LitellmUserRoles.PROXY_ADMIN, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_execute_search_unregistered_fallback_follows_default_search_list_deny(
+    monkeypatch, general_settings, user_role, expect_search
+):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+    router = MagicMock()
+    router.search_tools = []
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+    kwargs = {"metadata": {"user_api_key_auth": UserAPIKeyAuth(user_id="user-1", user_role=user_role)}}
+
+    if expect_search:
+        await logger._execute_search("what is litellm", kwargs=kwargs)
+        assert mock_asearch.await_args.kwargs["search_provider"] == "perplexity"
+    else:
+        with pytest.raises(ProxyException) as exc_info:
+            await logger._execute_search("what is litellm", kwargs=kwargs)
+        assert exc_info.value.code == "403"
+        mock_asearch.assert_not_awaited()
 
 
 @pytest.mark.asyncio

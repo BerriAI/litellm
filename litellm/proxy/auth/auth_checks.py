@@ -14,6 +14,7 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias
 
@@ -5244,11 +5245,12 @@ def _search_tool_names_from_object_permission(
 
 def _can_object_call_search_tool(
     search_tool_name: str,
-    allowed_search_tools: list[str],
-    object_type: Literal["key", "team", "project"],
+    allowed_search_tools: Sequence[str],
+    object_type: Literal["key", "team", "project", "user"],
+    empty_allows_all: bool = True,
 ) -> Literal[True]:
     """
-    Check if an object (key/team/project) can access a specific search tool.
+    Check if an object (key/team/project/user) can access a specific search tool.
 
     Similar to _can_object_call_model but for search tools.
 
@@ -5256,6 +5258,7 @@ def _can_object_call_search_tool(
         search_tool_name: The search tool being requested
         allowed_search_tools: List of allowed search tool names for this object
         object_type: Type of object for error messaging
+        empty_allows_all: Whether an empty allowlist grants every search tool
 
     Returns:
         True if access is allowed
@@ -5263,18 +5266,20 @@ def _can_object_call_search_tool(
     Raises:
         ProxyException if access is denied
     """
-    # Empty list means all search tools are allowed
-    if not allowed_search_tools:
+    if not allowed_search_tools and empty_allows_all:
         return True
 
-    # Check if the search tool is in the allowlist
     if search_tool_name in allowed_search_tools:
         return True
 
-    # Access denied
     raise ProxyException(
-        message=f"{object_type.capitalize()} not allowed to access search tool: {search_tool_name}. "
-        f"Allowed search tools: {allowed_search_tools}",
+        message=(
+            f"{object_type.capitalize()} not allowed to access search tool: {search_tool_name}. "
+            f"Allowed search tools: {list(allowed_search_tools)}"
+            if allowed_search_tools
+            else f"{object_type.capitalize()} not allowed to access search tool: {search_tool_name}. "
+            "No search tools are granted and general_settings.default_search_list_deny is enabled"
+        ),
         type=ProxyErrorTypes.key_model_access_denied,
         param="search_tool_name",
         code=status.HTTP_403_FORBIDDEN,
@@ -5336,24 +5341,162 @@ async def can_team_call_search_tool(
     )
 
 
-async def can_user_view_search_tool(
+@dataclass(frozen=True)
+class SearchToolGrants:
+    """Search tool allowlists of every layer that scopes one caller.
+
+    ``team`` is None when the caller has no team and ``user`` is None when the user layer is not consulted.
+    Under ``default_deny`` the owner of the credential must grant the tool: the team for a team key, else the
+    user for a personal key, else the key itself. Every other non-empty allowlist only narrows that grant.
+    """
+
+    key: tuple[str, ...]
+    team: tuple[str, ...] | None
+    user: tuple[str, ...] | None
+    default_deny: bool
+
+
+UserObjectPermissionLookup: TypeAlias = Callable[[str, UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]]
+
+
+def check_search_tool_grants(search_tool_name: str, grants: SearchToolGrants) -> Literal[True]:
+    """Enforce ``grants`` for one search tool, raising a 403 ProxyException when it is not allowed."""
+    _can_object_call_search_tool(
+        search_tool_name=search_tool_name,
+        allowed_search_tools=grants.key,
+        object_type="key",
+        empty_allows_all=not (grants.default_deny and grants.team is None and grants.user is None),
+    )
+    if grants.team is not None:
+        _can_object_call_search_tool(
+            search_tool_name=search_tool_name,
+            allowed_search_tools=grants.team,
+            object_type="team",
+            empty_allows_all=not grants.default_deny,
+        )
+    if grants.user is not None:
+        _can_object_call_search_tool(
+            search_tool_name=search_tool_name,
+            allowed_search_tools=grants.user,
+            object_type="user",
+            empty_allows_all=not (grants.default_deny and grants.team is None),
+        )
+    return True
+
+
+async def get_user_object_permission(
+    user_id: str,
+    valid_token: UserAPIKeyAuth,
+) -> LiteLLM_ObjectPermissionTable | None:
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    try:
+        user_object: Final = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=valid_token.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except UserNotFoundError:
+        return None
+    if user_object is None or user_object.object_permission_id is None:
+        return None
+    object_permission: Final = await get_object_permission(
+        object_permission_id=user_object.object_permission_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=valid_token.parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if object_permission is None:
+        raise ProxyException(
+            message=f"Search tool grants of user {user_id} could not be loaded",
+            type=ProxyErrorTypes.no_db_connection,
+            param="search_tool_name",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return object_permission
+
+
+def _is_search_default_deny_applied(valid_token: UserAPIKeyAuth, general_settings: Mapping[str, object]) -> bool:
+    return (
+        general_settings.get("default_search_list_deny") is True
+        and valid_token.user_role != LitellmUserRoles.PROXY_ADMIN
+    )
+
+
+async def resolve_search_tool_grants(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    general_settings: Mapping[str, object],
+    lookup_user_object_permission: UserObjectPermissionLookup = get_user_object_permission,
+) -> SearchToolGrants:
+    """Collect the key, team and user search tool allowlists that scope ``valid_token``.
+
+    ``general_settings.default_search_list_deny`` turns a missing, null or empty grant into a denial for
+    every caller except a proxy admin. The user layer is only consulted in that mode.
+    """
+    default_deny: Final = _is_search_default_deny_applied(valid_token, general_settings)
+    user_id: Final = valid_token.user_id
+    return SearchToolGrants(
+        key=tuple(_search_tool_names_from_object_permission(valid_token.object_permission)),
+        team=(
+            None
+            if team_object is None
+            else tuple(_search_tool_names_from_object_permission(team_object.object_permission))
+        ),
+        user=(
+            tuple(_search_tool_names_from_object_permission(await lookup_user_object_permission(user_id, valid_token)))
+            if default_deny and user_id
+            else None
+        ),
+        default_deny=default_deny,
+    )
+
+
+async def can_caller_call_search_tool(
     search_tool_name: str,
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
-) -> bool:
-    """
-    Boolean variant of the key + team authorization enforced on /search, used to
-    scope /search_tools/list so a non-admin caller only sees tools it may invoke.
-    """
-    try:
-        await can_key_call_search_tool(
-            search_tool_name=search_tool_name,
+    general_settings: Mapping[str, object],
+    lookup_user_object_permission: UserObjectPermissionLookup = get_user_object_permission,
+) -> Literal[True]:
+    """Key, team and user search tool authorization shared by /search, web search interception and discovery."""
+    return check_search_tool_grants(
+        search_tool_name=search_tool_name,
+        grants=await resolve_search_tool_grants(
             valid_token=valid_token,
-        )
-        await can_team_call_search_tool(
-            search_tool_name=search_tool_name,
             team_object=team_object,
+            general_settings=general_settings,
+            lookup_user_object_permission=lookup_user_object_permission,
+        ),
+    )
+
+
+def check_unregistered_search_fallback(
+    valid_token: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+) -> Literal[True]:
+    if _is_search_default_deny_applied(valid_token, general_settings):
+        raise ProxyException(
+            message="No registered search tool is available and general_settings.default_search_list_deny is enabled",
+            type=ProxyErrorTypes.key_model_access_denied,
+            param="search_tool_name",
+            code=status.HTTP_403_FORBIDDEN,
         )
+    return True
+
+
+def can_grants_view_search_tool(search_tool_name: str, grants: SearchToolGrants) -> bool:
+    """Boolean variant of check_search_tool_grants used to scope /search_tools/list."""
+    try:
+        check_search_tool_grants(search_tool_name=search_tool_name, grants=grants)
     except ProxyException:
         return False
     return True

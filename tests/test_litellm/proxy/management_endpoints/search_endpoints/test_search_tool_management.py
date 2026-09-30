@@ -1148,3 +1148,99 @@ async def test_create_search_tool_survives_a_failing_router_refresh():
 
     assert response.status_code == 200
     assert response.json()["search_tool_name"] == "tavily-search"
+
+
+def _user_permission_lookup(search_tools: list[str] | None) -> AsyncMock:
+    return AsyncMock(
+        return_value=(
+            None
+            if search_tools is None
+            else LiteLLM_ObjectPermissionTable(object_permission_id="op-user", search_tools=search_tools)
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_search_tools, expected",
+    [
+        ({}, None, ["db-tool-1", "db-tool-2"]),
+        ({"default_search_list_deny": False}, [], ["db-tool-1", "db-tool-2"]),
+        ({"default_search_list_deny": True}, None, []),
+        ({"default_search_list_deny": True}, [], []),
+        ({"default_search_list_deny": True}, ["db-tool-2"], ["db-tool-2"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_personal_key_follows_default_search_list_deny(
+    general_settings, user_search_tools, expected
+):
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        _filter_visible_search_tools,
+    )
+
+    personal_key = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user")
+    team_lookup = AsyncMock()
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2"),
+        personal_key,
+        team_lookup,
+        _user_permission_lookup(user_search_tools),
+        general_settings,
+    )
+
+    assert [t["search_tool_name"] for t in visible] == expected
+    team_lookup.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "team_search_tools, expected",
+    [([], []), (["db-tool-1"], ["db-tool-1"])],
+)
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_team_key_needs_a_team_grant_under_default_search_list_deny(
+    team_search_tools, expected
+):
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        _filter_visible_search_tools,
+    )
+
+    team_member = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user", team_id="team-1")
+    team_lookup = AsyncMock(
+        return_value=LiteLLM_TeamTable(
+            team_id="team-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-team", search_tools=team_search_tools
+            ),
+        )
+    )
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2"),
+        team_member,
+        team_lookup,
+        _user_permission_lookup(["db-tool-1", "db-tool-2"]),
+        {"default_search_list_deny": True},
+    )
+
+    assert [t["search_tool_name"] for t in visible] == expected
+
+
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_admin_sees_every_tool_under_default_search_list_deny():
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        _filter_visible_search_tools,
+    )
+
+    user_lookup = _user_permission_lookup(None)
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2"),
+        UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        AsyncMock(),
+        user_lookup,
+        {"default_search_list_deny": True},
+    )
+
+    assert [t["search_tool_name"] for t in visible] == ["db-tool-1", "db-tool-2"]
+    user_lookup.assert_not_awaited()

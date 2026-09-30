@@ -765,6 +765,7 @@ export default function KeyInfoView({
               <Card className="block p-6">
                 <ObjectPermissionsView
                   objectPermission={currentKeyData.object_permission}
+                  searchToolScope="key"
                   variant="inline"
                   accessToken={accessToken}
                 />
@@ -1171,6 +1172,7 @@ export default function KeyInfoView({
 
                   <ObjectPermissionsView
                     objectPermission={currentKeyData.object_permission}
+                    searchToolScope="key"
                     variant="inline"
                     className="pt-4 border-t border-border"
                     accessToken={accessToken}

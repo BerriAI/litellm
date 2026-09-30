@@ -1491,3 +1491,255 @@ async def test_key_access_group_grants_model_when_get_access_object_raises():
     finally:
         for p in patches:
             p.stop()
+
+
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock as _MagicMock
+
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable as _ObjectPermission,
+    LitellmUserRoles as _Roles,
+    ProxyException as _ProxyException,
+)
+from litellm.proxy.auth.auth_checks import (
+    can_caller_call_search_tool,
+    get_user_object_permission,
+)
+from litellm.proxy.common_utils.user_api_key_cache import (
+    object_permission_cache_key,
+)
+
+_DENY_ON: Final = {"default_search_list_deny": True}
+_NO_USER_ROW: Final = "no-user-row"
+_SEARCH_TOOLS_NULL: Final = "search-tools-null"
+
+
+def _search_permission(search_tools):
+    return _ObjectPermission(object_permission_id="op", search_tools=search_tools)
+
+
+def _user_lookup(user_search_tools):
+    async def lookup(user_id, valid_token):
+        if user_search_tools == _NO_USER_ROW:
+            return None
+        if user_search_tools == _SEARCH_TOOLS_NULL:
+            return _search_permission(None)
+        return _search_permission(user_search_tools)
+
+    return lookup
+
+
+async def _search_tool_allowed(
+    search_tool_name,
+    general_settings,
+    key_tools=None,
+    team_tools=None,
+    has_team=False,
+    user_tools=_NO_USER_ROW,
+    user_id="user-1",
+    user_role=_Roles.INTERNAL_USER,
+):
+    valid_token = UserAPIKeyAuth(
+        user_id=user_id,
+        user_role=user_role,
+        team_id="team-1" if has_team else None,
+        object_permission=None if key_tools is None else _search_permission(key_tools),
+    )
+    team_object = (
+        LiteLLM_TeamTable(
+            team_id="team-1",
+            object_permission=None if team_tools is None else _search_permission(team_tools),
+        )
+        if has_team
+        else None
+    )
+    try:
+        await can_caller_call_search_tool(
+            search_tool_name=search_tool_name,
+            valid_token=valid_token,
+            team_object=team_object,
+            general_settings=general_settings,
+            lookup_user_object_permission=_user_lookup(user_tools),
+        )
+    except _ProxyException as e:
+        if e.code != "403":
+            raise
+        return False
+    return True
+
+
+@pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"default_search_list_deny": False}, {"default_search_list_deny": None}, {"default_search_list_deny": "true"}],
+    ids=["omitted", "false", "null", "string-true"],
+)
+@pytest.mark.parametrize(
+    "caller, expected",
+    [
+        (dict(), True),
+        (dict(key_tools=[]), True),
+        (dict(has_team=True), True),
+        (dict(has_team=True, team_tools=[]), True),
+        (dict(user_tools=[]), True),
+        (dict(user_tools=["search-b"]), True),
+        (dict(key_tools=["search-b"]), False),
+        (dict(has_team=True, team_tools=["search-b"]), False),
+        (dict(key_tools=["search-a"]), True),
+        (dict(has_team=True, team_tools=["search-a"]), True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_search_tool_access_is_unchanged_without_default_search_list_deny(general_settings, caller, expected):
+    assert await _search_tool_allowed("search-a", general_settings, **caller) is expected
+
+
+@pytest.mark.parametrize(
+    "caller, expected",
+    [
+        pytest.param(dict(), False, id="personal key, no user row"),
+        pytest.param(dict(user_tools=_SEARCH_TOOLS_NULL), False, id="personal key, user search_tools null"),
+        pytest.param(dict(user_tools=[]), False, id="personal key, user search_tools empty"),
+        pytest.param(dict(key_tools=[], user_tools=[]), False, id="personal key, key and user empty"),
+        pytest.param(dict(user_tools=["search-b"]), False, id="personal key, user grants another tool"),
+        pytest.param(dict(user_tools=["search-a"]), True, id="personal key, user grants the tool"),
+        pytest.param(dict(key_tools=["search-a"]), False, id="personal key, key grant cannot stand in for user"),
+        pytest.param(
+            dict(key_tools=["search-b"], user_tools=["search-a", "search-b"]),
+            False,
+            id="personal key, key allowlist narrows user grant",
+        ),
+        pytest.param(dict(has_team=True), False, id="team key, team object_permission missing"),
+        pytest.param(dict(has_team=True, team_tools=None), False, id="team key, team search_tools null"),
+        pytest.param(dict(has_team=True, team_tools=[]), False, id="team key, team search_tools empty"),
+        pytest.param(dict(has_team=True, team_tools=["search-a"]), True, id="team key, team grants the tool"),
+        pytest.param(dict(has_team=True, team_tools=["search-b"]), False, id="team key, team grants another tool"),
+        pytest.param(
+            dict(has_team=True, team_tools=[], user_tools=["search-a"]),
+            False,
+            id="team key, user grant cannot stand in for team",
+        ),
+        pytest.param(
+            dict(has_team=True, team_tools=[], key_tools=["search-a"]),
+            False,
+            id="team key, key grant cannot expand empty team",
+        ),
+        pytest.param(
+            dict(has_team=True, team_tools=["search-a"], user_tools=[]),
+            True,
+            id="team key, empty user list does not revoke team grant",
+        ),
+        pytest.param(
+            dict(has_team=True, team_tools=["search-a", "search-b"], user_tools=["search-b"]),
+            False,
+            id="team key, user allowlist narrows team grant",
+        ),
+        pytest.param(
+            dict(has_team=True, team_tools=["search-a", "search-b"], key_tools=["search-b"]),
+            False,
+            id="team key, key allowlist narrows team grant",
+        ),
+        pytest.param(
+            dict(has_team=True, team_tools=["search-a"], key_tools=["search-a"], user_tools=["search-a"]),
+            True,
+            id="team key, every layer grants the tool",
+        ),
+        pytest.param(dict(user_id=None), False, id="key without user or team, no grant"),
+        pytest.param(dict(user_id=None, key_tools=[]), False, id="key without user or team, empty grant"),
+        pytest.param(dict(user_id=None, key_tools=["search-a"]), True, id="key without user or team, key grants"),
+        pytest.param(dict(user_role=_Roles.PROXY_ADMIN), True, id="proxy admin is exempt"),
+        pytest.param(dict(user_role=_Roles.PROXY_ADMIN_VIEW_ONLY), False, id="view-only admin is not exempt"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_default_search_list_deny_requires_an_explicit_grant(caller, expected):
+    assert await _search_tool_allowed("search-a", _DENY_ON, **caller) is expected
+
+
+@pytest.mark.asyncio
+async def test_default_search_list_deny_reads_the_user_grant_on_every_call():
+    user_grants = [["search-a"], []]
+
+    async def lookup(user_id, valid_token):
+        return _search_permission(user_grants.pop(0))
+
+    valid_token = UserAPIKeyAuth(user_id="user-1", user_role=_Roles.INTERNAL_USER)
+    await can_caller_call_search_tool("search-a", valid_token, None, _DENY_ON, lookup)
+    with pytest.raises(_ProxyException):
+        await can_caller_call_search_tool("search-a", valid_token, None, _DENY_ON, lookup)
+    assert user_grants == []
+
+
+@pytest.mark.asyncio
+async def test_default_search_list_deny_does_not_look_up_the_user_when_off():
+    lookup = AsyncMock(return_value=_search_permission(["search-b"]))
+    valid_token = UserAPIKeyAuth(user_id="user-1", user_role=_Roles.INTERNAL_USER)
+
+    assert await can_caller_call_search_tool("search-a", valid_token, None, {}, lookup) is True
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_default_search_list_deny_propagates_a_user_lookup_failure():
+    lookup = AsyncMock(side_effect=RuntimeError("db down"))
+    valid_token = UserAPIKeyAuth(user_id="user-1", user_role=_Roles.INTERNAL_USER)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        await can_caller_call_search_tool("search-a", valid_token, None, _DENY_ON, lookup)
+
+
+def _cache_with(*entries):
+    cache = UserApiKeyCache()
+    for key, value in entries:
+        cache.set_cache(key=key, value=value)
+    return cache
+
+
+def _patch_user_permission_sources(monkeypatch, cache, prisma_client):
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_permission_returns_the_linked_row(monkeypatch):
+    user_row = LiteLLM_UserTable(user_id="user-1", object_permission_id="op-user")
+    permission = _ObjectPermission(object_permission_id="op-user", search_tools=["search-a"])
+    cache = _cache_with(("user-1", user_row), (object_permission_cache_key("op-user"), permission))
+    _patch_user_permission_sources(monkeypatch, cache, _MagicMock())
+
+    result = await get_user_object_permission("user-1", UserAPIKeyAuth(user_id="user-1"))
+
+    assert result is not None
+    assert result.search_tools == ["search-a"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_permission_is_none_for_a_user_without_a_link(monkeypatch):
+    cache = _cache_with(("user-1", LiteLLM_UserTable(user_id="user-1")))
+    _patch_user_permission_sources(monkeypatch, cache, _MagicMock())
+
+    assert await get_user_object_permission("user-1", UserAPIKeyAuth(user_id="user-1")) is None
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_permission_denies_when_the_linked_row_cannot_be_read(monkeypatch):
+    cache = _cache_with(("user-1", LiteLLM_UserTable(user_id="user-1", object_permission_id="op-gone")))
+    prisma_client = _MagicMock()
+    prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(side_effect=RuntimeError("db down"))
+    _patch_user_permission_sources(monkeypatch, cache, prisma_client)
+
+    with pytest.raises(_ProxyException) as exc_info:
+        await get_user_object_permission("user-1", UserAPIKeyAuth(user_id="user-1"))
+
+    assert exc_info.value.code == "503"
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_permission_is_none_for_an_unknown_user(monkeypatch):
+    prisma_client = _MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    _patch_user_permission_sources(monkeypatch, UserApiKeyCache(), prisma_client)
+
+    assert await get_user_object_permission("ghost", UserAPIKeyAuth(user_id="ghost")) is None
