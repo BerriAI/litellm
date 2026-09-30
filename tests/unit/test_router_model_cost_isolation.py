@@ -1053,6 +1053,55 @@ def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() 
         litellm.get_model_info.cache_clear()
 
 
+def test_router_completion_uses_backend_ultrafast_long_context_rates() -> None:
+    model_id: Final = "lit9058-tier-priced-long-context-deployment"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_LIT9058_TIER_BACKEND_KEY, _LIT9058_TIER_BACKEND_MODEL, model_id)
+    }
+    try:
+        _register_lit9058_tier_backend()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "lit9058-tier-priced-long-context",
+                    "litellm_params": {
+                        "model": _LIT9058_TIER_BACKEND_MODEL,
+                        "custom_llm_provider": "openai",
+                        "api_key": "sk-lit9058-not-used",
+                        "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+                        "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+                    },
+                    "model_info": {
+                        "id": model_id,
+                        "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+                        "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+                    },
+                }
+            ]
+        )
+
+        response: Final = router.completion(
+            model="lit9058-tier-priced-long-context",
+            messages=[{"role": "user", "content": "long context tiered pricing"}],
+            service_tier="ultrafast",
+            mock_response=litellm.ModelResponse(
+                model=_LIT9058_TIER_BACKEND_MODEL,
+                service_tier="ultrafast",
+                usage=litellm.Usage(prompt_tokens=300_000, completion_tokens=100, total_tokens=300_100),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            300_000 * _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_above_272k_tokens_ultrafast"]
+            + 100 * _LIT9058_TIER_BACKEND_ENTRY["output_cost_per_token_above_272k_tokens_ultrafast"]
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
 @pytest.mark.parametrize("ptu_enabled", (True, False))
 def test_ptu_service_tier_pricing_is_disabled_only_when_attribution_is_enabled(
     monkeypatch: pytest.MonkeyPatch, ptu_enabled: bool

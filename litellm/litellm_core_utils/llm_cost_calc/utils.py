@@ -666,13 +666,15 @@ def _get_token_base_cost(
 
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
-    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
-    # so that the threshold detection loop only processes standard keys.  The
-    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
+    # Standard thresholds and thresholds suffixed for this request's service tier both count.
+    tier_key_suffix: Final = _get_service_tier_cost_key("", service_tier)
     threshold_keys: Final = [
         k
         for k in model_info
-        if k.startswith("input_cost_per_token_above_") and not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES)
+        if k.startswith("input_cost_per_token_above_")
+        and (
+            not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES) or (tier_key_suffix != "" and k.endswith(tier_key_suffix))
+        )
     ]
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
