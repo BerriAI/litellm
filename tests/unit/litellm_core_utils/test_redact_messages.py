@@ -672,14 +672,21 @@ class TestPerformRedaction:
         from litellm.litellm_core_utils.redact_messages import (
             _redact_responses_api_output,
             _redact_responses_api_output_dict,
+            _redact_streaming_response,
         )
 
         _redact_responses_api_output(None)
         _redact_responses_api_output_dict(None, "redacted-by-litellm")
 
-        result = {"output": None}
-        redacted = perform_redaction({}, result)
-        assert redacted["output"] is None
+        # Test dictionary output: None
+        result_dict = {"output": None}
+        redacted_dict = perform_redaction({}, result_dict)
+        assert redacted_dict["output"] is None
+
+        # Test object/streaming response output: None
+        streaming_obj = SimpleNamespace(output=None)
+        _redact_streaming_response(streaming_obj)
+        assert streaming_obj.output is None
 
     def test_skips_non_dict_response_output_items(self):
         result = {
