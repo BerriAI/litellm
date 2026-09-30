@@ -248,7 +248,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
                 if OpenAIGPT5Config._is_reasoning_effort_level_explicitly_disabled(lookup_name, effort):
                     if drop_params or litellm.drop_params:
-                        remaining: Final = {key: value for key, value in reasoning.items() if key != "effort"}
+                        remaining: Final = {  # mutable-ok: outgoing JSON reasoning object with one key removed
+                            key: value for key, value in reasoning.items() if key != "effort"
+                        }
                         if remaining:
                             params["reasoning"] = remaining
                         else:
