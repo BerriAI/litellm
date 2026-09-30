@@ -4,7 +4,7 @@ imports its module only on the first request matching its path prefix,
 saving ~700 MB at idle for deployments that don't use these features.
 First hit pays the import cost (1-3 s for heavy modules); /openapi.json
 omits each feature's routes until the feature is warmed. Setting
-LITELLM_DISABLE_LAZY_ROUTES registers every feature while the app is built
+LITELLM_DISABLE_LAZY_ROUTES registers every feature at worker startup
 instead, so the route table is complete before the first request.
 """
 

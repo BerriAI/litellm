@@ -2,9 +2,9 @@
 
 By default optional feature routers (``LAZY_FEATURES``) are registered on the first
 request to their path prefix, so an operator inspecting the route table right after
-boot cannot see or gate them. With the flag set every feature is registered while the
-app is built, so ``GET /routes`` lists them before any feature request is served and
-the first feature request changes nothing.
+boot cannot see or gate them. With the flag set every feature is registered at worker
+startup, so ``GET /routes`` lists them before any feature request is served and the
+first feature request changes nothing.
 """
 
 from collections.abc import Mapping
