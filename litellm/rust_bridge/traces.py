@@ -51,6 +51,7 @@ class NativeTraces(Protocol):
         max_decompressed_bytes: int,
     ) -> list[DecodedSpan]: ...
 
+
 class QueryResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
     data: list[dict[str, JsonValue]]
