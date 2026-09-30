@@ -2,7 +2,7 @@ import asyncio
 import time
 from types import TracebackType
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -23,6 +23,9 @@ def local_model_cost_map(monkeypatch):
 
 class FakeLogging:
     def update_from_kwargs(self, **kwargs):
+        pass
+
+    def pre_call(self, **kwargs):
         pass
 
 
@@ -574,3 +577,33 @@ async def test_arealtime_keeps_gemini_live_on_the_vertex_realtime_websocket(monk
 async def test_realtime_health_check_names_the_batch_mode_for_chirp_models():
     with pytest.raises(ValueError, match="mode audio_transcription"):
         await realtime_main._realtime_health_check(model="chirp_3", custom_llm_provider="vertex_ai", api_key=None)
+
+
+@pytest.mark.parametrize(
+    ("client_query_params", "expected_backend_url"),
+    [
+        (
+            {"model": "my-transcribe-alias", "intent": "transcription"},
+            "wss://api.openai.com/v1/realtime?intent=transcription",
+        ),
+        (
+            {"model": "my-realtime-alias"},
+            "wss://api.openai.com/v1/realtime?model=gpt-live-transcribe",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_arealtime_openai_drops_model_from_the_upstream_url_only_for_transcription_sessions(
+    client_query_params, expected_backend_url
+):
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-live-transcribe",
+            websocket=AsyncMock(),
+            api_base="https://api.openai.com/",
+            api_key="fake-key",
+            litellm_logging_obj=FakeLogging(),
+            query_params=client_query_params,
+        )
+    assert connect.url == expected_backend_url
