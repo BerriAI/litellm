@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.oauth_server import AuthorizationServer, oauth_server
+from integration._support.wire import Reply, Request, wire_server
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -195,6 +197,34 @@ def test_token_exchange_without_a_subject_token_is_rejected_before_any_upstream_
         assert tool_calls(peer.drain()) == ()
         assert auth.token_requests() == ()
         _assert_subject_token_challenge(as_subject, alias)
+
+
+@pytest.mark.parametrize("status", (429, 408), ids=("throttled", "timed-out"))
+def test_a_throttled_token_exchange_is_an_outage_not_a_sign_in_challenge(gateway: Gateway, status: int) -> None:
+    def shedding_idp(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/token", request
+        return Reply(status=status, body=json.dumps({"error": "temporarily_unavailable"}).encode())
+
+    with mcp_peer() as peer, wire_server(shedding_idp) as idp, gateway.scenario() as scenario:
+        alias: Final = "te" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2_token_exchange",
+            token_exchange_endpoint=idp.url + "/token",
+            credentials={"client_id": "te-client", "client_secret": "te-secret"},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(
+            gateway, key, "server_mcp", alias, headers={"Authorization": "Bearer subject-" + uuid.uuid4().hex}
+        )
+        peer.drain()
+        response: Final = caller.rpc("tools/call", {"name": f"{alias}-add", "arguments": ADD})
+        assert response.status_code == 503, (response.status_code, response.text, dict(response.headers))
+        assert "www-authenticate" not in response.headers, dict(response.headers)
+        assert len(idp.drain()) == 1
+        assert tool_calls(peer.drain()) == ()
 
 
 def _assert_subject_token_challenge(response: httpx.Response, alias: str) -> None:
