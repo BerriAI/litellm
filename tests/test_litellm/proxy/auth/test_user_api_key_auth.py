@@ -9354,3 +9354,59 @@ async def test_admission_and_budget_reservation_read_the_key_spend_counter_with_
     ], "admission and reservation share one snapshot, and read-then-write callers go to Redis once it closes"
     assert redis.async_batch_get_cache.await_count == 1
     assert "spend:key:hashed" in redis.async_batch_get_cache.await_args.kwargs["key_list"]
+
+
+def test_identity_prefetch_keys_match_what_auth_reads_for_the_request():
+    from litellm.proxy.auth.user_api_key_auth import _identity_cache_keys
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        end_user_cache_key,
+        end_user_restricted_registry_cache_key,
+        model_access_group_registry_cache_key,
+    )
+    from litellm.proxy.utils import hash_token
+
+    assert _identity_cache_keys("sk-1234", end_user_id="eu-1", key_is_resolved=False) == (
+        hash_token("sk-1234"),
+        end_user_cache_key("eu-1"),
+        end_user_restricted_registry_cache_key(),
+        model_access_group_registry_cache_key(),
+    )
+    assert _identity_cache_keys("a" * 64, end_user_id=None, key_is_resolved=False) == (
+        hash_token("a" * 64),
+        model_access_group_registry_cache_key(),
+    )
+    master_key_keys = _identity_cache_keys("my-master-key", end_user_id=None, key_is_resolved=False)
+    assert master_key_keys == (hash_token("my-master-key"), model_access_group_registry_cache_key())
+    assert "my-master-key" not in master_key_keys, "a bearer that is not an sk- key must not be sent to Redis as is"
+    assert _identity_cache_keys("sk-1234", end_user_id=None, key_is_resolved=True) == (
+        model_access_group_registry_cache_key(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_cannot_enter_checks_as_an_identity_managed_actor(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import user_api_key_auth as auth_module
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    target: Final = AgentResponse(
+        agent_id="bound", agent_name="Bound", agent_card_params={}, identity_managed=True,
+        identity=AgentIdentityBinding(
+            agent_id="bound", provider="microsoft_entra", tenant_id="tenant", client_id="client", issuer="issuer", revision="current"
+        ),
+    )
+    client: Final = MagicMock()
+    client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    checks: Final = AsyncMock()
+    monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock(return_value=None)))
+    data: Final = {"model": "allowed", "messages": [{"role": "user", "content": "hello"}]}
+    request: Final = _alias_request("/v1/chat/completions", data)
+    with pytest.raises(ProxyException):
+        await auth_module._authorize_authenticated_request(
+            UserAPIKeyAuth(agent_id="bound"), request, data, "/v1/chat/completions", "sk-test"
+        )
+    checks.assert_not_awaited()

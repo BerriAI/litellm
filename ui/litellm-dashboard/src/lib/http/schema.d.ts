@@ -24285,6 +24285,45 @@ export interface components {
             /** Uri */
             uri?: string;
         };
+        /** AgentIdentityBinding */
+        AgentIdentityBinding: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Agent Id */
+            agent_id: string;
+            /** Client Id */
+            client_id: string;
+            /** Issuer */
+            issuer: string;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Required Roles
+             * @default []
+             */
+            required_roles: string[];
+            /**
+             * Required Scopes
+             * @default [
+             *       "user_impersonation"
+             *     ]
+             */
+            required_scopes: string[];
+            /** Revision */
+            revision: string;
+            /** Service Principal Id */
+            service_principal_id?: string | null;
+            /** Tenant Id */
+            tenant_id: string;
+        };
         /**
          * AgentInterface
          * @description Declares a combination of a target URL and a transport protocol.
@@ -24440,8 +24479,30 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Mode
+             * @default autonomous
+             * @enum {string}
+             */
+            execution_mode: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["AgentIdentityBinding"] | null;
+            /**
+             * Identity Managed
+             * @default false
+             */
+            identity_managed: boolean;
+            /**
+             * Jwt Auth Configured
+             * @default false
+             */
+            jwt_auth_configured: boolean;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
@@ -32969,6 +33030,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -32997,6 +33060,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -33081,6 +33146,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -33208,6 +33275,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -46800,6 +46869,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -46828,6 +46899,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -46912,6 +46985,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -47039,6 +47114,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -66054,7 +66131,7 @@ export interface operations {
                 group_by_session?: boolean;
                 /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
                 session_cursor?: string | null;
-                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
             };
             header?: never;
@@ -66174,7 +66251,7 @@ export interface operations {
                 group_by_session?: boolean;
                 /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
                 session_cursor?: string | null;
-                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
             };
             header?: never;

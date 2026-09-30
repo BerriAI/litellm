@@ -24,7 +24,7 @@ from litellm.types.caching import RedisPipelineIncrementOperation
 
 from .base_cache import BaseCache
 from .in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
-from .redis_batch import BatchResult, RedisBatch, active_post_call_redis_batch
+from .redis_batch import BatchResult, RedisBatch, active_post_call_redis_batch, active_request_redis_batch
 from .redis_cache import RedisCache, RedisCircuitBreakerOpenError, log_redis_failure
 
 if TYPE_CHECKING:
@@ -279,6 +279,9 @@ class DualCache(BaseCache):
                     result = in_memory_result
 
             if result is None and self.redis_cache is not None and local_only is False:
+                request_batch: Final = active_request_redis_batch(self.redis_cache)
+                if request_batch is not None and request_batch.read_as_missing(key):
+                    return None
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result: Final = await self.redis_cache.async_get_cache(key, parent_otel_span=parent_otel_span)
 
@@ -322,6 +325,20 @@ class DualCache(BaseCache):
                     self.last_redis_batch_access_time[key] = current_time
 
         return sublist_keys, previous_access_times
+
+    def reserve_redis_batch_reads(self, keys: Sequence[str]) -> tuple[list[str], dict[str, float | None]]:
+        """Reserve the memory-missed keys whose throttled Redis reads are due, as a batch read would."""
+        if self.redis_cache is None:
+            return [], {}  # mutable-ok: API contract returns an empty list and dictionary
+        key_list: Final = list(keys)  # mutable-ok: batch_get_cache takes a list
+        memory: Final = self.in_memory_cache
+        in_memory_result: Final = (
+            None
+            if memory is None  # pyright: ignore[reportUnnecessaryComparison]  # handle an absent in-memory tier
+            else memory.batch_get_cache(key_list)
+        )
+        result: Final = in_memory_result if in_memory_result is not None else tuple(None for _ in key_list)
+        return self._reserve_redis_batch_keys(time.time(), key_list, result)
 
     def _rollback_redis_batch_key_reservations(self, previous_access_times: dict[str, float | None]) -> None:
         with self._last_redis_batch_access_time_lock:
@@ -502,12 +519,29 @@ class DualCache(BaseCache):
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
             )
 
+    async def async_set_cache_pre_call(self, key: str, value: object, ttl: float | None) -> BatchResult[None] | None:
+        """Memory now, the Redis SET on the request's pipeline, sent with the next read any caller awaits; None
+        when no pipeline is open, so the caller takes its direct path."""
+        batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
+        return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
+
     async def async_set_cache_post_call(self, key: str, value: object, ttl: float | None) -> BatchResult[None] | None:
         """Memory now, the Redis SET on the request's post-call pipeline; None when no pipeline is open, so the
         caller takes its direct path."""
         batch: Final = None if self.redis_cache is None else active_post_call_redis_batch(self.redis_cache)
+        return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
+
+    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
+        """Memory now, the Redis DEL on the request's pipeline; None when no pipeline is open, so the caller
+        takes its direct path."""
+        batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
         if batch is None:
             return None
+        if self.in_memory_cache is not None:
+            self.in_memory_cache.delete_cache(key)
+        return batch.delete(key)
+
+    async def _set_on_batch(self, batch: RedisBatch, key: str, value: object, ttl: float | None) -> BatchResult[None]:
         effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
         if self.in_memory_cache is not None:
             await self.in_memory_cache.async_set_cache(key, value, ttl=effective_ttl)

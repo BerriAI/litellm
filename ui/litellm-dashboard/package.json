@@ -40,7 +40,7 @@
     "dayjs": "1.11.19",
     "jwt-decode": "4.0.0",
     "lucide-react": "0.513.0",
-    "moment": "2.30.1",
+    "moment": "2.31.0",
     "next": "16.3.3",
     "next-themes": "^0.4.6",
     "nuqs": "^2.9.4",
@@ -98,7 +98,7 @@
   "overrides": {
     "prismjs": "1.30.0",
     "js-yaml": "4.3.2",
-    "brace-expansion": "5.0.9",
+    "brace-expansion": "5.0.12",
     "glob": "13.0.0",
     "minimatch": "10.2.4",
     "ws": "8.21.0",

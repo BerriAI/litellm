@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import json
+import re
 import sys
 import time
 from collections.abc import Iterator, Mapping
@@ -38,6 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.types.agents import AgentCaller
 from litellm.proxy.auth.auth_checks import (
+    LITELLM_SESSION_TOKEN_PREFIX,
     ExperimentalUIJWTToken,
     _cache_management_object,
     _can_object_call_model,
@@ -76,7 +79,9 @@ from litellm.constants import (
     TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_headers_or_pass_through_endpoints
+from litellm.proxy import proxy_server
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -149,7 +154,7 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     # Check that decrypted_token is not None before using json.loads
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
@@ -175,7 +180,7 @@ def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_value
         team_alias="test-team",
     )
 
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -202,7 +207,7 @@ def test_get_cli_jwt_auth_token_carries_team_grants_not_user_allowlist(
         team_model_aliases={"team-fast": "gpt-4.1-mini"},
     )
 
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -219,7 +224,7 @@ def test_get_cli_jwt_auth_token_keeps_user_allowlist_when_no_team(
     """A session token with no team bound still carries the user's own allowlist."""
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -233,7 +238,7 @@ def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
 ):
     """Test that Experimental UI token uses fixed 10-minute expiry (does not use LITELLM_UI_SESSION_DURATION)."""
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
@@ -251,7 +256,7 @@ def test_experimental_ui_token_ignores_litellm_ui_session_duration(
     was incorrectly wired to the experimental flow."""
     # Default LITELLM_UI_SESSION_DURATION is "24h" - token must still expire in ~10 min
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
@@ -286,6 +291,51 @@ def test_get_key_object_from_ui_hash_key_valid(valid_sso_user_defined_values, mo
     assert key_object.user_role == LitellmUserRoles.PROXY_ADMIN
     assert key_object.models == ["gpt-3.5-turbo"]
     assert key_object.max_budget == litellm.max_ui_session_budget
+
+
+@pytest.mark.parametrize("encryption_algorithm", ["xsalsa20-poly1305", "aes-256-gcm"])
+def test_get_key_object_from_ui_hash_key_accepts_only_minted_session_tokens(
+    valid_sso_user_defined_values, monkeypatch, encryption_algorithm
+):
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": encryption_algorithm})
+    session_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    stored_value = encrypt_value_helper(json.dumps({"user_role": LitellmUserRoles.PROXY_ADMIN.value}))
+
+    key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(session_token)
+    assert key_object is not None
+    assert key_object.user_role == LitellmUserRoles.PROXY_ADMIN
+    reshaped = LITELLM_SESSION_TOKEN_PREFIX + stored_value.removeprefix("v2:gcm:").rstrip("=")
+    for candidate in (stored_value, reshaped):
+        assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(candidate) is None
+
+
+def test_session_tokens_are_header_safe_and_never_look_like_virtual_keys(valid_sso_user_defined_values):
+    for token in (
+        ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values),
+        ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values),
+    ):
+        assert re.fullmatch(r"litellm_login_[A-Za-z0-9_-]+", token), token
+        assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None
+
+
+@pytest.mark.asyncio
+async def test_session_token_survives_langfuse_basic_auth_parsing(valid_sso_user_defined_values):
+    session_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    basic_credentials = base64.b64encode(f"{session_token}:sk-lf-secret".encode()).decode()
+    request = MagicMock()
+    request.headers = {}
+
+    api_key = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/api/public/ingestion",
+        pass_through_endpoints=[
+            {"path": "/api/public/ingestion", "target": "https://example.com", "custom_auth_parser": "langfuse"}
+        ],
+        api_key=f"Basic {basic_credentials}",
+    )
+
+    assert api_key == session_token
+    assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(session_token) is not None
 
 
 def test_get_key_object_from_ui_hash_key_invalid():
@@ -801,7 +851,7 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -841,7 +891,7 @@ def test_get_cli_jwt_auth_token_custom_expiration(valid_sso_user_defined_values,
     token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -859,7 +909,7 @@ def test_get_cli_jwt_auth_token_unique_per_session(valid_sso_user_defined_values
     from litellm.constants import CLI_SESSION_KEY_PREFIX
 
     def _decode(token: str) -> dict:
-        decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+        decrypted = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
         assert decrypted is not None
         return json.loads(decrypted)
 
@@ -879,7 +929,7 @@ def test_get_cli_jwt_auth_token_applies_fallback_budget(valid_sso_user_defined_v
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
         valid_sso_user_defined_values, max_budget=litellm.max_ui_session_budget
     )
-    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted is not None
     assert json.loads(decrypted).get("max_budget") == litellm.max_ui_session_budget
 
@@ -888,7 +938,7 @@ def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
     valid_sso_user_defined_values,
 ):
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values, max_budget=None)
-    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted is not None
     assert json.loads(decrypted).get("max_budget") is None
 
@@ -1091,7 +1141,7 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
     monkeypatch.setitem(auth_checks.last_db_access_time, f"user_id:{user_id}", (None, time.time()))
     db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
 
     result = await get_user_object(
         user_id=user_id,
@@ -1103,7 +1153,7 @@ async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
 
     assert result is not None
     assert result.user_id == user_id
-    mock_prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
+    mock_prisma_client.writer_db.litellm_usertable.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3058,7 +3108,7 @@ async def test_get_team_object_raises_404_when_not_found():
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
     mock_prisma_client.db = mock_db
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
@@ -3076,11 +3126,40 @@ async def test_get_team_object_raises_404_when_not_found():
     assert "Team doesn't exist in db" in str(exc_info.value.detail)
 
 
+@pytest.mark.asyncio
+async def test_get_team_object_check_db_only_reads_writer_through_the_shared_loader():
+    """Management endpoints mock ``_get_team_object_from_user_api_key_cache`` and expect
+    ``check_db_only`` to still flow through it; only the table it reads moves to the writer."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    row = {"team_id": "team-writer", "models": ["gpt-4o"], "object_permission_id": None}
+    prisma = MagicMock()
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(dict=lambda: row))
+    prisma.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(dict=lambda: row))
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    shared_loader = AsyncMock(wraps=auth_checks._get_team_object_from_user_api_key_cache)
+
+    with patch.object(auth_checks, "_get_team_object_from_user_api_key_cache", shared_loader):
+        team = await get_team_object("team-writer", prisma, cache, check_db_only=True)
+
+    assert team.team_id == "team-writer"
+    assert shared_loader.await_args.kwargs["use_writer"] is True
+    prisma.writer_db.litellm_teamtable.find_unique.assert_awaited_once()
+    prisma.db.litellm_teamtable.find_unique.assert_not_awaited()
+    cache.async_set_cache.assert_awaited_once()
+
+
 def _mock_prisma_for_team_lookup(find_unique):
     from unittest.mock import MagicMock
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = find_unique
+    mock_prisma_client.writer_db.litellm_teamtable.find_unique = find_unique
     return mock_prisma_client
 
 
@@ -5621,7 +5700,8 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     team_table = LiteLLM_TeamTableCachedObj(**base_team_row)
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
-    cache.delete_cache = MagicMock()
+    cache.async_delete_cache = AsyncMock()
+    cache.async_delete_cache_pre_call = AsyncMock(return_value=None)  # no request pipeline open
     logging_obj = MagicMock()
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -5642,9 +5722,9 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     written_value = cache.async_set_cache.await_args.kwargs.get("value") or cache.async_set_cache.await_args.args[1]
     assert written_value is team_table
 
-    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache
-    # and the Redis dual cache (mirrors _delete_cache_key_object pattern).
-    cache.delete_cache.assert_called_once_with(key="team_alias:H-Capacity")
+    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache and the Redis dual cache, on the
+    # async path: a Redis DEL must never run synchronously on the event loop.
+    cache.async_delete_cache.assert_awaited_once_with(key="team_alias:H-Capacity")
 
     # (4) internal usage cache: team_id entry deleted BEFORE the fresh
     # write, alias entry deleted as before.
@@ -5658,7 +5738,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     aliasless = LiteLLM_TeamTableCachedObj(**{**base_team_row, "team_alias": None})
     cache2 = MagicMock()
     cache2.async_set_cache = AsyncMock()
-    cache2.delete_cache = MagicMock()
+    cache2.async_delete_cache = AsyncMock()
     logging_obj2 = MagicMock()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -5669,7 +5749,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
         proxy_logging_obj=logging_obj2,
     )
 
-    cache2.delete_cache.assert_not_called()
+    cache2.async_delete_cache.assert_not_awaited()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
         key="team_id:team-no-alias"
     )
@@ -10003,3 +10083,196 @@ def test_can_object_call_model_allows_listed_model_for_key():
     )
 
     assert result is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed", [True, False])
+async def test_authoritative_access_group_reads_writer_despite_stale_allow_cache(allowed: bool) -> None:
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import get_access_object
+
+    stale: Final = LiteLLM_AccessGroupTable(access_group_id="group", access_group_name="Policy", access_model_names=["old"])
+    current: Final = stale.model_copy(update={"access_model_names": ["new"] if allowed else []})
+    client: Final = MagicMock()
+    client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=current)
+    client.db.litellm_accessgrouptable.find_unique = AsyncMock(return_value=stale)
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=stale)
+    cache.async_set_cache = AsyncMock()
+    result: Final = await get_access_object("group", client, cache, check_db_only=True)
+    assert result.access_model_names == (["new"] if allowed else [])
+    cache.async_get_cache.assert_not_awaited()
+    client.db.litellm_accessgrouptable.find_unique.assert_not_awaited()
+    client.writer_db.litellm_accessgrouptable.find_unique.assert_awaited_once_with(where={"access_group_id": "group"})
+
+
+@pytest.mark.asyncio
+async def test_authoritative_access_group_outage_does_not_use_cached_grants() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_access_object
+
+    client: Final = MagicMock()
+    client.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("writer unavailable"))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock()
+    with pytest.raises(HTTPException) as failure:
+        await get_access_object("group", client, cache, check_db_only=True)
+    assert failure.value.status_code == 503
+    assert failure.value.detail == "Access group policy is unavailable"
+    cache.async_get_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_authoritative_team_permission_outage_cannot_drop_the_teams_restrictions() -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    row: Final = LiteLLM_TeamTable(team_id="team-policy-outage", object_permission_id="team-permission")
+    client: Final = MagicMock()
+    client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=row)
+    client.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(side_effect=RuntimeError("unavailable"))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock()
+    cache.async_set_cache = AsyncMock()
+    with pytest.raises(HTTPException) as failure:
+        await get_team_object(row.team_id, client, cache, check_db_only=True)
+    assert failure.value.status_code == 404
+    client.writer_db.litellm_objectpermissiontable.find_unique.assert_awaited_once()
+    cache.async_set_cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [True, False])
+@pytest.mark.parametrize("missing", [True, False])
+async def test_referenced_permission_failures_preserve_legacy_behavior_and_deny_strict_reads(strict, missing):
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_object_permission
+
+    client = MagicMock()
+    lookup = AsyncMock(return_value=None, side_effect=None if missing else RuntimeError("unavailable"))
+    client.writer_db.litellm_objectpermissiontable.find_unique = lookup
+    client.db.litellm_objectpermissiontable.find_unique = lookup
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    if strict:
+        with pytest.raises(HTTPException if missing else RuntimeError):
+            await get_object_permission("referenced", client, cache, check_db_only=True)
+        cache.async_get_cache.assert_not_awaited()
+    else:
+        assert await get_object_permission("referenced", client, cache) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "models,key_aliases,team_aliases,allowed",
+    [
+        (["fast"], {}, {}, True),
+        ([], {}, {}, False),
+        (["other"], {}, {}, False),
+        (["target"], {"fast": "target"}, {}, True),
+        (["target"], {}, {"fast": "target"}, True),
+        (["fast"], {}, {"fast": "forbidden"}, False),
+    ],
+)
+async def test_managed_agent_model_policy_checks_dispatched_model(
+    models: list[str], key_aliases: dict[str, str], team_aliases: dict[str, str], allowed: bool
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.types.agents import AgentResponse
+
+    agent: Final = AgentResponse(
+        agent_id="managed", agent_name="Managed", agent_card_params={}, object_permission={"models": models}
+    )
+    auth: Final = UserAPIKeyAuth(
+        token="test-token", team_id="team", aliases=key_aliases, team_model_aliases=team_aliases
+    )
+    auth.managed_agent_policy = agent
+    checks: Final = common_checks(
+        request_body={"model": "fast", "messages": [{"role": "user", "content": "hi"}]},
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=auth,
+        request=MagicMock(spec=Request),
+    )
+    if allowed:
+        assert await checks is True
+    else:
+        with pytest.raises((HTTPException, ModelAccessDeniedProxyException)) as failure:
+            await checks
+        assert str(getattr(failure.value, "status_code", getattr(failure.value, "code", None))) == "403"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconnect", (False, True))
+async def test_authoritative_key_load_bypasses_warm_key_and_permission_caches(reconnect: bool) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="current", agents=["allowed"])
+    stale: Final = UserAPIKeyAuth(token="hash", team_id="old-team", object_permission_id="old")
+    current: Final = UserAPIKeyAuth(token="hash", team_id="new-team", object_permission_id="current")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache("hash", stale)
+    cache.set_cache(object_permission_cache_key("current"), permission.model_copy(update={"agents": ["revoked"]}))
+    database: Final = MagicMock()
+    database.get_data = AsyncMock(side_effect=[httpx.ConnectError("reset"), current] if reconnect else [current])
+    database.attempt_db_reconnect = AsyncMock(return_value=True)
+    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=permission)
+    fresh: Final = await get_key_object("hash", database, cache, check_db_only=True)
+    assert fresh.team_id == "new-team"
+    assert fresh.object_permission == permission
+    assert all(call.kwargs["use_writer"] is True for call in database.get_data.await_args_list)
+    database.db.litellm_objectpermissiontable.find_unique.assert_not_called()
+    cached: Final = await get_key_object("hash", database, cache)
+    assert cached.team_id == "old-team"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", (False, True))
+async def test_authoritative_key_cannot_keep_grants_when_permission_is_unavailable(missing: bool) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    database: Final = MagicMock()
+    database.get_data = AsyncMock(return_value=UserAPIKeyAuth(
+        object_permission_id="grant", object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["allowed"])
+    ))
+    database.writer_db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=None, side_effect=None if missing else RuntimeError("writer unavailable")
+    )
+    with pytest.raises(Exception, match=r"does not exist|unavailable"):
+        await get_key_object("hash", database, UserApiKeyCache(), check_db_only=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+async def test_authoritative_group_grants_propagate_policy_outages(
+    monkeypatch: pytest.MonkeyPatch, strict: bool
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import _get_agent_ids_from_access_groups
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    database: Final = MagicMock()
+    database.db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    database.writer_db.litellm_accessgrouptable.find_unique = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    if strict:
+        with pytest.raises(HTTPException):
+            await _get_agent_ids_from_access_groups(["group"], check_db_only=True)
+    else:
+        assert await _get_agent_ids_from_access_groups(["group"]) == []
