@@ -8,6 +8,7 @@ import { ALL_SERVICES, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
 import { RunView } from "./TraceDrawer";
 import type { TraceSummary } from "./traceTypes";
 import { previewText } from "./traceUtils";
+import { OtelEndpointPanel } from "./OtelEndpointPanel";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { TracingSetupCard } from "./TracingSetupCard";
@@ -30,6 +31,13 @@ export function filterRuns(
     return matchesQuery && matchesService && matchesStatus;
   });
 }
+
+/** Start time of the most recent run, or null when there are none. */
+export const newestStart = (runs: readonly TraceSummary[]): string | null =>
+  runs.reduce<string | null>(
+    (newest, run) => (newest === null || Date.parse(run.start_time) > Date.parse(newest) ? run.start_time : newest),
+    null,
+  );
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -77,6 +85,7 @@ export function AgentTracesSection({
   const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive };
   const traces = useAgentTraces(traceQuery);
 
+  const newestRunStart = useMemo(() => newestStart(traces.traces), [traces.traces]);
   const services = useMemo(() => Array.from(new Set(traces.traces.map((t) => t.service))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
@@ -142,13 +151,7 @@ export function AgentTracesSection({
         onServiceChange={setService}
         onStatusChange={setStatus}
       >
-        <button
-          type="button"
-          onClick={() => setShowSetup(true)}
-          className="shrink-0 px-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-info hover:underline"
-        >
-          Set up tracing
-        </button>
+        <OtelEndpointPanel newestRunStart={newestRunStart} onOpenGuide={() => setShowSetup(true)} />
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}
