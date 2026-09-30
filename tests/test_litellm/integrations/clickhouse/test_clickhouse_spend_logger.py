@@ -188,6 +188,17 @@ async def test_missing_payload_and_bad_payload_never_raise():
 
 
 @pytest.mark.asyncio
+async def test_trace_ingest_requests_are_not_logged_as_spend():
+    # OTLP exports hit POST /v1/traces; they are not LLM calls and must not create spend rows
+    logger = ClickHouseSpendLogger(client=MagicMock())
+    payload = _payload(call_type="/v1/traces", status="failure")
+
+    await logger.async_log_failure_event({"standard_logging_object": payload}, None, None, None)
+
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
 async def test_clickhouse_callback_resolves_via_factory(monkeypatch):
     monkeypatch.setenv("CLICKHOUSE_URL", "http://localhost:8123")
     monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
