@@ -120,11 +120,9 @@ async def _db_or_empty(
     warning: str,
     count: int,
 ) -> _T | None:
-    from prisma.errors import PrismaError
-
     try:
         return await load()
-    except PrismaError as e:
+    except Exception as e:
         verbose_proxy_logger.warning(warning, count, e)
         return None
 

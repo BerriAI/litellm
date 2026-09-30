@@ -331,12 +331,16 @@ def _spender(proxy: Gateway, database_url: str, label: str) -> Spender:
     return Spender(alias, user_id, user_email, digest)
 
 
-def _read(pinned: Pinned, digest: str) -> httpx.Response:
-    response: Final = pinned.request(
+def _fetch(pinned: Pinned, digest: str) -> httpx.Response:
+    return pinned.request(
         "GET",
         "/user/daily/activity/aggregated",
         params={"start_date": _day(-1), "end_date": _day(1), "api_key": digest},
     )
+
+
+def _read(pinned: Pinned, digest: str) -> httpx.Response:
+    response: Final = _fetch(pinned, digest)
     assert response.status_code == 200, response.text
     return response
 
@@ -354,6 +358,14 @@ def _named(pinned: Pinned, spender: Spender) -> httpx.Response:
     return eventually(
         lambda: _read(pinned, spender.digest),
         lambda response: _aliases(response, spender.digest) == (spender.alias,),
+        seconds=MISS_TTL_BOUND,
+    )
+
+
+def _named_once_reconnected(pinned: Pinned, spender: Spender) -> httpx.Response:
+    return eventually(
+        lambda: _fetch(pinned, spender.digest),
+        lambda response: response.status_code == 200 and _aliases(response, spender.digest) == (spender.alias,),
         seconds=MISS_TTL_BOUND,
     )
 
@@ -884,7 +896,7 @@ def test_usage_page_survives_a_dropped_database_connection_during_alias_recovery
             dropped: Final = _read(pinned, spender.digest)
             assert relay.tripped.is_set(), dropped.text
             assert _aliases(dropped, spender.digest) == (None,), dropped.text
-            recovered: Final = _named(pinned, spender)
+            recovered: Final = _named_once_reconnected(pinned, spender)
             assert _metadata(recovered, spender.digest) == (
                 _KeyMetadata(key_alias=spender.alias, user_id=spender.user_id, user_email=spender.user_email),
             ), recovered.text
