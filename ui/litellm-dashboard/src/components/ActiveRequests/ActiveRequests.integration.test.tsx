@@ -81,11 +81,11 @@ describe("ActiveRequests", () => {
 
     const toggle = screen.getByRole("switch", { name: "Auto refresh" });
     expect(toggle).toBeChecked();
-    expect(toggle.closest("div")?.querySelector(".lucide-play")).not.toBeNull();
+    expect(screen.getByTestId("auto-refresh-running")).toBeInTheDocument();
 
     fireEvent.click(toggle);
     expect(screen.getByRole("switch", { name: "Auto refresh" })).not.toBeChecked();
-    expect(toggle.closest("div")?.querySelector(".lucide-pause")).not.toBeNull();
+    expect(screen.getByTestId("auto-refresh-paused")).toBeInTheDocument();
   });
 
   it("should show a safe error when refreshing fails", async () => {
@@ -149,7 +149,7 @@ describe("ActiveRequests", () => {
     expect(await screen.findByText("end-user-123")).toBeInTheDocument();
     fireEvent.click(screen.getByText("end-user-123"));
 
-    expect((await screen.findByText("Open in Logs")).closest("a")).toHaveAttribute(
+    expect(await screen.findByRole("button", { name: /Open in Logs/ })).toHaveAttribute(
       "href",
       "/ui/logs?request_id=call-123%26foo%3D1%23fragment",
     );

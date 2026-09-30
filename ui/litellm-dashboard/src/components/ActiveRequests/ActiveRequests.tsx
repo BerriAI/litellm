@@ -241,7 +241,11 @@ export default function ActiveRequests({ accessToken }: ActiveRequestsProps) {
             <div className="flex items-center gap-2">
               <Switch id="active-requests-auto-refresh" checked={autoRefresh} onCheckedChange={setAutoRefresh} />
               <Label htmlFor="active-requests-auto-refresh" className="flex items-center gap-1.5">
-                {autoRefresh ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
+                {autoRefresh ? (
+                  <Play className="size-3.5" aria-hidden data-testid="auto-refresh-running" />
+                ) : (
+                  <Pause className="size-3.5" aria-hidden data-testid="auto-refresh-paused" />
+                )}
                 Auto refresh
               </Label>
             </div>
