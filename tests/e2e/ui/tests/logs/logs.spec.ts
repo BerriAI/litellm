@@ -117,6 +117,17 @@ test.describe("Logs page", () => {
     await expect(row, `no logs row for call id ${callId}`).toHaveCount(1, { timeout: 30_000 });
     await expect(row, "the row itself shows only the request id").not.toContainText(callId);
 
+    await row.getByText(requestId).hover();
+    const tooltip = page.locator("[data-slot='tooltip-content']");
+    await expect(tooltip, "hovering the Request ID cell does not list the x-litellm-call-id").toContainText(
+      `x-litellm-call-id: ${callId}`,
+      { timeout: 10_000 },
+    );
+    await tooltip.getByRole("button", { name: "Copy x-litellm-call-id" }).click();
+    if (await page.evaluate(() => window.isSecureContext)) {
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(callId);
+    }
+
     await row.click();
     const drawer = page.getByRole("dialog").first();
     await expect(drawer.getByText("Request & Response")).toBeVisible({ timeout: 20_000 });
