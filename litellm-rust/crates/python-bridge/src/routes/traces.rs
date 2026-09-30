@@ -32,10 +32,6 @@ pub fn trace_schema_statements(
 }
 
 #[pyfunction]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the internal adapter supplies connection fields and a parameterized query"
-)]
 pub fn trace_query<'py>(
     py: Python<'py>,
     url: &str,
