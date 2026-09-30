@@ -49,6 +49,7 @@ NARROW_CAPS = Capabilities(
     permission_modes=frozenset({"read-only", "full"}),
 )
 
+
 class FakeConfig(BaseHarnessConfig):
     """Declares the fake harness; per-test subclasses override capabilities."""
 
@@ -231,7 +232,9 @@ def install_adapter(
         {"capabilities": caps, "uses_model_endpoint": uses_endpoint},
     )
     monkeypatch.setattr(runtime, "get_harness_config", lambda harness: config_cls())
-    monkeypatch.setattr(runtime, "get_harness_handler", lambda config: adapter_cls(config))
+    monkeypatch.setattr(
+        runtime, "get_harness_handler", lambda config: adapter_cls(config)
+    )
     monkeypatch.setattr(runtime, "ModelEndpoint", FakeEndpoint)
     monkeypatch.delenv("LITELLM_PROXY_API_BASE", raising=False)
     monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
