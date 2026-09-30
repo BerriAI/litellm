@@ -25,9 +25,9 @@ def _register_model(proxy: ProxyClient, resources: ResourceManager) -> tuple[str
         MODEL_NAME,
         LiteLLMParamsBody(
             model=BEDROCK_MODEL,
-            aws_access_key_id="os.environ/AWS_BEDROCK_TEST_ACCESS_KEY_ID",
-            aws_secret_access_key="os.environ/AWS_BEDROCK_TEST_SECRET_ACCESS_KEY",
-            aws_region_name="us-east-1",
+            aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+            aws_region_name="os.environ/AWS_REGION",
             drop_params=True,
         ),
     )
@@ -36,7 +36,7 @@ def _register_model(proxy: ProxyClient, resources: ResourceManager) -> tuple[str
 
 
 class TestBedrockKimiK3Messages:
-    @pytest.mark.covers("llm.messages.bedrock_converse.basic.nonstream.works")
+    @pytest.mark.covers("llm.messages.bedrock_converse.basic.nonstream.works_for_kimi_k3_max_tokens_1")
     def test_model_switch_probe_max_tokens_1_returns_message(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
