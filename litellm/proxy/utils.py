@@ -1156,7 +1156,6 @@ def _overrides_moderation_hook(callback: CustomLogger) -> bool:
     return _overrides_hook(callback, "async_moderation_hook")
 
 
-
 _PRE_CALL_ONLY_HOOKS: Final = frozenset(
     {
         GuardrailEventHooks.pre_call.value,
@@ -1188,9 +1187,7 @@ def _guardrail_configured_hooks(guardrail: CustomGuardrail) -> frozenset[str] | 
             else:
                 hooks.add(_normalize_guardrail_hook_name(tag_value))
         if event_hook.default:
-            default_list = (
-                event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
-            )
+            default_list = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
             hooks.update(_normalize_guardrail_hook_name(value) for value in default_list)
         return frozenset(hooks)
     if isinstance(event_hook, list):
@@ -1211,11 +1208,22 @@ def _guardrail_affects_streaming(guardrail: CustomGuardrail) -> bool:
 
 
 def _guardrail_affects_during_call(guardrail: CustomGuardrail) -> bool:
-    """True if this guardrail can run on the ``during_call`` event."""
+    """True if this guardrail can run on during_call / during_mcp_call events.
+
+    MCP tool calls reach ``during_call_hook``, which remaps to
+    ``during_mcp_call``. That capability must keep the hook live so
+    MCP-only guardrails are not skipped by the early return.
+    """
     hooks = _guardrail_configured_hooks(guardrail)
     if hooks is None:
         return True
-    return GuardrailEventHooks.during_call.value in hooks
+    return bool(
+        hooks
+        & {
+            GuardrailEventHooks.during_call.value,
+            GuardrailEventHooks.during_mcp_call.value,
+        }
+    )
 
 
 _LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
@@ -2898,10 +2906,7 @@ class ProxyLogging:
             elif (
                 "apply_guardrail" in cls_attrs
                 and not getattr(resolved, "use_native_lifecycle_hooks", False)
-                and (
-                    not isinstance(resolved, CustomGuardrail)
-                    or _guardrail_affects_streaming(resolved)
-                )
+                and (not isinstance(resolved, CustomGuardrail) or _guardrail_affects_streaming(resolved))
             ):
                 # pre_call-only guardrails never scan the response stream
                 iterator_overrides.append((resolved, "apply_guardrail"))

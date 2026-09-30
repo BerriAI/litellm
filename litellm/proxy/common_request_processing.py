@@ -3894,7 +3894,9 @@ class ProxyBaseLLMRequestProcessing:
         # pure overhead on the streaming hot path (the default config).
         caps: Final = ProxyLogging._callback_capabilities()
         cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
-        fast_path = not caps.has_streaming_chunk_override and not caps.has_streaming_guardrail and not cost_injection_enabled
+        fast_path = (
+            not caps.has_streaming_chunk_override and not caps.has_streaming_guardrail and not cost_injection_enabled
+        )
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
         client_disconnected = False

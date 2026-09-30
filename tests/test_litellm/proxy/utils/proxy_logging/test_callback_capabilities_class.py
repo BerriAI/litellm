@@ -281,6 +281,13 @@ def test_has_during_call_guardrails_truth_table(monkeypatch, mock_callbacks_disa
         def __init__(self):
             super().__init__(guardrail_name="g-during", event_hook=GuardrailEventHooks.during_call)
 
+    class _DuringMcpCall(CustomGuardrail):
+        def __init__(self):
+            super().__init__(
+                guardrail_name="g-during-mcp",
+                event_hook=GuardrailEventHooks.during_mcp_call,
+            )
+
     snapshot = {
         "empty_false": ProxyLogging.has_during_call_guardrails(),
     }
@@ -290,6 +297,9 @@ def test_has_during_call_guardrails_truth_table(monkeypatch, mock_callbacks_disa
     monkeypatch.setattr(litellm, "callbacks", [_DuringCall()])
     ProxyLogging._callback_capabilities_cache.clear()
     snapshot["with_during_call_true"] = ProxyLogging.has_during_call_guardrails()
+    monkeypatch.setattr(litellm, "callbacks", [_DuringMcpCall()])
+    ProxyLogging._callback_capabilities_cache.clear()
+    snapshot["with_during_mcp_call_true"] = ProxyLogging.has_during_call_guardrails()
     monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
     ProxyLogging._callback_capabilities_cache.clear()
     snapshot["only_plain_logger_false"] = ProxyLogging.has_during_call_guardrails()
@@ -297,6 +307,7 @@ def test_has_during_call_guardrails_truth_table(monkeypatch, mock_callbacks_disa
         "empty_false": False,
         "pre_call_only_false": False,
         "with_during_call_true": True,
+        "with_during_mcp_call_true": True,
         "only_plain_logger_false": False,
     }
 
@@ -365,9 +376,7 @@ def test_get_combined_callback_list_matrix(proxy_logging):
         "none_dynamic_returns_global_copy": proxy_logging.get_combined_callback_list(
             dynamic_success_callbacks=None, global_callbacks=["a", "b", "c"]
         ),
-        "empty_both": proxy_logging.get_combined_callback_list(
-            dynamic_success_callbacks=[], global_callbacks=[]
-        ),
+        "empty_both": proxy_logging.get_combined_callback_list(dynamic_success_callbacks=[], global_callbacks=[]),
     }
     assert snapshot == {
         "merge_dedupes_shared": ["dyn-1", "glob-1", "shared"],
