@@ -15,6 +15,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -430,16 +431,22 @@ async def _force_load(app: "FastAPI", feat: LazyFeature, features: tuple[LazyFea
     async with _lazy_lock(app, feat.module_path):
         if feat.module_path in _lazy_loaded(app):
             return False
-        try:
-            # Import on a thread (heavy modules take 1-3 s). register_fn
-            # mutates app.router.routes, so it stays on the loop thread.
-            loop: Final = asyncio.get_running_loop()
-            module: Final = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
-            _register_feature(app, feat, module, features)
-            return True
-        except Exception as exc:
-            _mark_failed(app, feat, exc)
-            return False
+        # Import on a thread (heavy modules take 1-3 s). register_fn
+        # mutates app.router.routes, so it stays on the loop thread.
+        imported: Final = asyncio.get_running_loop().run_in_executor(None, importlib.import_module, feat.module_path)
+        await asyncio.wait((imported,))
+        return _install(app, feat, imported.result, features)
+
+
+def _install(
+    app: "FastAPI", feat: LazyFeature, module: Callable[[], object], features: tuple[LazyFeature, ...]
+) -> bool:
+    try:
+        _register_feature(app, feat, module(), features)
+        return True
+    except Exception as exc:
+        _mark_failed(app, feat, exc)
+        return False
 
 
 def _lazy_loaded(app: "FastAPI") -> set[str]:
@@ -499,10 +506,7 @@ def register_all_features(app: "FastAPI", features: tuple[LazyFeature, ...] = LA
     """Register every feature router now, in registry order, so app.routes is
     complete before the app serves its first request."""
     for feat in features:
-        try:
-            _register_feature(app, feat, importlib.import_module(feat.module_path), features)
-        except Exception as exc:
-            _mark_failed(app, feat, exc)
+        _install(app, feat, partial(importlib.import_module, feat.module_path), features)
 
 
 def attach_lazy_features(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
