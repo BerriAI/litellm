@@ -33,7 +33,12 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_batch import BatchResult, RegisteredScript, active_request_redis_batch
+from litellm.caching.redis_batch import (
+    BatchResult,
+    RegisteredScript,
+    active_post_call_redis_batch,
+    active_request_redis_batch,
+)
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
@@ -1893,6 +1898,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         stash: RequestRateLimiterStash | None,
         parent_otel_span: Span | None,
+        *,
+        in_logging_callback: bool = False,
     ) -> None:
         if stash is None:
             return
@@ -1900,7 +1907,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             acquisition: Final = stash.parallel_slot
             if acquisition is None:
                 return
-            await self._release_parallel_request_slots(acquisition, parent_otel_span)
+            deferred: Final = in_logging_callback and await self._defer_parallel_slot_release(
+                acquisition, parent_otel_span
+            )
+            if not deferred:
+                await self._release_parallel_request_slots(acquisition, parent_otel_span)
             stash.parallel_slot = None  # rebind-ok: marks this request's slot as released
 
     async def _release_parallel_request_slots(
@@ -1926,14 +1937,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     keys=counter_keys,
                     args=[slot_id for _ in counter_keys],
                 )
-                for counter_key, remaining in zip(counter_keys, raw):
-                    await self.internal_usage_cache.async_set_cache(
-                        key=counter_key,
-                        value=max(0, int(remaining)),
-                        ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
-                        litellm_parent_otel_span=parent_otel_span,
-                        local_only=True,
-                    )
+                await self._mirror_released_parallel_slots(counter_keys, raw, parent_otel_span)
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
                 log_redis_failure(
@@ -1942,7 +1946,55 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "parallel_release_script failed, falling back to in-memory release",
                     e,
                 )
+        await self._release_parallel_request_slots_in_memory(counter_keys, slot_id, parent_otel_span)
 
+    async def _defer_parallel_slot_release(
+        self, acquisition: ParallelSlotAcquisition, parent_otel_span: Span | None
+    ) -> bool:
+        """Only for a release from the logging callbacks: the response has left and the callbacks' end flushes
+        the pipeline. A release before the response goes to Redis at once, so another worker's next acquire
+        never counts a finished request. The local gauge frees the slot at once, so admission on this worker
+        sees the capacity before the pipeline goes out. The count Redis returns from the pipeline is not
+        mirrored: by then a newer acquire on this worker may have written a fresher count, and the next
+        acquire refreshes the gauge anyway."""
+        counter_keys: Final = acquisition["counter_keys"]
+        slot_id: Final = acquisition["slot_id"]
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        script: Final = self.parallel_release_script
+        batch: Final = None if redis_cache is None else active_post_call_redis_batch(redis_cache)
+        if batch is None or script is None or not counter_keys or not slot_id:
+            return False
+        await self._release_parallel_request_slots_in_memory(counter_keys, slot_id, parent_otel_span)
+
+        async def settle(future: asyncio.Future[object]) -> None:
+            if future.cancelled() or future.exception() is not None:
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_release_script failed, the slot stays released in memory only",
+                    future.exception() if not future.cancelled() else asyncio.CancelledError(),
+                )
+
+        batch.script(PARALLEL_RELEASE_SCRIPT, script, counter_keys, (slot_id,) * len(counter_keys)).on_settled(settle)
+        return True
+
+    async def _mirror_released_parallel_slots(
+        self, counter_keys: list[str], remaining_by_key: Sequence[object], parent_otel_span: Span | None
+    ) -> None:
+        for counter_key, remaining in zip(counter_keys, remaining_by_key):
+            if not isinstance(remaining, (int, float, str, bytes)):
+                continue
+            await self.internal_usage_cache.async_set_cache(
+                key=counter_key,
+                value=max(0, int(remaining)),
+                ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
+
+    async def _release_parallel_request_slots_in_memory(
+        self, counter_keys: list[str], slot_id: str, parent_otel_span: Span | None
+    ) -> None:
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
                 raw_value: ParallelGaugeCacheValue | None = await self.internal_usage_cache.async_get_cache(
@@ -3013,6 +3065,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         agent_id: str,
         data: dict,
+        policy: "AgentResponse | None" = None,
     ) -> list[RateLimitDescriptor]:
         """
         Create rate limit descriptors for agent-level and session-level limits.
@@ -3022,7 +3075,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         descriptors: Final[list[RateLimitDescriptor]] = []
 
-        agent: Final = self._get_agent_from_registry(agent_id)
+        agent: Final = policy if policy is not None else self._get_agent_from_registry(agent_id)
         if agent is None:
             return descriptors
 
@@ -3217,14 +3270,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        # Agent-level and session-level rate limits
         resolved_agent_id: Final = self._get_resolved_agent_id(user_api_key_dict, data)
-
-        if resolved_agent_id:
+        for agent_id in dict.fromkeys((resolved_agent_id, user_api_key_dict.invoked_agent_id)):
+            if agent_id is None:
+                continue
             descriptors.extend(
                 self._create_agent_rate_limit_descriptors(
-                    agent_id=resolved_agent_id,
+                    agent_id=agent_id,
                     data=data,
+                    policy=(
+                        user_api_key_dict.managed_agent_policy
+                        if agent_id == user_api_key_dict.agent_id
+                        else user_api_key_dict.invoked_agent_policy
+                    ),
                 )
             )
 
@@ -4301,10 +4359,42 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 keys.append(op["key"])
                 args.extend([op["increment_value"], ttl_value])
 
+            if self._defer_token_increment_script(keys, args, group_operations):
+                continue
             await self.token_increment_script(
                 keys=keys,
                 args=args,
             )
+
+    def _defer_token_increment_script(
+        self,
+        keys: list[str],
+        args: list[int],
+        group_operations: list["RedisPipelineIncrementOperation"],
+    ) -> bool:
+        """Declared into the request's post-call pipeline instead of its own EVALSHA round trip; a failed
+        script falls back to the plain increment pipeline for its own group, as the direct path does."""
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        script: Final = self.token_increment_script
+        batch: Final = None if redis_cache is None else active_post_call_redis_batch(redis_cache)
+        if batch is None or script is None:
+            return False
+
+        async def fall_back(future: asyncio.Future[object]) -> None:
+            if future.cancelled() or future.exception() is None:
+                return
+            log_redis_failure(
+                verbose_proxy_logger,
+                logging.WARNING,
+                "TTL preservation failed, falling back to regular pipeline",
+                future.exception(),
+            )
+            await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                increment_list=group_operations,
+            )
+
+        batch.script(TOKEN_INCREMENT_SCRIPT, script, keys, args).on_settled(fall_back)
+        return True
 
     async def async_increment_tokens_with_ttl_preservation(
         self,
@@ -4881,6 +4971,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
             model_group=reconcile_model.group if reconcile_model is not None else None,
         )
+        targets.extend(
+            scope
+            for scope in sorted(reserved_scopes)
+            if scope[0] in ("agent", "agent_session") and scope not in targets
+        )
         charged_targets: Final = (
             [target for target in targets if target[0] != "model_per_team"]
             if self._key_owns_model_tpm_limit_from_request_metadata(request_metadata, reconcile_model)
@@ -4919,7 +5014,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             verbose_proxy_logger.debug("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
 
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span)
+            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
 
             pipeline_operations: Final = self._build_success_event_pipeline_operations(
                 kwargs=kwargs,
@@ -5039,7 +5134,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
-            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span)
+            await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
 
             # Skip the reservation refund if async_post_call_failure_hook
             # already released it (proxy-level rejection that also bubbles up
@@ -5109,15 +5204,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if pipeline_operations:
-                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                    increment_list=pipeline_operations,
-                    litellm_parent_otel_span=litellm_parent_otel_span,
+                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
+                    pipeline_operations, parent_otel_span=litellm_parent_otel_span
                 )
             for project_operations in (itpm_operations, otpm_operations):
                 if isinstance(project_operations, list):
-                    await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                        increment_list=project_operations,
-                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
+                        project_operations, parent_otel_span=litellm_parent_otel_span
                     )
                 elif project_operations:
                     await self.async_increment_reservation_aware_tokens(

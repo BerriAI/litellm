@@ -149,6 +149,9 @@ async def test_route_a2a_model_read_through_recovers_agent_created_on_sibling_re
     prisma_client.db.litellm_agentstable.find_unique = AsyncMock(
         side_effect=[None, _DbAgentRow("a2a-sibling-replica-agent-id", agent_name)]
     )
+    prisma_client.writer_db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=_DbAgentRow("a2a-sibling-replica-agent-id", agent_name)
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
 

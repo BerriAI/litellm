@@ -8,23 +8,23 @@ Has 4 primary methods:
     - async_get_cache
 """
 
+import asyncio
 import itertools
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
 
-if TYPE_CHECKING:
-    from litellm.types.caching import RedisPipelineIncrementOperation
-
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+from litellm.types.caching import RedisPipelineIncrementOperation
 
 from .base_cache import BaseCache
 from .in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY, InMemoryCache
+from .redis_batch import BatchResult, RedisBatch, active_post_call_redis_batch, active_request_redis_batch
 from .redis_cache import RedisCache, RedisCircuitBreakerOpenError, log_redis_failure
 
 if TYPE_CHECKING:
@@ -57,6 +57,24 @@ class PendingBatchRead:
     result: list[object | None]
     redis_keys: list[str]
     previous_access_times: dict[str, float | None]
+
+
+@dataclass(frozen=True, slots=True)
+class DeclaredBatchRead:
+    """A ``async_batch_get_cache`` split in two: the memory half done, the Redis half declared on a ``RedisBatch``
+    so it rides that batch's next round trip, resolved later with ``async_resolve_batch_get``."""
+
+    keys: tuple[str, ...]
+    pending: PendingBatchRead
+    result: BatchResult[Mapping[str, object]] | None
+
+
+def _log_deferred_increment_failure(future: asyncio.Future[float]) -> None:
+    if future.cancelled():
+        return
+    failure: Final = future.exception()
+    if failure is not None:
+        log_redis_failure(verbose_logger, logging.WARNING, "post-call Redis increment failed", failure)
 
 
 class DualCache(BaseCache):
@@ -261,6 +279,9 @@ class DualCache(BaseCache):
                     result = in_memory_result
 
             if result is None and self.redis_cache is not None and local_only is False:
+                request_batch: Final = active_request_redis_batch(self.redis_cache)
+                if request_batch is not None and request_batch.read_as_missing(key):
+                    return None
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result: Final = await self.redis_cache.async_get_cache(key, parent_otel_span=parent_otel_span)
 
@@ -305,6 +326,20 @@ class DualCache(BaseCache):
 
         return sublist_keys, previous_access_times
 
+    def reserve_redis_batch_reads(self, keys: Sequence[str]) -> tuple[list[str], dict[str, float | None]]:
+        """Reserve the memory-missed keys whose throttled Redis reads are due, as a batch read would."""
+        if self.redis_cache is None:
+            return [], {}  # mutable-ok: API contract returns an empty list and dictionary
+        key_list: Final = list(keys)  # mutable-ok: batch_get_cache takes a list
+        memory: Final = self.in_memory_cache
+        in_memory_result: Final = (
+            None
+            if memory is None  # pyright: ignore[reportUnnecessaryComparison]  # handle an absent in-memory tier
+            else memory.batch_get_cache(key_list)
+        )
+        result: Final = in_memory_result if in_memory_result is not None else tuple(None for _ in key_list)
+        return self._reserve_redis_batch_keys(time.time(), key_list, result)
+
     def _rollback_redis_batch_key_reservations(self, previous_access_times: dict[str, float | None]) -> None:
         with self._last_redis_batch_access_time_lock:
             for key, previous_time in previous_access_times.items():
@@ -335,7 +370,7 @@ class DualCache(BaseCache):
         )
 
     async def _apply_batch_get(
-        self, pending: PendingBatchRead, redis_result: dict[str, object] | None, **kwargs: object
+        self, pending: PendingBatchRead, redis_result: Mapping[str, object] | None, **kwargs: object
     ) -> list[object | None]:
         if redis_result is None or all(v is None for v in redis_result.values()):
             return pending.result
@@ -348,6 +383,22 @@ class DualCache(BaseCache):
                 if value is not None:
                     await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
         return merged
+
+    async def declare_batch_get(self, keys: Sequence[str], batch: RedisBatch) -> DeclaredBatchRead:
+        pending: Final = await self._prepare_batch_get(
+            list(keys),  # mutable-ok: the shared batch read takes a list
+            local_only=False,
+            throttle_redis=False,
+        )
+        return DeclaredBatchRead(
+            keys=tuple(keys),
+            pending=pending,
+            result=batch.mget(pending.redis_keys) if pending.redis_keys else None,
+        )
+
+    async def async_resolve_batch_get(self, declared: DeclaredBatchRead) -> list[object | None]:
+        redis_result: Final = None if declared.result is None else await declared.result
+        return await self._apply_batch_get(declared.pending, redis_result)
 
     async def async_batch_get_cache(
         self,
@@ -468,6 +519,34 @@ class DualCache(BaseCache):
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
             )
 
+    async def async_set_cache_pre_call(self, key: str, value: object, ttl: float | None) -> BatchResult[None] | None:
+        """Memory now, the Redis SET on the request's pipeline, sent with the next read any caller awaits; None
+        when no pipeline is open, so the caller takes its direct path."""
+        batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
+        return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
+
+    async def async_set_cache_post_call(self, key: str, value: object, ttl: float | None) -> BatchResult[None] | None:
+        """Memory now, the Redis SET on the request's post-call pipeline; None when no pipeline is open, so the
+        caller takes its direct path."""
+        batch: Final = None if self.redis_cache is None else active_post_call_redis_batch(self.redis_cache)
+        return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
+
+    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
+        """Memory now, the Redis DEL on the request's pipeline; None when no pipeline is open, so the caller
+        takes its direct path."""
+        batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
+        if batch is None:
+            return None
+        if self.in_memory_cache is not None:
+            self.in_memory_cache.delete_cache(key)
+        return batch.delete(key)
+
+    async def _set_on_batch(self, batch: RedisBatch, key: str, value: object, ttl: float | None) -> BatchResult[None]:
+        effective_ttl: Final = self.default_in_memory_ttl if ttl is None else ttl
+        if self.in_memory_cache is not None:
+            await self.in_memory_cache.async_set_cache(key, value, ttl=effective_ttl)
+        return batch.set(key, value, effective_ttl)
+
     # async_batch_set_cache
     async def async_set_cache_pipeline(
         self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs
@@ -534,6 +613,41 @@ class DualCache(BaseCache):
                 e,
             )
             return result
+
+    async def async_increment_cache_post_call(
+        self,
+        key: str,
+        value: float,
+        ttl: int | None,
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        """Memory is incremented now; the Redis increment rides the request's post-call pipeline when one is
+        open, and runs on its own as ``async_increment_cache`` otherwise."""
+        await self.async_increment_cache_pipeline_post_call(
+            (RedisPipelineIncrementOperation(key=key, increment_value=value, ttl=ttl),), parent_otel_span
+        )
+
+    async def async_increment_cache_pipeline_post_call(
+        self,
+        increment_list: Sequence["RedisPipelineIncrementOperation"],
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        batch: Final = None if self.redis_cache is None else active_post_call_redis_batch(self.redis_cache)
+        operations: Final = list(increment_list)  # mutable-ok: both increment pipelines take a list
+        if batch is None:
+            await self.async_increment_cache_pipeline(operations, parent_otel_span=parent_otel_span)
+            return
+        try:
+            if self.in_memory_cache is not None:
+                await self.in_memory_cache.async_increment_pipeline(
+                    increment_list=operations, parent_otel_span=parent_otel_span
+                )
+        except Exception as e:  # noqa: BLE001  # same tolerance as async_increment_cache_pipeline
+            log_redis_failure(verbose_logger, logging.WARNING, "in-memory increment failed", e)
+        for operation in increment_list:
+            batch.increment(operation["key"], operation["increment_value"], operation["ttl"]).on_settled(
+                _log_deferred_increment_failure
+            )
 
     async def async_increment_cache_pipeline(
         self,

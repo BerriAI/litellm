@@ -115,6 +115,7 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import type { SpanDetail, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -2100,6 +2101,42 @@ export const uiSpendLogsCall = async ({
     throw error;
   }
 };
+
+/**
+ * Agent tracing. All three respond 501 `{detail}` when `general_settings.tracing` is not
+ * configured; callers can detect that through the thrown `ApiError`'s `status`.
+ */
+export const agentTraceListCall = async ({
+  accessToken,
+  startMs,
+  endMs,
+  cursor,
+}: {
+  accessToken: string;
+  startMs: number;
+  endMs: number;
+  cursor?: string | null;
+}): Promise<TracePage> => {
+  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined };
+  return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
+};
+
+export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined },
+  });
+
+export const agentTraceSpanCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  traceRef?: string,
+): Promise<SpanDetail> =>
+  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined },
+  });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {

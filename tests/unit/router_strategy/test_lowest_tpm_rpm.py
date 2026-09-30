@@ -72,11 +72,48 @@ async def test_v2_async_selection_uses_prefetched_counters_only_when_they_cover_
     keys = tpm_keys + rpm_keys
 
     covering = PrefetchedUsage(keys=frozenset(keys), values=dict(zip(keys, [10, 100, None, None])))
-    chosen = await strategy.async_get_available_deployments(model_group="g", healthy_deployments=deployments, prefetched_usage=covering)
+    with PrefetchedUsage.scoped(covering):
+        chosen: Final = await strategy.async_get_available_deployments(model_group="g", healthy_deployments=deployments)
     assert chosen["model_info"]["id"] == "a", "the prefetched counters say a is the lowest"
     router_cache.async_batch_get_cache.assert_not_awaited()
 
     stale = PrefetchedUsage(keys=frozenset(keys[:1]), values={keys[0]: 10})
-    chosen = await strategy.async_get_available_deployments(model_group="g", healthy_deployments=deployments, prefetched_usage=stale)
-    assert chosen["model_info"]["id"] == "b", "counters that do not cover this minute's keys are read again"
+    with PrefetchedUsage.scoped(stale):
+        chosen_stale: Final = await strategy.async_get_available_deployments(
+            model_group="g", healthy_deployments=deployments
+        )
+    assert chosen_stale["model_info"]["id"] == "b", "counters that do not cover this minute's keys are read again"
     router_cache.async_batch_get_cache.assert_awaited_once_with(keys=keys)
+
+
+@pytest.mark.asyncio
+async def test_v2_subclass_overriding_async_get_available_deployments_with_the_old_signature_still_routes() -> None:
+    class OldSignatureV2(LowestTPMLoggingHandler_v2):
+        async def async_get_available_deployments(
+            self,
+            model_group: str,
+            healthy_deployments: list,
+            messages: list[dict[str, str]] | None = None,
+            input: str | list | None = None,
+        ):
+            return await super().async_get_available_deployments(
+                model_group=model_group,
+                healthy_deployments=healthy_deployments,
+                messages=messages,
+                input=input,
+            )
+
+    router: Final = Router(
+        model_list=[_deployment(HIGH_USAGE_DEPLOYMENT_ID), _deployment(LOW_USAGE_DEPLOYMENT_ID)],
+        routing_strategy="usage-based-routing-v2",
+    )
+    router.lowesttpm_logger_v2 = OldSignatureV2(router_cache=router.cache, routing_args={})
+
+    response: Final = await router.acompletion(
+        model=MODEL_GROUP, messages=[{"role": "user", "content": "x"}]
+    )
+
+    assert response.choices[0].message.content in {
+        f"from {HIGH_USAGE_DEPLOYMENT_ID}",
+        f"from {LOW_USAGE_DEPLOYMENT_ID}",
+    }

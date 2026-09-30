@@ -768,12 +768,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
+                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
@@ -782,7 +784,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
@@ -809,11 +813,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_balanced": {"type": "number"},
+                "cache_read_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_token_balanced": {"type": "number"},
+                "input_cost_per_token_ultrafast": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
@@ -822,8 +828,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_balanced": {"type": "number"},
+                "output_cost_per_token_ultrafast": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "regional_endpoint_uplift_multiplier": {"type": "number"},
@@ -4137,6 +4145,40 @@ def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.Monk
     monkeypatch.setattr(litellm, "failure_callback", [BuiltinLogger()])
     assert _custom_logger_class_exists_in_success_callbacks(builtin_instance) is True
     assert _custom_logger_class_exists_in_failure_callbacks(builtin_instance) is True
+
+
+def test_custom_logger_guards_distinguish_callback_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression LIT-9070: every OTel v2 preset (otel, arize, ...) is one OpenTelemetryV2 class,
+    so a class-only guard reported a UI-added arize as already registered whenever otel was
+    active and silently skipped it. The guard has to match on class and callback_name together:
+    the same preset twice is still a duplicate, a sibling preset or a subclass is not."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import (
+        _custom_logger_class_exists_in_failure_callbacks,
+        _custom_logger_class_exists_in_success_callbacks,
+    )
+
+    class PresetLogger(CustomLogger):
+        def __init__(self, callback_name: str) -> None:
+            super().__init__()
+            self.callback_name: Final = callback_name
+
+    class UserSubclassLogger(PresetLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "success_callback", [PresetLogger("otel"), UserSubclassLogger("arize")])
+    monkeypatch.setattr(litellm, "failure_callback", [PresetLogger("otel"), UserSubclassLogger("arize")])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    assert _custom_logger_class_exists_in_success_callbacks(PresetLogger("otel")) is True
+    assert _custom_logger_class_exists_in_failure_callbacks(PresetLogger("otel")) is True
+    assert _custom_logger_class_exists_in_success_callbacks(PresetLogger("arize")) is False
+    assert _custom_logger_class_exists_in_failure_callbacks(PresetLogger("arize")) is False
+    assert _custom_logger_class_exists_in_success_callbacks(UserSubclassLogger("otel")) is False
+    assert _custom_logger_class_exists_in_failure_callbacks(UserSubclassLogger("otel")) is False
+    assert _custom_logger_class_exists_in_success_callbacks(UserSubclassLogger("arize")) is True
+    assert _custom_logger_class_exists_in_failure_callbacks(UserSubclassLogger("arize")) is True
 
 
 @pytest.mark.asyncio

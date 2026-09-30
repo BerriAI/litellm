@@ -269,6 +269,12 @@ import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.dual_cache import DeclaredBatchRead
+from litellm.caching.redis_batch import (
+    active_post_call_redis_batch,
+    active_request_redis_batches,
+    drain_post_call_redis_batches,
+)
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -421,6 +427,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     check_file_size_under_limit,
     get_form_data,
+    resolve_inference_model,
 )
 from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
@@ -707,6 +714,7 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -838,6 +846,7 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
+from litellm.tracing import TraceReceiver
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1112,6 +1121,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
+    await drain_post_call_redis_batches()
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
@@ -1513,6 +1523,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
+    ## [Optional] Initialize agent tracing
+    asyncio.create_task(ProxyStartupEvent.init_tracing(general_settings))
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -1540,6 +1553,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         if not model_info_scheduler.running:
             model_info_scheduler.start()
+
+    if scheduler is not None and prisma_client is not None:
+        from litellm.proxy.management_endpoints.roi_calculator_endpoints import register_scheduled_sync
+
+        register_scheduled_sync(scheduler)
 
     # End of startup event
     yield
@@ -3715,12 +3733,49 @@ async def _invalidate_spend_counter(counter_key: str):
 
 
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
+    if _defer_spend_counter_increments(pending):
+        return
     try:
         await increment_spend_counters_pipeline(pending=pending)
     except Exception as e:
         if isinstance(e, RedisCircuitBreakerOpenError) or is_redis_timeout_failure(e):
             return
         raise
+
+
+def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
+    """Post-call increments ride the request's post-call pipeline with the other counters. Each counter's
+    new value lands in memory when the pipeline settles; a failed one is invalidated so no reader trusts a
+    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
+    redis_cache: Final = spend_counter_cache.redis_cache
+    if redis_cache is None or not pending:
+        return False
+    batch: Final = active_post_call_redis_batch(redis_cache)
+    if batch is None:
+        return False
+    ttl: Final = redis_cache.get_ttl()
+    for item in pending:
+        batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
+    return True
+
+
+def _settle_spend_counter_increment(item: PendingSpendIncrement) -> Callable[[asyncio.Future[float]], Awaitable[None]]:
+    async def settle(future: asyncio.Future[float]) -> None:
+        if not future.cancelled() and future.exception() is None:
+            current_value: Final = float(future.result())
+            spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
+            record_spend_counter_value(item.counter_key, current_value)
+            return
+        if future.cancelled():
+            if spend_counter_cache.in_memory_cache.get_cache(key=item.counter_key) is not None:
+                spend_counter_cache.in_memory_cache.increment_cache(key=item.counter_key, value=item.increment)
+            return
+        verbose_proxy_logger.warning(
+            "Spend counter %s increment did not land in the post-call pipeline; invalidating it", item.counter_key
+        )
+        await _invalidate_spend_counter(counter_key=item.counter_key)
+
+    return settle
 
 
 async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
@@ -3762,7 +3817,7 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
     return tuple(float(current_value) for current_value in results or ())
 
 
-def _update_cache_read_keys(
+def update_cache_read_keys(
     user_id: str | None,
     end_user_id: str | None,
     team_id: str | None,
@@ -3778,13 +3833,45 @@ def _update_cache_read_keys(
     return user_keys + end_user_keys + team_keys + tag_keys
 
 
-async def _read_update_cache_values(keys: Sequence[str], parent_otel_span: Span | None) -> Mapping[str, object]:
+_UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
+
+
+async def arm_update_cache_read(keys: Sequence[str], cache: DualCache | None = None) -> None:
+    """Declares the ``update_cache`` read on the request pipeline once the spend is persisted, so it rides the same
+    round trip as the post-call spend counter read instead of its own."""
+    request: Final = active_request_redis_batches()
+    target: Final = user_api_key_cache if cache is None else cache
+    if request is None or target.redis_cache is None or not keys:
+        return
+    request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
+        keys, request.batch(target.redis_cache)
+    )
+
+
+async def _take_armed_update_cache_read(keys: Sequence[str], cache: DualCache) -> Mapping[str, object] | None:
+    request: Final = active_request_redis_batches()
+    if request is None:
+        return None
+    armed: Final = request.prefetched.pop(_UPDATE_CACHE_PREFETCH_SLOT, None)
+    if not isinstance(armed, DeclaredBatchRead) or armed.keys != tuple(keys):
+        return None
+    values: Final = await cache.async_resolve_batch_get(armed)
+    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
+
+
+async def _read_update_cache_values(
+    keys: Sequence[str], parent_otel_span: Span | None, cache: DualCache | None = None
+) -> Mapping[str, object]:
     """One batched read for every object ``update_cache`` refreshes; a failed read leaves them all untouched,
     exactly as a failed per-object GET left that object untouched."""
     if not keys:
         return MappingProxyType({})
+    target: Final = user_api_key_cache if cache is None else cache
     try:
-        values: Final = await user_api_key_cache.async_batch_get_cache(
+        armed: Final = await _take_armed_update_cache_read(keys, target)
+        if armed is not None:
+            return armed
+        values: Final = await target.async_batch_get_cache(
             keys=list(keys), parent_otel_span=parent_otel_span, throttle_redis=False
         )
     except Exception as e:
@@ -3817,7 +3904,7 @@ async def update_cache(
 
     values_to_update_in_cache: Final[list[tuple[str, object]]] = []
     cached_values: Final = await _read_update_cache_values(
-        keys=_update_cache_read_keys(
+        keys=update_cache_read_keys(
             user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
         ),
         parent_otel_span=parent_otel_span,
@@ -11234,6 +11321,28 @@ class ProxyStartupEvent:
             return connected_client
 
     @classmethod
+    async def init_tracing(cls, general_settings: dict) -> None:
+        """
+        Enable agent tracing (`POST/GET /v1/traces`) when configured:
+
+            general_settings:
+              tracing:
+                store: clickhouse       # CLICKHOUSE_URL / _USER / _PASSWORD / _DATABASE
+        """
+        settings: Final = general_settings.get("tracing")
+        if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
+            return
+        try:
+            tracing: Final = TraceReceiver.from_env()
+            await tracing.start()
+        except (KeyError, OSError, RuntimeError, ValueError) as error:
+            tracing_endpoints.receiver = None
+            verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
+            return
+        tracing_endpoints.receiver = tracing
+        verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
+
+    @classmethod
     def _init_dd_tracer(cls):
         """
         Initialize dd tracer - if `USE_DDTRACE=true` in .env
@@ -12275,13 +12384,7 @@ async def moderations(
             proxy_config=proxy_config,
         )
 
-        data["model"] = (
-            general_settings.get("moderation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model")  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
+        data["model"] = resolve_inference_model(data.get("model"), general_settings, user_model, kind="moderation")
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
@@ -12535,13 +12638,7 @@ async def audio_transcriptions(
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             data["user"] = user_api_key_dict.user_id
 
-        data["model"] = (
-            general_settings.get("moderation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
+        data["model"] = resolve_inference_model(data.get("model"), general_settings, user_model, kind="moderation")
 
         router_model_names: Final = llm_router.model_names if llm_router is not None else []
 
@@ -17443,13 +17540,17 @@ def _serve_custom_ui_logo(candidate: str) -> Response | None:
 
 
 @app.get("/get_image", include_in_schema=False)
-async def get_image(theme: Literal["light", "dark"] | None = None):
+async def get_image(
+    theme: Literal["light", "dark"] | None = None,
+    variant: Literal["full", "monogram"] = "full",
+):
     """Get logo to show on admin UI"""
 
     # get current_dir
     current_dir: Final = os.path.dirname(os.path.abspath(__file__))
-    bundled_light_logo: Final = os.path.join(current_dir, "logo.jpg")
-    bundled_dark_logo: Final = os.path.join(current_dir, "logo_dark.png")
+    bundled_logo_stem: Final = "logo_monogram" if variant == "monogram" else "logo"
+    bundled_light_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}.png")
+    bundled_dark_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}_dark.png")
     default_site_logo: Final = (
         bundled_dark_logo if theme == "dark" and os.path.isfile(bundled_dark_logo) else bundled_light_logo
     )
@@ -17510,7 +17611,7 @@ async def get_image(theme: Literal["light", "dark"] | None = None):
     if safe_logo is not None:
         safe_logo_path, media_type = safe_logo
         return FileResponse(safe_logo_path, media_type=media_type)
-    return FileResponse(bundled_light_logo, media_type="image/jpeg")
+    return FileResponse(bundled_light_logo, media_type="image/png")
 
 
 @app.get("/get_favicon", include_in_schema=False)
@@ -19784,6 +19885,7 @@ app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
+app.include_router(tracing_endpoints.router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
