@@ -449,27 +449,27 @@ def test_oversize_base64_is_refused_by_length_before_decoding():
     assert found.unscannable == ("image_url (over 4 MB)",)
 
 
-def test_content_source_document_with_an_image_is_refused():
+@pytest.mark.parametrize(
+    "call_type", [CallTypes.anthropic_messages.value, CallTypes.acompletion.value], ids=["messages", "chat"]
+)
+def test_images_inside_a_content_source_document_are_scanned(call_type):
     image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_B64}}
-    block = {"type": "document", "source": {"type": "content", "content": [TEXT, image]}}
+    pdf = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": PDF_B64}}
+    block = {"type": "document", "source": {"type": "content", "content": [TEXT, image, pdf]}}
 
-    found = find_request_attachments(_chat(block), CallTypes.anthropic_messages.value, False, False)
+    found = find_request_attachments(_chat(block), call_type, False, False)
 
+    assert list(found.images) == [_png_item()]
     assert found.unscannable == ("document",)
 
 
-@pytest.mark.parametrize(
-    "source, unscannable",
-    [
-        pytest.param({"text": "The grass is purple."}, (), id="text"),
-        pytest.param({"content": [{"text": "a"}, {"text": "b"}]}, (), id="content"),
-        pytest.param({"content": [{"text": "a"}, {"image": {}}]}, ("document",), id="content-with-image"),
-        pytest.param({"bytes": PDF_B64}, ("document",), id="bytes"),
-    ],
-)
-def test_converse_text_source_document_is_not_an_attachment(source, unscannable):
-    data = _converse({"document": {"format": "txt", "name": "doc", "source": source}})
+def test_document_images_inside_a_tool_result_follow_the_tool_scope():
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_B64}}
+    document = {"type": "document", "source": {"type": "content", "content": [image]}}
+    data = _chat({"type": "tool_result", "tool_use_id": "t1", "content": [document]})
 
-    found = find_request_attachments(data, CallTypes.allm_passthrough_route.value, False, False)
+    scanned = find_request_attachments(data, CallTypes.anthropic_messages.value, False, False)
+    skipped = find_request_attachments(data, CallTypes.anthropic_messages.value, True, False)
 
-    assert found.unscannable == unscannable
+    assert list(scanned.images) == [_png_item()]
+    assert skipped.images == ()
