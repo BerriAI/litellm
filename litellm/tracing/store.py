@@ -2,7 +2,7 @@
 
 import base64
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Final
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
@@ -102,7 +102,7 @@ def decode_cursor(cursor: str | None) -> tuple[int, str]:
 
 
 def _iso(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, tz=UTC).isoformat()
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
 
 
 def _status(code: str) -> SpanStatus:

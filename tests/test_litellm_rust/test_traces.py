@@ -39,11 +39,16 @@ async def test_trace_reader_rejects_success_status_with_embedded_error(recording
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("database,retention", [("db; DROP DATABASE default", 7), ("traces", 0)])
-async def test_schema_binding_preserves_configuration_validation(database: str, retention: int) -> None:
+async def test_schema_binding_rejects_invalid_database() -> None:
     with pytest.raises(ValueError, match=r"database.*retention"):
-        storage: Final = NativeTraceStorage(database, "http://localhost:8123")
-        await storage.ensure_schema(retention, 14)
+        NativeTraceStorage("db; DROP DATABASE default", "http://localhost:8123")
+
+
+@pytest.mark.asyncio
+async def test_schema_binding_rejects_non_positive_retention() -> None:
+    storage: Final = NativeTraceStorage("traces", "http://localhost:8123")
+    with pytest.raises(ValueError, match=r"database.*retention"):
+        await storage.ensure_schema(0, 14)
 
 
 @pytest.mark.asyncio
