@@ -9,11 +9,11 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm._logging import verbose_logger, verbose_router_logger
-from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.constants import PINNED_DEPLOYMENT_ID_METADATA_KEY, ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.types.router import CredentialLiteLLMParams
+from litellm.types.router import CredentialLiteLLMParams, RouterErrors
 from litellm.types.utils import LlmProviders
 
 
@@ -205,6 +205,31 @@ def filter_team_based_models(
         for deployment in healthy_deployments
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
+
+
+def filter_pinned_deployment(
+    model: str,
+    healthy_deployments: list[dict] | dict,
+    request_kwargs: Mapping[str, object] | None,
+) -> list[dict] | dict:
+    """Keep only the deployment a follow-up call must reach, such as the one that created a video."""
+    if request_kwargs is None or isinstance(healthy_deployments, dict):
+        return healthy_deployments
+    buckets: Final = (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
+    pinned_ids: Final = [
+        bucket.get(PINNED_DEPLOYMENT_ID_METADATA_KEY) for bucket in buckets if isinstance(bucket, Mapping)
+    ]
+    pinned_id: Final = next((pinned_id for pinned_id in pinned_ids if pinned_id), None)
+    if pinned_id is None:
+        return healthy_deployments
+    pinned: Final = [d for d in healthy_deployments if (d.get("model_info") or {}).get("id") == pinned_id]
+    if not pinned:
+        raise BadRequestError(
+            message=f"You passed in model={model}. {RouterErrors.no_healthy_deployments.value}",
+            model=model,
+            llm_provider="",
+        )
+    return pinned
 
 
 def _deployment_supports_web_search(deployment: dict) -> bool:

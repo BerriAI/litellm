@@ -2,13 +2,11 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import orjson
-from fastapi import status
 
+from litellm.constants import PINNED_DEPLOYMENT_ID_METADATA_KEY
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.router import Router
-from litellm.router_utils.common_utils import filter_team_based_models
-from litellm.types.router import RouterErrors
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_character_id_with_provider,
@@ -76,40 +74,25 @@ def deployment_id_for_encoding(response: object, data: Mapping[str, Any]) -> str
     """
     litellm_metadata: Final = data.get("litellm_metadata") or {}
     model_info: Final = litellm_metadata.get("model_info") or {}
-    return _hidden_param(response, "model_id") or model_info.get("id") or data.get("model")
+    pinned_id: Final = (data.get("metadata") or {}).get(PINNED_DEPLOYMENT_ID_METADATA_KEY)
+    return _hidden_param(response, "model_id") or model_info.get("id") or pinned_id or data.get("model")
 
 
-def routing_model_for_id(llm_router: Router, model_id: str, user_api_key_dict: UserAPIKeyAuth) -> str | None:
-    if not llm_router.has_model_id(model_id):
-        return llm_router.resolve_model_name_from_model_id(model_id)
-    deployment: Final = llm_router.get_deployment(model_id=model_id)
-    if deployment is None:
-        return model_id
-    # The router skips its access-group and team filters for a deployment id, so run both for the caller here.
-    request_kwargs: Final = {
-        "metadata": {
-            "user_api_key_auth": user_api_key_dict,
-            "user_api_key_team_id": user_api_key_dict.team_id,
-            "model_group": deployment.model_name,
-        }
-    }
-    allowed: Final = filter_team_based_models(
-        llm_router._filter_deployments_by_model_access_groups(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # untyped router filter, reused because the deployment-id path skips it
-            model=deployment.model_name,
-            healthy_deployments=[deployment.model_dump(exclude_none=True)],
-            request_kwargs=request_kwargs,
-            request_team_id=user_api_key_dict.team_id,
-        ),
-        request_kwargs,
-    )
-    if not allowed:
-        raise ProxyException(
-            message=f"litellm.BadRequestError: You passed in model={deployment.model_name}. {RouterErrors.no_healthy_deployments.value}",
-            type="invalid_request_error",
-            param=None,
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-    return model_id
+def route_to_encoded_deployment(llm_router: Router, model_id: str, data: dict[str, Any]) -> None:
+    """Route by the model group, pinned to the deployment the id encodes.
+
+    ``data["model"]`` stays the group so guardrails, limits and budgets keyed on it apply.
+    The router's own access-group and team filters run first, then the pin narrows the result.
+    """
+    resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id)
+    if resolved_model:
+        data["model"] = resolved_model
+    if model_id in llm_router.model_names or not llm_router.has_model_id(model_id):
+        return
+    raw_metadata: Final = data.get("metadata") or {}
+    metadata: Final = safe_json_loads(raw_metadata) if isinstance(raw_metadata, str) else raw_metadata
+    if isinstance(metadata, dict):
+        data["metadata"] = {**metadata, PINNED_DEPLOYMENT_ID_METADATA_KEY: model_id}
 
 
 def video_id_for_provider(llm_router: Router, video_id: str) -> str:

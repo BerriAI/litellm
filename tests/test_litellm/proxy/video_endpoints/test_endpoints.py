@@ -40,9 +40,9 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
 from litellm.llms.fal_ai.videos.transformation import FalAIVideoConfig
-from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoObject
@@ -879,7 +879,7 @@ FOLLOW_UP_CALLS = {
 @pytest.mark.parametrize(
     ("model_id", "expected_model"),
     [
-        pytest.param("deployment-b", "deployment-b", id="deployment_id_pins"),
+        pytest.param("deployment-b", "sora-2", id="deployment_id_pins"),
         pytest.param("sora-2", "sora-2", id="group_id_load_balances"),
         pytest.param("", None, id="no_model_in_id"),
         pytest.param("deployment-gone", None, id="deleted_deployment_calls_provider_directly"),
@@ -892,6 +892,9 @@ async def test_follow_up__model_comes_from_the_id(harness, endpoint, model_id, e
         await FOLLOW_UP_CALLS[endpoint](harness, model_id)
 
     assert harness.processor_data().get("model") == expected_model
+    assert (harness.processor_data().get("metadata") or {}).get("pinned_deployment_id") == (
+        "deployment-b" if model_id == "deployment-b" else None
+    )
 
 
 @pytest.mark.asyncio
@@ -924,7 +927,7 @@ async def test_status__fal_id_keeps_the_model_path_fal_reads(harness):
         headers={},
     )
 
-    assert data["model"] == "deployment-fal"
+    assert data["model"] == "kling"
     assert url == "https://queue.fal.run/fal-ai/kling-video/requests/req-123/status"
 
 
@@ -941,7 +944,8 @@ async def test_status__response_id_keeps_the_deployment_for_content(harness):
         await call_content(harness, status.id)
 
     assert decode_video_id_with_provider(status.id)["model_id"] == "deployment-b"
-    assert harness.processor_data().get("model") == "deployment-b"
+    assert harness.processor_data().get("model") == "sora-2"
+    assert harness.processor_data()["metadata"]["pinned_deployment_id"] == "deployment-b"
 
 
 @pytest.mark.asyncio
@@ -953,6 +957,45 @@ async def test_status__without_router_keeps_the_provider_model_in_the_id(harness
         status = await call_status(harness, fal_status_id)
 
     assert status.id == fal_status_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", sorted(FOLLOW_UP_CALLS))
+async def test_follow_up__pinned_deployment_keeps_its_model_level_guardrails(harness, endpoint):
+    harness.base_process.return_value = b"video-bytes"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "sora-2",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "sk-mock-b", "guardrails": ["video-guard"]},
+                "model_info": {"id": "deployment-b"},
+            }
+        ]
+    )
+
+    with patch.object(proxy_server, "llm_router", llm_router):
+        await FOLLOW_UP_CALLS[endpoint](harness, "deployment-b")
+    merged = _check_and_merge_model_level_guardrails(
+        data=harness.processor_data(), llm_router=llm_router, trust_client_model_info=False
+    )
+
+    assert merged["metadata"]["guardrails"] == ["video-guard"]
+
+
+@pytest.mark.asyncio
+async def test_remix__pin_keeps_the_metadata_sent_as_a_form_string(harness):
+    harness.base_process.return_value = b"video-bytes"
+
+    with patch.object(proxy_server, "llm_router", _video_router()):
+        await call_remix(harness, _video_id("deployment-b"), body={"prompt": "x", "metadata": '{"tag": "blue"}'})
+
+    assert harness.processor_data()["metadata"] == {"tag": "blue", "pinned_deployment_id": "deployment-b"}
+
+
+async def _call_router_as_proxy(llm_router: Router, harness, key: UserAPIKeyAuth):
+    data = harness.processor_data()
+    metadata = {**data.get("metadata", {}), "user_api_key_auth": key, "user_api_key_team_id": key.team_id}
+    return await getattr(llm_router, harness.route_type())(**{**data, "metadata": metadata})
 
 
 def _access_group_router() -> Router:
@@ -975,17 +1018,18 @@ def _access_group_router() -> Router:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", sorted(FOLLOW_UP_CALLS))
 async def test_follow_up__id_outside_the_key_access_group_is_rejected(harness, monkeypatch, endpoint):
-    monkeypatch.setitem(globals(), "_user", lambda: UserAPIKeyAuth(api_key="sk-test", models=["group-a"]))
+    key = UserAPIKeyAuth(api_key="sk-test", models=["group-a"])
+    monkeypatch.setitem(globals(), "_user", lambda: key)
+    harness.base_process.return_value = b"video-bytes"
+    llm_router = _access_group_router()
 
-    with patch.object(proxy_server, "llm_router", _access_group_router()):
-        with pytest.raises(ProxyException) as rejected:
-            await FOLLOW_UP_CALLS[endpoint](harness, "deployment-b")
+    with patch.object(proxy_server, "llm_router", llm_router):
+        await FOLLOW_UP_CALLS[endpoint](harness, "deployment-b")
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await _call_router_as_proxy(llm_router, harness, key)
 
-    assert rejected.value.code == "400"
-    assert rejected.value.message == (
-        "litellm.BadRequestError: You passed in model=sora-2. There are no healthy deployments for this model"
-    )
-    assert harness.base_process.call_count == 0
+    assert rejected.value.status_code == 400
+    assert "You passed in model=sora-2. There are no healthy deployments for this model" in rejected.value.message
 
 
 @pytest.mark.asyncio
@@ -1009,7 +1053,8 @@ async def test_status__id_inside_the_key_access_pins_the_deployment(harness, mon
     with patch.object(proxy_server, "llm_router", _access_group_router()):
         await call_status(harness, _video_id(model_id))
 
-    assert harness.processor_data().get("model") == model_id
+    assert harness.processor_data().get("model") == "sora-2"
+    assert harness.processor_data()["metadata"]["pinned_deployment_id"] == model_id
 
 
 def _team_router() -> Router:
@@ -1027,18 +1072,18 @@ def _team_router() -> Router:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("endpoint", sorted(FOLLOW_UP_CALLS))
 async def test_follow_up__id_of_another_team_deployment_is_rejected(harness, monkeypatch, endpoint):
-    monkeypatch.setitem(globals(), "_user", lambda: UserAPIKeyAuth(api_key="sk-test", team_id="team-a"))
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a")
+    monkeypatch.setitem(globals(), "_user", lambda: key)
+    harness.base_process.return_value = b"video-bytes"
+    llm_router = _team_router()
 
-    with patch.object(proxy_server, "llm_router", _team_router()):
-        with pytest.raises(ProxyException) as rejected:
-            await FOLLOW_UP_CALLS[endpoint](harness, "team-b-deployment")
+    with patch.object(proxy_server, "llm_router", llm_router):
+        await FOLLOW_UP_CALLS[endpoint](harness, "team-b-deployment")
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        await _call_router_as_proxy(llm_router, harness, key)
 
-    assert rejected.value.code == "400"
-    assert rejected.value.message == (
-        "litellm.BadRequestError: You passed in model=model_name_team-b_sora. "
-        "There are no healthy deployments for this model"
-    )
-    assert harness.base_process.call_count == 0
+    assert rejected.value.status_code == 400
+    assert "You passed in model=model_name_team-b_sora. There are no healthy deployments" in rejected.value.message
 
 
 @pytest.mark.asyncio
@@ -1056,4 +1101,5 @@ async def test_status__id_of_a_team_deployment_pins_it_for_that_team(harness, mo
     with patch.object(proxy_server, "llm_router", _team_router()):
         await call_status(harness, _video_id("team-b-deployment"))
 
-    assert harness.processor_data().get("model") == "team-b-deployment"
+    assert harness.processor_data().get("model") == "model_name_team-b_sora"
+    assert harness.processor_data()["metadata"]["pinned_deployment_id"] == "team-b-deployment"

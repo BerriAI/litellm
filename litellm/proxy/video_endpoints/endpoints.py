@@ -22,7 +22,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
-    routing_model_for_id,
+    route_to_encoded_deployment,
     video_id_for_provider,
     video_reference_to_id,
 )
@@ -274,9 +274,7 @@ async def video_status(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
-        if resolved_model:
-            data["model"] = resolved_model
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
         data["video_id"] = video_id_for_provider(llm_router, video_id)
 
     # Process request using ProxyBaseLLMRequestProcessing
@@ -376,9 +374,7 @@ async def video_content(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
-        if resolved_model:
-            data["model"] = resolved_model
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
         data["video_id"] = video_id_for_provider(llm_router, video_id)
     # Process request using ProxyBaseLLMRequestProcessing
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -485,9 +481,7 @@ async def video_remix(
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
-        if resolved_model:
-            data["model"] = resolved_model
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
         data["video_id"] = video_id_for_provider(llm_router, video_id)
 
     # Process request using ProxyBaseLLMRequestProcessing
@@ -690,9 +684,7 @@ async def video_get_character(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
-        if resolved_model:
-            data["model"] = resolved_model
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -801,9 +793,7 @@ async def video_edit(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
-        if resolved_model:
-            data["model"] = resolved_model
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
         data["video_id"] = video_id_for_provider(llm_router, data["video_id"])
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -900,9 +890,7 @@ async def video_extension(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = routing_model_for_id(llm_router, model_id_from_decoded, user_api_key_dict)
-        if resolved_model:
-            data["model"] = resolved_model
+        route_to_encoded_deployment(llm_router, model_id_from_decoded, data)
         data["video_id"] = video_id_for_provider(llm_router, data["video_id"])
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
