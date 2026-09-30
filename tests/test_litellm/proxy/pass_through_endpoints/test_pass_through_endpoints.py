@@ -6116,7 +6116,10 @@ async def test_websocket_passthrough_never_forwards_caller_credentials_upstream(
     await websocket_passthrough_request(
         websocket=websocket,
         target="wss://upstream.example.test/v1/realtime",
-        custom_headers={"Authorization": "Bearer upstream-admin-secret"},
+        custom_headers={
+            "Authorization": "Bearer upstream-admin-secret",
+            "x-api-key": "upstream-admin-key",
+        },
         user_api_key_dict=UserAPIKeyAuth(),
         forward_headers=True,
         endpoint="/realtime",
@@ -6125,6 +6128,7 @@ async def test_websocket_passthrough_never_forwards_caller_credentials_upstream(
 
     assert all("sk-caller-virtual-key" not in value for value in captured["headers"].values())
     assert captured["headers"]["Authorization"] == "Bearer upstream-admin-secret"
+    assert captured["headers"]["x-api-key"] == "upstream-admin-key"
     assert captured["headers"]["x-goog-user-project"] == "caller-project"
 
 
