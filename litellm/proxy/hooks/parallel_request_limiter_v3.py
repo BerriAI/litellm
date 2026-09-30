@@ -31,8 +31,9 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
-from litellm import DualCache
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import (
     BatchResult,
     RegisteredScript,
@@ -1166,6 +1167,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache
         )
 
+    @staticmethod
+    def _force_hash_tag_grouping_enabled() -> bool:
+        """
+        Whether to slot-group keys even though the client is not an OSS-Cluster client.
+
+        Sharded backends that front their shards with a proxy - notably Azure Redis
+        Enterprise / Azure Managed Redis with the EnterpriseCluster policy - speak the
+        standalone protocol, so ``_is_redis_cluster()`` is False for them, yet they still
+        reject multi-key EVALSHA whose KEYS span slots with ``CROSSSLOT Keys in request
+        don't hash to the same slot``. Their hashing policy matches
+        ``keyslot_for_redis_cluster`` exactly (hash tag between ``{}`` if present, else the
+        whole key, CRC16 mod 16384), so grouping by computed slot makes every batch
+        single-slot and valid. Opt in with ``litellm.force_redis_hash_tag_grouping = True``
+        (``litellm_settings.force_redis_hash_tag_grouping`` in the proxy config).
+        """
+        return litellm.force_redis_hash_tag_grouping
+
     async def in_memory_cache_sliding_window(
         self,
         keys: list[str],
@@ -1361,13 +1379,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Group keys by their Redis hash tag to ensure cluster compatibility.
 
-        For Redis clusters, uses slot calculation to group keys that belong to the same slot.
-        For regular Redis, no grouping is needed - all keys can be processed together.
+        For Redis clusters, and for backends that opt into
+        ``force_redis_hash_tag_grouping`` (see ``_force_hash_tag_grouping_enabled``), uses
+        slot calculation to group keys that belong to the same slot. For regular Redis, no
+        grouping is needed - all keys can be processed together.
         """
         groups: Final[dict[str, list[str]]] = {}
 
-        # Use slot calculation for Redis clusters only
-        if self._is_redis_cluster():
+        if self._is_redis_cluster() or self._force_hash_tag_grouping_enabled():
             for key in keys:
                 slot = self.keyslot_for_redis_cluster(key)
                 slot_key = f"slot_{slot}"
@@ -1470,6 +1489,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         key_groups: Final = list(self._group_keys_by_hash_tag(keys_to_fetch).items())
         all_cache_values: Final[list[CacheCounterValue | None]] = []
+        values_by_key: Final[dict[str, CacheCounterValue | None]] = {}
         args: Final = (now_int, self.window_size)
         pipelined: Final = self._pipeline_scripts(
             BATCH_RATE_LIMITER_SCRIPT,
@@ -1485,6 +1505,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     else _as_counter_values(await group_result)
                 )
                 all_cache_values.extend(group_cache_values)
+                values_by_key.update(zip(group_keys, group_cache_values))
             except Exception as e:
                 if self._fail_closed_resolver():
                     applied_keys = tuple(itertools.chain.from_iterable(keys for _tag, keys in key_groups[:index]))
@@ -1503,8 +1524,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
                 all_cache_values.extend(group_cache_values)
+                values_by_key.update(zip(group_keys, group_cache_values))
 
-        return all_cache_values
+        # Groups run (and are refunded, above) in first-seen-slot order, which only matches
+        # keys_to_fetch order when grouping is a no-op (single group). Reassemble the
+        # original order here so callers can keep indexing positionally against keys_to_fetch.
+        return [values_by_key.get(key) for key in keys_to_fetch]
 
     async def _refund_later_pipelined_groups(
         self,
@@ -3680,8 +3705,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         custom model name) or otherwise raises -- the audio add-on still
         applies on top of the fallback.
         """
-        from litellm import token_counter
-
         if not isinstance(data, dict):
             return 0
         is_responses_request: Final = call_type in RESPONSES_API_CALL_TYPES
@@ -3725,7 +3748,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             estimate: Final = max(
                 0,
                 int(
-                    token_counter(
+                    litellm.token_counter(
                         model=model or "",
                         messages=countable_messages,
                         text=selected_text,

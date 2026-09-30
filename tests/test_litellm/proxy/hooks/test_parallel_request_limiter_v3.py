@@ -1882,6 +1882,61 @@ def test_group_keys_by_hash_tag_redis_cluster():
         ), "All keys should be present in groups"
 
 
+def test_group_keys_by_hash_tag_force_grouping_non_cluster(monkeypatch):
+    """
+    Sharded-but-proxied backends (Azure Redis Enterprise, EnterpriseCluster policy) are not
+    OSS-Cluster clients, so _is_redis_cluster() is False, but they still reject multi-key
+    EVALSHA spanning slots. force_redis_hash_tag_grouping must opt them into slot grouping.
+    """
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", True)
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    test_keys = [
+        "{user:user-456}:window",
+        "{user:user-456}:tokens",
+        "{team:team-789}:window",
+        "{team:team-789}:tokens",
+    ]
+
+    groups = handler._group_keys_by_hash_tag(test_keys)
+
+    # not lumped into the single non-cluster bucket
+    assert "all_keys" not in groups
+
+    # every group is single-slot, which is what Redis requires
+    for group_key, group_keys in groups.items():
+        assert group_key.startswith("slot_")
+        slots = {handler.keyslot_for_redis_cluster(k) for k in group_keys}
+        assert len(slots) == 1, f"{group_key} spans slots {slots}"
+
+    # nothing dropped
+    assert {k for gk in groups.values() for k in gk} == set(test_keys)
+
+    # the two hash tags genuinely differ in slot, so this input really would have CROSSSLOT'd
+    assert len(groups) == 2
+
+
+def test_group_keys_by_hash_tag_force_grouping_disabled_by_default(monkeypatch):
+    """
+    force_redis_hash_tag_grouping defaults to False, so non-cluster Redis keeps the
+    single-group (no-op) behavior unless an operator explicitly opts in.
+    """
+    monkeypatch.setattr(litellm, "force_redis_hash_tag_grouping", False)
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    keys = ["{user:a}:window", "{team:b}:window"]
+    groups = handler._group_keys_by_hash_tag(keys)
+    assert list(groups) == ["all_keys"]
+
+
 def test_keyslot_for_redis_cluster():
     """
     Test the keyslot calculation for Redis cluster.
@@ -1928,8 +1983,8 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
         mock_script.side_effect = [
             Exception(
                 "EVALSHA - all keys must map to the same key slot"
-            ),  # First group fails
-            [1234, 1, 1234, 2],  # Second group succeeds
+            ),  # First group (api_key, 2 keys) fails
+            [5678, 2],  # Second group (user, 2 keys) succeeds
         ]
         handler.batch_rate_limiter_script = mock_script
 
@@ -1949,8 +2004,15 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             keys_to_fetch=test_keys, now_int=1234
         )
 
-        # Verify results: 2 from fallback + 4 from successful script = 6 total
-        assert len(results) == 6, f"Expected 6 results, got {len(results)}"
+        # Exactly one (window, counter) pair per key in keys_to_fetch - callers index
+        # results positionally against keys_to_fetch, so the lengths must match.
+        assert len(results) == len(
+            test_keys
+        ), f"Expected {len(test_keys)} results (one per key), got {len(results)}"
+        # Results must be reordered back to keys_to_fetch order regardless of which
+        # slot group ran first: fallback values for the api_key pair, script values
+        # for the user pair.
+        assert results == [1234, 1, 5678, 2]
 
         # Verify script was called twice (once per slot group)
         assert mock_script.call_count == 2
@@ -1975,6 +2037,64 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
         assert (
             len(unique_processed_keys) >= 2
         ), "Should have processed at least some keys"
+
+
+@pytest.mark.asyncio
+async def test_execute_redis_batch_rate_limiter_script_preserves_original_key_order():
+    """
+    Regression test: when a later descriptor's hash tag revisits a slot seen earlier
+    (interleaved with an intervening different-slot descriptor), _group_keys_by_hash_tag's
+    groups are concatenated in first-seen-slot order, not in keys_to_fetch order. The
+    returned cache_values must still line up positionally with keys_to_fetch, since
+    should_rate_limit and is_cache_list_over_limit both index it that way.
+
+    Layout: descriptor A ({user:a}, slot 12527) and descriptor C ({api_key:sk-858}, also
+    slot 12527 - a genuine CRC16 collision) both land in the same group, but descriptor B
+    ({team:b}, slot 10576) sits between them in keys_to_fetch. Group order is [A, C][B];
+    original order is [A][B][C]. If the fix regresses, B's values end up attributed to C.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    a_keys = ["{user:a}:window", "{user:a}:tokens"]
+    b_keys = ["{team:b}:window", "{team:b}:tokens"]
+    c_keys = ["{api_key:sk-858}:window", "{api_key:sk-858}:tokens"]
+    assert handler.keyslot_for_redis_cluster(a_keys[0]) == handler.keyslot_for_redis_cluster(
+        c_keys[0]
+    ), "test fixture assumes A and C collide onto the same slot"
+    assert handler.keyslot_for_redis_cluster(b_keys[0]) != handler.keyslot_for_redis_cluster(
+        a_keys[0]
+    ), "test fixture assumes B is on a different slot than A/C"
+
+    keys_to_fetch = [*a_keys, *b_keys, *c_keys]
+    values_by_pair_keys = {
+        tuple(a_keys): [100, 1],
+        tuple(b_keys): [200, 2],
+        tuple(c_keys): [300, 3],
+    }
+
+    async def fake_script(*, keys, args):
+        # A group call may bundle multiple original pairs (A and C share a slot);
+        # concatenate each pair's canned values in the order the group received them.
+        values = []
+        for i in range(0, len(keys), 2):
+            values.extend(values_by_pair_keys[tuple(keys[i : i + 2])])
+        return values
+
+    handler.batch_rate_limiter_script = AsyncMock(side_effect=fake_script)
+
+    with patch.object(handler, "_is_redis_cluster", return_value=True):
+        results = await handler._execute_redis_batch_rate_limiter_script(
+            keys_to_fetch=keys_to_fetch, now_int=1234
+        )
+
+    assert results == [100, 1, 200, 2, 300, 3], (
+        "results must be reordered to match keys_to_fetch (A, B, C), not group order (A, C, B)"
+    )
 
 
 @pytest.mark.asyncio
