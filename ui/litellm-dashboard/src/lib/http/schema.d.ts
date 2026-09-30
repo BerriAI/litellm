@@ -1263,8 +1263,8 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads session rollups folded once per request at spend-write time, so this endpoint
-         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+         *     Reads session rollups folded once per request at spend-write time, with bounded
+         *     retained-log recovery for historical comparisons. A user filter selects only turns attributed to that
          *     internal user when written; older key-only history remains outside user views. A session
          *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
@@ -9187,6 +9187,40 @@ export interface paths {
          * @description [Docs](https://docs.litellm.ai/docs/pass_through/mistral)
          */
         patch: operations["mistral_proxy_route_mistral__endpoint__patch"];
+        trace?: never;
+    };
+    "/model-insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insights */
+        get: operations["get_model_insights_model_insights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-insights/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insight Tasks */
+        get: operations["get_model_insight_tasks_model_insights_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/model/block": {
@@ -24865,17 +24899,17 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description Covered savings over covered baseline spend, as a percentage
+             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
              */
             saved_pct: number | null;
             /**
              * Saved Per Session
-             * @description Average session savings; unavailable unless every turn is covered
+             * @description Recorded savings per session, including historical estimates
              */
             saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed savings for covered turns only; null when traffic has no current estimates
+             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
              */
             saved_spend: number | null;
             /**
@@ -24884,8 +24918,13 @@ export interface components {
              */
             savings_estimated_actual_spend: number;
             /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
+            /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -24929,17 +24968,17 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description Covered savings over covered baseline spend, as a percentage
+             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
              */
             saved_pct: number | null;
             /**
              * Saved Per Session
-             * @description Average session savings; unavailable unless every turn is covered
+             * @description Recorded savings per session, including historical estimates
              */
             saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed savings for covered turns only; null when traffic has no current estimates
+             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
              */
             saved_spend: number | null;
             /**
@@ -24948,8 +24987,13 @@ export interface components {
              */
             savings_estimated_actual_spend: number;
             /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
+            /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25226,12 +25270,12 @@ export interface components {
         AutoRouterSessionResponse: {
             /**
              * Baseline Model
-             * @description The savings baseline most covered turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             * @description The savings baseline recorded by most session turns, including historical turns, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
              */
             baseline_model: string | null;
             /**
              * Baseline Models
-             * @description Covered turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             * @description Session turns recording each baseline model; more than one entry means the router's baseline changed mid-session; these counts do not imply savings coverage
              */
             baseline_models: {
                 [key: string]: number;
@@ -25258,7 +25302,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Estimated savings for covered turns only, net of classifier cost
+             * @description Recorded historical savings plus newer estimates, net of classifier cost
              */
             saved_spend: number | null;
             /**
@@ -25273,7 +25317,7 @@ export interface components {
             savings_estimated_baseline_spend: number | null;
             /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Session Id */
@@ -32979,6 +33023,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Per Second */
+            cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
@@ -34314,6 +34360,11 @@ export interface components {
              * @default true
              */
             fail_on_error: boolean | null;
+            /**
+             * Gateway Name
+             * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
+             */
+            gateway_name?: string | null;
             /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.
@@ -35973,6 +36024,87 @@ export interface components {
         ModelInfoDelete: {
             /** Id */
             id: string;
+        };
+        /** ModelInsightDailyMetric */
+        ModelInsightDailyMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightMetric */
+        ModelInsightMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightTaskSummary */
+        ModelInsightTaskSummary: {
+            /** Category */
+            category: string;
+            /** Label */
+            label: string;
+            /** Leader */
+            leader: string;
+            /** Provider */
+            provider: string;
+            /** Share */
+            share: number;
+            /** Task Type */
+            task_type: string;
+            /** Value */
+            value: number;
+        };
+        /** ModelInsightTasksResponse */
+        ModelInsightTasksResponse: {
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Tasks */
+            tasks: components["schemas"]["ModelInsightTaskSummary"][];
+        };
+        /** ModelInsightsResponse */
+        ModelInsightsResponse: {
+            /** Daily */
+            daily: components["schemas"]["ModelInsightDailyMetric"][];
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Top Models */
+            top_models: components["schemas"]["ModelInsightMetric"][];
         };
         /** ModelParams */
         ModelParams: {
@@ -46722,6 +46854,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Per Second */
+            cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
@@ -59319,6 +59453,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insights_model_insights_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric the top models are ranked by */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insight_tasks_model_insights_tasks_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric task shares are computed from */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightTasksResponse"];
                 };
             };
             /** @description Validation Error */

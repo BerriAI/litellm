@@ -28,7 +28,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import chain, groupby
-from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
@@ -7134,7 +7133,7 @@ class MCPServerManager:
         )
         return {
             server_id: list(dict.fromkeys(chain.from_iterable(tools for _, tools in group)))
-            for server_id, group in groupby(sorted(expanded, key=itemgetter(0)), key=itemgetter(0))
+            for server_id, group in groupby(sorted(expanded, key=lambda pair: pair[0]), key=lambda pair: pair[0])
         }
 
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
