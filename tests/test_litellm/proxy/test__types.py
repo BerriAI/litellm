@@ -20,6 +20,14 @@ from litellm.proxy._types import (
 )
 
 SERVER_ONLY_MARKERS = (
+    "requires_fresh_policy",
+    "mcp_explicit_grants_only",
+    "managed_agent_context",
+    "managed_agent_policy",
+    "invoked_agent_id",
+    "invoked_agent_policy",
+    "agent_invocation_cost",
+    "billing_agent_policy",
     "mcp_admitted_user_subject",
     "mcp_source_team_rpm_limits",
     "mcp_session_resource_server_id",
