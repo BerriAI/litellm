@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import time
+import weakref
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
@@ -32,6 +33,8 @@ from litellm.types.services import ServiceTypes
 
 _T = TypeVar("_T")
 _ScriptArg = str | bytes | int | float
+SettledHook = Callable[[asyncio.Future[_T]], Awaitable[None] | None]  # mutable-ok: Callable params
+POST_CALL_FLUSH_DEADLINE_SECONDS: Final = 1.0
 
 
 class RegisteredScript(Protocol):
@@ -52,11 +55,24 @@ class _Op(Generic[_T]):
     how to run on its own when the batch cannot pipeline (cluster client, or a reply the pipeline cannot
     settle, like NOSCRIPT)."""
 
-    __slots__ = ("future",)
+    __slots__ = ("future", "settled_hooks")
 
     def __init__(self) -> None:
         self.future: Final[asyncio.Future[_T]] = asyncio.get_running_loop().create_future()
         self.future.add_done_callback(_mark_retrieved)
+        self.settled_hooks: Final[list[SettledHook[_T]]] = []  # mutable-ok: append-only registry
+
+    async def run_settled_hooks(self) -> None:
+        for hook in self.settled_hooks:
+            await self._run_settled_hook(hook)
+
+    async def _run_settled_hook(self, hook: SettledHook[_T]) -> None:
+        try:
+            follow_up: Final = hook(self.future)
+            if follow_up is not None:
+                await follow_up
+        except Exception as e:  # noqa: BLE001  # one owner's follow-up must not stop the others
+            verbose_logger.warning("redis batch settled hook failed: %s", e)
 
     def enqueue(self, pipe: _RedisPipeline) -> int:
         raise NotImplementedError
@@ -238,6 +254,11 @@ class BatchResult(Generic[_T]):
     def done(self) -> bool:
         return self._op.future.done()
 
+    def on_settled(self, hook: SettledHook[_T]) -> None:
+        """For an owner that does not await: runs inside the flush once this operation has its result or
+        failure (or was cancelled with the pipeline), so the flush completes with the follow-up done."""
+        self._op.settled_hooks.append(hook)
+
 
 @dataclass(slots=True)
 class RedisBatch:
@@ -294,6 +315,7 @@ class RedisBatch:
                 for op in ops:
                     if not op.future.done():
                         op.future.cancel()
+                await asyncio.gather(*(op.run_settled_hooks() for op in ops))
 
     async def _flush_pipeline(self, ops: Sequence[_Op[object]]) -> None:
         start_time: Final = time.time()
@@ -354,14 +376,34 @@ def _backend_key(redis_cache: RedisCache) -> object:
     return (type(redis_cache), redis_cache.namespace, settings)
 
 
+_open_post_call: Final[weakref.WeakSet[RequestRedisBatches]] = weakref.WeakSet()
+"""Requests whose post-call batch still holds declared ops, so a shutdown can send them before Redis goes away."""
+
+
 class RequestRedisBatches:
     """One ``RedisBatch`` per Redis backend for the current request, so readers of different caches that
-    share a server (the proxy's and the router's) share the pipeline."""
+    share a server (the proxy's and the router's) share the pipeline.
 
-    __slots__ = ("_batches", "prefetched")
+    The post-call batches hold the writes nothing waits on (counters, token scripts, the response cache).
+    They flush once, when the success or failure callbacks have all run, or at ``post_call_deadline``
+    seconds after the first declaration when no callback phase closes them."""
 
-    def __init__(self) -> None:
+    __slots__ = (
+        "__weakref__",
+        "_batches",
+        "_deadline",
+        "_deadline_flush",
+        "_post_call",
+        "post_call_deadline",
+        "prefetched",
+    )
+
+    def __init__(self, post_call_deadline: float = POST_CALL_FLUSH_DEADLINE_SECONDS) -> None:
         self._batches: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
+        self._post_call: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
+        self.post_call_deadline: Final = post_call_deadline
+        self._deadline: asyncio.TimerHandle | None = None
+        self._deadline_flush: asyncio.Task[None] | None = None
         # Reads declared early for a consumer that runs later in the request, keyed by consumer name.
         self.prefetched: Final[dict[str, object]] = {}  # mutable-ok: armed pre-admission, taken at use
 
@@ -373,13 +415,43 @@ class RequestRedisBatches:
             self._batches[key] = batch
         return batch
 
+    def post_call(self, redis_cache: RedisCache) -> RedisBatch:
+        key: Final = _backend_key(redis_cache)
+        existing: Final = self._post_call.get(key)
+        batch: Final = (
+            existing
+            if existing is not None
+            else self._post_call.setdefault(key, RedisBatch(redis_cache, name="post_call_redis_batch"))
+        )
+        if self._deadline is None:
+            self._deadline = asyncio.get_running_loop().call_later(self.post_call_deadline, self._flush_on_deadline)
+        _open_post_call.add(self)
+        return batch
+
+    def _flush_on_deadline(self) -> None:
+        self._deadline = None
+        self._deadline_flush = asyncio.ensure_future(self.flush_post_call())
+
     async def flush_all(self) -> None:
         """Send whatever is still declared (write-backs nobody awaits) before the request scope closes."""
         await asyncio.gather(*(batch.flush() for batch in self._batches.values() if batch.pending))
 
+    async def flush_post_call(self) -> None:
+        """One pipeline per backend for the post-call writes; the deadline is disarmed since this is that flush."""
+        if self._deadline is not None:
+            self._deadline.cancel()
+            self._deadline = None
+        await asyncio.gather(*(batch.flush() for batch in self._post_call.values() if batch.pending))
+        if not any(batch.pending for batch in self._post_call.values()):
+            _open_post_call.discard(self)
+
     @property
     def batches(self) -> tuple[RedisBatch, ...]:
         return tuple(self._batches.values())
+
+    @property
+    def post_call_batches(self) -> tuple[RedisBatch, ...]:
+        return tuple(self._post_call.values())
 
 
 _active_request_batches: Final[ContextVar[RequestRedisBatches | None]] = ContextVar(
@@ -399,19 +471,40 @@ def active_request_redis_batches() -> RequestRedisBatches | None:
     return _active_request_batches.get()
 
 
+def active_post_call_redis_batch(redis_cache: RedisCache) -> RedisBatch | None:
+    """The request's post-call batch for this backend, or None outside a ``request_redis_batch_scope``."""
+    batches: Final = _active_request_batches.get()
+    if batches is None:
+        return None
+    return batches.post_call(redis_cache)
+
+
+async def flush_post_call_redis_batches() -> None:
+    """Called where the success and failure callbacks of a request have all run."""
+    batches: Final = _active_request_batches.get()
+    if batches is not None:
+        await batches.flush_post_call()
+
+
+async def drain_post_call_redis_batches() -> None:
+    """Sends every post-call batch still waiting on its callbacks or deadline; for the shutdown path."""
+    await asyncio.gather(*(batches.flush_post_call() for batches in tuple(_open_post_call)))
+
+
 class request_redis_batch_scope:
     """Redis reads declared inside share one pipeline per backend; nested scopes join the outer one."""
 
-    __slots__ = ("_token",)
+    __slots__ = ("_post_call_deadline", "_token")
 
-    def __init__(self) -> None:
+    def __init__(self, post_call_deadline: float = POST_CALL_FLUSH_DEADLINE_SECONDS) -> None:
         self._token: Token[RequestRedisBatches | None] | None = None
+        self._post_call_deadline: Final = post_call_deadline
 
     def __enter__(self) -> RequestRedisBatches:
         outer: Final = _active_request_batches.get()
         if outer is not None:
             return outer
-        batches: Final = RequestRedisBatches()
+        batches: Final = RequestRedisBatches(post_call_deadline=self._post_call_deadline)
         self._token = _active_request_batches.set(batches)
         return batches
 
