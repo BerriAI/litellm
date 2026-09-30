@@ -14,21 +14,20 @@ from typing import (
 
 from pydantic import BaseModel
 
-from litellm.harness.adapters.base import ApprovalHandler
+from litellm.harness.context import ApprovalHandler
 from litellm.harness.options import HarnessOptions
 from litellm.harness.runtime import (
     AsyncEventStream,
     AsyncSession,
-    aresume,
-    arun,
-    asession,
-    astream,
+    _arun,
+    _astream,
+    aagent_resume,
+    aagent_session,
 )
 from litellm.harness.sandbox.base import Sandbox
 from litellm.harness.types import (
     Done,
     Event,
-    Gateway,
     Harness,
     PermissionMode,
     Result,
@@ -39,8 +38,7 @@ from litellm.harness.types import (
 T = TypeVar("T")
 
 IN_LOOP_MESSAGE = (
-    "litellm.harness.{name}() cannot be called from a running event loop; "
-    "use `await litellm.harness.a{name}(...)` instead"
+    "litellm.{name}() cannot be called from a running event loop; use `await litellm.a{name}(...)` instead"
 )
 
 
@@ -209,13 +207,12 @@ class Session:
         return self._inner.session_id
 
 
-def run(
+def _run(
     harness: Harness,
     prompt: str,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -233,12 +230,11 @@ def run(
 ) -> Result:
     """Run one prompt to completion (blocking) and return the Result."""
     return run_sync(
-        arun(
+        _arun(
             harness,
             prompt,
             sandbox=sandbox,
             model=model,
-            gateway=gateway,
             api_key=api_key,
             api_base=api_base,
             instructions=instructions,
@@ -254,17 +250,16 @@ def run(
             options=options,
             install=install,
         ),
-        "run",
+        "agent",
     )
 
 
-def stream(
+def _stream(
     harness: Harness,
     prompt: str,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -281,13 +276,12 @@ def stream(
     install: bool = False,
 ) -> EventStream:
     """Stream events for one prompt (sync iterator). Validation errors raise here."""
-    _ensure_sync_context("stream")
-    inner = astream(
+    _ensure_sync_context("agent")
+    inner = _astream(
         harness,
         prompt,
         sandbox=sandbox,
         model=model,
-        gateway=gateway,
         api_key=api_key,
         api_base=api_base,
         instructions=instructions,
@@ -306,12 +300,11 @@ def stream(
     return EventStream(inner)
 
 
-def session(
+def agent_session(
     harness: Harness,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -327,14 +320,13 @@ def session(
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Session:
-    """A sync multi-turn session: `with session(...) as s: s.run(...)`."""
-    _ensure_sync_context("session")
+    """A multi-turn agent session: `with litellm.agent_session(...) as s: s.run(...)`."""
+    _ensure_sync_context("agent_session")
     return Session(
-        asession(
+        aagent_session(
             harness,
             sandbox=sandbox,
             model=model,
-            gateway=gateway,
             api_key=api_key,
             api_base=api_base,
             instructions=instructions,
@@ -353,12 +345,11 @@ def session(
     )
 
 
-def resume(
+def agent_resume(
     state: State | bytes,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -374,14 +365,13 @@ def resume(
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Session:
-    """Continue a detached/stopped session (sync)."""
-    _ensure_sync_context("resume")
+    """Continue a detached or stopped agent session from its State."""
+    _ensure_sync_context("agent_resume")
     return Session(
-        aresume(
+        aagent_resume(
             state,
             sandbox=sandbox,
             model=model,
-            gateway=gateway,
             api_key=api_key,
             api_base=api_base,
             instructions=instructions,
@@ -398,3 +388,54 @@ def resume(
             install=install,
         )
     )
+
+
+def agent(
+    harness: Harness,
+    prompt: str,
+    *,
+    sandbox: Sandbox,
+    stream: bool = False,
+    model: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    instructions: str | None = None,
+    tools: Sequence[Callable[..., Any]] = (),
+    skills: Sequence[str | os.PathLike[str]] = (),
+    disable_tools: Sequence[str] = (),
+    permissions: PermissionMode = "full",
+    on_approval: ApprovalHandler | None = None,
+    output: type[BaseModel] | None = None,
+    max_turns: int | None = None,
+    timeout: float | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    options: HarnessOptions | None = None,
+    install: bool = False,
+) -> Result | EventStream:
+    """Run an agent harness (Claude Code, Codex, OpenCode, Deep Agents) on one prompt.
+
+    Returns a Result. With stream=True it returns an iterator of events instead.
+    Prefix the model with `litellm_proxy/` to route every model call through your
+    LiteLLM AI Gateway.
+    """
+    kwargs: dict[str, Any] = {
+        "sandbox": sandbox,
+        "model": model,
+        "api_key": api_key,
+        "api_base": api_base,
+        "instructions": instructions,
+        "tools": tools,
+        "skills": skills,
+        "disable_tools": disable_tools,
+        "permissions": permissions,
+        "on_approval": on_approval,
+        "output": output,
+        "max_turns": max_turns,
+        "timeout": timeout,
+        "metadata": metadata,
+        "options": options,
+        "install": install,
+    }
+    if stream:
+        return _stream(harness, prompt, **kwargs)
+    return _run(harness, prompt, **kwargs)
