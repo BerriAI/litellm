@@ -1,0 +1,37 @@
+# The k8s-aibom subchart is condition-gated (k8s-aibom.enabled, default
+# false). helm-unittest does not load a disabled dependency's templates at
+# all, so the default-off path cannot be asserted here as "zero documents";
+# it is covered by every other suite rendering with default values. These
+# tests exercise the enabled configuration end to end.
+suite: k8s-aibom optional subchart (enabled)
+templates:
+  - charts/k8s-aibom/templates/deployment.yaml
+  - charts/k8s-aibom/templates/clusterrole.yaml
+  - charts/k8s-aibom/templates/controllerconfig.yaml
+set:
+  k8s-aibom.enabled: true
+tests:
+  - it: renders the k8s-aibom controller Deployment when enabled
+    template: charts/k8s-aibom/templates/deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: manager
+  - it: renders the k8s-aibom ClusterRole when enabled
+    template: charts/k8s-aibom/templates/clusterrole.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ClusterRole
+  - it: renders the default AIBOMControllerConfig when enabled
+    template: charts/k8s-aibom/templates/controllerconfig.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: AIBOMControllerConfig
