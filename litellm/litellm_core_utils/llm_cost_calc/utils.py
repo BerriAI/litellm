@@ -76,6 +76,9 @@ _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
         ServiceTier.ULTRAFAST.value: ServiceTier.ULTRAFAST.value,
     }
 )
+SERVICE_TIER_COST_KEY_SUFFIXES: Final[tuple[str, ...]] = tuple(
+    sorted(frozenset(f"_{suffix}" for suffix in _SERVICE_TIER_TO_COST_KEY_SUFFIX.values()))
+)
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
 _BATCH_KEY_SUFFIX: Final = "_batches"

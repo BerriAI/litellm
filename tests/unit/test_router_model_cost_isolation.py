@@ -23,6 +23,7 @@ from litellm import Router
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
+from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -860,6 +861,328 @@ def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
     )
 
     assert model_info == {"input_cost_per_token": 0.000003}
+
+
+_LIT9058_TIER_BACKEND_MODEL: Final = "lit9058-tier-backend"
+_LIT9058_TIER_BACKEND_KEY: Final = f"openai/{_LIT9058_TIER_BACKEND_MODEL}"
+_LIT9058_CUSTOM_INPUT_RATE: Final = 0.00011
+_LIT9058_CUSTOM_OUTPUT_RATE: Final = 0.00022
+_LIT9058_TIER_BACKEND_ENTRY: Final = {
+    "key": _LIT9058_TIER_BACKEND_KEY,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "max_tokens": 123456,
+    "input_cost_per_token": 0.00021,
+    "output_cost_per_token": 0.00032,
+    "input_cost_per_token_ultrafast": 0.00031,
+    "output_cost_per_token_ultrafast": 0.00042,
+    "input_cost_per_token_priority": 0.00051,
+    "output_cost_per_token_priority": 0.00062,
+    "input_cost_per_token_flex": 0.00071,
+    "output_cost_per_token_flex": 0.00082,
+    "input_cost_per_token_balanced": 0.00091,
+    "output_cost_per_token_balanced": 0.00102,
+    "cache_read_input_token_cost_ultrafast": 0.00013,
+    "input_cost_per_token_above_272k_tokens_ultrafast": 0.00014,
+    "output_cost_per_token_above_272k_tokens_ultrafast": 0.00015,
+    "input_cost_per_token_batches": 0.00016,
+    "input_cost_per_token_above_272k_tokens": 0.00017,
+}
+_LIT9058_AZURE_TIER_BACKEND_KEY: Final = "azure/lit9058-tier-backend"
+_LIT9058_AZURE_TIER_BACKEND_ENTRY: Final = {
+    **_LIT9058_TIER_BACKEND_ENTRY,
+    "key": _LIT9058_AZURE_TIER_BACKEND_KEY,
+    "litellm_provider": "azure",
+}
+
+
+def _register_lit9058_tier_backend() -> None:
+    litellm.model_cost[_LIT9058_TIER_BACKEND_KEY] = copy.deepcopy(_LIT9058_TIER_BACKEND_ENTRY)
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+
+
+def _register_lit9058_azure_tier_backend() -> None:
+    litellm.model_cost[_LIT9058_AZURE_TIER_BACKEND_KEY] = copy.deepcopy(_LIT9058_AZURE_TIER_BACKEND_ENTRY)
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> None:
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_LIT9058_TIER_BACKEND_KEY, _LIT9058_TIER_BACKEND_MODEL)
+    }
+    try:
+        _register_lit9058_tier_backend()
+        model_info: Final = {
+            "id": "lit9058-custom-priced",
+            "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+            "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+            "output_cost_per_token_ultrafast": 0.00999,
+        }
+
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info,
+            backend_model=_LIT9058_TIER_BACKEND_MODEL,
+            custom_llm_provider="openai",
+        )
+
+        assert model_info == {
+            "id": "lit9058-custom-priced",
+            "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+            "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+            "input_cost_per_token_ultrafast": _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"],
+            "output_cost_per_token_ultrafast": 0.00999,
+            "input_cost_per_token_priority": _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_priority"],
+            "output_cost_per_token_priority": _LIT9058_TIER_BACKEND_ENTRY["output_cost_per_token_priority"],
+            "input_cost_per_token_flex": _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_flex"],
+            "output_cost_per_token_flex": _LIT9058_TIER_BACKEND_ENTRY["output_cost_per_token_flex"],
+            "input_cost_per_token_balanced": _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_balanced"],
+            "output_cost_per_token_balanced": _LIT9058_TIER_BACKEND_ENTRY["output_cost_per_token_balanced"],
+            "cache_read_input_token_cost_ultrafast": _LIT9058_TIER_BACKEND_ENTRY[
+                "cache_read_input_token_cost_ultrafast"
+            ],
+            "input_cost_per_token_above_272k_tokens_ultrafast": _LIT9058_TIER_BACKEND_ENTRY[
+                "input_cost_per_token_above_272k_tokens_ultrafast"
+            ],
+            "output_cost_per_token_above_272k_tokens_ultrafast": _LIT9058_TIER_BACKEND_ENTRY[
+                "output_cost_per_token_above_272k_tokens_ultrafast"
+            ],
+        }
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_inherit_builtin_service_tier_pricing_noop_without_base_rate_or_backend() -> None:
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_LIT9058_TIER_BACKEND_KEY, _LIT9058_TIER_BACKEND_MODEL)
+    }
+    try:
+        _register_lit9058_tier_backend()
+        model_info_without_base_rate: Final = {
+            "id": "lit9058-no-base-rate",
+            "input_cost_per_token_ultrafast": 0.00031,
+        }
+        expected_without_base_rate: Final = copy.deepcopy(model_info_without_base_rate)
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info_without_base_rate,
+            backend_model=_LIT9058_TIER_BACKEND_MODEL,
+            custom_llm_provider="openai",
+        )
+
+        model_info_with_unknown_backend: Final = {
+            "id": "lit9058-unknown-backend",
+            "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+            "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+        }
+        expected_with_unknown_backend: Final = copy.deepcopy(model_info_with_unknown_backend)
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info_with_unknown_backend,
+            backend_model="lit9058-tier-backend-unknown",
+            custom_llm_provider="openai",
+        )
+
+        assert model_info_without_base_rate == expected_without_base_rate
+        assert model_info_with_unknown_backend == expected_with_unknown_backend
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() -> None:
+    model_id: Final = "lit9058-tier-priced-deployment"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_LIT9058_TIER_BACKEND_KEY, _LIT9058_TIER_BACKEND_MODEL, model_id)
+    }
+    try:
+        _register_lit9058_tier_backend()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "lit9058-tier-priced",
+                    "litellm_params": {
+                        "model": _LIT9058_TIER_BACKEND_MODEL,
+                        "custom_llm_provider": "openai",
+                        "api_key": "sk-lit9058-not-used",
+                        "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+                        "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+                    },
+                    "model_info": {
+                        "id": model_id,
+                        "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+                        "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+                    },
+                }
+            ]
+        )
+
+        ultrafast_response: Final = router.completion(
+            model="lit9058-tier-priced",
+            messages=[{"role": "user", "content": "tiered pricing"}],
+            service_tier="ultrafast",
+            mock_response=litellm.ModelResponse(
+                model=_LIT9058_TIER_BACKEND_MODEL,
+                service_tier="ultrafast",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+        standard_response: Final = router.completion(
+            model="lit9058-tier-priced",
+            messages=[{"role": "user", "content": "standard pricing"}],
+            mock_response=litellm.ModelResponse(
+                model=_LIT9058_TIER_BACKEND_MODEL,
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+
+        assert isinstance(ultrafast_response, litellm.ModelResponse)
+        assert ultrafast_response._hidden_params["response_cost"] == pytest.approx(
+            1000 * _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"]
+            + 100 * _LIT9058_TIER_BACKEND_ENTRY["output_cost_per_token_ultrafast"]
+        )
+        assert isinstance(standard_response, litellm.ModelResponse)
+        assert standard_response._hidden_params["response_cost"] == pytest.approx(
+            1000 * _LIT9058_CUSTOM_INPUT_RATE + 100 * _LIT9058_CUSTOM_OUTPUT_RATE
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize("ptu_enabled", (True, False))
+def test_ptu_service_tier_pricing_is_disabled_only_when_attribution_is_enabled(
+    monkeypatch: pytest.MonkeyPatch, ptu_enabled: bool
+) -> None:
+    model_id: Final = f"lit9058-ptu-tier-{ptu_enabled}"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_LIT9058_TIER_BACKEND_KEY, model_id)
+    }
+    try:
+        _register_lit9058_tier_backend()
+        monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True" if ptu_enabled else "")
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": f"lit9058-ptu-tier-{ptu_enabled}",
+                    "litellm_params": {
+                        "model": _LIT9058_TIER_BACKEND_MODEL,
+                        "custom_llm_provider": "openai",
+                        "api_key": "sk-lit9058-not-used",
+                        "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+                        "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+                    },
+                    "model_info": {**_PTU_MODEL_INFO, "id": model_id},
+                }
+            ]
+        )
+        registered: Final = litellm.model_cost[model_id]
+        tier_fields: Final = tuple(
+            field for field in _LIT9058_TIER_BACKEND_ENTRY if field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES)
+        )
+        if ptu_enabled:
+            assert all(field not in registered for field in tier_fields)
+        else:
+            assert all(field in registered for field in tier_fields)
+
+        response: Final = router.completion(
+            model=f"lit9058-ptu-tier-{ptu_enabled}",
+            messages=[{"role": "user", "content": "ptu service tier pricing"}],
+            service_tier="priority",
+            mock_response=litellm.ModelResponse(
+                model=_LIT9058_TIER_BACKEND_MODEL,
+                service_tier="priority",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        expected_cost: Final = (
+            0.0
+            if ptu_enabled
+            else 1000 * _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_priority"]
+            + 100 * _LIT9058_TIER_BACKEND_ENTRY["output_cost_per_token_priority"]
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_azure_base_model_inherits_service_tier_pricing_for_registration_and_payload() -> None:
+    model_id: Final = "lit9058-azure-alias"
+    payload_id: Final = "lit9058-azure-payload"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_LIT9058_AZURE_TIER_BACKEND_KEY, model_id, payload_id)
+    }
+    try:
+        _register_lit9058_azure_tier_backend()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "azure/lit9058-alias",
+                    "litellm_params": {
+                        "model": "azure/lit9058-alias",
+                        "custom_llm_provider": "azure",
+                        "api_key": "sk-lit9058-not-used",
+                        "api_base": "https://azure.lit9058.invalid",
+                    },
+                    "model_info": {
+                        "id": model_id,
+                        "base_model": _LIT9058_AZURE_TIER_BACKEND_KEY,
+                        "input_cost_per_token": _LIT9058_CUSTOM_INPUT_RATE,
+                        "output_cost_per_token": _LIT9058_CUSTOM_OUTPUT_RATE,
+                    },
+                }
+            ]
+        )
+
+        response: Final = router.completion(
+            model="azure/lit9058-alias",
+            messages=[{"role": "user", "content": "azure base model pricing"}],
+            service_tier="priority",
+            allowed_openai_params=["service_tier"],
+            mock_response=litellm.ModelResponse(
+                model=_LIT9058_AZURE_TIER_BACKEND_KEY,
+                service_tier="priority",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * _LIT9058_AZURE_TIER_BACKEND_ENTRY["input_cost_per_token_priority"]
+            + 100 * _LIT9058_AZURE_TIER_BACKEND_ENTRY["output_cost_per_token_priority"]
+        )
+
+        payload: Final = Router._deployment_model_cost_payload(
+            deployment=Deployment(
+                model_name="azure/lit9058-alias-from-params",
+                litellm_params=LiteLLM_Params(
+                    model="azure/lit9058-alias",
+                    custom_llm_provider="azure",
+                    base_model=_LIT9058_AZURE_TIER_BACKEND_KEY,
+                    input_cost_per_token=_LIT9058_CUSTOM_INPUT_RATE,
+                    output_cost_per_token=_LIT9058_CUSTOM_OUTPUT_RATE,
+                ),
+                model_info=ModelInfo(id=payload_id),
+            )
+        )
+
+        assert payload["input_cost_per_token_priority"] == _LIT9058_AZURE_TIER_BACKEND_ENTRY[
+            "input_cost_per_token_priority"
+        ]
+        assert payload["output_cost_per_token_priority"] == _LIT9058_AZURE_TIER_BACKEND_ENTRY[
+            "output_cost_per_token_priority"
+        ]
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
 
 
 def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
@@ -1801,6 +2124,41 @@ def test_deployment_model_cost_payload_folds_in_litellm_params_pricing():
     assert payload["max_input_tokens"] == 4242
     assert payload["input_cost_per_token"] == 0.000123
     assert payload["cache_read_input_token_cost"] > 0
+
+
+def test_deployment_model_cost_payload_includes_builtin_service_tier_pricing() -> None:
+    model_id: Final = "lit9058-tier-payload"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_LIT9058_TIER_BACKEND_KEY, _LIT9058_TIER_BACKEND_MODEL, model_id)
+    }
+    try:
+        _register_lit9058_tier_backend()
+        payload: Final = Router._deployment_model_cost_payload(
+            deployment=Deployment(
+                model_name="lit9058-tier-payload",
+                litellm_params=LiteLLM_Params(
+                    model=_LIT9058_TIER_BACKEND_MODEL,
+                    custom_llm_provider="openai",
+                    input_cost_per_token=_LIT9058_CUSTOM_INPUT_RATE,
+                    output_cost_per_token=_LIT9058_CUSTOM_OUTPUT_RATE,
+                ),
+                model_info=ModelInfo(id=model_id),
+            )
+        )
+
+        assert (
+            payload["input_cost_per_token_ultrafast"] == _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"]
+        )
+        assert (
+            payload["output_cost_per_token_ultrafast"] == _LIT9058_TIER_BACKEND_ENTRY["output_cost_per_token_ultrafast"]
+        )
+        assert payload["input_cost_per_token_balanced"] == _LIT9058_TIER_BACKEND_ENTRY["input_cost_per_token_balanced"]
+        assert payload["input_cost_per_token"] == _LIT9058_CUSTOM_INPUT_RATE
+        assert payload["output_cost_per_token"] == _LIT9058_CUSTOM_OUTPUT_RATE
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
 
 
 def test_register_deployment_in_model_cost_writes_both_key_families():
