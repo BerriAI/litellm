@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import os
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import (
     Any,
@@ -22,13 +21,9 @@ from typing import (
 
 from pydantic import BaseModel, ValidationError
 
+import litellm
 from litellm._logging import verbose_logger
-from litellm.harness.adapters import get_adapter_class
-from litellm.harness.adapters.base import (
-    ApprovalHandler,
-    HarnessAdapter,
-    SessionContext,
-)
+from litellm.harness.context import ApprovalHandler, GatewayTarget, SessionContext
 from litellm.harness.endpoint import ModelEndpoint
 from litellm.harness.errors import (
     CapabilityUnsupported,
@@ -39,6 +34,8 @@ from litellm.harness.errors import (
     SessionClosed,
     StateIncompatible,
 )
+from litellm.harness.handlers import get_harness_config, get_harness_handler
+from litellm.harness.handlers.base import BaseHarnessHandler
 from litellm.harness.options import HarnessOptions
 from litellm.harness.sandbox.base import Sandbox
 from litellm.harness.sandbox.snapshot import build_file_changes, capture_text_contents
@@ -48,7 +45,6 @@ from litellm.harness.types import (
     Done,
     Event,
     FileChange,
-    Gateway,
     Harness,
     PermissionMode,
     Result,
@@ -59,12 +55,13 @@ from litellm.harness.types import (
     Usage,
     require_harness,
 )
+from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
+from litellm.llms.base_llm.harness.utils import last_json_object
 
 PERMISSION_MODES: Final = frozenset(get_args(PermissionMode))
 SKILL_FILE: Final = "SKILL.md"
 # Adapter errors that mean "misconfigured", not "the runtime crashed": re-raised to the caller.
 PROPAGATED_ERRORS: Final = (HarnessInstallFailed, CapabilityUnsupported)
-_JSON_DECODER: Final = json.JSONDecoder()
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +76,7 @@ class SessionConfig:
     harness: Harness
     sandbox: Sandbox
     model: str | None = None
-    gateway: Gateway | None = None
+    gateway: GatewayTarget | None = None
     api_key: str | None = None
     api_base: str | None = None
     instructions: str | None = None
@@ -96,13 +93,29 @@ class SessionConfig:
     install: bool = False
 
 
-def resolve_gateway(gateway: Gateway | None) -> Gateway | None:
-    """gateway argument, else LITELLM_PROXY_* env, else None (SDK mode)."""
-    if gateway is not None:
-        if not isinstance(gateway, Gateway):
-            raise TypeError(f"gateway must be a litellm.harness.Gateway, got {type(gateway).__name__}")
-        return gateway
-    return Gateway.from_env()
+LITELLM_PROXY_PREFIX: Final = "litellm_proxy/"
+
+
+def resolve_model_route(
+    model: str | None, api_key: str | None, api_base: str | None
+) -> tuple[str | None, GatewayTarget | None]:
+    """(model sent to the runtime, gateway or None).
+
+    `litellm_proxy/<group>` (or `litellm.use_litellm_proxy = True`) routes every model call
+    through the LiteLLM AI Gateway, using api_base/api_key or LITELLM_PROXY_API_BASE /
+    LITELLM_PROXY_API_KEY. Anything else is called directly through the LiteLLM SDK.
+    """
+    prefixed = model is not None and model.startswith(LITELLM_PROXY_PREFIX)
+    if not prefixed and not litellm.use_litellm_proxy:
+        return model, None
+    group = model[len(LITELLM_PROXY_PREFIX) :] if prefixed and model is not None else model
+    base = (api_base or os.environ.get("LITELLM_PROXY_API_BASE") or "").strip()
+    key = (api_key or os.environ.get("LITELLM_PROXY_API_KEY") or "").strip()
+    if not base:
+        raise ValueError("litellm_proxy/ models need the gateway URL: pass api_base= or set LITELLM_PROXY_API_BASE")
+    if not key:
+        raise ValueError("litellm_proxy/ models need a gateway virtual key: pass api_key= or set LITELLM_PROXY_API_KEY")
+    return group, GatewayTarget(api_base=base.rstrip("/"), api_key=key)
 
 
 def _normalize_skills(skills: Sequence[str | os.PathLike[str]]) -> list[str]:
@@ -126,12 +139,12 @@ def _check_basic(config: SessionConfig) -> None:
         raise CapabilityUnsupported("install=True is not supported yet; put the runtime binary on PATH in the sandbox")
 
 
-def _check_options(config: SessionConfig, adapter_cls: type[HarnessAdapter]) -> None:
-    if config.options is None or isinstance(config.options, adapter_cls.options_type):
+def _check_options(config: SessionConfig, harness_config: BaseHarnessConfig) -> None:
+    if config.options is None or isinstance(config.options, harness_config.options_type):
         return
     raise OptionsMismatch(
         f"{type(config.options).__name__} cannot be used with Harness.{config.harness.name}; "
-        f"use {adapter_cls.options_type.__name__}"
+        f"use {harness_config.options_type.__name__}"
     )
 
 
@@ -156,11 +169,11 @@ def _check_capabilities(config: SessionConfig, caps: Capabilities, interactive: 
         raise CapabilityUnsupported(f"{name} does not support disable_tools=")
 
 
-def validate(config: SessionConfig, adapter_cls: type[HarnessAdapter], interactive: bool) -> None:
+def validate(config: SessionConfig, harness_config: BaseHarnessConfig, interactive: bool) -> None:
     """Raise before anything starts if the request cannot be served."""
     _check_basic(config)
-    _check_options(config, adapter_cls)
-    _check_capabilities(config, adapter_cls.capabilities, interactive)
+    _check_options(config, harness_config)
+    _check_capabilities(config, harness_config.capabilities, interactive)
 
 
 def build_config(
@@ -168,7 +181,6 @@ def build_config(
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -187,11 +199,13 @@ def build_config(
     """Normalize public keyword arguments into a SessionConfig."""
     if sandbox is None:
         raise TypeError("sandbox= is required, e.g. sandbox=litellm.sandbox.local('.')")
+    resolved_harness = require_harness(harness)
+    routed_model, gateway = resolve_model_route(model, api_key, api_base)
     return SessionConfig(
-        harness=require_harness(harness),
+        harness=resolved_harness,
         sandbox=sandbox,
-        model=model,
-        gateway=resolve_gateway(gateway),
+        model=routed_model,
+        gateway=gateway,
         api_key=api_key,
         api_base=api_base,
         instructions=instructions,
@@ -237,22 +251,6 @@ def _context_for(config: SessionConfig) -> SessionContext:
 # ---------------------------------------------------------------------------
 
 
-def last_json_object(text: str) -> str | None:
-    """The last top-level JSON object embedded in text, as a string."""
-    found: str | None = None
-    index = text.find("{")
-    while index != -1:
-        try:
-            value, end = _JSON_DECODER.raw_decode(text, index)
-        except ValueError:
-            index = text.find("{", index + 1)
-            continue
-        if isinstance(value, dict):
-            found = text[index:end]
-        index = text.find("{", end)
-    return found
-
-
 def parse_output(output: type[BaseModel], output_json: str | None, text: str) -> tuple[BaseModel | None, str | None]:
     """Return (model, None) on success or (None, error message) on failure."""
     raw = output_json or last_json_object(text)
@@ -271,7 +269,7 @@ def parse_output(output: type[BaseModel], output_json: str | None, text: str) ->
 
 @dataclass
 class _End:
-    """Sentinel the producer puts on the queue when the adapter turn is over."""
+    """Sentinel the producer puts on the queue when the handler turn is over."""
 
     reason: StopReason | None = None
     error: BaseException | None = None
@@ -297,7 +295,7 @@ async def _aclose(events: AsyncIterator[Event]) -> None:
     try:
         await closer()
     except Exception as e:
-        verbose_logger.debug("harness: error closing adapter turn: %s", e)
+        verbose_logger.debug("harness: error closing handler turn: %s", e)
 
 
 async def pump_events(
@@ -305,7 +303,7 @@ async def pump_events(
     queue: asyncio.Queue[Event | _End],
     max_turns: int | None,
 ) -> None:
-    """Drive the adapter turn in one task, enforcing max_turns on ToolCall events."""
+    """Drive the handler turn in one task, enforcing max_turns on ToolCall events."""
     end = _End()
     tool_calls = 0
     try:
@@ -385,7 +383,7 @@ class _Turn:
             self.deadline = asyncio.get_running_loop().time() + self.ctx.timeout
 
     def _start_producer(self) -> None:
-        events = self.session.adapter.turn(self.ctx, self.prompt)
+        events = self.session.handler.turn(self.ctx, self.prompt)
         self.control.producer = asyncio.ensure_future(pump_events(events, self.queue, self.ctx.max_turns))
         if self.control.cancelled:
             self.control.producer.cancel()
@@ -598,12 +596,14 @@ class AsyncSession:
         interactive: bool = True,
     ) -> None:
         self.config = config
-        self.adapter_cls = get_adapter_class(config.harness)
-        validate(config, self.adapter_cls, interactive=interactive)
-        if resume_from is not None and not self.adapter_cls.capabilities.resume:
+        self.harness_config = get_harness_config(config.harness)
+        validate(config, self.harness_config, interactive=interactive)
+        if resume_from is not None and not self.harness_config.capabilities.resume:
             raise CapabilityUnsupported(f"Harness.{config.harness.name} does not support resume")
         self.ctx = _context_for(config)
-        self.adapter: HarnessAdapter = self.adapter_cls()
+        # Config-specific static checks (managed option keys, required model) before any I/O.
+        self.harness_config.validate_environment(self.ctx)
+        self.handler: BaseHarnessHandler = get_harness_handler(self.harness_config)
         self.results: list[Result] = []
         self._resume_from = resume_from
         self._native_id: str | None = resume_from
@@ -624,7 +624,7 @@ class AsyncSession:
         await self.aclose()
 
     async def _open_endpoint(self) -> None:
-        if not self.adapter_cls.uses_endpoint or self.ctx.endpoint is not None:
+        if not self.harness_config.uses_model_endpoint or self.ctx.endpoint is not None:
             return
         endpoint = ModelEndpoint(
             self.config.harness,
@@ -638,9 +638,9 @@ class AsyncSession:
         self.ctx.endpoint = endpoint
 
     async def _launch(self) -> None:
-        await self.adapter.start(self.ctx)
+        await self.handler.start(self.ctx)
         if self._native_id is not None and (self._resume_from is not None or self._restart_needed):
-            await self.adapter.resume(self.ctx, self._native_id)
+            await self.handler.resume(self.ctx, self._native_id)
 
     async def start(self) -> AsyncSession:
         if self._closed:
@@ -658,11 +658,11 @@ class AsyncSession:
 
     async def interrupt(self) -> None:
         """Stop the runtime after a timeout / max_turns / cancel; next turn restarts it."""
-        self._native_id = self.adapter.native_session_id() or self._native_id
+        self._native_id = self.handler.native_session_id() or self._native_id
         try:
-            await self.adapter.stop(self.ctx)
+            await self.handler.stop(self.ctx)
         except Exception as e:
-            verbose_logger.warning("harness: adapter stop failed: %s", e)
+            verbose_logger.warning("harness: handler stop failed: %s", e)
         self._restart_needed = True
 
     async def _ensure_ready(self) -> None:
@@ -690,11 +690,11 @@ class AsyncSession:
             return
         self._closed = True
         if self._started:
-            self._native_id = self.adapter.native_session_id() or self._native_id
+            self._native_id = self.handler.native_session_id() or self._native_id
             try:
-                await self.adapter.stop(self.ctx)
+                await self.handler.stop(self.ctx)
             except Exception as e:
-                verbose_logger.warning("harness: adapter stop failed: %s", e)
+                verbose_logger.warning("harness: handler stop failed: %s", e)
         await self._close_endpoint()
 
     close = aclose
@@ -702,7 +702,7 @@ class AsyncSession:
     def state(self) -> State:
         native = self._native_id
         if self._started and not self._closed:
-            native = self.adapter.native_session_id() or native
+            native = self.handler.native_session_id() or native
         return State(
             harness=self.config.harness,
             native_session_id=native,
@@ -726,7 +726,7 @@ class AsyncSession:
     # -- turns --------------------------------------------------------------
 
     def usage_counters(self) -> tuple[int, int, int, float]:
-        """(input_tokens, output_tokens, calls, cost) so far, from endpoint or adapter."""
+        """(input_tokens, output_tokens, calls, cost) so far, from endpoint or handler."""
         endpoint = self.ctx.endpoint
         if endpoint is not None:
             usage = endpoint.usage
@@ -756,10 +756,10 @@ class AsyncSession:
         return await _collect(self.turn_events(prompt, TurnControl(), False))
 
     async def history(self) -> list[dict[str, Any]]:
-        if not self.adapter_cls.capabilities.history:
+        if not self.harness_config.capabilities.history:
             raise CapabilityUnsupported(f"Harness.{self.config.harness.name} does not expose history")
         await self._ensure_ready()
-        return await self.adapter.history(self.ctx)
+        return await self.handler.history(self.ctx)
 
     @property
     def cost(self) -> float:
@@ -797,12 +797,11 @@ async def _collect(events: AsyncIterator[Event]) -> Result:
 # ---------------------------------------------------------------------------
 
 
-def asession(
+def aagent_session(
     harness: Harness,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -818,12 +817,11 @@ def asession(
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> AsyncSession:
-    """A multi-turn session: `async with asession(...) as s:` or `s = await asession(...)`."""
+    """A multi-turn agent session: `async with litellm.aagent_session(...) as s:`."""
     config = build_config(
         harness,
         sandbox=sandbox,
         model=model,
-        gateway=gateway,
         api_key=api_key,
         api_base=api_base,
         instructions=instructions,
@@ -842,13 +840,12 @@ def asession(
     return AsyncSession(config)
 
 
-async def arun(
+async def _arun(
     harness: Harness,
     prompt: str,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -869,7 +866,6 @@ async def arun(
         harness,
         sandbox=sandbox,
         model=model,
-        gateway=gateway,
         api_key=api_key,
         api_base=api_base,
         instructions=instructions,
@@ -889,13 +885,12 @@ async def arun(
         return await session.arun(prompt)
 
 
-def astream(
+def _astream(
     harness: Harness,
     prompt: str,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -912,11 +907,10 @@ def astream(
     install: bool = False,
 ) -> AsyncEventStream:
     """Stream events for one prompt. Validation errors raise here, before iteration."""
-    session = asession(
+    session = aagent_session(
         harness,
         sandbox=sandbox,
         model=model,
-        gateway=gateway,
         api_key=api_key,
         api_base=api_base,
         instructions=instructions,
@@ -944,12 +938,11 @@ def _coerce_state(state: State | bytes) -> State:
     return state
 
 
-def aresume(
+def aagent_resume(
     state: State | bytes,
     *,
     sandbox: Sandbox,
     model: str | None = None,
-    gateway: Gateway | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
@@ -973,7 +966,6 @@ def aresume(
         resolved.harness,
         sandbox=sandbox,
         model=model if model is not None else resolved.model,
-        gateway=gateway,
         api_key=api_key,
         api_base=api_base,
         instructions=instructions,
@@ -992,6 +984,56 @@ def aresume(
     return AsyncSession(config, resume_from=resolved.native_session_id)
 
 
-def capabilities(harness: Harness) -> Capabilities:
+def agent_capabilities(harness: Harness) -> Capabilities:
     """What a harness supports (permission modes, structured output, tools...)."""
-    return get_adapter_class(require_harness(harness)).capabilities
+    return get_harness_config(require_harness(harness)).capabilities
+
+
+def aagent(
+    harness: Harness,
+    prompt: str,
+    *,
+    sandbox: Sandbox,
+    stream: bool = False,
+    model: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    instructions: str | None = None,
+    tools: Sequence[Callable[..., Any]] = (),
+    skills: Sequence[str | os.PathLike[str]] = (),
+    disable_tools: Sequence[str] = (),
+    permissions: PermissionMode = "full",
+    on_approval: ApprovalHandler | None = None,
+    output: type[BaseModel] | None = None,
+    max_turns: int | None = None,
+    timeout: float | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    options: HarnessOptions | None = None,
+    install: bool = False,
+) -> Coroutine[Any, Any, Result] | AsyncEventStream:
+    """Run an agent harness on one prompt.
+
+    `await litellm.aagent(...)` returns a Result. With stream=True it returns an async
+    iterator of events instead: `async for event in litellm.aagent(..., stream=True)`.
+    """
+    kwargs: dict[str, Any] = {
+        "sandbox": sandbox,
+        "model": model,
+        "api_key": api_key,
+        "api_base": api_base,
+        "instructions": instructions,
+        "tools": tools,
+        "skills": skills,
+        "disable_tools": disable_tools,
+        "permissions": permissions,
+        "on_approval": on_approval,
+        "output": output,
+        "max_turns": max_turns,
+        "timeout": timeout,
+        "metadata": metadata,
+        "options": options,
+        "install": install,
+    }
+    if stream:
+        return _astream(harness, prompt, **kwargs)
+    return _arun(harness, prompt, **kwargs)
