@@ -6253,6 +6253,24 @@ class TestMCPServerManager:
         assert manager.get_mcp_server_answering_to("gh") is by_alias
         assert manager.get_mcp_server_answering_to("GH") is by_alias
 
+    @pytest.mark.parametrize("hidden_first", [True, False], ids=["hidden-listed-first", "public-listed-first"])
+    def test_answering_to_never_reroutes_a_name_hidden_from_an_ip_to_a_case_variant(self, hidden_first):
+        manager = MCPServerManager()
+        hidden = MCPServer(
+            server_id="p-id",
+            name="gh",
+            server_name="gh",
+            transport=MCPTransport.http,
+            available_on_public_internet=False,
+        )
+        public = MCPServer(server_id="u-id", name="u", server_name="u", alias="Gh", transport=MCPTransport.http)
+        manager.registry = {"p-id": hidden, "u-id": public} if hidden_first else {"u-id": public, "p-id": hidden}
+
+        assert manager.get_mcp_server_answering_to("gh", client_ip="203.0.113.7") is None
+        assert manager.get_mcp_server_answering_to("p-id", client_ip="203.0.113.7") is None
+        assert manager.get_mcp_server_answering_to("gh", client_ip="10.0.0.7") is hidden
+        assert manager.get_mcp_server_answering_to("Gh", client_ip="203.0.113.7") is public
+
     @pytest.mark.parametrize("pinned_first", [True, False], ids=["pinned-id-listed-first", "alias-listed-first"])
     def test_answering_to_and_discovery_agree_on_a_pinned_id_that_another_alias_case_folds_to(self, pinned_first):
         from litellm.proxy._experimental.mcp_server import discoverable_endpoints

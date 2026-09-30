@@ -8682,13 +8682,17 @@ async def test_scoped_router_hides_a_private_server_from_an_external_ip_like_the
             internal = await _get_allowed_mcp_servers_from_mcp_server_names(
                 mcp_servers=["gh"], allowed_mcp_servers=[public], client_ip=None
             )
+            by_own_name = await _get_allowed_mcp_servers_from_mcp_server_names(
+                mcp_servers=["Gh"], allowed_mcp_servers=[public], client_ip="203.0.113.7"
+            )
         assert global_mcp_server_manager.get_mcp_server_answering_to("gh", client_ip="203.0.113.7") is None
         assert global_mcp_server_manager.get_mcp_server_answering_to("gh", client_ip=None) is private
     finally:
         global_mcp_server_manager.registry.clear()
 
-    assert [s.server_id for s in external] == ["u-id"], "the router must apply the connect preflight's IP filter"
+    assert external == [], "a name the preflight hides from this IP must not reroute to a case variant"
     assert internal == []
+    assert [s.server_id for s in by_own_name] == ["u-id"]
 
 
 @pytest.mark.asyncio

@@ -182,6 +182,54 @@ def test_exact_name_wins_over_a_case_folded_config_alias_for_connect_discovery_a
             assert _advertised(candidate, stem) != _advertised(candidate, cased)
 
 
+def test_name_of_a_server_hidden_from_an_external_ip_does_not_reroute_to_a_case_variant(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    stem: Final = "gh" + uuid.uuid4().hex[:6]
+    cased: Final = stem.capitalize()
+    external: Final = {"X-Forwarded-For": "203.0.113.7"}
+    with mcp_peer() as hidden_peer, mcp_peer() as public_peer:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["general_settings"] = {
+            **config.get("general_settings", {}),
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": ["127.0.0.0/8"],
+        }
+        config["mcp_servers"] = {
+            stem: {"transport": "http", "url": hidden_peer.url, "available_on_public_internet": False}
+        }
+        path: Final = tmp_path / "external-ip.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            public_id: Final = register_mcp(scenario, public_peer, cased)
+            key: Final = scenario.key(object_permission={"mcp_servers": [public_id]})
+
+            hidden_name: Final = _rpc(candidate, f"/mcp/{stem}", key, external)
+            assert hidden_name.status_code == 403, hidden_name.text
+            assert "www-authenticate" not in hidden_name.headers, hidden_name.headers
+            assert (
+                candidate.client.get(f"/.well-known/oauth-protected-resource/mcp/{stem}", headers=external).status_code
+                == 404
+            )
+            assert _rpc(candidate, f"/mcp/{stem}", key, {}).status_code == 403
+
+            own_name: Final = _rpc(candidate, f"/mcp/{cased}", key, external)
+            assert own_name.status_code == 200, own_name.text
+            listed: Final = _rpc(candidate, f"/mcp/{cased}", key, external, method="tools/list")
+            add: Final = next(
+                tool["name"]
+                for tool in json.loads(_sse_data(listed))["result"]["tools"]
+                if tool["name"].endswith("add")
+            )
+            called: Final = _rpc(
+                candidate, f"/mcp/{cased}", key, external, method="tools/call", params={"name": add, "arguments": ADD}
+            )
+            assert called.status_code == 200, called.text
+            assert json.loads(_sse_data(called))["result"]["content"][0]["text"] == "5", called.text
+            assert len(tool_calls(public_peer.drain())) == 1
+            assert tool_calls(hidden_peer.drain()) == ()
+
+
 def test_jwt_signer_verifies_the_bearer_that_admitted_the_call(gateway: Gateway, tmp_path: Path) -> None:
     signer_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwk: Final = json.loads(jwt_algorithms.RSAAlgorithm.to_jwk(signer_key.public_key()))

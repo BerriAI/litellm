@@ -3642,8 +3642,8 @@ async def test_authorize_resolves_server_by_id_when_name_lookup_fails():
 
     assert response.status_code == 307
     assert "https://provider.com/oauth/authorize" in response.headers["location"]
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -3679,8 +3679,8 @@ async def test_token_endpoint_resolves_server_by_id_when_name_lookup_fails():
         )
 
     assert json.loads(result.body)["access_token"] == "token"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -3711,8 +3711,8 @@ async def test_register_client_resolves_server_by_id_when_name_lookup_fails():
         result = await discoverable_endpoints.register_client(request=request, mcp_server_name=server.server_id)
 
     assert json.loads(result.body)["client_id"] == "registered-client"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -3739,8 +3739,8 @@ async def test_protected_resource_metadata_resolves_server_by_id_when_name_looku
 
     assert result["authorization_servers"] == ["https://llm.example.com/mcp"]
     assert result["resource"] == f"https://llm.example.com/mcp/{server.server_id}"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
@@ -3815,8 +3815,8 @@ def test_authorization_server_metadata_resolves_server_by_id_when_name_lookup_fa
 
     assert result["scopes_supported"] == server.scopes
     assert result["issuer"] == f"https://llm.example.com/{server.server_id}"
-    by_name.assert_called_once_with(server.server_id, client_ip=None)
-    by_id.assert_called_once_with(server.server_id, client_ip=None)
+    by_name.assert_called_once_with(server.server_id)
+    by_id.assert_called_once_with(server.server_id)
 
 
 @pytest.mark.asyncio
