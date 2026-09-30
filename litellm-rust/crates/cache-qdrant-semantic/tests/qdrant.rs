@@ -250,7 +250,7 @@ async fn async_and_sync_set_get_store_exact_payload(entry: JsonValue) {
             "citations": {"page": 1, "section": "intro"},
         }],
     }]),
-    r#"sourcetitlebody{"page":1,"section":"intro"}"#
+    r#"{"result_of_call":null,"output":""}sourcetitlebody{"page":1,"section":"intro"}"#
 )]
 #[tokio::test(flavor = "multi_thread")]
 async fn prompt_matches_python_message_rules(
