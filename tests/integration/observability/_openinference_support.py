@@ -646,16 +646,21 @@ def _collect_marker_spans(
     return collect(())
 
 
-def _llm_spans_through_marker(destination: Wire, marker: str) -> tuple[dict[str, str], ...]:
+def _llm_spans_through_markers(destination: Wire, markers: tuple[str, ...]) -> tuple[dict[str, str], ...]:
+    expected: Final = frozenset(markers)
+
     def llm_spans(requests: tuple[Request, ...]) -> tuple[dict[str, str], ...]:
         return tuple(
             attributes for attributes in _spans(requests) if attributes.get("openinference.span.kind") == "LLM"
         )
 
+    def complete(spans: tuple[dict[str, str], ...]) -> bool:
+        return all(any(marker in attributes.values() for attributes in spans) for marker in expected)
+
     def collect(previous: tuple[dict[str, str], ...]) -> tuple[dict[str, str], ...]:
         current: Final = eventually(lambda: llm_spans(destination.drain()), bool, seconds=30)
         combined: Final = (*previous, *current)
-        return combined if any(marker in attributes.values() for attributes in combined) else collect(combined)
+        return combined if complete(combined) else collect(combined)
 
     return collect(())
 
@@ -755,6 +760,7 @@ def _rig(
     destination_handler: Callable[[Request], Reply] | None = None,
     destination_wire: Wire | None = None,
     fresh_client_connections: bool = False,
+    workers: int = 2,
 ) -> Iterator[Rig]:
     destination_context: Final[AbstractContextManager[Wire]] = (
         nullcontext(destination_wire)
@@ -833,7 +839,7 @@ def _rig(
                 overrides,
                 config=config,
                 remove_environment=remove_environment,
-                workers=2,
+                workers=workers,
             ) as owned,
             ExitStack() as resources,
         ):

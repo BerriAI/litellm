@@ -30,7 +30,7 @@ from _openinference_support import (
     _chat_tool_call,
     _json_messages,
     _json_object,
-    _llm_spans_through_marker,
+    _llm_spans_through_markers,
     _matching_marker_span,
     _messages_caller_response,
     _messages_caller_stream,
@@ -882,6 +882,7 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
         general_settings={"always_include_stream_usage": False} if surface == "chat-stream" else None,
         model_name="anthropic/claude-opus-5-5" if surface == "messages" else "gpt-4o-mini",
         api_base_suffix="" if surface == "messages" else "/v1",
+        workers=1,
     ) as rig:
         expected_arguments: Final = '{"city": "Paris"}'
         first: Final = _cache_call(rig, surface, marker)
@@ -916,7 +917,7 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
             if request.method == "POST" and sentinel.encode() in request.body
         )
         assert len(sentinel_forwarded) == 1, sentinel_forwarded
-        spans: Final = _llm_spans_through_marker(rig.destination, sentinel)
+        spans: Final = _llm_spans_through_markers(rig.destination, (sentinel,))
         sentinel_spans: Final = tuple(
             attributes for attributes in spans if attributes.get("litellm.metadata.trace_marker") == sentinel
         )
