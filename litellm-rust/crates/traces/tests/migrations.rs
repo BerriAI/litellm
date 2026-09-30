@@ -211,19 +211,22 @@ async fn schema_supports_span_rollups_and_spend_joins(
 }
 
 #[rstest]
+#[case::large_handoff(10, format!("ParentCommand: {}", "x".repeat(460_000)))]
+#[case::multibyte(1_000, "🧪".repeat(1_024))]
 #[tokio::test]
-async fn trace_detail_loads_when_handoff_errors_exceed_response_limit(
+async fn trace_detail_loads_when_status_messages_exceed_response_limit(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] span_count: usize,
+    #[case] message: String,
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
-    let message = format!("ParentCommand: {}", "x".repeat(460_000));
-    let rows = (0..10)
+    let rows = (0..span_count)
         .map(|index| {
             serde_json::from_value(serde_json::json!({
-                "Timestamp": timestamp + index,
+                "Timestamp": timestamp + index as i64,
                 "TraceId": "large-handoff-trace",
                 "SpanId": format!("span-{index}"),
                 "SpanName": "tools",
@@ -254,12 +257,12 @@ async fn trace_detail_loads_when_handoff_errors_exceed_response_limit(
     let spans = result["data"]
         .as_array()
         .expect("trace query returns spans");
-    assert_eq!(spans.len(), 10);
+    assert_eq!(spans.len(), span_count);
     assert!(spans.iter().all(|span| {
         span["status"] == "STATUS_CODE_ERROR"
             && span["status_message"]
                 .as_str()
-                .is_some_and(|value| value.starts_with("ParentCommand: ") && value.len() <= 1024)
+                .is_some_and(|value| message.starts_with(value) && value.len() <= 512)
     }));
     Ok(())
 }
