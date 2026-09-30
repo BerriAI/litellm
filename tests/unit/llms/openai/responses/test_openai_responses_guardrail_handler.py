@@ -70,17 +70,17 @@ class MockGuardrail(CustomGuardrail):
 class RecordingMaskingGuardrail(MockGuardrail):
     """MockGuardrail that also records the texts and structured message contents it was shown"""
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.seen_texts: List[List[str]] = []
-        self.seen_message_contents: List[List[object]] = []
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_texts: list[list[str]] = []
+        self.seen_message_contents: list[list[object]] = []
 
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         self.seen_texts.append(list(inputs.get("texts", [])))
         self.seen_message_contents.append([m["content"] for m in inputs.get("structured_messages") or []])
@@ -91,9 +91,9 @@ class LastTextDroppingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         return {**inputs, "texts": list(inputs.get("texts", []))[:-1]}
 
