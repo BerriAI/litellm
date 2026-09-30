@@ -94,6 +94,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     tag_registry_cache_key,
 )
 from litellm.utils import get_utc_datetime
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
 def _rendered_log_message(call):
@@ -1751,6 +1752,62 @@ async def test_vector_store_access_check_with_team_permissions():
             )
 
     assert exc_info.value.type == ProxyErrorTypes.team_vector_store_access_denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_vector_store_id,expected_error_type",
+    [
+        ("KBOTHERTEAM99", ProxyErrorTypes.team_vector_store_access_denied),
+        ("KBALLOWED123", None),
+    ],
+)
+async def test_vector_store_access_check_enforces_team_allowlist_for_rag_query(
+    requested_vector_store_id: str, expected_error_type: ProxyErrorTypes | None
+):
+    """
+    /v1/rag/query carries its vector store in retrieval_config.vector_store_id,
+    not in tools[].vector_store_ids. The team allowlist must apply either way.
+    """
+    request_body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "what is in this KB?"}],
+        "retrieval_config": {
+            "vector_store_id": requested_vector_store_id,
+            "custom_llm_provider": "bedrock",
+        },
+    }
+    valid_token = UserAPIKeyAuth(token="team-test-token", object_permission_id=None)
+
+    team_object = MagicMock()
+    team_object.object_permission_id = "team-permission"
+
+    mock_prisma_client = MagicMock()
+    team_permissions = MagicMock()
+    team_permissions.vector_stores = ["KBALLOWED123"]
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=team_permissions)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", VectorStoreRegistry()),
+    ):
+        if expected_error_type is None:
+            result = await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=valid_token,
+            )
+            assert result is True
+            return
+
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=valid_token,
+            )
+
+    assert exc_info.value.type == expected_error_type
 
 
 def test_can_object_call_model_with_alias():
