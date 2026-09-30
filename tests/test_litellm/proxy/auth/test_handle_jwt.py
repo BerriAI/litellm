@@ -7932,6 +7932,8 @@ async def test_managed_application_uses_persisted_identity_without_provisioning_
         result: Final = await JWTAuthManager.auth_builder(**arguments)
         auth: Final = JWTAuthManager.user_api_key_auth_from_result(result)
         assert auth.agent_id == "stable-id"
+        assert auth.api_key is None
+        assert auth.token is None
         assert auth.user_id is None
         assert auth.team_id is None
         assert auth.managed_agent_context is not None

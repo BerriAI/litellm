@@ -6,7 +6,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
-from typing_extensions import NotRequired, ReadOnly, Required
+from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -56,6 +56,7 @@ def resolve_inference_model(
             return endpoint_model
         case "completion":
             return settings.get("completion_model") or cli_model or endpoint_model or body_model
+    assert_never(kind)
 
 
 def _normalize_media_type(content_type: str) -> str:
