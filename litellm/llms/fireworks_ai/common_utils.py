@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -15,9 +16,16 @@ class FireworksAIException(BaseLLMException):
     pass
 
 
-def get_fireworks_session_id(litellm_params: Mapping[str, object]) -> str | None:
+def get_fireworks_session_id(
+    litellm_params: Mapping[str, object], headers: Mapping[str, str]
+) -> str | None:
     """
     Session id to send as `x-session-affinity`, or None when the caller gave none.
+
+    Priority:
+    1. Explicit `litellm_session_id` or `session_id` in litellm_params
+    2. Explicit `session_id` in metadata
+    3. Shared affinity (if enabled): hash of the API key or LiteLLM user key
 
     Deliberately does not fall back to `litellm_trace_id`, and ignores session ids the
     proxy generated for a request that had none: both are per request, so using them
@@ -25,16 +33,42 @@ def get_fireworks_session_id(litellm_params: Mapping[str, object]) -> str | None
     """
     params: Final = litellm_params
     metadata: Final = params.get("metadata")
-    if isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
-        return None
-    for key in ("litellm_session_id", "session_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    if isinstance(metadata, Mapping):
-        value = metadata.get("session_id")
-        if value:
-            return str(value)
+
+    # 1 & 2. Explicit session IDs
+    has_generated_session_id: Final = isinstance(metadata, Mapping) and metadata.get(
+        SESSION_ID_GENERATED_METADATA_KEY
+    )
+    if not has_generated_session_id:
+        for key in ("litellm_session_id", "session_id"):
+            value = params.get(key)
+            if value:
+                return str(value)
+        if isinstance(metadata, Mapping):
+            value = metadata.get("session_id")
+            if value:
+                return str(value)
+
+    # 3. Shared affinity
+    shared_affinity: Final = params.get("fireworks_shared_session_affinity") or (
+        metadata.get("fireworks_shared_session_affinity")
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    if shared_affinity:
+        # Try LiteLLM user API key hash first (proxy-level isolation)
+        user_key_hash = (
+            metadata.get("user_api_key_hash") if isinstance(metadata, Mapping) else None
+        )
+        if user_key_hash:
+            return f"litellm-user-{user_key_hash}"
+
+        # Fall back to hashing the Fireworks API key (account-level pooling)
+        auth = headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            api_key = auth.removeprefix("Bearer ")
+            if api_key:
+                return hashlib.sha256(api_key.encode()).hexdigest()
+
     return None
 
 
@@ -43,7 +77,7 @@ def with_fireworks_session_affinity(
 ) -> Mapping[str, str]:
     if any(key.lower() == "x-session-affinity" for key in headers):
         return headers
-    session_id: Final = get_fireworks_session_id(litellm_params)
+    session_id: Final = get_fireworks_session_id(litellm_params, headers)
     if not session_id:
         return headers
     return MappingProxyType({**headers, "x-session-affinity": session_id})

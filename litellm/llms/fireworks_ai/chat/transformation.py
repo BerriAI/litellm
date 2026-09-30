@@ -264,6 +264,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             "prediction",
             "stream_options",
             "sampling_mask",
+            "fireworks_shared_session_affinity",
         ]
 
         # Only add tools for models that support function calling

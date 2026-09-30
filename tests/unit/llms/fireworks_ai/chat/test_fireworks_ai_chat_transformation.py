@@ -219,28 +219,74 @@ def test_validate_environment_raises_without_api_key(monkeypatch):
 def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     assert (
         get_fireworks_session_id(
-            {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"}
+            {"litellm_session_id": "session-123", "litellm_trace_id": "trace-123"},
+            {},
         )
         == "session-123"
     )
 
 
-def test_get_fireworks_session_id_ignores_proxy_generated_session_id():
-    """general_settings.missing_session_id: generate stamps a fresh id per request; sending it
-    as x-session-affinity would pin every request to a different node."""
+def test_get_fireworks_session_id_ignores_proxy_generated_session_id_without_shared_affinity():
+    """Without shared affinity, a generated session id must be ignored."""
     assert (
         get_fireworks_session_id(
             {
                 "litellm_session_id": "generated-1",
                 "litellm_trace_id": "generated-1",
                 "metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True},
-            }
+            },
+            {},
         )
         is None
     )
 
 
-def test_handle_message_content_with_tool_calls():
+def test_get_fireworks_session_id_uses_shared_affinity_even_with_generated_id():
+    """With shared affinity, we use the stable hash even if the proxy generated a fresh ID."""
+    litellm_params = {
+        "litellm_session_id": "generated-1",
+        "metadata": {
+            "session_id": "generated-1",
+            SESSION_ID_GENERATED_METADATA_KEY: True,
+            "fireworks_shared_session_affinity": True,
+            "user_api_key_hash": "stable-user-hash",
+        },
+    }
+    assert get_fireworks_session_id(litellm_params, {}) == "litellm-user-stable-user-hash"
+
+
+def test_get_fireworks_session_id_falls_back_to_api_key_hash():
+    litellm_params = {
+        "metadata": {
+            "fireworks_shared_session_affinity": True,
+        },
+    }
+    headers = {"Authorization": "Bearer fw-api-key"}
+    import hashlib
+
+    expected = hashlib.sha256(b"fw-api-key").hexdigest()
+    assert get_fireworks_session_id(litellm_params, headers) == expected
+
+
+def test_get_fireworks_session_id_uses_top_level_shared_affinity():
+    litellm_params = {
+        "fireworks_shared_session_affinity": True,
+        "metadata": {
+            "user_api_key_hash": "stable-user-hash",
+        },
+    }
+    assert get_fireworks_session_id(litellm_params, {}) == "litellm-user-stable-user-hash"
+
+
+def test_get_fireworks_session_id_explicit_overrides_shared():
+    litellm_params = {
+        "litellm_session_id": "explicit-session",
+        "metadata": {
+            "fireworks_shared_session_affinity": True,
+            "user_api_key_hash": "stable-user-hash",
+        },
+    }
+    assert get_fireworks_session_id(litellm_params, {}) == "explicit-session"
     config = FireworksAIConfig()
     message = Message(
         content='{"type": "function", "name": "get_current_weather", "parameters": {"location": "Boston, MA", "unit": "fahrenheit"}}',
