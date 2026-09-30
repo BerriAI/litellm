@@ -275,15 +275,16 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const usageSnippet = (model: ModelGroupInfo): string => {
     if (model.pass_through_path) {
       const method = passThroughExampleMethod(model.pass_through_methods);
+      const quotedMethod = shellDoubleQuoted(method);
       const url = shellDoubleQuoted(`${getProxyBaseUrl()}${model.pass_through_path}`);
       return BODY_METHODS.has(method)
         ? [
-            `curl -X ${method} "${url}" \\`,
+            `curl -X "${quotedMethod}" "${url}" \\`,
             `  -H "Authorization: Bearer your_api_key" \\`,
             `  -H "Content-Type: application/json" \\`,
             `  -d '{"input": "Hello, how are you?"}'`,
           ].join("\n")
-        : [`curl -X ${method} "${url}" \\`, `  -H "Authorization: Bearer your_api_key"`].join("\n");
+        : [`curl -X "${quotedMethod}" "${url}" \\`, `  -H "Authorization: Bearer your_api_key"`].join("\n");
     }
     const snippetRequest: Parameters<typeof generateCodeSnippet>[0] = {
       apiKeySource: "custom",

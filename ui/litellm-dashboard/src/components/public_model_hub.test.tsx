@@ -376,8 +376,28 @@ describe("PublicModelHub", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("/clinical-ner")).toBeInTheDocument();
-    expect(within(dialog).getByText(/curl -X POST "http:\/\/localhost:3000\/clinical-ner"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/curl -X "POST" "http:\/\/localhost:3000\/clinical-ner"/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Token & Cost Information")).not.toBeInTheDocument();
+  });
+
+  it("quotes a hostile configured method in the usage example", async () => {
+    respondWith([
+      model({
+        model_group: "Odd",
+        providers: [],
+        mode: "passthrough",
+        pass_through_path: "/odd",
+        pass_through_methods: ['GET" ; touch /tmp/pwned ; "'],
+      }),
+    ]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Odd" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(/curl -X "GET\\" ; touch \/tmp\/pwned ; \\"" "http:\/\/localhost:3000\/odd"/),
+    ).toBeInTheDocument();
   });
 
   it("escapes shell characters in the pass-through route of the usage example", async () => {
@@ -389,7 +409,7 @@ describe("PublicModelHub", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Tenant" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/curl -X POST "http:\/\/localhost:3000\/tenant\/\\\$acct"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/curl -X "POST" "http:\/\/localhost:3000\/tenant\/\\\$acct"/)).toBeInTheDocument();
   });
 
   it("writes the usage example with a method the pass-through route accepts", async () => {
@@ -407,7 +427,7 @@ describe("PublicModelHub", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Catalog" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/curl -X GET "http:\/\/localhost:3000\/catalog"/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/curl -X "GET" "http:\/\/localhost:3000\/catalog"/)).toBeInTheDocument();
     expect(within(dialog).queryByText(/-d '\{"input"/)).not.toBeInTheDocument();
   });
 
