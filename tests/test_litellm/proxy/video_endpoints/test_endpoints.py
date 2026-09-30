@@ -1010,3 +1010,50 @@ async def test_status__id_inside_the_key_access_pins_the_deployment(harness, mon
         await call_status(harness, _video_id(model_id))
 
     assert harness.processor_data().get("model") == model_id
+
+
+def _team_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-b_sora",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "sk-mock-team-b"},
+                "model_info": {"id": "team-b-deployment", "team_id": "team-b", "team_public_model_name": "sora-2"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", sorted(FOLLOW_UP_CALLS))
+async def test_follow_up__id_of_another_team_deployment_is_rejected(harness, monkeypatch, endpoint):
+    monkeypatch.setitem(globals(), "_user", lambda: UserAPIKeyAuth(api_key="sk-test", team_id="team-a"))
+
+    with patch.object(proxy_server, "llm_router", _team_router()):
+        with pytest.raises(ProxyException) as rejected:
+            await FOLLOW_UP_CALLS[endpoint](harness, "team-b-deployment")
+
+    assert rejected.value.code == "400"
+    assert rejected.value.message == (
+        "litellm.BadRequestError: You passed in model=model_name_team-b_sora. "
+        "There are no healthy deployments for this model"
+    )
+    assert harness.base_process.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [
+        pytest.param(UserAPIKeyAuth(api_key="sk-test", team_id="team-b"), id="same_team"),
+        pytest.param(UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN), id="admin"),
+    ],
+)
+async def test_status__id_of_a_team_deployment_pins_it_for_that_team(harness, monkeypatch, key):
+    monkeypatch.setitem(globals(), "_user", lambda: key)
+    harness.base_process.return_value = b"video-bytes"
+
+    with patch.object(proxy_server, "llm_router", _team_router()):
+        await call_status(harness, _video_id("team-b-deployment"))
+
+    assert harness.processor_data().get("model") == "team-b-deployment"

@@ -7,6 +7,7 @@ from fastapi import status
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router import Router
+from litellm.router_utils.common_utils import filter_team_based_models
 from litellm.types.router import RouterErrors
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -82,12 +83,26 @@ def routing_model_for_id(llm_router: Router, model_id: str, user_api_key_dict: U
     if not llm_router.has_model_id(model_id):
         return llm_router.resolve_model_name_from_model_id(model_id)
     deployment: Final = llm_router.get_deployment(model_id=model_id)
-    if deployment is not None and not llm_router._filter_deployments_by_model_access_groups(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the router skips its access-group filter for a deployment id, so reuse that untyped filter here
-        model=deployment.model_name,
-        healthy_deployments=[deployment.model_dump(exclude_none=True)],
-        request_kwargs={"metadata": {"user_api_key_auth": user_api_key_dict}},
-        request_team_id=user_api_key_dict.team_id,
-    ):
+    if deployment is None:
+        return model_id
+    # The router skips its access-group and team filters for a deployment id, so run both for the caller here.
+    request_kwargs: Final = {
+        "metadata": {
+            "user_api_key_auth": user_api_key_dict,
+            "user_api_key_team_id": user_api_key_dict.team_id,
+            "model_group": deployment.model_name,
+        }
+    }
+    allowed: Final = filter_team_based_models(
+        llm_router._filter_deployments_by_model_access_groups(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # untyped router filter, reused because the deployment-id path skips it
+            model=deployment.model_name,
+            healthy_deployments=[deployment.model_dump(exclude_none=True)],
+            request_kwargs=request_kwargs,
+            request_team_id=user_api_key_dict.team_id,
+        ),
+        request_kwargs,
+    )
+    if not allowed:
         raise ProxyException(
             message=f"litellm.BadRequestError: You passed in model={deployment.model_name}. {RouterErrors.no_healthy_deployments.value}",
             type="invalid_request_error",
