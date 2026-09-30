@@ -1497,6 +1497,7 @@ class _DisconnectRig:
     scans: _ScanLog
     identity: str
     gate: threading.Event
+    upstream: Wire
 
     @property
     def candidate(self) -> Gateway:
@@ -1546,6 +1547,7 @@ def _disconnect_rig(
                     _ScanLog(policy),
                     identity,
                     gate,
+                    upstream,
                 )
         finally:
             gate.set()
@@ -1881,6 +1883,7 @@ def _cached_twin_rows(rig: _DisconnectRig) -> tuple[tuple[str, ...], ...]:
     second: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig, 0, stream=False))
     assert first.status_code == second.status_code == 200, (first.text, second.text)
     assert first.json()["choices"] == second.json()["choices"], (first.text, second.text)
+    assert len(rig.upstream.drain()) == 1, "the second request must be served from the cache"
     return _post_call_statuses(rig, rig.model, rows=2)
 
 
