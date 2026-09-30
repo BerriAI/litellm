@@ -47,6 +47,7 @@ from litellm.router import (
     _anthropic_stream_should_decline_fallback,
     _is_retriable_anthropic_status,
     _responses_stream_holds_event,
+    _without_line_breaks,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -11516,15 +11517,16 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         }
 
     @pytest.mark.asyncio
-    async def test_subagent_concrete_model_uses_the_main_sessions_router(self):
+    @pytest.mark.parametrize("app", ["cli", "cli-bg"])
+    async def test_subagent_concrete_model_uses_the_main_sessions_router(self, app):
         router = self._router()
 
         await router.acompletion(
             model="smart-router",
             messages=[{"role": "user", "content": "main turn"}],
-            **self._request_kwargs(),
+            **self._request_kwargs(app=app),
         )
-        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+        subagent_kwargs = self._request_kwargs(app=app, agent_id="agent-1234")
 
         response = await router.acompletion(
             model="expensive-model",
@@ -18861,3 +18863,36 @@ async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: E
             await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("gpt-4\r\nERROR forged entry\n", "gpt-4ERROR forged entry"),
+        (RuntimeError("no deployments\r\nfor gpt-4"), "no deploymentsfor gpt-4"),
+        ("gpt-4", "gpt-4"),
+    ],
+)
+def test_without_line_breaks_drops_every_cr_and_lf_from_the_logged_value(value: object, expected: str) -> None:
+    assert _without_line_breaks(value) == expected
+
+
+def test_a_failed_routing_read_prefetch_logs_the_request_model_without_its_line_breaks(monkeypatch, caplog) -> None:
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4", "api_key": "k"}}]
+    )
+    forged_model: Final = "gpt-4\r\nERROR forged entry\n"
+
+    def fail_lookup(model_name: str | None = None, team_id: str | None = None) -> None:
+        raise RuntimeError(f"no deployments for {model_name}")
+
+    monkeypatch.setattr(router, "get_model_list", fail_lookup)
+    caplog.clear()
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Router"):
+        router.arm_routing_read_prefetch(forged_model, {})
+
+    messages: Final = [r.getMessage() for r in caplog.records if "routing read prefetch not armed" in r.getMessage()]
+    assert messages == [
+        "routing read prefetch not armed for gpt-4ERROR forged entry: no deployments for gpt-4ERROR forged entry"
+    ]

@@ -269,25 +269,22 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     };
 
     let resources = support::resources();
-    let response = litellm_core::messages::MessagesRoute::builder()
-        .with_http(provider_http(
-            &resources,
-            &Resolution::from(&settings).config,
-        ))
-        .with_auth(resources.auth)
-        .with_secrets(no_secrets())
-        .build()
-        .execute(
-            MessagesCall {
-                api_key: Some("sk-ant".into()),
-                api_base: Some(base),
-                ..call
-            },
-            &(),
-            None,
-        )
-        .await
-        .expect("messages request succeeds");
+    let response = litellm_core::messages::MessagesRoute::new(
+        provider_http(&resources, &Resolution::from(&settings).config),
+        resources.auth,
+        no_secrets(),
+    )
+    .execute(
+        MessagesCall {
+            api_key: Some("sk-ant".into()),
+            api_base: Some(base),
+            ..call
+        },
+        &(),
+        None,
+    )
+    .await
+    .expect("messages request succeeds");
 
     let MessagesCallResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
@@ -345,7 +342,7 @@ async fn message_route_summary_excludes_payload_diagnostics(
 #[case::uncached(false, 2)]
 #[case::cached(true, 1)]
 #[tokio::test]
-async fn builder_preserves_dependencies_and_optional_cache(
+async fn route_uses_injected_dependencies_and_optional_cache(
     #[case] caching: bool,
     #[case] expected_requests: usize,
 ) {
@@ -355,9 +352,13 @@ async fn builder_preserves_dependencies_and_optional_cache(
 
     let upstream = upstream([message_response(), message_response()]).await;
     let resources = resources();
-    let builder = MessagesRoute::builder();
-    let builder = if caching {
-        builder.with_cache(ScopedCache::new(
+    let route = MessagesRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth.clone(),
+        Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "route-key")])),
+    );
+    let route = if caching {
+        route.with_cache(ScopedCache::new(
             Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
                 Some(100),
                 Some(Duration::from_secs(60)),
@@ -365,16 +366,8 @@ async fn builder_preserves_dependencies_and_optional_cache(
             CacheScope::Shared,
         ))
     } else {
-        builder
+        route
     };
-    let route = builder
-        .with_secrets(Arc::new(RecordingSecrets::new([(
-            "ANTHROPIC_API_KEY",
-            "builder-key",
-        )])))
-        .with_auth(resources.auth.clone())
-        .with_http(provider_http(&resources, &http_config()))
-        .build();
     for _ in 0..2 {
         let request = MessagesCall {
             api_base: Some(upstream.uri()),
@@ -392,5 +385,72 @@ async fn builder_preserves_dependencies_and_optional_cache(
     }
     let requests = received(&upstream).await;
     assert_eq!(requests.len(), expected_requests);
-    assert_eq!(requests[0].header("x-api-key"), Some("builder-key"));
+    assert_eq!(requests[0].header("x-api-key"), Some("route-key"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) {
+    use litellm_cache_memory::InMemoryCache;
+    use litellm_cache_response::{CachePolicy, CacheScope, ResponseCache, ScopedCache};
+
+    let first_body = message_body();
+    let second_body = Value::Object(
+        first_body
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    if key == "id" {
+                        json!("msg_second")
+                    } else {
+                        value.clone()
+                    },
+                )
+            })
+            .collect(),
+    );
+    let upstream = upstream([
+        json_response(first_body.clone()),
+        json_response(second_body.clone()),
+    ])
+    .await;
+    let service = Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+        Some(100),
+        Some(Duration::from_secs(60)),
+    ))));
+    let first = messages_route(no_secrets()).with_cache(ScopedCache::new(
+        service.clone(),
+        CacheScope::Isolated("first".into()),
+    ));
+    let second = messages_route(no_secrets()).with_cache(ScopedCache::new(
+        service,
+        CacheScope::Isolated("second".into()),
+    ));
+    for (route, expected) in [
+        (&first, &first_body),
+        (&second, &second_body),
+        (&first, &first_body),
+        (&second, &second_body),
+    ] {
+        let request = MessagesCall {
+            body: call.body.clone(),
+            api_key: Some("same-key".into()),
+            api_base: Some(upstream.uri()),
+            ..super::call()
+        };
+        let override_options = CachePolicy {
+            ttl: Some(Duration::from_secs(30)),
+            ..CachePolicy::default()
+        };
+        let MessagesCallResponse::Complete(response) =
+            route.execute(request, &(), override_options).await.unwrap()
+        else {
+            panic!("expected a completed message");
+        };
+        assert_eq!(response.id, expected["id"].as_str().unwrap());
+    }
+    assert_eq!(received(&upstream).await.len(), 2);
 }

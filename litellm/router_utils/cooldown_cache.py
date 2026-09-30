@@ -4,7 +4,7 @@ Wrapper around router cache. Meant to handle model cooldown logic
 
 import functools
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
@@ -163,6 +163,12 @@ class CooldownCache:
         keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
         results: Final = await self.cooldown_store.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+        return self.active_cooldowns_from_results(model_ids, results)
+
+    def active_cooldowns_from_results(
+        self, model_ids: list[str], results: Sequence[object] | None
+    ) -> list[tuple[str, CooldownCacheValue]]:
+        """The cooldowns still active in a `cooldown_store` batch read of `get_cooldown_cache_key(model_id)` per id."""
         active_cooldowns: Final[list[tuple[str, CooldownCacheValue]]] = []
 
         if results is None or all(v is None for v in results):
