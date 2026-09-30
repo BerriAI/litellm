@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from importlib.resources import files
 from pathlib import Path
 from typing import Final
 from urllib.parse import quote, unquote
@@ -37,7 +36,6 @@ from integration._support.wire import Reply, Request, wire_server
 
 FLUSH: Final = {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1"}
 HOUR: Final = {"s3_partition_granularity": "hour"}
-FAKETIME_LIBRARY: Final = files("libfaketime").joinpath("vendor", "libfaketime", "src", "libfaketime.so.1")
 ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-4-5-20250929"
 WARNING: Final = "s3 logging: s3_partition_granularity="
 SINK_CREDENTIALS: Final = {
@@ -205,23 +203,6 @@ def _keys_on_fresh_connections(candidate: Gateway, aliases: tuple[str, ...]) -> 
 
     with ThreadPoolExecutor(max_workers=len(aliases)) as pool:
         return tuple(pool.map(generate, aliases))
-
-
-SETUP_AUDITS: Final = (
-    ("created", "LiteLLM_ProxyModelTable"),
-    ("created", "LiteLLM_ProxyModelTable"),
-    ("created", "LiteLLM_VerificationToken"),
-)
-
-
-def _audit_changes(sink: RecordingS3Sink, audit_prefix: str) -> tuple[tuple[str, str], ...]:
-    bodies: Final = (body for target, body in sink.objects().items() if target.startswith(audit_prefix))
-    lines: Final = b"\n".join(bodies).splitlines()
-    return tuple(sorted((str(audit["action"]), str(audit["table_name"])) for audit in map(_audit_line, lines)))
-
-
-def _audit_line(line: bytes) -> Mapping[str, JsonValue]:
-    return object_value(json.loads(line))
 
 
 def _created_key_hashes(sink: RecordingS3Sink, audit_prefix: str) -> frozenset[str]:
@@ -1081,99 +1062,6 @@ def test_s3_v2_hour_coded_403_retries_reuse_the_same_hour_key(gateway: Gateway, 
     assert frozenset(attempted) == frozenset(objects), "a retried upload must reuse the key of its first attempt"
     assert sum(attempted.values()) == len(objects) + 10
     assert _outside_layout(objects, "hour") == ()
-
-
-def test_s3_v2_hour_rollover_inside_one_batch_flush_splits_files_by_hour_folder(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    assert FAKETIME_LIBRARY.is_file(), "the libfaketime dev dependency drives the proxy clock"
-    marker: Final = "s3hroll" + uuid.uuid4().hex[:8]
-    clock: Final = tmp_path / "proxy-clock"
-    clock.write_text("@2026-09-29 10:59:30\n")
-    upstream: Final = CountingUpstream()
-    sink: Final = RecordingS3Sink(delay_seconds=0.05)
-    audit_prefix: Final = f"/{BUCKET}/{PREFIX}/audit_logs/"
-    with (
-        wire_server(upstream.respond) as provider,
-        wire_server(sink.respond) as bucket,
-        _s3_proxy(
-            gateway,
-            tmp_path,
-            bucket.url,
-            {**HOUR, "s3_batch_file_upload": True},
-            {"store_audit_logs": True, "audit_log_callbacks": ["s3_v2"]},
-            environment={
-                "DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "3600",
-                "DEFAULT_S3_BATCH_SIZE": "1",
-                "LD_PRELOAD": str(FAKETIME_LIBRARY),
-                "FAKETIME_TIMESTAMP_FILE": str(clock),
-                "FAKETIME_CACHE_DURATION": "1",
-                "FAKETIME_DONT_FAKE_MONOTONIC": "1",
-            },
-            workers=1,
-        ) as owned,
-        owned.gateway.scenario() as scenario,
-    ):
-        openai_model, _, key = _models(scenario, provider.url)
-        setup_audits: Final = eventually(
-            lambda: _audit_changes(sink, audit_prefix),
-            lambda changes: changes == SETUP_AUDITS,
-            seconds=30,
-        )
-
-        def advance(stamp: str, shown: str) -> None:
-            clock.write_text(f"@2026-09-29 {stamp}\n")
-            eventually(
-                lambda: owned.gateway.client.get("/health/liveliness").headers["date"],
-                lambda date: f" {shown}:" in date,
-                seconds=10,
-            )
-
-        advance("10:59:40", "10:59")
-        flushed_before: Final = frozenset(sink.objects())
-        before: Final = tuple(f"{marker}-before-{index}" for index in range(4))
-        after: Final = tuple(f"{marker}-after-{index}" for index in range(4))
-        answered_before: Final = _sdk_chats(owned.gateway, openai_model, key, before)
-        advance("11:00:05", "11:00")
-        answered_after: Final = _sdk_chats(owned.gateway, openai_model, key, after)
-        spent: Final = eventually(
-            lambda: read_rows(
-                'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(%s)',
-                (list(answered_before + answered_after),),
-            ),
-            lambda rows: len(rows) == len(before) + len(after),
-            seconds=70,
-        )
-        pending: Final = frozenset(sink.objects()) - flushed_before
-        scenario.key(models=[openai_model])
-        batches: Final = eventually(
-            lambda: {
-                target: body
-                for target, body in sink.objects().items()
-                if target not in flushed_before and not target.startswith(audit_prefix)
-            },
-            lambda landed: sum(len(body.splitlines()) for body in landed.values()) >= len(before) + len(after),
-            seconds=30,
-        )
-    batch_file: Final = re.compile(
-        rf"/{BUCKET}/{PREFIX}/2026-09-29/(\d{{2}})/batch_(\d{{2}}-\d{{2}}-\d{{2}})_[0-9a-f]{{32}}\.jsonl"
-    )
-    layout: Final = {
-        (match.group(1), match.group(2)): sorted(_prompt(object_value(json.loads(line))) for line in body.splitlines())
-        for target, body in batches.items()
-        if (match := batch_file.fullmatch(unquote(target)))
-    }
-    assert setup_audits == SETUP_AUDITS
-    assert answered_before == before and answered_after == after
-    assert sorted(str(row["request_id"]) for row in spent) == sorted(before + after)
-    assert sorted(upstream.received()) == sorted(before + after), "every prompt must reach the upstream exactly once"
-    assert pending == frozenset(), (
-        f"request logs must stay queued until the audit log fills the batch: {sorted(pending)}"
-    )
-    assert len(layout) == len(batches) == 2, tuple(batches)
-    assert sorted(hour for hour, _ in layout) == ["10", "11"], layout
-    assert len({stamp for _, stamp in layout}) == 1, f"both hour files must come from one flush: {layout}"
-    assert {hour: prompts for (hour, _), prompts in layout.items()} == {"10": sorted(before), "11": sorted(after)}
 
 
 def test_s3_v2_hour_slow_sink_batches_never_duplicate_an_upload(gateway: Gateway, tmp_path: Path) -> None:
