@@ -3043,7 +3043,7 @@ def test_team_update_gate_admits_internal_user_without_org_context():  # test-qu
 
 def test_team_update_gate_defers_cross_org_admin_to_the_handler():  # test-quality-ok: the gate's only success signal is not raising; the handler's 403 it defers to is pinned in test_team_endpoints
     """An org admin of a DIFFERENT org clears the coarse gate like any internal user;
-    update_team's _resolve_team_access finds no role on the team and 403s (pinned in
+    update_team's TeamAccess.strongest_role finds no role on the team and 403s (pinned in
     test_team_endpoints), so there is still no cross-org escalation."""
     user_obj = _make_org_admin_user("org-1")
     valid_token = UserAPIKeyAuth(user_id="org-admin-user", user_role=LitellmUserRoles.INTERNAL_USER.value)
@@ -4019,8 +4019,8 @@ def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
     """A team admin manages their own team's logging callbacks, so the route gate
     must let a non-proxy-admin through to the handler.
 
-    The handler is what authorizes: every team callback endpoint calls
-    _verify_team_access, which admits only a proxy admin, an org admin for the
+    The handler is what authorizes: every team callback endpoint asks
+    TeamAccess.allows, which admits only a proxy admin, an org admin for the
     team, or an admin of that team, and 403s everyone else. Before this, the gate
     rejected the team admin with a 401 naming proxy admin, so the handler's own
     check was unreachable for them.

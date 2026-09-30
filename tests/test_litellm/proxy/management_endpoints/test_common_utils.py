@@ -25,7 +25,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
     _org_admin_can_invite_user,
     _set_object_metadata_field,
     _team_admin_can_invite_user,
@@ -246,53 +245,12 @@ class TestUserHasAdminView:
         assert _user_has_admin_view(auth_user) is False
 
 
-class TestIsUserTeamAdmin:
-    """Tests for _is_user_team_admin function."""
+def test_published_enterprise_import_of_team_admin_check_still_answers():
+    from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 
-    @pytest.mark.parametrize(
-        "members_with_roles,user_id,expected",
-        [
-            (
-                [Member(user_id="u1", role="admin")],
-                "u1",
-                True,
-            ),
-            (
-                [Member(user_id="u1", role="user")],
-                "u1",
-                False,
-            ),
-            (
-                [
-                    Member(user_id="u2", role="admin"),
-                    Member(user_id="u1", role="admin"),
-                ],
-                "u1",
-                True,
-            ),
-            ([], "u1", False),
-        ],
-    )
-    def test_is_user_team_admin_parametrized(
-        self, members_with_roles, user_id, expected
-    ):
-        """Parametrized test: user is team admin only when in members_with_roles with admin role."""
-        mock_auth = MagicMock()
-        mock_auth.user_id = user_id
-        team = LiteLLM_TeamTable(
-            team_id="team-1",
-            members_with_roles=members_with_roles,
-        )
-        assert _is_user_team_admin(mock_auth, team) == expected
-
-    def test_is_user_team_admin_user_not_in_team(self):
-        """Test returns False when user is not in team members."""
-        auth = UserAPIKeyAuth(user_id="u99", api_key="sk-x", user_role=None)
-        team = LiteLLM_TeamTable(
-            team_id="team-1",
-            members_with_roles=[Member(user_id="u1", role="admin")],
-        )
-        assert _is_user_team_admin(auth, team) is False
+    team = LiteLLM_TeamTable(team_id="t1", members_with_roles=[Member(user_id="admin", role="admin")])
+    assert _is_user_team_admin(UserAPIKeyAuth(user_id="admin"), team) is True
+    assert _is_user_team_admin(UserAPIKeyAuth(user_id="outsider"), team) is False
 
 
 class TestOrgAdminCanInviteUser:
@@ -900,46 +858,6 @@ class TestCheckDisableGlobalGuardrailsCallerPermission:
         assert (
             _check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, self._admin())
             is None
-        )
-
-
-class TestIsUserOrgAdminForTeam:
-    """The caller must be looked up with its exact identity; a nulled or omitted
-    lookup argument would silently mis-resolve org-admin status."""
-
-    @pytest.mark.asyncio
-    async def test_get_user_object_called_with_caller_identity(self):
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
-
-        team = LiteLLM_TeamTable(
-            team_id="t1", organization_id="org1", members_with_roles=[]
-        )
-        key = UserAPIKeyAuth(
-            user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
-        )
-        fake_prisma, fake_cache, fake_logging = MagicMock(), MagicMock(), MagicMock()
-        mock_get_user = AsyncMock(return_value=None)
-
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client", fake_prisma
-        ), patch(
-            "litellm.proxy.proxy_server.user_api_key_cache", fake_cache
-        ), patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj", fake_logging
-        ), patch(
-            "litellm.proxy.auth.auth_checks.get_user_object", mock_get_user
-        ):
-            result = await _is_user_org_admin_for_team(key, team)
-
-        assert result is False
-        mock_get_user.assert_awaited_once_with(
-            user_id="u1",
-            prisma_client=fake_prisma,
-            user_api_key_cache=fake_cache,
-            user_id_upsert=False,
-            proxy_logging_obj=fake_logging,
         )
 
 
