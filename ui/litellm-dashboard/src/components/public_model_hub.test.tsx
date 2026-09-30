@@ -60,6 +60,17 @@ const model = (overrides: Partial<ModelGroupInfo> & { model_group: string }): Mo
   ...overrides,
 });
 
+const passThrough = (name: string, path: string, methods?: string[]): ModelGroupInfo => {
+  const spec: Partial<ModelGroupInfo> & { model_group: string } = {
+    model_group: name,
+    providers: [],
+    mode: "passthrough",
+    pass_through_path: path,
+    pass_through_methods: methods,
+  };
+  return model(spec);
+};
+
 const DEFAULT_MODELS = [model({ model_group: "gpt-4" }), model({ model_group: "claude-3", providers: ["anthropic"] })];
 
 const respondWith = (rows: ModelGroupInfo[], totalCount: number = rows.length, pageSize: number = 50) =>
@@ -362,9 +373,7 @@ describe("PublicModelHub", () => {
   });
 
   it("lists a published pass-through endpoint under its display name and opens its route", async () => {
-    respondWith([
-      model({ model_group: "Clinical NER", providers: [], mode: "passthrough", pass_through_path: "/clinical-ner" }),
-    ]);
+    respondWith([passThrough("Clinical NER", "/clinical-ner")]);
     renderHub();
 
     const row = (await screen.findByRole("button", { name: "Clinical NER" })).closest("tr");
@@ -381,15 +390,7 @@ describe("PublicModelHub", () => {
   });
 
   it("quotes a hostile configured method in the usage example", async () => {
-    respondWith([
-      model({
-        model_group: "Odd",
-        providers: [],
-        mode: "passthrough",
-        pass_through_path: "/odd",
-        pass_through_methods: ['GET" ; touch /tmp/pwned ; "'],
-      }),
-    ]);
+    respondWith([passThrough("Odd", "/odd", ['GET" ; touch /tmp/pwned ; "'])]);
     renderHub();
 
     fireEvent.click(await screen.findByRole("button", { name: "Odd" }));
@@ -401,9 +402,7 @@ describe("PublicModelHub", () => {
   });
 
   it("escapes shell characters in the pass-through route of the usage example", async () => {
-    respondWith([
-      model({ model_group: "Tenant", providers: [], mode: "passthrough", pass_through_path: "/tenant/$acct" }),
-    ]);
+    respondWith([passThrough("Tenant", "/tenant/$acct")]);
     renderHub();
 
     fireEvent.click(await screen.findByRole("button", { name: "Tenant" }));
@@ -413,15 +412,7 @@ describe("PublicModelHub", () => {
   });
 
   it("writes the usage example with a method the pass-through route accepts", async () => {
-    respondWith([
-      model({
-        model_group: "Catalog",
-        providers: [],
-        mode: "passthrough",
-        pass_through_path: "/catalog",
-        pass_through_methods: ["GET"],
-      }),
-    ]);
+    respondWith([passThrough("Catalog", "/catalog", ["GET"])]);
     renderHub();
 
     fireEvent.click(await screen.findByRole("button", { name: "Catalog" }));
