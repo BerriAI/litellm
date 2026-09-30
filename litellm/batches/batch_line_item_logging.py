@@ -511,6 +511,7 @@ async def log_batch_line_items(
             "batch line item logging failed for batch_id=%s; aggregate logging unaffected",
             batch.id,
         )
+    finally:
         if emitted == 0:
             await _release_line_item_claim(claim_cache, claim_key, token)
     return emitted

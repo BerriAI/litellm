@@ -1287,3 +1287,89 @@ async def test_empty_result_files_fall_back_to_fetching_everything(recorder):
     assert emitted == 2
     fetched: Final = sorted(call.kwargs["file_id"] for call in file_mock.await_args_list)
     assert fetched == ["error-file-1", "input-file-1", "output-file-1"]
+
+
+@pytest.mark.asyncio
+async def test_native_vertex_skip_releases_the_claim(recorder):
+    file_mock: Final = AsyncMock(
+        side_effect=_scoped_file_content(
+            {
+                "input-vtx-rel": b"",
+                "output-vtx-rel": VERTEX_NATIVE_OUTPUT_JSONL,
+            }
+        )
+    )
+    claim_cache: Final = DualCache()
+    batch: Final = _provider_batch("batch_vtx_rel", "input-vtx-rel", "output-vtx-rel")
+    parent: Final = _parent_logging(custom_llm_provider="vertex_ai")
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="vertex_ai",
+            parent=parent,
+            model_name="vertex_ai/gemini-2.5-flash",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="vertex_ai",
+            parent=parent,
+            model_name="vertex_ai/gemini-2.5-flash",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 0
+    assert second == 0
+    assert file_mock.await_count == 4, (
+        "a released claim must let the next retrieve reach the fetch step again; already_claimed would return early at 2 fetches"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fanout_emitting_nothing_releases_the_claim(recorder):
+    file_mock: Final = AsyncMock(
+        side_effect=_scoped_file_content(
+            {
+                "input-empty": b"",
+                "output-empty": b"",
+                "error-empty": b"",
+            }
+        )
+    )
+    claim_cache: Final = DualCache()
+    batch: Final = _provider_batch("batch_empty", "input-empty", "output-empty")
+    batch = batch.model_copy(update={"error_file_id": "error-empty"})
+    parent: Final = _parent_logging()
+    with patch(
+        "litellm.files.main.afile_content", file_mock
+    ):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 0
+    assert second == 0
+    assert file_mock.await_count == 6, (
+        "a completed fan-out that emits nothing must release the claim so the next retrieve retries"
+    )

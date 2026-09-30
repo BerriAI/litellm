@@ -9166,6 +9166,9 @@ class TestRetrieveBatchReusesFetchedResultFiles:
 
     @pytest.mark.asyncio
     async def test_compute_path_fetches_each_result_file_once(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
         file_bytes = self._batch_file_bytes()
 
         async def fake_afile_content(**kwargs):
@@ -9189,6 +9192,9 @@ class TestRetrieveBatchReusesFetchedResultFiles:
 
     @pytest.mark.asyncio
     async def test_explicit_kwargs_path_forwards_result_files(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
         from litellm.types.utils import Usage
 
         file_bytes = self._batch_file_bytes()
@@ -9220,6 +9226,9 @@ class TestRetrieveBatchReusesFetchedResultFiles:
 
     @pytest.mark.asyncio
     async def test_line_item_logging_failure_leaves_aggregate_result_intact(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
         from litellm.types.utils import Usage
 
         monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
