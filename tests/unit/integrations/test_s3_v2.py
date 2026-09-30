@@ -675,7 +675,7 @@ async def test_async_upload_exhausts_403_retries_through_production_http_handler
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transient_status", [500, 503])
 async def test_async_upload_recovers_from_transient_5xx_through_production_http_handler(
-    transient_status: int, rotating_profile: str, caplog
+    transient_status: int, rotating_profile: str, caplog: pytest.LogCaptureFixture
 ):
     """
     AsyncHTTPHandler.put raises MaskedHTTPStatusError on 5xx instead of returning the response, so a retry
