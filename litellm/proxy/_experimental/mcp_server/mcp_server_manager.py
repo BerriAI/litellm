@@ -4443,7 +4443,7 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
-    ) -> list[MCPTool]:
+    ) -> Sequence[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
 
@@ -4566,7 +4566,7 @@ class MCPServerManager:
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                unprefixed_tools: Final = list(guarded_openapi)
+                unprefixed_tools: Final = guarded_openapi
                 self._record_listed_tools(server, unprefixed_tools, listed_caller)
                 if not add_prefix:
                     return unprefixed_tools
@@ -4583,7 +4583,7 @@ class MCPServerManager:
                 raw_headers=raw_headers,
             )
             prefixed_or_original_tools: Final = self._create_prefixed_tools(
-                list(guarded_tools), server, add_prefix=add_prefix, caller=listed_caller
+                guarded_tools, server, add_prefix=add_prefix, caller=listed_caller
             )
 
             return prefixed_or_original_tools
@@ -4649,7 +4649,7 @@ class MCPServerManager:
         if server.spec_path or caller is None:
             return None
         auth: Final = caller.user_api_key_auth
-        forwarded: Final = dict(self._forwarded_header_values(server, caller.raw_headers)) or None
+        forwarded: Final = self._forwarded_header_values(server, caller.raw_headers) or None
         header_env: Final = self._build_stdio_env(server, caller.raw_headers)
         stdio_env: Final = None if header_env == self._build_stdio_env(server) else header_env
         caller_bearer: Final = (
@@ -4676,7 +4676,7 @@ class MCPServerManager:
 
         if get_mcp_jwt_signer() is None:
             return False
-        return not any(k.lower() == "authorization" for k in (server.static_headers or {}))
+        return server.static_headers is None or not any(k.lower() == "authorization" for k in server.static_headers)
 
     @staticmethod
     def _forwarded_header_values(
@@ -4694,7 +4694,7 @@ class MCPServerManager:
     ) -> None:
         identity: Final = self._listed_tools_identity(server, caller)
         listing: Final = MappingProxyType({tool.name: tool for tool in tools})
-        existing: Final[_ListedToolsByCaller] = self._listed_tools_by_server_id.get(server.server_id, {})
+        existing: Final = self._listed_tools_by_server_id.get(server.server_id, MappingProxyType({}))
         shared: Final = existing.get(None)
         callers: Final = tuple((key, value) for key, value in existing.items() if key not in (None, identity))
         evicted: Final = 0 if identity is None else max(len(callers) + 1 - _LISTED_TOOLS_CALLERS_PER_SERVER, 0)
@@ -5609,7 +5609,7 @@ class MCPServerManager:
 
     def _create_prefixed_tools(
         self,
-        tools: list[MCPTool],
+        tools: Sequence[MCPTool],
         server: MCPServer,
         add_prefix: bool = True,
         caller: ListedToolsCaller | None = None,
@@ -5644,13 +5644,13 @@ class MCPServerManager:
 
     def get_listed_tool(self, server: MCPServer, name: str, caller: ListedToolsCaller | None = None) -> MCPTool | None:
         identity: Final = self._listed_tools_identity(server, caller)
-        listed: Final = self._listed_tools_by_server_id.get(server.server_id, {}).get(identity)
+        listed: Final = self._listed_tools_by_server_id.get(server.server_id, MappingProxyType({})).get(identity)
         if not listed:
             return None
         tool: Final = listed.get(name) or listed.get(strip_known_server_prefix(name, server))
         if tool is None:
             return None
-        description: Final = (server.tool_name_to_description or {}).get(tool.name)
+        description: Final = server.tool_name_to_description.get(tool.name) if server.tool_name_to_description else None
         return tool if description is None else tool.model_copy(update={"description": description})
 
     def _create_prefixed_prompts(
