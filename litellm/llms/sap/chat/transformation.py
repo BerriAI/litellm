@@ -421,6 +421,12 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return _normalize_choice_fn(choice)
 
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
+        """Strip markdown code block wrapper from JSON content if present.
+
+        SAP GenAI Hub with Anthropic models sometimes returns JSON wrapped in
+        markdown code blocks (```json ... ```) depending on prompt phrasing.
+        This method strips that wrapper to ensure consistent JSON output.
+        """
         import re
 
         for choice in response.choices or []:
