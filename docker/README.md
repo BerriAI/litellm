@@ -60,8 +60,10 @@ handler uses `httpx`, while the connector requires `httpx2`. A small ASGI adapte
 preserves the original caller's address, scheme and policy headers, which a direct
 transport mount would replace with loopback defaults. It retains the complete
 gateway middleware and authentication stack; it does not implement HTTP requests
-or MCP protocol handling. Nested calls share their parent request's admission
-slot, and active requests drain before the connector is closed
+or MCP protocol handling. The adapter explicitly links internal calls to their
+parent's admission slot; unrelated requests still acquire their own slots. The
+proxy pauses scheduled jobs, drains active requests, closes the connector, and
+then cleans up shared resources, including when startup or shutdown fails
 
 `PROXY_BASE_URL` supplies the trusted public origin for Host and Origin validation.
 Set `LITELLM_MCP_PUBLIC_URL` to an HTTPS origin if the admin MCP uses a different

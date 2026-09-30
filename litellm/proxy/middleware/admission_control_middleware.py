@@ -1,7 +1,6 @@
 import asyncio
 import os
 from collections.abc import Callable, Mapping
-from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Annotated, Final, Protocol, TypeAlias, runtime_checkable
@@ -11,6 +10,8 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+
+ADMISSION_LEASE_SCOPE_KEY: Final = "litellm.admission_lease"
 
 _EXEMPT_PATHS: Final[frozenset[str]] = frozenset(
     {
@@ -38,11 +39,6 @@ class AdmissionControlStats:
     admitted: int
     queued: int
     rejected_total: int
-
-
-class _AdmissionLease:
-    def __init__(self) -> None:
-        self.active: bool = True
 
 
 @runtime_checkable
@@ -136,6 +132,12 @@ class AdmissionControlState:
         return self._metrics
 
 
+class _AdmissionLease:
+    def __init__(self, state: AdmissionControlState) -> None:
+        self.state: Final = state
+        self.active: bool = True
+
+
 class AdmissionControlMiddleware:
     def __init__(
         self,
@@ -146,15 +148,18 @@ class AdmissionControlMiddleware:
         self.app = app
         self.get_settings = get_settings
         self.state = state
-        self._lease: ContextVar[_AdmissionLease | None] = ContextVar("admission_lease", default=None)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        inherited_lease: Final = self._lease.get()
-        if inherited_lease is not None and inherited_lease.active:
+        inherited_lease: Final = scope.get(ADMISSION_LEASE_SCOPE_KEY)
+        if (
+            isinstance(inherited_lease, _AdmissionLease)
+            and inherited_lease.state is self.state
+            and inherited_lease.active
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -190,13 +195,12 @@ class AdmissionControlMiddleware:
             state.record_dequeue()
             state.record_admission()
 
-        lease: Final = _AdmissionLease()
-        token: Final = self._lease.set(lease)
+        lease: Final = _AdmissionLease(state)
+        admitted_scope: Final[Scope] = {**scope, ADMISSION_LEASE_SCOPE_KEY: lease}
         try:
-            await self.app(scope, receive, send)
+            await self.app(admitted_scope, receive, send)
         finally:
             lease.active = False
-            self._lease.reset(token)
             semaphore.release()
             state.record_release()
 

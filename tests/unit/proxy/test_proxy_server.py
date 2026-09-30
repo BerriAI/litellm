@@ -49,14 +49,18 @@ from litellm.proxy.utils import ProxyLogging
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
-@pytest.mark.parametrize("failure_phase", ["startup", "serving", "shutdown"])
+@pytest.mark.parametrize("failure_phase", ["startup", "serving", "shutdown", "cancelled"])
 async def test_admin_mcp_failure_still_closes_proxy_resources(
     monkeypatch: pytest.MonkeyPatch, failure_phase: str
 ) -> None:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import STATE_PAUSED
     from litellm_admin_mcp import server as connector_server
     from litellm_admin_mcp.gateway import Gateway
 
     from litellm.proxy import proxy_server
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+    from litellm.proxy.shutdown.scheduled_jobs import AwaitableAsyncIOExecutor
 
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "1234567890abcdef" * 4)
@@ -66,12 +70,21 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
     monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_info_refresh": True})
+    executor: Final = AwaitableAsyncIOExecutor()
+    scheduler: Final = AsyncIOScheduler(executors={"default": executor})
+    monkeypatch.setattr(proxy_server, "scheduler", scheduler)
+    monkeypatch.setattr(proxy_server, "scheduler_executor", executor)
+    scheduler.start()
 
     @asynccontextmanager
     async def failing_connector(_app: FastAPI) -> AsyncGenerator[None, None]:
         if failure_phase == "startup":
             raise RuntimeError("connector startup failed")
         yield
+        assert scheduler.state == STATE_PAUSED
+        assert GracefulShutdownManager.is_shutting_down()
+        assert proxy_server.shared_aiohttp_session is not None
+        assert not proxy_server.shared_aiohttp_session.closed
         if failure_phase == "shutdown":
             raise RuntimeError("connector shutdown failed")
 
@@ -85,8 +98,12 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
         async with proxy_server.proxy_startup_event(gateway_app):
             if failure_phase == "serving":
                 raise RuntimeError("serving failed")
+            if failure_phase == "cancelled":
+                raise asyncio.CancelledError("cancelled failed")
 
-    with pytest.raises(RuntimeError, match=f"{failure_phase} failed"):
+    with pytest.raises(
+        asyncio.CancelledError if failure_phase == "cancelled" else RuntimeError, match=f"{failure_phase} failed"
+    ):
         await run_lifespan()
 
     assert proxy_server.shared_aiohttp_session is not None

@@ -80,7 +80,7 @@ jobs:
           LITELLM_IMAGE: litellm-image-scan:${{ github.sha }}
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py -v
+          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
 
       # Scans the whole shipped artifact: OS/apk plus every language package
       # baked into the image, including ones no lockfile declares (e.g. prisma's
@@ -125,7 +125,7 @@ jobs:
           LITELLM_IMAGE: litellm-runtime-scan:${{ github.sha }}
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py -v
+          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
 
   migrations-image:
     name: migrations-image

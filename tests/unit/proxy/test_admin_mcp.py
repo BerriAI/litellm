@@ -17,6 +17,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlStats,
 )
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
+from litellm.proxy.middleware.per_request_root_path_middleware import PerRequestRootPathMiddleware
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
 
@@ -80,6 +81,7 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 
 @pytest.mark.parametrize("enabled", [None, "false", "0"])
 def test_disabled_preserves_existing_admin_namespace(monkeypatch: pytest.MonkeyPatch, enabled: str | None) -> None:
+    monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
     if enabled is None:
         monkeypatch.delenv("LITELLM_ENABLE_ADMIN_MCP", raising=False)
     else:
@@ -94,6 +96,14 @@ def test_disabled_preserves_existing_admin_namespace(monkeypatch: pytest.MonkeyP
         response: Final = client.post("/admin/mcp")
     assert response.status_code == 200
     assert response.json() == {"server": "admin"}
+
+
+def test_enabled_without_connector_explains_installation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
+    monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
+    with pytest.raises(RuntimeError, match="admin-mcp dependency group"):
+        with TestClient(FastAPI(lifespan=admin_mcp_lifespan)):
+            pytest.fail("Enabling the connector without its dependency must fail startup")
 
 
 def test_invalid_flag_fails_startup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,16 +147,25 @@ def test_mount_keeps_existing_mcp_and_manages_restart(management_app: FastAPI) -
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
 @pytest.mark.parametrize("root_path", ["", "/gateway"])
+@pytest.mark.parametrize("prefix_mode", ["ingress", "scalar", "multiple"])
 async def test_concurrent_calls_preserve_identity_network_context_and_strip_cookies(
-    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, root_path: str
+    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, root_path: str, prefix_mode: str
 ) -> None:
     monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com" + root_path)
     monkeypatch.setenv("LITELLM_BASE_URL", "https://must-not-call.example.com")
     monkeypatch.setenv("LITELLM_API_KEY", "must-not-use-shared-credential")
+    if prefix_mode == "scalar":
+        management_app.root_path = root_path
+    elif prefix_mode == "multiple":
+        management_app.add_middleware(PerRequestRootPathMiddleware, root_paths=("/other", root_path))
 
     async def call(credential: str) -> dict[str, object]:
         async with httpx2.AsyncClient(
-            transport=httpx2.ASGITransport(app=management_app, root_path=root_path, client=("198.51.100.7", 4567)),
+            transport=httpx2.ASGITransport(
+                app=management_app,
+                root_path=root_path if prefix_mode == "ingress" else "",
+                client=("198.51.100.7", 4567),
+            ),
             base_url="https://gateway.example.com",
         ) as client:
             response: Final = await client.post(
@@ -173,6 +192,17 @@ async def test_concurrent_calls_preserve_identity_network_context_and_strip_cook
             "forwarded_for": "203.0.113.8",
             "cookie": "",
         }
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize("public_url", ["gateway.example.com", "https:/broken", "http://gateway.example.com"])
+def test_invalid_public_origin_fails_startup(
+    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, public_url: str
+) -> None:
+    monkeypatch.setenv("LITELLM_MCP_PUBLIC_URL", public_url)
+    with pytest.raises(ValueError, match="HTTPS gateway origin"):
+        with TestClient(management_app):
+            pytest.fail("An invalid trusted public origin must fail startup")
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
@@ -251,13 +281,29 @@ def test_nested_management_calls_share_one_admission_slot(management_app: FastAP
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize("outcome", ["complete", "cancelled", "deadline"])
 async def test_shutdown_drains_an_active_tool_before_closing_connector(
-    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch, outcome: str
 ) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "1234567890abcdef" * 4)
+    monkeypatch.delenv("WORKER_CONFIG", raising=False)
+    monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_info_refresh": True})
     monkeypatch.setenv("LITELLM_ADMIN_TOOLS", "list_teams")
+    if outcome == "deadline":
+        monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "0")
     started: Final = asyncio.Event()
     release: Final = asyncio.Event()
     management_app.add_middleware(InFlightRequestsMiddleware)
+    state: Final = AdmissionControlState(lambda: None)
+    management_app.add_middleware(
+        AdmissionControlMiddleware, get_settings=lambda: AdmissionControlSettings(1, 0, 1.0), state=state
+    )
 
     @management_app.get("/team/list", operation_id="list_team_team_list_get")
     async def list_teams() -> dict[str, object]:
@@ -271,12 +317,15 @@ async def test_shutdown_drains_an_active_tool_before_closing_connector(
                 while not GracefulShutdownManager.is_shutting_down():
                     await asyncio.sleep(0)
         finally:
-            release.set()
+            if outcome == "cancelled":
+                request.cancel()
+            if outcome != "deadline":
+                release.set()
 
     async with httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=management_app), base_url="http://localhost:4000"
     ) as client:
-        async with management_app.router.lifespan_context(management_app):
+        async with proxy_server.proxy_startup_event(management_app):
             request: Final = asyncio.create_task(
                 client.post(
                     "/admin/mcp",
@@ -287,9 +336,22 @@ async def test_shutdown_drains_an_active_tool_before_closing_connector(
             await asyncio.wait_for(started.wait(), timeout=5)
             completion: Final = asyncio.create_task(complete_during_drain())
         await asyncio.wait_for(completion, timeout=5)
-        response: Final = await asyncio.wait_for(request, timeout=5)
+        if outcome == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        else:
+            response: Final = await asyncio.wait_for(request, timeout=5)
+            assert response.status_code == (500 if outcome == "deadline" else 200), response.text
+            if outcome == "deadline":
+                assert "error" in response.json()
+            else:
+                assert response.json()["result"]["isError"] is False
+                assert json.loads(response.json()["result"]["content"][0]["text"]) == {
+                    "teams": ["completed-before-shutdown"]
+                }
 
-    assert response.status_code == 200, response.text
-    assert response.json()["result"]["isError"] is False
-    assert json.loads(response.json()["result"]["content"][0]["text"]) == {"teams": ["completed-before-shutdown"]}
+    assert proxy_server.shared_aiohttp_session is not None
+    assert proxy_server.shared_aiohttp_session.closed
+    assert all(route.name != "admin_mcp" for route in management_app.routes)
     assert InFlightRequestsMiddleware.get_count() == 0
+    assert state.get_stats() == AdmissionControlStats(0, 0, 0)

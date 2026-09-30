@@ -11,6 +11,8 @@ from starlette.requests import Request
 from starlette.routing import Mount
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from litellm.proxy.middleware.admission_control_middleware import ADMISSION_LEASE_SCOPE_KEY
+
 _REQUEST_HEADERS: Final = frozenset(
     {
         b"authorization",
@@ -70,12 +72,11 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Use a LiteLLM image that bundles it, or run uv sync --extra proxy --group admin-mcp."
         ) from exc
 
-    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
-
-    public_url: Final = urlsplit(os.environ.get("LITELLM_MCP_PUBLIC_URL") or os.environ.get("PROXY_BASE_URL", ""))
+    configured_url: Final = os.environ.get("LITELLM_MCP_PUBLIC_URL") or os.environ.get("PROXY_BASE_URL", "")
+    public_url: Final = urlsplit(configured_url)
     config: Final = Config(
         base_url="http://localhost",
-        public_url=f"{public_url.scheme}://{public_url.netloc}" if public_url.netloc else "",
+        public_url=f"{public_url.scheme}://{public_url.netloc}" if public_url.netloc else configured_url,
         read_only=env_bool("LITELLM_ADMIN_READ_ONLY"),
         allowed_tools=frozenset(
             name.strip() for name in os.environ.get("LITELLM_ADMIN_TOOLS", "").split(",") if name.strip()
@@ -95,6 +96,7 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "client": request.client,
             "scheme": request.url.scheme,
             "headers": headers,
+            ADMISSION_LEASE_SCOPE_KEY: request.scope.get(ADMISSION_LEASE_SCOPE_KEY),
         }
         await app(gateway_scope, receive, send)
 
@@ -106,8 +108,4 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             try:
                 yield
             finally:
-                GracefulShutdownManager.start_shutdown()
-                try:
-                    await GracefulShutdownManager.wait_for_drain()
-                finally:
-                    app.router.routes.remove(route)
+                app.router.routes.remove(route)
