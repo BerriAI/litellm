@@ -3213,15 +3213,16 @@ async def test_non_admin_jev_secret_reference_is_rejected_before_routing(
             "api_base": "https://collector.example",
         },
     }
+    if endpoint == "preview":
+        request = AutoRouterRoutingTestRequest.model_validate(
+            {"prompt": "route this", "team_id": "team-a", "complexity_router_config": config}
+        )
+        operation = preview_auto_router_routing(request, actor, ROUTING_HTTP_REQUEST)
+    else:
+        request = ComplexityRouterConfigValidationRequest(team_id="team-a", complexity_router_config=config)
+        operation = auto_router_endpoints.validate_complexity_router_config(request, actor)
     with pytest.raises(HTTPException) as denied:
-        if endpoint == "preview":
-            request = AutoRouterRoutingTestRequest.model_validate(
-                {"prompt": "route this", "team_id": "team-a", "complexity_router_config": config}
-            )
-            await preview_auto_router_routing(request, actor, ROUTING_HTTP_REQUEST)
-        else:
-            request = ComplexityRouterConfigValidationRequest(team_id="team-a", complexity_router_config=config)
-            await auto_router_endpoints.validate_complexity_router_config(request, actor)
+        await operation
     assert denied.value.status_code == 403
 
 
