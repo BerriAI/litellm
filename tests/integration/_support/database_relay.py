@@ -81,15 +81,88 @@ class DatabaseRelay:
         )
 
 
+class HeldStatementRelay:
+    def __init__(self, upstream_host: str, upstream_port: int, fragments: tuple[bytes, ...]) -> None:
+        self.port: Final = _free_port()
+        self._upstream_host: Final = upstream_host
+        self._upstream_port: Final = upstream_port
+        self._fragments: Final = fragments
+        self._loop: Final = asyncio.new_event_loop()
+        self._released: Final = asyncio.Event()
+        self.held: Final = threading.Event()
+        self._ready: Final = threading.Event()
+        self._thread: Final = threading.Thread(target=self._run, daemon=True)
+
+    def release(self) -> None:
+        self._loop.call_soon_threadsafe(self._released.set)
+
+    def start(self) -> None:
+        self._thread.start()
+        assert self._ready.wait(10), "Database relay did not start"
+
+    def stop(self) -> None:
+        self.release()
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(10)
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(asyncio.start_server(self._serve, "127.0.0.1", self.port))
+        self._ready.set()
+        self._loop.run_forever()
+
+    def _holds(self, chunk: bytes) -> bool:
+        return not self.held.is_set() and all(fragment in chunk for fragment in self._fragments)
+
+    async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+        server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
+
+        async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
+            try:
+                while chunk := await reader.read(65536):
+                    if inspect and self._holds(chunk):
+                        self.held.set()
+                        await self._released.wait()
+                    writer.write(chunk)
+                    await writer.drain()
+            except (ConnectionError, asyncio.IncompleteReadError):
+                return
+            finally:
+                writer.close()
+
+        await asyncio.gather(
+            forward(client_reader, server_writer, True),
+            forward(server_reader, client_writer, False),
+        )
+
+
+def _relayed_url(database_url: str, port: int) -> str:
+    parts: Final = urlsplit(database_url)
+    credentials: Final = f"{parts.username}:{parts.password}@" if parts.username else ""
+    return urlunsplit(parts._replace(netloc=f"{credentials}127.0.0.1:{port}"))
+
+
 @contextmanager
 def database_relay(database_url: str, trigger: bytes) -> Generator[tuple[DatabaseRelay, str]]:
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
     relay: Final = DatabaseRelay(parts.hostname, parts.port, trigger)
     relay.start()
-    credentials: Final = f"{parts.username}:{parts.password}@" if parts.username else ""
-    relayed: Final = urlunsplit(parts._replace(netloc=f"{credentials}127.0.0.1:{relay.port}"))
     try:
-        yield relay, relayed
+        yield relay, _relayed_url(database_url, relay.port)
+    finally:
+        relay.stop()
+
+
+@contextmanager
+def held_statement_relay(
+    database_url: str, fragments: tuple[bytes, ...]
+) -> Generator[tuple[HeldStatementRelay, str]]:
+    parts: Final = urlsplit(database_url)
+    assert parts.hostname is not None and parts.port is not None, database_url
+    relay: Final = HeldStatementRelay(parts.hostname, parts.port, fragments)
+    relay.start()
+    try:
+        yield relay, _relayed_url(database_url, relay.port)
     finally:
         relay.stop()

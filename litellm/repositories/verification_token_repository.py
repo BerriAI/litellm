@@ -4,7 +4,7 @@ VerificationToken repository for database operations on LiteLLM_VerificationToke
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -124,21 +124,16 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
 
-    async def find_latest_llm_api_row_by_user_id(
+    async def find_newest_reusable_llm_api_key(
         self, user_id: str, team_id: str | None
-    ) -> "PrismaVerificationToken | None":
-        row: Final = await self.table.find_first(
+    ) -> LiteLLM_VerificationToken | None:
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
             where={  # mutable-ok: the prisma where clause contract is a plain dict
                 "user_id": user_id,
                 "team_id": team_id,
+                "expires": None,
                 "AND": [  # mutable-ok: prisma filter literal
                     {"OR": [{"blocked": False}, {"blocked": None}]},  # mutable-ok: prisma filter literal
-                    {  # mutable-ok: prisma filter literal
-                        "OR": [  # mutable-ok: prisma filter literal
-                            {"expires": None},  # mutable-ok: prisma filter literal
-                            {"expires": {"gt": datetime.now(timezone.utc)}},  # mutable-ok: prisma filter literal
-                        ]
-                    },
                     {  # mutable-ok: prisma filter literal
                         "OR": [  # mutable-ok: prisma filter literal
                             {"team_id": None},  # mutable-ok: prisma filter literal
@@ -155,7 +150,10 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
             },
             order={"created_at": "desc"},  # mutable-ok: prisma order literal
         )
-        return row
+        return next(
+            (key for key in self._to_model_list(records) if key.metadata.get("auto_registered") is not True),
+            None,
+        )
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a team."""

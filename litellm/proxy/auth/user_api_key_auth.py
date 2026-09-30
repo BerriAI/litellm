@@ -938,11 +938,23 @@ class _PendingAutoRegister(NamedTuple):
     jwt_issuer: str | None = None
 
 
-async def _latest_active_key_hash_for_user(
-    prisma_client: PrismaClient, user_id: str, team_id: str | None
-) -> str | None:
-    row: Final = await VerificationTokenRepository(prisma_client).find_latest_llm_api_row_by_user_id(user_id, team_id)
-    return None if row is None else row.token
+def _claim_identifies_user(jwt_handler: JWTHandler, claim_value: str, user_id: str) -> bool:
+    if not jwt_handler.litellm_jwtauth.auto_register_map_existing_key:
+        return False
+    if claim_value == user_id:
+        return True
+    verbose_proxy_logger.warning(
+        "JWT Key Mapping (auto_register_map_existing_key): claim value '%s' is not the resolved user_id '%s' and "
+        "may be shared by several users, so a new key is minted instead of reusing one the user owns.",
+        claim_value,
+        user_id,
+    )
+    return False
+
+
+async def _reusable_key_hash_for_user(prisma_client: PrismaClient, user_id: str, team_id: str | None) -> str | None:
+    key: Final = await VerificationTokenRepository(prisma_client).find_newest_reusable_llm_api_key(user_id, team_id)
+    return None if key is None else key.token
 
 
 async def _auto_register_jwt_mapping(
@@ -983,8 +995,8 @@ async def _auto_register_jwt_mapping(
     )
 
     existing_token_hash: Final = (
-        await _latest_active_key_hash_for_user(prisma_client, user_id, team_id)
-        if jwt_handler.litellm_jwtauth.auto_register_map_existing_key and user_id is not None
+        await _reusable_key_hash_for_user(prisma_client, user_id, team_id)
+        if user_id is not None and _claim_identifies_user(jwt_handler, claim_value, user_id)
         else None
     )
     minted: Final = existing_token_hash is None
