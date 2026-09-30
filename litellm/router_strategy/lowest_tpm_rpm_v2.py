@@ -304,7 +304,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # update cache
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             ## TPM
-            await self.router_cache.async_increment_cache(
+            await self.router_cache.async_increment_cache_post_call(
                 key=tpm_key,
                 value=total_tokens,
                 ttl=self.routing_args.ttl,

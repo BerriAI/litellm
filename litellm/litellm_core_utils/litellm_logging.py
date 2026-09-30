@@ -35,6 +35,7 @@ from litellm._uuid import uuid
 from litellm.batches.batch_utils import _handle_completed_batch, batch_cost_is_final
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
@@ -3552,6 +3553,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     traceback.format_exc(),
                 )
                 self._handle_callback_failure(callback=callback)
+        await flush_post_call_redis_batches()
 
     def _handle_callback_failure(self, callback: object):
         """
@@ -3937,6 +3939,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 # Track callback logging failures in Prometheus
                 self._handle_callback_failure(callback=callback)
+        await flush_post_call_redis_batches()
 
     def _get_trace_id(self, service_name: Literal["langfuse"]) -> str | None:
         """
