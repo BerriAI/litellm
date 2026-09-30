@@ -20,7 +20,8 @@ describe("bucketRuns", () => {
     expect(buckets).toHaveLength(10);
     expect(buckets[0].startMs).toBe(range.startMs);
     expect(buckets.at(-1)?.endMs).toBe(range.endMs);
-    expect(buckets[3]).toMatchObject({ startMs: START + 3 * HOUR, endMs: START + 4 * HOUR, runs: 0, failed: 0 });
+    const fourthBucket = { startMs: START + 3 * HOUR, endMs: START + 4 * HOUR, runs: 0, failed: 0 };
+    expect(buckets[3]).toMatchObject(fourthBucket);
   });
 
   it("puts each run in the bucket covering its start time", () => {
