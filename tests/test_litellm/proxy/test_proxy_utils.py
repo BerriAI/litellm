@@ -1,6 +1,8 @@
 import datetime as real_datetime
 import smtplib
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -11,13 +13,8 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.bug_report import ISSUE_URL_BASE
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
-from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
+from litellm.proxy.utils import PrismaClient, ProxyLogging, get_custom_url, handle_exception_on_proxy, join_paths
 from litellm.types.guardrails import GuardrailEventHooks
-
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from litellm.proxy.utils import get_custom_url, join_paths
 
 
 def test_get_custom_url(monkeypatch):
@@ -2348,6 +2345,7 @@ class TestPrismaClientTokenAuthBehindThePool:
 @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
 def test_mcp_conversion_preserves_request_policy_and_isolates_guardrail_data(bucket):
     from copy import deepcopy
+
     from litellm.responses.mcp.request_context import MCPRequestContext
 
     parent = {
@@ -2400,8 +2398,8 @@ def test_mcp_conversion_honors_only_authenticated_global_guardrail_opt_outs(opt_
 
 @pytest.mark.parametrize("model, expected", [("parent-model", True), ("unmatched-model", False)])
 def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expected):
-    from litellm.responses.mcp.request_context import MCPRequestContext
     from litellm.proxy.policy_engine import policy_registry
+    from litellm.responses.mcp.request_context import MCPRequestContext
     from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails
 
     registry = policy_registry.PolicyRegistry()
@@ -2433,3 +2431,22 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+class TestProxyHookCallbackRegistration:
+    def test_hook_opting_out_gets_its_slot_without_becoming_a_callback(self):
+        import litellm
+        from litellm.proxy.hooks.active_request_registry import ActiveRequestRegistry
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=SimpleNamespace())
+        before = list(litellm.callbacks)
+
+        proxy_logging._add_proxy_hooks()
+
+        registry = proxy_logging.get_proxy_hook("active_request_registry")
+        added = [callback for callback in litellm.callbacks if callback not in before]
+        assert isinstance(registry, ActiveRequestRegistry)
+        assert registry.register_as_litellm_callback is False
+        assert registry not in added
+        assert added, "hooks that do not opt out must still be registered as callbacks"

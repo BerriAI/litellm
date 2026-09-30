@@ -225,6 +225,32 @@ def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -
     return request_data["litellm_metadata"]
 
 
+async def _register_router_passthrough(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str | None,
+    stream: bool,
+) -> str:
+    from litellm.proxy.common_request_processing import resolve_litellm_call_id
+    from litellm.proxy.hooks.active_request_registry import ActiveRequestCall, register_http_request
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    litellm_call_id: Final[str] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    call_data: Final[ActiveRequestCall] = {
+        "litellm_call_id": litellm_call_id,
+        "model": model or "unknown",
+        "stream": stream,
+    }
+    await register_http_request(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
+        data=call_data,
+        call_type="allm_passthrough_route",
+    )
+    return litellm_call_id
+
+
 async def llm_passthrough_factory_proxy_route(
     custom_llm_provider: str,
     endpoint: str,
@@ -495,6 +521,12 @@ async def vllm_proxy_route(
     is_router_model: Final = is_passthrough_request_using_router_model(request_body, llm_router)
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
+        litellm_call_id: Final = await _register_router_passthrough(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            model=request_body.get("model"),
+            stream=bool(is_streaming_request),
+        )
         result: Final = cast(
             httpx.Response,
             await llm_router.allm_passthrough_route(
@@ -511,6 +543,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
+                litellm_call_id=litellm_call_id,
                 litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
             ),
         )
@@ -2020,6 +2053,12 @@ async def _relay_router_model(
     is_streaming_request: bool,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
+    litellm_call_id: Final = await _register_router_passthrough(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        model=model,
+        stream=is_streaming_request,
+    )
     try:
         result: Final = await llm_router.allm_passthrough_route(
             model=model,
@@ -2035,6 +2074,7 @@ async def _relay_router_model(
             params=None,
             headers=None,
             cookies=None,
+            litellm_call_id=litellm_call_id,
             litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
         )
     except httpx.HTTPStatusError as upstream_error:

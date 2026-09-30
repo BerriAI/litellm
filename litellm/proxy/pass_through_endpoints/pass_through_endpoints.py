@@ -97,6 +97,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
+from litellm.proxy.hooks.active_request_registry import ActiveRequestCall, register_http_request
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
@@ -1148,6 +1149,18 @@ async def pass_through_request(
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        active_request_call: Final[ActiveRequestCall] = {
+            "litellm_call_id": litellm_call_id,
+            "model": passthrough_model,
+            "stream": bool(stream),
+        }
+        await register_http_request(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            data=active_request_call,
+            call_type="pass_through_endpoint",
+        )
         start_time: Final = datetime.now()
         team_callbacks: Final = _resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,

@@ -11,6 +11,7 @@ vi.mock("../utils/roles", async (importOriginal) => {
     old_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
+    proxyAdminRoles: ["admin", "admin_viewer"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
     isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
     isUserTeamAdminForAnyTeam: () => false,

@@ -30,6 +30,12 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     content: { role: "heading", name: "Access Groups" },
   },
   budgets: { segment: "budgets", linkName: "Budgets", content: { role: "heading", name: "Budgets" } },
+  "active-requests": {
+    segment: "active-requests",
+    linkName: "Active Requests",
+    group: "Observability",
+    content: { role: "heading", name: "Active Requests" },
+  },
   workflows: {
     segment: "workflows",
     linkName: "Workflow Runs",

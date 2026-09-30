@@ -55,6 +55,7 @@ import {
   ShieldCheck,
   Tags,
   Terminal,
+  Timer,
   User,
   Users,
   Wallet,
@@ -71,6 +72,7 @@ import {
   internalUserRoles,
   isAdminRole,
   isUserTeamAdminForAnyTeam,
+  proxyAdminRoles,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "../utils/roles";
@@ -227,6 +229,13 @@ const menuGroups: MenuGroup[] = [
         ),
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
+      {
+        key: "active-requests",
+        page: "active-requests",
+        label: "Active Requests",
+        icon: <Timer {...ICON} />,
+        roles: proxyAdminRoles,
+      },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",

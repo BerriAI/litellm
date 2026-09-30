@@ -568,6 +568,9 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_l
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
+from litellm.proxy.management_endpoints.active_request_endpoints import (
+    router as active_request_router,
+)
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     router as auto_router_management_router,
 )
@@ -19888,6 +19891,7 @@ app.include_router(ui_crud_endpoints_router)
 app.include_router(user_banner_endpoints_router)
 app.include_router(latest_release_endpoints_router)
 app.include_router(team_callback_router)
+app.include_router(active_request_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
