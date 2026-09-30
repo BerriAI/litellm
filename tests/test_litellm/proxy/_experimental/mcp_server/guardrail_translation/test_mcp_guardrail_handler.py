@@ -237,8 +237,8 @@ async def test_guardrail_returning_wrong_text_count_blocks_the_call():
 
 
 @pytest.mark.asyncio
-async def test_deeply_nested_arguments_are_blocked_rather_than_skipped():
-    """Arguments too deep to walk must block instead of passing unscanned."""
+@pytest.mark.parametrize("payload_field", ("mcp_arguments", "mcp_input_schema"))
+async def test_deeply_nested_tool_text_is_blocked_rather_than_skipped(payload_field: str):
     handler = MCPGuardrailTranslationHandler()
     guardrail = ArgumentMaskingGuardrail()
 
@@ -246,7 +246,7 @@ async def test_deeply_nested_arguments_are_blocked_rather_than_skipped():
     for _ in range(MAX_STRUCTURED_CONTENT_SCAN_DEPTH + 1):
         nested = {"next": nested}
 
-    data = {"mcp_tool_name": "search", "mcp_arguments": nested}
+    data = {"mcp_tool_name": "search", payload_field: nested}
 
     with pytest.raises(HTTPException) as exc_info:
         await handler.process_input_messages(data, guardrail)
@@ -652,7 +652,7 @@ async def test_structured_content_is_masked_alongside_content():
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert returned.content[0].text == "email <EMAIL_ADDRESS>"
-    assert returned.structuredContent == {"contact": {"email": "<EMAIL_ADDRESS>"}, "balance": 42.0}
+    assert returned.structured_content == {"contact": {"email": "<EMAIL_ADDRESS>"}, "balance": 42.0}
 
 
 @pytest.mark.asyncio
@@ -673,7 +673,7 @@ async def test_value_present_only_in_structured_content_is_masked():
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert "jane@example.com" in guardrail.seen_texts
-    assert returned.structuredContent == {"records": [{"email": "<EMAIL_ADDRESS>"}]}
+    assert returned.structured_content == {"records": [{"email": "<EMAIL_ADDRESS>"}]}
     assert returned.content[0].text == "lookup complete"
 
 
@@ -690,7 +690,7 @@ async def test_structured_content_without_a_match_is_untouched():
 
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
-    assert returned.structuredContent == {"record_id": "C-1001", "balance": 42.0, "active": True, "note": None}
+    assert returned.structured_content == {"record_id": "C-1001", "balance": 42.0, "active": True, "note": None}
 
 
 @pytest.mark.asyncio
@@ -798,4 +798,90 @@ async def test_clean_structured_content_keys_do_not_block():
     returned = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
 
     assert returned.content[0].text == "email <EMAIL_ADDRESS>"
-    assert returned.structuredContent == {"record_id": "C-1001", "balance": 42.0, "count": 3}
+    assert returned.structured_content == {"record_id": "C-1001", "balance": 42.0, "count": 3}
+
+
+@pytest.mark.asyncio
+async def test_description_and_schema_descriptions_are_scanned_ahead_of_arguments():
+    """A discovery scan hands the guardrail the tool description, then the schema descriptions, then arguments."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = MockGuardrail()
+
+    data = {
+        "mcp_tool_name": "weather",
+        "mcp_tool_description": "Get weather for a city",
+        "mcp_input_schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string", "description": "City name"}, "days": {"type": "integer"}},
+        },
+        "mcp_arguments": {"city": "tokyo"},
+    }
+
+    await handler.process_input_messages(data, guardrail)
+
+    assert guardrail.last_inputs is not None
+    assert guardrail.last_inputs.get("texts") == ["Get weather for a city", "City name", "tokyo"]
+
+
+@pytest.mark.asyncio
+async def test_masked_description_and_schema_are_written_back_without_touching_arguments():
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    data = {
+        "mcp_tool_name": "send_email",
+        "mcp_tool_description": "Email jane.doe@example.com for help",
+        "mcp_input_schema": {
+            "type": "object",
+            "properties": {"to": {"type": "string", "description": "Defaults to jane.doe@example.com"}},
+        },
+        "mcp_arguments": {},
+    }
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert result["mcp_tool_description"] == "Email <EMAIL_ADDRESS> for help"
+    assert result["mcp_input_schema"] == {
+        "type": "object",
+        "properties": {"to": {"type": "string", "description": "Defaults to <EMAIL_ADDRESS>"}},
+    }
+    assert "modified_arguments" not in result
+
+
+@pytest.mark.asyncio
+async def test_argument_mask_lands_on_the_argument_when_a_description_is_scanned_too():
+    """The positional write-back must offset past the description and schema texts."""
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail()
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_tool_description": "Search notes",
+        "mcp_input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "Query"}}},
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    result = await handler.process_input_messages(data, guardrail)
+
+    assert result["mcp_tool_description"] == "Search notes"
+    assert result["mcp_input_schema"]["properties"]["query"]["description"] == "Query"
+    assert result["modified_arguments"] == {"query": "contact <EMAIL_ADDRESS> about the invoice"}
+
+
+@pytest.mark.asyncio
+async def test_wrong_text_count_with_a_description_blocks_instead_of_misplacing_a_mask():
+    handler = MCPGuardrailTranslationHandler()
+    guardrail = ArgumentMaskingGuardrail(texts_override=["only one"])
+
+    data = {
+        "mcp_tool_name": "search",
+        "mcp_tool_description": "Search notes",
+        "mcp_arguments": {"query": "contact jane.doe@example.com about the invoice"},
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.process_input_messages(data, guardrail)
+
+    assert exc_info.value.status_code == 400
+    assert data["mcp_tool_description"] == "Search notes"
+    assert "modified_arguments" not in data

@@ -1,10 +1,11 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
+import { Copy } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { CellTooltip, DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
-import { getSpendString } from "@/utils/dataUtils";
+import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "./batchLogUtils";
@@ -15,6 +16,7 @@ import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, Wre
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
   onSessionClick: (log: LogEntry) => void;
+  resolveUserEmail?: (userId: string) => string | undefined;
 }
 
 const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
@@ -29,17 +31,50 @@ const readMcpLogoUrl = (metadata: Record<string, unknown> | undefined): string |
   return typeof url === "string" && url !== "" ? url : undefined;
 };
 
+function RequestIdWithCallIdTooltip({ requestId, callId }: { requestId: string; callId: string }) {
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span>{requestId}</span>
+      <span className="inline-flex items-center gap-1">
+        <span>x-litellm-call-id: {callId}</span>
+        <button
+          type="button"
+          aria-label="Copy x-litellm-call-id"
+          className="shrink-0 cursor-pointer opacity-70 hover:opacity-100"
+          onClick={(event) => {
+            event.stopPropagation();
+            void copyToClipboard(callId);
+          }}
+        >
+          <Copy className="size-3" />
+        </button>
+      </span>
+    </span>
+  );
+}
+
 const getLogoUrl = (row: LogEntry, provider: string): string =>
   readMcpLogoUrl(row.metadata) ?? (provider ? getProviderLogoAndName(provider).logo : "");
 
-function TruncatedText({ value }: { value: string | undefined }) {
+function TruncatedText({ value, tooltip }: { value: string | undefined; tooltip?: string }) {
   const display = value ?? "-";
-  return <CellTooltip content={display} trigger={<span className="max-w-[15ch] truncate block">{display}</span>} />;
+  return (
+    <CellTooltip
+      content={tooltip ?? display}
+      trigger={<span className="max-w-[15ch] truncate block">{display}</span>}
+    />
+  );
+}
+
+function UserCell({ userId, email }: { userId: string | undefined; email: string | undefined }) {
+  if (!userId || !email || email === userId) return <TruncatedText value={userId} />;
+  return <TruncatedText value={email} tooltip={`${email} (${userId})`} />;
 }
 
 export const getRequestLogsTableColumns = ({
   onKeyHashClick,
   onSessionClick,
+  resolveUserEmail = () => undefined,
 }: RequestLogsTableColumnsDeps): ColumnDef<LogEntry>[] => [
   {
     id: "startTime",
@@ -148,7 +183,14 @@ export const getRequestLogsTableColumns = ({
           </div>
         );
       }
-      return <IdCell value={log.request_id} variant="plain" />;
+      const callId = log.litellm_call_id && log.litellm_call_id !== log.request_id ? log.litellm_call_id : null;
+      return (
+        <IdCell
+          value={log.request_id}
+          variant="plain"
+          tooltip={callId ? <RequestIdWithCallIdTooltip requestId={log.request_id} callId={callId} /> : undefined}
+        />
+      );
     },
   },
   {
@@ -320,7 +362,12 @@ export const getRequestLogsTableColumns = ({
     header: "Internal User",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={row.original.user} />,
+    cell: ({ row }) => (
+      <UserCell
+        userId={row.original.user}
+        email={row.original.user ? resolveUserEmail(row.original.user) : undefined}
+      />
+    ),
   },
   {
     id: "end_user",

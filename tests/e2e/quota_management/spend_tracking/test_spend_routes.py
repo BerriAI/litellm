@@ -17,9 +17,11 @@ fast: no batch-write wait, no provider calls.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 
+from e2e_http import ProbeResult
 from models import DateRangeParams
 from spend_e2e_client import SpendClient
 
@@ -72,15 +74,12 @@ SPEND_ROUTES = (
 
 _SPEND_PREFIXES = ("/spend", "/global/spend", "/global/activity")
 
-_MISSING_VIEW_SKIP = pytest.mark.skip(
-    reason=(
-        "LIT-5211: on a fresh database the proxy's startup view creation can lose the race "
-        "against schema migrations, leaving MonthlyGlobalSpend/DailyTagSpend/Last30d* views "
-        "missing and these routes 500ing until the views exist"
-    )
-)
+_CAPTURE_RATE_ROUTE: Final = "/spend/capture_rate"
 
-_VIEW_BACKED_ROUTES = frozenset(
+# Served from the MonthlyGlobalSpend / DailyTagSpend / Last30d* views, which the
+# proxy creates in the background once the schema migrations have landed, so on a
+# fresh database they can 500 for a while after the proxy starts serving.
+_VIEW_BACKED_ROUTES: Final = frozenset(
     (
         "/global/spend",
         "/global/spend/keys",
@@ -98,15 +97,15 @@ def _date_range() -> DateRangeParams:
     return DateRangeParams(start_date=start.isoformat(), end_date=end.isoformat())
 
 
-@pytest.mark.parametrize(
-    "route",
-    tuple(
-        pytest.param(route, marks=_MISSING_VIEW_SKIP) if route in _VIEW_BACKED_ROUTES else route
-        for route in SPEND_ROUTES
-    ),
-)
+def _probe(client: SpendClient, route: str) -> ProbeResult:
+    if route in _VIEW_BACKED_ROUTES:
+        return client.probe_until_healthy(route, params=_date_range())
+    return client.probe(route, params=_date_range())
+
+
+@pytest.mark.parametrize("route", SPEND_ROUTES)
 def test_spend_route_responsive(client: SpendClient, route: str) -> None:
-    result = client.probe(route, params=_date_range())
+    result = _probe(client, route)
     print(f"{route} -> {result.status_code}\n{result.body[:600]}")
     assert result.healthy, f"{route} -> {result.status_code}\n{result.body[:600]}"
 
@@ -123,7 +122,7 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
         and "{" not in path
         and any(path.startswith(prefix) for prefix in _SPEND_PREFIXES)
     ]
-    extras = [path for path in discovered if path not in SPEND_ROUTES]
+    extras = [path for path in discovered if path not in (*SPEND_ROUTES, _CAPTURE_RATE_ROUTE)]
 
     params = _date_range()
     results = [(path, client.probe(path, params=params)) for path in extras]
@@ -135,3 +134,11 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
         if not result.healthy
     ]
     assert not offenders, "non-responsive schema spend routes:\n" + "\n".join(offenders)
+
+
+def test_capture_rate_reports_or_names_the_missing_billing_key(client: SpendClient) -> None:
+    result: Final = client.probe(_CAPTURE_RATE_ROUTE, params=_date_range())
+    print(f"{_CAPTURE_RATE_ROUTE} -> {result.status_code}\n{result.body[:600]}")
+    assert result.status_code == 200 or (result.status_code == 503 and "OPENAI_ADMIN_KEY is not set" in result.body), (
+        f"{_CAPTURE_RATE_ROUTE} -> {result.status_code}\n{result.body[:600]}"
+    )

@@ -258,9 +258,19 @@ describe("ActivityMetrics", () => {
             api_key: "key-123",
             key_alias: "Test Key",
             team_id: "team1",
+            user: "owner@example.com",
             spend: 50.25,
             requests: 25,
             tokens: 12500,
+          },
+          {
+            api_key: "key-456",
+            key_alias: "Owner Alias",
+            team_id: null,
+            user: "Owner Alias",
+            spend: 40.25,
+            requests: 20,
+            tokens: 10000,
           },
         ],
       },
@@ -269,6 +279,9 @@ describe("ActivityMetrics", () => {
     render(<ActivityMetrics modelMetrics={modelWithTopKeys} />);
     expect(screen.getByText("Top Virtual Keys by Spend")).toBeInTheDocument();
     expect(screen.getByText("Test Key")).toBeInTheDocument();
+    expect(screen.getByText("User: owner@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Owner Alias")).toBeInTheDocument();
+    expect(screen.queryByText("User: Owner Alias")).not.toBeInTheDocument();
   });
 
   it("should display API key hash when alias is missing", () => {
@@ -280,6 +293,7 @@ describe("ActivityMetrics", () => {
             api_key: "key-1234567890",
             key_alias: null,
             team_id: null,
+            user: null,
             spend: 50.25,
             requests: 25,
             tokens: 12500,
@@ -301,6 +315,7 @@ describe("ActivityMetrics", () => {
             api_key: "key-123",
             key_alias: "Test Key",
             team_id: "team1",
+            user: null,
             spend: 50.25,
             requests: 25,
             tokens: 12500,
@@ -1056,6 +1071,8 @@ describe("processActivityData", () => {
                     metadata: {
                       key_alias: "test-key-1",
                       team_id: "team1",
+                      user_id: "owner-id-1",
+                      user_email: "owner-1@example.com",
                     },
                   },
                   "key-2": {
@@ -1073,6 +1090,7 @@ describe("processActivityData", () => {
                     metadata: {
                       key_alias: "test-key-2",
                       team_id: "team2",
+                      user_id: "owner-id-2",
                     },
                   },
                 },
@@ -1094,6 +1112,10 @@ describe("processActivityData", () => {
     expect(result["gpt-4"].top_api_keys[0].spend).toBe(60.0);
     expect(result["gpt-4"].top_api_keys[0].api_key).toBe("key-1");
     expect(result["gpt-4"].top_api_keys[1].spend).toBe(40.5);
+    expect(result["gpt-4"].top_api_keys.map(({ api_key, user }) => [api_key, user])).toEqual([
+      ["key-1", "owner-1@example.com"],
+      ["key-2", "owner-id-2"],
+    ]);
   });
 
   it("should limit top_api_keys to 5 entries", () => {

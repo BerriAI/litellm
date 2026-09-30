@@ -131,6 +131,19 @@ def ensure_response_additional_headers(response: object) -> dict[str, object]:
     return additional_headers
 
 
+def apply_response_model_id(response: object, request_metadata: Mapping[str, object] | None) -> None:
+    if request_metadata is None:
+        return
+    model_id: Final = _routing_header_mapping(request_metadata.get("model_info")).get("id")
+    if not isinstance(model_id, str) or not model_id:
+        return
+    hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
+    if hidden_params.get("model_id"):
+        return
+    hidden_params["model_id"] = model_id
+    _write_hidden_params(response, hidden_params)
+
+
 def apply_quality_router_decision_headers(
     additional_headers: dict[str, object],
     request_kwargs: object,

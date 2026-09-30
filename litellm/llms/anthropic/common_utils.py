@@ -7,10 +7,10 @@ import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeVar
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import (
@@ -19,6 +19,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -30,6 +31,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     AllAnthropicToolsValues,
@@ -38,6 +40,8 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
+
+_MessageT = TypeVar("_MessageT")
 
 DROP_FORCED_TOOL_CHOICE_WARNING: Final = (
     "Downgrading forced tool_choice to 'auto' for model=%s (drop_params=True): this model rejects tool_choice type "
@@ -74,6 +78,42 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
+def requires_native_compaction_beta(
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    messages: Sequence[object],
+) -> bool:
+    return custom_llm_provider == "anthropic" and (
+        optional_params.get("compaction") is not None
+        or any(
+            isinstance(block, Mapping)
+            and block.get("type") == "compaction"
+            and isinstance(block.get("signature"), str)
+            and bool(block.get("signature"))
+            for message in messages
+            if isinstance(message, Mapping)
+            for content in (message.get("content"),)
+            if isinstance(content, (list, tuple))
+            for block in content
+        )
+    )
+
+
+def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.utils import supports_prompt_caching
+
+    try:
+        provider: Final = custom_llm_provider if custom_llm_provider is not None else get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # Optional caching must not block an unroutable request
+        return False
+    return (
+        provider in ("anthropic", "bedrock", "vertex_ai", "azure_ai")
+        and "claude" in model.lower()
+        and supports_prompt_caching(model=model, custom_llm_provider=provider)
+    )
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:
@@ -231,6 +271,27 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     return headers, api_key
 
 
+class _EagerInputStreamingFunction(BaseModel):
+    eager_input_streaming: StrictBool | None = None
+
+
+class _EagerInputStreamingTool(BaseModel):
+    eager_input_streaming: StrictBool | None = None
+    function: _EagerInputStreamingFunction | None = None
+
+
+def eager_input_streaming_flag(tool: object) -> bool | None:
+    try:
+        parsed: Final = _EagerInputStreamingTool.model_validate(tool)
+    except ValidationError as error:
+        if isinstance(tool, Mapping):
+            raise UnsupportedParamsError(message="eager_input_streaming must be a boolean") from error
+        return None
+    if parsed.eager_input_streaming is not None:
+        return parsed.eager_input_streaming
+    return parsed.function.eager_input_streaming if parsed.function is not None else None
+
+
 class AnthropicError(BaseLLMException):
     def __init__(
         self,
@@ -254,7 +315,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             _message_content = message.get("content")
             if _message_content is not None and isinstance(_message_content, list):
                 for content in _message_content:
-                    if "cache_control" in content:
+                    if isinstance(content, dict) and "cache_control" in content:
                         return True
 
         return False
@@ -265,6 +326,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
+
+    def is_mid_conversation_output_config_used(self, messages: list[AllMessageValues]) -> bool:
+        """
+        Return if "output_config" is in a message
+        """
+        return any("output_config" in message for message in messages)
 
     def is_mcp_server_used(self, mcp_servers: list[AnthropicMcpServerTool] | None) -> bool:
         if mcp_servers is None:
@@ -299,7 +366,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         for message in messages:
             if "content" in message and message["content"] is not None and isinstance(message["content"], list):
                 for content in message["content"]:
-                    if "type" in content and content["type"] != "text":
+                    if isinstance(content, dict) and "type" in content and content["type"] != "text":
                         return True
         return False
 
@@ -372,6 +439,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                     return True
 
         return False
+
+    def is_eager_input_streaming_used(self, tools: Sequence[object] | None) -> bool:
+        return any(eager_input_streaming_flag(tool) is True for tool in tools or ())
 
     @staticmethod
     def _supports_sampling_params(model: str) -> bool:
@@ -788,6 +858,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         mcp_server_used: bool = False,
         *,
         custom_llm_provider: str,
+        is_mid_conversation_output_config_used: bool = False,
     ) -> list[str]:
         """
         Get list of common beta headers based on the features that are active.
@@ -819,6 +890,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         if mcp_server_used:
             betas.append("mcp-client-2025-04-04")
+
+        if is_mid_conversation_output_config_used:
+            betas.append(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
         return list(set(betas))
 
@@ -852,6 +926,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         container_with_skills_used: bool = False,
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
+        is_mid_conversation_output_config_used: bool = False,
     ) -> dict:
         betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -886,6 +961,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Container with skills uses a separate beta header
         if container_with_skills_used:
             betas.add("skills-2025-10-02")
+
+        if is_mid_conversation_output_config_used:
+            betas.add(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
         _is_oauth: Final = api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
         headers: Final = {
@@ -952,6 +1030,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         mcp_server_used: Final = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
         pdf_used: Final = self.is_pdf_used(messages=messages)
         file_id_used: Final = self.is_file_id_used(messages=messages)
+        is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages=messages)
         web_search_tool_used: Final = self.is_web_search_tool_used(tools=tools)
         tool_search_used: Final = self.is_tool_search_used(tools=tools)
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools=tools)
@@ -969,6 +1048,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             api_key=api_key,
             auth_token=auth_token,
             file_id_used=file_id_used,
+            is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
@@ -1081,7 +1161,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-def strip_advisor_blocks_from_messages(messages: list[Any], replace_with_text: bool = False) -> list[Any]:
+def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_text: bool = False) -> list[_MessageT]:
     """
     Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
     from assistant message content.
@@ -1188,7 +1268,7 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
-def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[Any]:
+def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) -> list[object]:
     """
     Return a new message list with thinking / redacted_thinking content blocks removed
     from each message. Used to recover from invalid thinking signatures on retry.
@@ -1196,7 +1276,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
     Messages whose content is a list and becomes empty after stripping are omitted,
     since Anthropic rejects empty content arrays.
     """
-    out: Final[list[Any]] = []
+    out: Final[list[object]] = []
     for m in messages:
         if not isinstance(m, dict):
             out.append(m)
@@ -1410,12 +1490,19 @@ class _ReplayedWebSearchResult(BaseModel):
     encrypted_content: str = ""
 
 
+class _ReplayedWebSearchToolResultError(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_tool_result_error"]
+    error_code: str = ""
+
+
 class _ReplayedWebSearchToolResult(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_tool_result"]
     tool_use_id: str
-    content: tuple[_ReplayedWebSearchResult, ...]
+    content: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
 
 
 class _ReplayedServerToolUse(BaseModel):
@@ -1439,17 +1526,12 @@ def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchTool
     """
     The parsed block when it is a ``web_search_tool_result`` carrying no
     ``encrypted_content``, else None for anything Anthropic itself issued.
-
-    An empty ``content`` list is flattenable too. It is what the interceptor emits
-    when a search legitimately returns nothing and when a search raises, and it
-    carries neither evidence to preserve nor an ``encrypted_content`` to respect,
-    so leaving it in place only buys the 400 this whole function exists to avoid.
     """
     try:
         parsed: Final = _WEB_SEARCH_TOOL_RESULT_ADAPTER.validate_python(block)
     except ValidationError:
         return None
-    if any(result.encrypted_content for result in parsed.content):
+    if isinstance(parsed.content, tuple) and any(result.encrypted_content for result in parsed.content):
         return None
     return parsed
 
@@ -1461,8 +1543,12 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
         return None
 
 
-def _render_web_search_results(query: str, results: tuple[_ReplayedWebSearchResult, ...]) -> str:
+def _render_web_search_results(
+    query: str, results: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
+) -> str:
     header: Final = f"Web search results for '{query}':" if query else "Web search results:"
+    if isinstance(results, _ReplayedWebSearchToolResultError):
+        return f"{header}\n\nSearch failed: {results.error_code or 'unavailable'}"
     if not results:
         return f"{header}\n\nNo results were returned."
     body: Final = "\n\n".join(
@@ -1522,7 +1608,7 @@ def _flatten_web_search_results_in_message(message: object) -> object:
     return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
 
 
-def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok: as sibling sanitizers
+def flatten_unencrypted_web_search_results_in_anthropic_messages(
     messages: list[Any],
 ) -> list[Any]:
     """

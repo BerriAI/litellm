@@ -20,7 +20,7 @@ class WatsonxOrchestrateA2AConfig(BaseA2AProviderConfig):
         params: dict[str, Any],
         api_base: str | None = None,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Handle a non-streaming A2A request via WXO runs API."""
         litellm_params: Final = kwargs.get("litellm_params")
         if not litellm_params:
@@ -40,7 +40,7 @@ class WatsonxOrchestrateA2AConfig(BaseA2AProviderConfig):
         params: dict[str, Any],
         api_base: str | None = None,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         """Handle a streaming A2A request via WXO streaming runs API."""
         litellm_params: Final = kwargs.get("litellm_params")
         if not litellm_params:

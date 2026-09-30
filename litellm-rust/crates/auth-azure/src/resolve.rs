@@ -1,5 +1,5 @@
-use litellm_auth::Error;
-use litellm_auth::{
+use litellm_auth_types::Error;
+use litellm_auth_types::{
     CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential,
     SecretValue, Sourced, TokenProviderHandle,
 };
@@ -18,6 +18,17 @@ const AZURE_SCOPE_ENV: &str = "AZURE_SCOPE";
 const AZURE_AUTHORITY_HOST_ENV: &str = "AZURE_AUTHORITY_HOST";
 const AZURE_CREDENTIAL_ENV: &str = "AZURE_CREDENTIAL";
 const AZURE_FEDERATED_TOKEN_FILE_ENV: &str = "AZURE_FEDERATED_TOKEN_FILE";
+
+pub const SECRET_NAMES: &[&str] = &[
+    AZURE_AD_TOKEN_ENV,
+    AZURE_TENANT_ID_ENV,
+    AZURE_CLIENT_ID_ENV,
+    AZURE_CLIENT_SECRET_ENV,
+    AZURE_SCOPE_ENV,
+    AZURE_AUTHORITY_HOST_ENV,
+    AZURE_CREDENTIAL_ENV,
+    AZURE_FEDERATED_TOKEN_FILE_ENV,
+];
 
 #[derive(Clone, Debug)]
 pub(crate) enum AzureCredentialPlan {
@@ -80,7 +91,9 @@ impl AzureAuthService {
             AzureCredentialPlan::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(Error::EmptyAzureToken);
+                    return Err(Error::EmptyCallerCredential(
+                        "Azure AD token provider returned an empty token",
+                    ));
                 }
                 Ok(Some(Sourced::new(credential, InputSource::Deployment)))
             }
@@ -93,7 +106,11 @@ impl AzureAuthService {
             } => {
                 let assertion = resolve_reference(inputs, env_lookup, reference.value())
                     .await?
-                    .ok_or(Error::UnresolvedOidcReference)?;
+                    .ok_or_else(|| {
+                        Error::CredentialAcquisition(
+                            "Azure OIDC reference did not resolve to a value".into(),
+                        )
+                    })?;
                 let request = ValidatedAzureRequest::new(NativeAzureRequest::ClientAssertion {
                     tenant_id,
                     client_id,
@@ -156,7 +173,7 @@ pub(crate) fn select_auth_plan(
                 .map(|selector| Sourced::new(selector, value.source()))
         })
         .transpose()
-        .map_err(|_| Error::InvalidAzureSelector)?;
+        .map_err(|_| Error::InvalidConfiguration("invalid Azure credential selector".into()))?;
     let federated_token_file = configured_string(
         &inputs.federated_token_file,
         AZURE_FEDERATED_TOKEN_FILE_ENV,
@@ -246,7 +263,9 @@ fn select_native_plan(
     let selection_source = selected.source();
 
     match selected.into_value() {
-        AzureCredentialType::ClientSecretCredential => Err(Error::MissingClientSecretFields),
+        AzureCredentialType::ClientSecretCredential => Err(Error::InvalidConfiguration(
+            "ClientSecretCredential requires tenant_id, client_id, and client_secret".into(),
+        )),
         AzureCredentialType::WorkloadIdentityCredential => {
             Ok(AzureCredentialPlan::Native(ValidatedAzureRequest::new(
                 workload_request(tenant_id, client_id, federated_token_file, scope, authority)?,
@@ -330,9 +349,17 @@ fn workload_request(
     authority: Option<Sourced<String>>,
 ) -> Result<NativeAzureRequest, Error> {
     Ok(NativeAzureRequest::WorkloadIdentity {
-        tenant_id: tenant_id.ok_or(Error::MissingWorkloadTenant)?,
-        client_id: client_id.ok_or(Error::MissingWorkloadClient)?,
-        token_file_path: token_file_path.ok_or(Error::MissingWorkloadTokenFile)?,
+        tenant_id: tenant_id.ok_or_else(|| {
+            Error::InvalidConfiguration("WorkloadIdentityCredential requires tenant_id".into())
+        })?,
+        client_id: client_id.ok_or_else(|| {
+            Error::InvalidConfiguration("WorkloadIdentityCredential requires client_id".into())
+        })?,
+        token_file_path: token_file_path.ok_or_else(|| {
+            Error::InvalidConfiguration(
+                "WorkloadIdentityCredential requires azure_federated_token_file".into(),
+            )
+        })?,
         scope,
         authority,
     })
@@ -383,10 +410,11 @@ async fn resolve_reference(
             .map_or(CredentialLookup::Missing, CredentialLookup::Found),
         CredentialRef::None => return Ok(None),
         CredentialRef::File(_) | CredentialRef::Request(_) | CredentialRef::Host(_) => {
-            let resolver = inputs
-                .credential_resolver
-                .as_ref()
-                .ok_or(Error::MissingHostResolver)?;
+            let resolver = inputs.credential_resolver.as_ref().ok_or_else(|| {
+                Error::InvalidConfiguration(
+                    "credential reference requires a host credential resolver".into(),
+                )
+            })?;
             resolver.resolve(reference).await?
         }
     };
@@ -404,7 +432,9 @@ fn oidc_reference(
     };
     let value = token.value().expose();
     if token.source() == InputSource::Request && value.starts_with("oidc/") {
-        return Err(Error::RequestAzureCredentialReference);
+        return Err(Error::InvalidConfiguration(
+            "request-controlled Azure credential references are not allowed".into(),
+        ));
     }
     if let Some(name) = value.strip_prefix("oidc/env/") {
         return non_empty_reference(name, "OIDC environment reference")
@@ -426,34 +456,41 @@ fn oidc_reference(
         )));
     }
     if value.starts_with("oidc/") {
-        return Err(Error::UnsupportedOidcReference);
+        return Err(Error::InvalidConfiguration(
+            "unsupported OIDC reference".into(),
+        ));
     }
     Ok(None)
 }
 
 fn non_empty_reference(value: &str, kind: &str) -> Result<String, Error> {
     if value.is_empty() {
-        return Err(Error::EmptyReference(kind.to_string()));
+        return Err(Error::InvalidConfiguration(
+            litellm_auth_types::ErrorDetail::Empty {
+                subject: kind.into(),
+            },
+        ));
     }
     Ok(value.to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::future::Future;
     use std::sync::{Arc, Mutex};
 
     use serde_json::json;
 
     use super::{
-        AzureAuthService, AzureCredentialPlan, AzureTokenAcquirer, oidc_reference,
+        AzureAuthService, AzureCredentialPlan, AzureTokenAcquirer, SECRET_NAMES, oidc_reference,
         resolve_reference, select_auth_plan,
     };
     use crate::native::ValidatedAzureRequest;
     use crate::types::AzureAuthInputs;
-    use litellm_auth::Error;
-    use litellm_auth::ResolvedCredential;
-    use litellm_auth::{
+    use litellm_auth_types::Error;
+    use litellm_auth_types::ResolvedCredential;
+    use litellm_auth_types::{
         CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
         CredentialResolver, CredentialResolverHandle, InputSource, SecretValue, Sourced,
     };
@@ -481,7 +518,7 @@ mod tests {
                         expires_on: None,
                     })
                 } else {
-                    Err(Error::AzureTokenAcquisition(format!("{kind} failed")))
+                    Err(Error::CredentialAcquisition(kind.into()))
                 }
             })
         }
@@ -515,6 +552,24 @@ mod tests {
         .unwrap();
 
         assert!(matches!(plan, AzureCredentialPlan::Native(_)));
+    }
+
+    #[test]
+    fn secret_names_cover_environment_reads() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(BTreeSet::<String>::new()));
+        let recorded = seen.clone();
+        let inputs = AzureAuthInputs::default();
+        select_auth_plan(&inputs, &|name| {
+            recorded.lock().unwrap().insert(name.to_string());
+            None
+        })
+        .unwrap();
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|name| SECRET_NAMES.contains(&name.as_str()))
+        );
     }
 
     #[test]
@@ -572,7 +627,7 @@ mod tests {
         assert!(error.to_string().contains("unsupported OIDC reference"));
     }
 
-    #[test]
+    #[rstest::rstest]
     fn request_oidc_reference_is_rejected_before_lookup() {
         let params = json!({
             "azure_ad_token": "oidc/env/ASSERTION",
@@ -594,7 +649,12 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(matches!(error, Error::RequestAzureCredentialReference));
+        assert_eq!(
+            error,
+            Error::InvalidConfiguration(
+                "request-controlled Azure credential references are not allowed".into()
+            )
+        );
     }
 
     #[tokio::test]
@@ -661,8 +721,8 @@ mod tests {
     #[derive(Debug)]
     struct CallerToken(&'static str);
 
-    impl litellm_auth::TokenProvider for CallerToken {
-        fn acquire(&self) -> litellm_auth::TokenFuture<'_> {
+    impl litellm_auth_types::TokenProvider for CallerToken {
+        fn acquire(&self) -> litellm_auth_types::TokenFuture<'_> {
             Box::pin(async move {
                 Ok(ResolvedCredential::AccessToken {
                     token: SecretValue::new(self.0),
@@ -675,7 +735,7 @@ mod tests {
     fn caller_inputs(token: &'static str) -> AzureAuthInputs {
         let params = json!({"azure_ad_token": "static-token"});
         AzureAuthInputs {
-            azure_ad_token_provider: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
+            azure_ad_token_provider: Some(litellm_auth_types::TokenProviderHandle::new(Arc::new(
                 CallerToken(token),
             ))),
             ..AzureAuthInputs::from_optional_params(params.as_object().unwrap()).unwrap()
@@ -693,6 +753,7 @@ mod tests {
         assert_eq!(credential.value().secret().expose(), "caller-token");
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn empty_caller_token_is_rejected() {
         let error = AzureAuthService::default()
@@ -700,6 +761,9 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, Error::EmptyAzureToken));
+        assert_eq!(
+            error,
+            Error::EmptyCallerCredential("Azure AD token provider returned an empty token")
+        );
     }
 }

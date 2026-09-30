@@ -5,7 +5,12 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.verification_token import LiteLLM_VerificationToken
-from litellm.proxy._types import GenerateKeyRequest, RegenerateKeyRequest, UpdateKeyRequest
+from litellm.proxy._types import (
+    GenerateKeyRequest,
+    LiteLLM_ObjectPermissionBase,
+    RegenerateKeyRequest,
+    UpdateKeyRequest,
+)
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 
@@ -25,13 +30,14 @@ class KeySearchWhere(TypedDict):
 
 
 class BulkUpdateKeyRequestItem(BaseModel):
-    """Individual key update request item"""
+    """One /key/bulk_update item; only the fields it carries are written."""
 
     key: str  # Key identifier (token)
     budget_id: str | None = None  # Budget ID associated with the key
     max_budget: float | None = None  # Max budget for key
     team_id: str | None = None  # Team ID associated with key
     tags: list[str] | None = None  # Tags for organizing keys
+    object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
 class BulkUpdateKeyRequest(BaseModel):

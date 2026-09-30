@@ -21,7 +21,6 @@ vi.mock("../networking", () => {
     organizationMemberAddCall: vi.fn(),
     organizationMemberUpdateCall: vi.fn(),
     organizationMemberDeleteCall: vi.fn(),
-    organizationUpdateCall: vi.fn(),
     serverRootPath: "",
   };
 });

@@ -1,6 +1,8 @@
 """Tests for the single-statement daily spend upsert (LIT-5291)."""
 
 import re
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import pytest
 
@@ -148,6 +150,13 @@ class _RecordingDb:
     async def execute_raw(self, query: str, *args: object) -> int:
         self.statements.append((query, args))
         return len(args)
+
+    @asynccontextmanager
+    async def _tx(self) -> AsyncIterator["_RecordingDb"]:
+        yield self
+
+    def tx(self, timeout: object = None) -> AbstractAsyncContextManager["_RecordingDb"]:
+        return self._tx()
 
 
 class _RecordingPrismaClient:

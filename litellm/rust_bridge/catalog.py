@@ -1,71 +1,112 @@
-"""Declarative Rust/Python selection for routes with Rust integration.
+"""Ordered rollout policy for routes, loggers, and secret managers.
 
-Rules are static data matched top to bottom; the first match wins and a
-context with no matching rule stays on Python. Whether the Rust core can serve
-a specific request body is not decided here: that is Rust admission, which
-signals ``RustBridgeDeclined`` before any provider I/O.
+The first matching rule wins; unmatched contexts stay on Python. Native
+admission separately decides whether the selected implementation can execute.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
 from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import Decision, Rollout
 from litellm.rust_bridge.configuration import decision as _decision
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 
 class Route(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
+    EMBEDDINGS = "embeddings"
     MESSAGES = "messages"
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
     OCR = "ocr"
-
-
-class Delivery(Enum):
-    COMPLETED = auto()
-    STREAMING = auto()
-    WEBSOCKET = auto()
+    TOKEN_COUNTER = "token_counter"
+    TOKENIZER = "tokenizer"
 
 
 @dataclass(frozen=True, slots=True)
-class Context:
+class RouteContext:
     route: Route
     provider: str | None = None
     model: str | None = None
-    delivery: Delivery = Delivery.COMPLETED
 
 
 @dataclass(frozen=True, slots=True)
-class Rule:
+class RouteRule:
     route: Route
     rollout: Rollout
     providers: frozenset[str] | None = None
     models: frozenset[str] | None = None
-    deliveries: frozenset[Delivery] | None = None
 
     def matches(self, context: Context) -> bool:
         return (
-            context.route is self.route
+            isinstance(context, RouteContext)
+            and context.route is self.route
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
-            and (self.deliveries is None or context.delivery in self.deliveries)
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SecretManagerContext:
+    system: str
+
+
+@dataclass(frozen=True, slots=True)
+class SecretManagerRule:
+    rollout: Rollout
+    systems: frozenset[str] | None = None
+
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, SecretManagerContext) and (self.systems is None or context.system in self.systems)
+
+
+@dataclass(frozen=True, slots=True)
+class LoggerContext:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class LoggerRule:
+    rollout: Rollout
+
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, LoggerContext)
+
+
+Context: TypeAlias = RouteContext | SecretManagerContext | LoggerContext
+Rule: TypeAlias = RouteRule | SecretManagerRule | LoggerRule
 Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
-    Rule(Route.OCR, Rollout.RUST_OPT_OUT),
-    Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
+    LoggerRule(Rollout.RUST_OPT_IN),
+    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
+    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.GOOGLE_KMS.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AZURE_KEY_VAULT.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AWS_SECRET_MANAGER.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.GOOGLE_SECRET_MANAGER.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.HASHICORP_VAULT.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.CYBERARK.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.LOCAL.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.AWS_KMS.value})),
+    SecretManagerRule(Rollout.PYTHON_ONLY, systems=frozenset({KeyManagementSystem.CUSTOM.value})),
 )
 
 
-def rollout(context: Context, rules: Rules = RULES) -> Rollout:
-    return next((rule.rollout for rule in rules if rule.matches(context)), Rollout.PYTHON_ONLY)
+def rollout(context: Context, rules: Rules | None = None) -> Rollout:
+    selected_rules: Final = RULES if rules is None else rules
+    return next((rule.rollout for rule in selected_rules if rule.matches(context)), Rollout.PYTHON_ONLY)
 
 
-def decision(context: Context, rules: Rules = RULES) -> Decision:
+def decision(context: Context, rules: Rules | None = None) -> Decision:
     return _decision(rollout(context, rules))

@@ -5,9 +5,15 @@ use pyo3::exceptions::{PyBaseException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 
+pub type PythonLifecycle = for<'py> fn(Python<'py>) -> PyResult<Bound<'py, PyModule>>;
+
 pub enum ExecutionStep {
     Return(Py<PyAny>),
     Await(Py<PyAny>),
+    /// The call streams: the caller gets a stream over this execution carrying this head,
+    /// and the execution stays suspended until the stream asks for a chunk.
+    Open(Py<PyAny>),
+    Yield(Py<PyAny>),
 }
 
 pub trait ExecutionBody: Send + Sync {
@@ -25,12 +31,38 @@ enum ExecutionState {
 #[pyclass]
 pub struct Execution {
     state: ExecutionState,
+    lifecycle: PythonLifecycle,
 }
 
 impl Execution {
-    pub fn new(body: impl ExecutionBody + 'static) -> Self {
+    pub fn new(body: impl ExecutionBody + 'static, lifecycle: PythonLifecycle) -> Self {
         Self {
             state: ExecutionState::Created(Box::new(body)),
+            lifecycle,
+        }
+    }
+
+    pub fn into_coroutine(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        let binding = (self.lifecycle)(py)?;
+        let execution = Py::new(py, self)?;
+        binding.getattr("drive")?.call1((execution,))
+    }
+
+    pub(crate) fn into_sync_stream(
+        self,
+        py: Python<'_>,
+        head: Py<PyAny>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        (self.lifecycle)(py)?
+            .getattr("SyncStream")?
+            .call1((Py::new(py, self)?, head))
+    }
+
+    /// An execution already started elsewhere and now waiting for its next input.
+    pub fn suspended(body: impl ExecutionBody + 'static, lifecycle: PythonLifecycle) -> Self {
+        Self {
+            state: ExecutionState::Suspended(Box::new(body)),
+            lifecycle,
         }
     }
 
@@ -60,17 +92,16 @@ impl Execution {
                 _ => unreachable!(),
             }
         };
+        let lifecycle = slf.borrow().lifecycle;
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let step = body.resume(result)?;
             let (tag, value, suspended) = match step {
                 ExecutionStep::Await(value) => ("Await", value, true),
+                ExecutionStep::Open(head) => ("Open", head, true),
+                ExecutionStep::Yield(value) => ("Yield", value, true),
                 ExecutionStep::Return(value) => ("Complete", value, false),
             };
-            let step = py
-                .import("litellm.rust_bridge.lifecycle")?
-                .getattr(tag)?
-                .call1((value,))?
-                .unbind();
+            let step = lifecycle(py)?.getattr(tag)?.call1((value,))?.unbind();
             Ok((step, suspended))
         }))
         .map_err(panic_to_pyerr)
