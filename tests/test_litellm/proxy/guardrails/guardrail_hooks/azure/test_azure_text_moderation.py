@@ -80,6 +80,29 @@ async def test_azure_text_moderation_scans_responses_input() -> None:
     assert mock_post.call_args.kwargs["json"]["text"] == "Review this response input"
 
 
+def _moderation_response(severity: int) -> Mock:
+    response = Mock()
+    response.json.return_value = {
+        "blocklistsMatch": [],
+        "categoriesAnalysis": [
+            {"category": "Hate", "severity": severity},
+            {"category": "Sexual", "severity": 0},
+            {"category": "SelfHarm", "severity": 0},
+            {"category": "Violence", "severity": 0},
+        ],
+    }
+    return response
+
+
+def _moderation_flagging(flagged: str):
+    def azure_by_text(*args: object, **kwargs: object) -> Mock:
+        body = kwargs["json"]
+        assert isinstance(body, dict)
+        return _moderation_response(6 if body["text"] == flagged else 0)
+
+    return azure_by_text
+
+
 @pytest.mark.asyncio
 async def test_azure_text_moderation_empty_messages_stub_does_not_hide_responses_input() -> None:
     guardrail: Final = AzureContentSafetyTextModerationGuardrail(
@@ -88,27 +111,19 @@ async def test_azure_text_moderation_empty_messages_stub_does_not_hide_responses
         api_base="azure_text_moderation_api_base",
         severity_threshold=4,
     )
-    response: Final = Mock()
-    response.json.return_value = {
-        "blocklistsMatch": [],
-        "categoriesAnalysis": [
-            {"category": "Hate", "severity": 0},
-            {"category": "Sexual", "severity": 0},
-            {"category": "SelfHarm", "severity": 0},
-            {"category": "Violence", "severity": 0},
-        ],
-    }
+    flagged: Final = "flagged responses input"
+    data: Final[dict[str, object]] = {"messages": [], "input": flagged}
 
-    with patch.object(guardrail.async_handler, "post", return_value=response) as mock_post:
-        await guardrail.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
-            cache=None,
-            data={"messages": [], "input": "Review this response input"},
-            call_type="aresponses",
-        )
+    with patch.object(guardrail.async_handler, "post", side_effect=_moderation_flagging(flagged)):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
+                cache=None,
+                data=data,
+                call_type="aresponses",
+            )
 
-    mock_post.assert_called_once()
-    assert mock_post.call_args.kwargs["json"]["text"] == "Review this response input"
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -117,21 +132,24 @@ async def test_azure_text_moderation_chat_call_type_scans_messages_not_input() -
         guardrail_name="azure_text_moderation",
         api_key="azure_text_moderation_api_key",
         api_base="azure_text_moderation_api_base",
+        severity_threshold=4,
     )
+    flagged: Final = "flagged chat prompt"
+    data: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": flagged}],
+        "input": "benign responses input",
+    }
 
-    with patch.object(guardrail, "async_make_request") as mock_async_make_request:
-        await guardrail.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
-            cache=None,
-            data={
-                "messages": [{"role": "user", "content": "chat prompt"}],
-                "input": "unrelated responses input",
-            },
-            call_type="acompletion",
-        )
+    with patch.object(guardrail.async_handler, "post", side_effect=_moderation_flagging(flagged)):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
+                cache=None,
+                data=data,
+                call_type="acompletion",
+            )
 
-    mock_async_make_request.assert_called_once()
-    assert mock_async_make_request.call_args.kwargs["text"] == "chat prompt"
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
