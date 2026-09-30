@@ -144,17 +144,18 @@ async def test_team_admin_can_patch_unrelated_field_on_admin_configured_jev_rout
         }
     )
     prisma = MagicMock()
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
-    with pytest.raises(HTTPException) as denied:
-        await ModelManagementAuthChecks.can_user_make_model_call(
-            model_params=deployment,
-            user_api_key_dict=_actor(user_role=LitellmUserRoles.TEAM),
-            prisma_client=prisma,
-            premium_user=True,
-            member_operation="update",
-            incoming_model_params=updateDeployment.model_validate({"litellm_params": {"api_key": "new-key"}}),
-        )
-    assert denied.value.status_code == 400
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=_team(members_with_roles=[Member(user_id="owner", role="admin")])
+    )
+    granted = await ModelManagementAuthChecks.can_user_make_model_call(
+        model_params=deployment,
+        user_api_key_dict=_actor(user_role=LitellmUserRoles.TEAM, team_id="team-a"),
+        prisma_client=prisma,
+        premium_user=True,
+        member_operation="update",
+        incoming_model_params=updateDeployment.model_validate({"litellm_params": {"api_key": "new-key"}}),
+    )
+    assert granted is True
 
 
 @pytest.fixture
