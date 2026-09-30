@@ -1606,6 +1606,55 @@ class TestContentTypeTransformation:
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
 
+    def test_empty_string_text_blocks_filtered_out(self):
+        """Empty text parts must not become content=[{"type":"text","text":""}].
+
+        Codex/Responses replays of tool-only turns use output_text with text="".
+        Backends such as Z.ai reject that shape (error 1210); content="" is OK.
+        """
+        mixed = [
+            {"type": "output_text", "text": "keep me"},
+            {"type": "output_text", "text": ""},
+            {"type": "text", "text": "and me"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            mixed
+        )
+        assert result == [
+            {"type": "text", "text": "keep me"},
+            {"type": "text", "text": "and me"},
+        ]
+
+        only_empty = [{"type": "output_text", "text": ""}]
+        assert (
+            LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                only_empty
+            )
+            == ""
+        )
+
+    def test_assistant_message_with_empty_output_text_uses_string_content(self):
+        """Responses→chat must not emit an empty text item for a silent turn."""
+        messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item={
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": ""}],
+            },
+            replay_reasoning=True,
+        )
+        assert len(messages) == 1
+        assert messages[0]["role"] == "assistant"
+        assert messages[0]["content"] == ""
+        content = messages[0]["content"]
+        assert not (
+            isinstance(content, list)
+            and any(
+                isinstance(part, dict) and part.get("type") == "text" and part.get("text") == ""
+                for part in content
+            )
+        )
+
     def test_encrypted_content_blocks_preserved_as_text(self):
         """
         OpenAI Responses agent messages can include encrypted_content blocks.

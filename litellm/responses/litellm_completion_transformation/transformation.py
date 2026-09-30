@@ -1812,6 +1812,8 @@ class LiteLLMCompletionResponsesConfig:
             content_list: Final[list[str | dict[str, object]]] = []
             for item in content:
                 if isinstance(item, str):
+                    if item == "":
+                        continue
                     content_list.append(item)
                 elif isinstance(item, dict):
                     if item.get("type") == "input_file":
@@ -1832,9 +1834,12 @@ class LiteLLMCompletionResponsesConfig:
                                 OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
                             )
                     else:
-                        # Skip text blocks with None text to avoid downstream errors
+                        # Skip text blocks with None/empty text. Empty string items
+                        # (common on tool-only Responses turns) become
+                        # content=[{"type":"text","text":""}], which several
+                        # OpenAI-compatible backends reject (e.g. Z.ai 1210).
                         text_value = item.get("text")
-                        if text_value is None:
+                        if text_value is None or text_value == "":
                             continue
                         content_block: dict[str, object] = {
                             "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
@@ -1845,6 +1850,10 @@ class LiteLLMCompletionResponsesConfig:
                         if "cache_control" in item:
                             content_block["cache_control"] = item["cache_control"]
                         content_list.append(content_block)
+            # Prefer string empty content over an empty list of text parts: the
+            # latter is what upstreams flag as invalid, while content="" is fine.
+            if not content_list:
+                return ""
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
