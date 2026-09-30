@@ -186,7 +186,9 @@ def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     assert optional_params["aws_session_token"] == "session-secret"
 
 
-def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
 
@@ -233,10 +235,6 @@ def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
     assert "goog-secret" not in str(logging_obj.model_call_details["standard_logging_object"])
     assert logging_obj.model_call_details["response_cost"] is not None
     assert logging_obj.optional_params["extra_headers"] == {"x-goog-api-key": "goog-secret"}
-
-
-
-
 
 
 def test_realtime_stream_combines_text_and_audio_token_details():
@@ -1353,8 +1351,6 @@ def test_bedrock_cost_calculator_comparison_with_without_cache():
     print(f"Cost with cache: {cost_with_cache}")
 
 
-
-
 def test_gemini_25_explicit_caching_cost_direct_usage():
     """
     Test that Gemini 2.5 models correctly calculate costs with explicit caching.
@@ -1605,6 +1601,97 @@ def test_cost_discount_vertex_ai(monkeypatch):
     print(f"  - Original cost: ${cost_without_discount:.6f}")
     print(f"  - Discounted cost (5% off): ${cost_with_discount:.6f}")
     print(f"  - Savings: ${cost_without_discount - cost_with_discount:.6f}")
+
+
+def test_cost_discount_model_pattern_beats_bare_provider(monkeypatch):
+    """
+    Test that a <provider>/<model-pattern> discount key applies only to matching models
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    claude_response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    gemini_response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gemini-3-pro-preview",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    claude_undiscounted = completion_cost(
+        completion_response=claude_response,
+        model="vertex_ai/claude-sonnet-4-5",
+        custom_llm_provider="vertex_ai",
+    )
+    gemini_undiscounted = completion_cost(
+        completion_response=gemini_response,
+        model="vertex_ai/gemini-3-pro-preview",
+        custom_llm_provider="vertex_ai",
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {"vertex_ai/claude-*": 0.2, "vertex_ai": 0.05})
+    claude_discounted = completion_cost(
+        completion_response=claude_response,
+        model="vertex_ai/claude-sonnet-4-5",
+        custom_llm_provider="vertex_ai",
+    )
+    gemini_discounted = completion_cost(
+        completion_response=gemini_response,
+        model="vertex_ai/gemini-3-pro-preview",
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert claude_discounted == pytest.approx(claude_undiscounted * 0.8, rel=1e-9)
+    assert gemini_discounted == pytest.approx(gemini_undiscounted * 0.95, rel=1e-9)
+
+
+def test_cost_discount_together_ai_pattern_matches_unrewritten_model(monkeypatch):
+    """
+    Test that a <provider>/<model-pattern> discount matches the request model, not the
+    pricing category the Together AI cost lookup rewrites it to
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="together_ai/my-org/Custom-70B-Instruct",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    undiscounted = completion_cost(
+        completion_response=response,
+        model="together_ai/my-org/Custom-70B-Instruct",
+        custom_llm_provider="together_ai",
+    )
+    assert undiscounted > 0
+
+    monkeypatch.setattr(
+        litellm,
+        "cost_discount_config",
+        {"together_ai": 0.05, "together_ai/my-org/Custom-*": 0.20},
+    )
+    discounted = completion_cost(
+        completion_response=response,
+        model="together_ai/my-org/Custom-70B-Instruct",
+        custom_llm_provider="together_ai",
+    )
+
+    assert discounted == pytest.approx(undiscounted * 0.8, rel=1e-9)
 
 
 def test_cost_discount_not_applied_to_other_providers(monkeypatch):
@@ -1921,8 +2008,6 @@ def test_cost_margin_with_discount(monkeypatch):
     print(f"  - Base cost: ${base_cost:.6f}")
     print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
     print(f"  - Expected: ${expected_cost:.6f}")
-
-
 
 
 def test_completion_cost_extracts_service_tier_from_response(_local_model_cost_map):
@@ -2674,8 +2759,6 @@ def test_gemini_without_cache_tokens_details():
     print("✅ Gemini without cacheTokensDetails works correctly")
 
 
-
-
 def test_additional_costs_only_for_azure_ai(_local_model_cost_map):
     """
     Test that _get_additional_costs is only called for azure_ai provider.
@@ -3220,9 +3303,7 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
 
     model: Final = "test-chat-per-second-rate-precedence"
     entry: Final = {**pricing_fields, "litellm_provider": "together_ai", "mode": "chat"}
-    litellm.register_model(
-        model_cost={model: entry}
-    )
+    litellm.register_model(model_cost={model: entry})
 
     assert cost_per_token(
         model=model,
@@ -3772,6 +3853,41 @@ def test_completion_cost_region_name_prices_mantle_on_the_regional_row(_local_mo
     assert litellm.completion_cost(
         completion_response=response, model="xai.grok-4.3", custom_llm_provider="bedrock_mantle"
     ) == pytest.approx(expected_flat)
+
+
+def test_completion_cost_discount_matches_region_stripped_model(monkeypatch, _local_model_cost_map):
+    """A discount pattern written against the bare model name must still match when the
+    cost-selected name carries a <provider>/<region>/ prefix from a priced regional row."""
+
+    response = litellm.ModelResponse(
+        id="x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="xai.grok-4.3",
+        usage={"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+    )
+
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    undiscounted = litellm.completion_cost(
+        completion_response=response,
+        model="xai.grok-4.3",
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+    assert undiscounted > 0
+
+    monkeypatch.setattr(
+        litellm,
+        "cost_discount_config",
+        {"bedrock_mantle": 0.05, "bedrock_mantle/xai.grok-*": 0.20},
+    )
+    discounted = litellm.completion_cost(
+        completion_response=response,
+        model="xai.grok-4.3",
+        custom_llm_provider="bedrock_mantle",
+        region_name="us-gov-west-1",
+    )
+
+    assert discounted == pytest.approx(undiscounted * 0.8, rel=1e-9)
 
 
 def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_model_cost_map):
@@ -4785,9 +4901,7 @@ def test_xai_batch_tier_discounts_the_long_context_rate_like_the_flat_batch_rate
         assert info[f"{prefix}_above_200k_tokens_batches"] < info[f"{prefix}_above_200k_tokens"]
 
 
-@pytest.mark.parametrize(
-    ("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")]
-)
+@pytest.mark.parametrize(("prompt_tokens", "tier"), [(200_000, "_above_200k_tokens_batches"), (199_999, "_batches")])
 def test_xai_batch_cost_calculator_bills_the_200k_batch_tier_inclusively(
     _local_model_cost_map: None, prompt_tokens: int, tier: str
 ) -> None:

@@ -21,6 +21,7 @@ import litellm
 from litellm._internal_context import current_billing_time, pinned_billing_time
 from litellm._logging import verbose_proxy_logger
 from litellm.cost_calculator import completion_cost
+from litellm.litellm_core_utils.cost_discount import parse_cost_discount_key
 from litellm.proxy._types import (
     CommonProxyErrors,
     CostEstimateRequest,
@@ -238,11 +239,14 @@ async def update_cost_discount_config(
 
     Updates the cost_discount_config in litellm_settings.
     Discounts should be between 0 and 1 (e.g., 0.05 = 5% discount).
+    A key may also be <provider>/<model-pattern>, where the pattern is an
+    fnmatch glob matched against the model name.
 
     Example:
     ```json
     {
         "vertex_ai": 0.05,
+        "vertex_ai/claude-*": 0.20,
         "gemini": 0.05,
         "openai": 0.01
     }
@@ -267,10 +271,16 @@ async def update_cost_discount_config(
         )
 
     # Validate that all providers are valid LiteLLM providers
-    invalid_providers: Final = []
-    for provider in cost_discount_config:
-        if provider not in LlmProvidersSet:
-            invalid_providers.append(provider)
+    parsed_keys: Final = tuple((key, parse_cost_discount_key(key)) for key in cost_discount_config)
+    empty_pattern_key: Final = next((key for key, parsed in parsed_keys if parsed.model_pattern == ""), None)
+    if empty_pattern_key is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model pattern for {empty_pattern_key} cannot be empty",
+        )
+    invalid_providers: Final = tuple(
+        parsed.provider for _, parsed in parsed_keys if parsed.provider not in LlmProvidersSet
+    )
 
     if invalid_providers:
         raise HTTPException(
