@@ -296,8 +296,8 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             session = getattr(self, "client", None)
             if isinstance(session, ClientSession) and not session.closed:
                 self._close_recycled_session(session)
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError, OSError) as e:
+            verbose_logger.debug("Error closing session on transport finalization: %s", e)
 
     def _get_valid_client_session(self) -> ClientSession:
         """
