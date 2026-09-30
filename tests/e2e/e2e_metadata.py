@@ -13,6 +13,7 @@ this one, so it imports only the stdlib and pydantic.
 from __future__ import annotations
 
 import inspect
+import os
 import re
 import string
 import threading
@@ -33,13 +34,31 @@ _Y = TypeVar("_Y")
 MAX_STEPS: Final = 50
 MAX_STEP_CHARS: Final = 200
 
+SECRET_ENV_NAME: Final = re.compile(r"(^|_)(KEY|SECRET|TOKEN|PASSWORD|CREDENTIALS?)(_|$)", re.IGNORECASE)
+MIN_SECRET_CHARS: Final = 8
+MASK: Final = "***"
+
+
+def environment_secrets(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
+    """The credentials a live run holds: every secret-named environment variable's
+    value, long enough that masking it can't blank out ordinary words."""
+    return frozenset(
+        value for name, value in environ.items() if SECRET_ENV_NAME.search(name) and len(value) >= MIN_SECRET_CHARS
+    )
+
+
+def _masked(label: str, secrets: Iterable[str]) -> str:
+    longest_first: Final = sorted(secrets, key=len, reverse=True)
+    return reduce(lambda text, secret: text.replace(secret, MASK), longest_first, label)
+
+
 STEP_FRAMES: Final = 1
 """Frames a `@step` wrapper puts between a helper and its caller. A decorated
 helper that warns about its caller adds this to `stacklevel`
 (`stacklevel=2 + STEP_FRAMES`), or the warning is reported at the wrapper."""
 
 
-class _StepRecorder:
+class StepRecorder:
     """The ordered step log for the running test.
 
     A plain lock-guarded list rather than a ContextVar: ContextVars do not
@@ -48,7 +67,8 @@ class _StepRecorder:
     cross-test bleed beyond what the per-test reset already handles.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, secrets: Callable[[], Iterable[str]] = environment_secrets) -> None:
+        self._secrets = secrets
         self._lock = threading.Lock()
         self._steps: deque[str] = deque(maxlen=MAX_STEPS)
         self._dropped = 0
@@ -69,8 +89,11 @@ class _StepRecorder:
         the story rather than fifty, and past MAX_STEPS the oldest step makes way.
         It is the oldest that goes because the last step is the one that has to
         survive: it is where a failing test died.
+
+        Any credential the run holds is masked before the label is kept, however it
+        got into the label, since the steps are published with the results.
         """
-        cleaned = " ".join(label.split())[:MAX_STEP_CHARS]
+        cleaned = " ".join(_masked(label, self._secrets()).split())[:MAX_STEP_CHARS]
         if not cleaned:
             return
         with self._lock:
@@ -88,7 +111,7 @@ class _StepRecorder:
             return dropped + tuple(self._steps)
 
 
-STEPS: Final = _StepRecorder()
+STEPS: Final = StepRecorder()
 
 
 def _joined(phrases: tuple[str, ...]) -> str:

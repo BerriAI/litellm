@@ -156,7 +156,7 @@ Generate a virtual key with models: claude-haiku-4-5 and rpm limit: 3
 Send a /chat/completions request to claude-haiku-4-5 with the prompt "reply with one word d3940a1c4288"
 ```
 
-A request model prints only the fields the test set, and a dotted placeholder like `{body.litellm_params.model}` prints just one field. A field marked `Field(repr=False)` never prints, so mark every secret field that way, and never put a key, token or credential in a label. A placeholder that isn't one of the helper's parameters fails at import, and a literal brace is written `{{id}}`. A filled-in label is squashed onto one line and cut at 200 characters
+A request model prints only the fields the test set, and a dotted placeholder like `{body.litellm_params.model}` prints just one field. A field marked `Field(repr=False)` never prints, so mark every secret field that way, and never put a key, token or credential in a label. As a backstop, the recorder replaces the value of every secret-named environment variable (`*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_CREDENTIALS`) with `***` wherever it shows up in a label. That only covers secrets the environment holds, so a key the proxy hands back during the test is still never named in a label. A placeholder that isn't one of the helper's parameters fails at import, and a literal brace is written `{{id}}`. A filled-in label is squashed onto one line and cut at 200 characters
 
 ### Nesting and the step log
 

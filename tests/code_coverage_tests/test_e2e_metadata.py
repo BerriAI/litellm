@@ -23,7 +23,7 @@ from types import UnionType
 from typing import Final, cast, get_args, get_type_hints
 
 import pytest
-from e2e_metadata import MAX_STEPS, STEP_FRAMES, STEPS, step
+from e2e_metadata import MASK, MAX_STEPS, STEP_FRAMES, STEPS, StepRecorder, environment_secrets, step
 from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
 
@@ -282,6 +282,55 @@ class TestLabelTemplates:
 
         retrieve_batch("batch_123")
         assert STEPS.taken() == ("GET /v1/batches/{id}",)
+
+
+class TestSecretMasking:
+    """Steps are published with the results, so a credential the run holds is
+    masked wherever it shows up in a label: a nested model field nobody marked
+    `repr=False`, a dict value, or a prompt."""
+
+    def test_a_secret_anywhere_in_a_label_is_masked(self) -> None:
+        recorder: Final = StepRecorder(secrets=lambda: ("sk-live-abcdef123", "wandb-9f8e7d6c"))
+        recorder.record("Generate a virtual key with callback vars: wandb api key: wandb-9f8e7d6c")
+        recorder.record('Send "use sk-live-abcdef123 please" to claude-haiku-4-5')
+        assert recorder.taken() == (
+            f"Generate a virtual key with callback vars: wandb api key: {MASK}",
+            f'Send "use {MASK} please" to claude-haiku-4-5',
+        )
+
+    def test_a_secret_is_masked_before_the_label_is_cut(self) -> None:
+        secret: Final = "s3cr3t-" + "x" * 40
+        recorder: Final = StepRecorder(secrets=lambda: (secret,))
+        recorder.record("a" * 170 + " " + secret)
+        assert recorder.taken() == ("a" * 170 + f" {MASK}",)
+
+    def test_a_longer_secret_containing_a_shorter_one_is_masked_whole(self) -> None:
+        recorder: Final = StepRecorder(secrets=lambda: ("abcdefgh", "abcdefgh-ijklmnop"))
+        recorder.record("key abcdefgh-ijklmnop")
+        assert recorder.taken() == (f"key {MASK}",)
+
+    def test_only_secret_named_variables_long_enough_to_be_credentials_count(self) -> None:
+        environ: Final = {
+            "OPENAI_API_KEY": "sk-proj-0123456789",
+            "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG",
+            "LITELLM_MASTER_KEY": "sk-1234",
+            "GOOGLE_APPLICATION_CREDENTIALS": "/secrets/vertex.json",
+            "KEYCLOAK_URL": "http://localhost:8080",
+            "E2E_MODEL": "claude-haiku-4-5",
+        }
+        assert environment_secrets(environ) == frozenset(
+            {"sk-proj-0123456789", "wJalrXUtnFEMI/K7MDENG", "/secrets/vertex.json"}
+        )
+
+    def test_the_shared_log_masks_the_live_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("WANDB_API_KEY", "wandb-live-5a4b3c2d")
+
+        @step("Generate a virtual key with {body}")
+        def generate_key(body: _KeyBody) -> None:
+            return None
+
+        generate_key(_KeyBody(team_id="wandb-live-5a4b3c2d"))
+        assert STEPS.taken() == (f"Generate a virtual key with team id: {MASK}",)
 
 
 class TestNestedSteps:
