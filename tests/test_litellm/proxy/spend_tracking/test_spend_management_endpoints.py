@@ -7006,16 +7006,46 @@ def test_parse_session_cursor():
     )
 
 
-SESSION_GROUP_KEY_SQL = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
+SESSION_KEY_EXPR = "COALESCE(NULLIF(session_id, ''), request_id)"
+SESSION_GROUP_KEY_SQL = f"{SESSION_KEY_EXPR}, api_key"
+
+
+def _session_walk_batch(page_rows, rows_read):
+    """Walk-batch rows for ``page_rows`` (newest first): one first row per session plus the batch's oldest row."""
+    first_rows = [
+        {
+            "session_key": row["session_key"],
+            "api_key": row["api_key"],
+            "last_activity": row["last_activity"],
+            "sort_time": row["last_activity"],
+            "request_id": f"req-{row['session_key']}",
+            "is_edge": False,
+            "batch_rows": 0,
+        }
+        for row in page_rows
+    ]
+    edge = [{**first_rows[-1], "is_edge": True, "batch_rows": rows_read}] if first_rows else []
+    return first_rows + edge
+
+
+def _session_count_walk(sessions):
+    """Count-walk result for a window that ran out of rows after holding ``sessions`` sessions."""
+    return [{"rows_read": 0, "sessions": sessions}]
 
 
 def _session_grouped_mock_prisma(session_page_rows, session_total, representative_rows):
     """Mock prisma dispatching the raw queries the keyset grouped path emits."""
 
     async def mock_query_raw(sql_query, *params):
+        if "AS newer_row" in sql_query:
+            return []
+        if "WITH batch AS MATERIALIZED" in sql_query:
+            return _session_walk_batch(session_page_rows, 0)
+        if "newest_rows" in sql_query:
+            return _session_count_walk(session_total)
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": session_total}]
-        if "DISTINCT ON" in sql_query:
+        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
             return representative_rows
         if "COALESCE(SUM(spend)" in sql_query:
             return [
@@ -7065,9 +7095,15 @@ def _session_grouped_paginating_prisma(sessions, counted_total=None):
     """Mock prisma serving the grouped page query out of ``sessions``, honoring the LIMIT and OFFSET it asks for."""
 
     async def mock_query_raw(sql_query, *params):
+        if "AS newer_row" in sql_query:
+            return []
+        if "WITH batch AS MATERIALIZED" in sql_query:
+            return _session_walk_batch([_session_page_row(key, activity) for key, activity in sessions], 0)
+        if "newest_rows" in sql_query:
+            return _session_count_walk(len(sessions) if counted_total is None else counted_total)
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": min(len(sessions) if counted_total is None else counted_total, params[-1])}]
-        if "DISTINCT ON" in sql_query:
+        if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
             return []
@@ -7130,21 +7166,10 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
 
         emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list]
         page_query_sql = emitted[0][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in page_query_sql
         assert "OFFSET" not in page_query_sql
         assert "HAVING" not in page_query_sql
-        assert emitted[0][-1] == 3, "page query fetches page_size + 1 sessions to detect has_more"
-
-        count_sql = emitted[1][0]
-        assert f"GROUP BY {SESSION_GROUP_KEY_SQL}" in count_sql
-        assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
 
         rep_call = emitted[2]
-        assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in rep_call[0]
-        assert (
-            f"ORDER BY {SESSION_GROUP_KEY_SQL}, call_type IN ('call_mcp_tool', 'list_mcp_tools'), \"startTime\" DESC"
-            in rep_call[0]
-        ), "the session representative must prefer the newest non-MCP call"
         assert rep_call[-2] == ["sess-1", "req-solo"]
         assert rep_call[-1] == ["hashed-key", "hashed-key"]
     finally:
@@ -7153,7 +7178,7 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
 
 @pytest.mark.asyncio
 async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypatch):
-    """A session_cursor becomes a HAVING keyset predicate instead of an OFFSET."""
+    """A session_cursor becomes a WHERE keyset predicate instead of an OFFSET."""
     page_rows = [_session_page_row("sess-2", "2026-08-29 07:00:00")]
     reps = [_session_representative_row("req-2", "sess-2")]
     mock_prisma = _session_grouped_mock_prisma(page_rows, 3, reps)
@@ -7186,16 +7211,215 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
 
         page_query_call = mock_prisma.db.query_raw.await_args_list[0]
         page_query_sql = page_query_call.args[0]
-        assert f'HAVING (MAX("startTime"), {SESSION_GROUP_KEY_SQL}) <' in page_query_sql
+        assert "HAVING" not in page_query_sql
         assert "OFFSET" not in page_query_sql
         cursor_index = page_query_call.args.index("2026-08-29 09:00:00")
         assert page_query_call.args[cursor_index : cursor_index + 3] == (
             "2026-08-29 09:00:00",
             "req-solo",
             "hashed-key",
-        ), "cursor params must line up with (MAX(startTime), session key, api_key)"
+        ), "cursor params must line up with (startTime, session key, api_key)"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _session_walk_mock_prisma(walked_rows, window_rows_per_batch, grouped_rows):
+    """Mock prisma whose walk batches keep returning ``walked_rows`` and report ``window_rows_per_batch`` rows read."""
+
+    async def mock_query_raw(sql_query, *params):
+        if "WITH batch AS MATERIALIZED" in sql_query:
+            return _session_walk_batch(walked_rows, min(window_rows_per_batch, params[-1]))
+        if "newest_rows" in sql_query:
+            return _session_count_walk(3)
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": 3}]
+        if "CROSS JOIN LATERAL" in sql_query:
+            return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
+        if "COALESCE(SUM(spend)" in sql_query:
+            return []
+        return grouped_rows
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    return mock_prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("window_rows_per_batch", "expected_request_ids", "expected_has_more"),
+    [
+        pytest.param(10**9, ["req-grouped-1", "req-grouped-2"], True, id="walk-that-cannot-settle-groups-the-window"),
+        pytest.param(10, ["req-walked-1"], False, id="walk-that-read-the-whole-window-is-trusted"),
+    ],
+)
+async def test_ui_view_spend_logs_group_by_session_falls_back_when_the_walk_cannot_settle(
+    client, monkeypatch, window_rows_per_batch, expected_request_ids, expected_has_more
+):
+    """A walk that keeps finding too few sessions serves the grouped page; one that ran out of rows is exact."""
+    mock_prisma = _session_walk_mock_prisma(
+        walked_rows=[_session_page_row("walked-1", "2026-08-29 10:00:00")],
+        window_rows_per_batch=window_rows_per_batch,
+        grouped_rows=[
+            _session_page_row("grouped-1", "2026-08-29 10:00:00"),
+            _session_page_row("grouped-2", "2026-08-29 09:00:00"),
+            _session_page_row("grouped-3", "2026-08-29 08:00:00"),
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date, "group_by_session": "true", "page_size": 2},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert [row["request_id"] for row in data["data"]] == expected_request_ids
+        assert data["has_more"] is expected_has_more
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _walk_row(session_key, sort_time, is_edge=False, batch_rows=0):
+    return {
+        "session_key": session_key,
+        "api_key": "hashed-key",
+        "last_activity": sort_time,
+        "sort_time": sort_time,
+        "request_id": f"req-{session_key}",
+        "is_edge": is_edge,
+        "batch_rows": batch_rows,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_walk_finishes_a_tied_timestamp_before_settling(client, monkeypatch):
+    """Sessions tied on their newest startTime order by session key, so the walk reads past the tie before settling."""
+    tied = "2026-08-29 10:00:00"
+
+    async def mock_query_raw(sql_query, *params):
+        if "WITH batch AS MATERIALIZED" in sql_query:
+            if '("startTime", request_id) <' not in sql_query:
+                return [
+                    _walk_row("b", tied),
+                    _walk_row("a", tied),
+                    _walk_row("a", tied, is_edge=True, batch_rows=params[-1]),
+                ]
+            return [_walk_row("c", tied), _walk_row("c", "2026-08-29 09:00:00", is_edge=True, batch_rows=1)]
+        if "newest_rows" in sql_query:
+            return _session_count_walk(3)
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": 3}]
+        if "CROSS JOIN LATERAL" in sql_query:
+            return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
+        return []
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+    try:
+        start_date, end_date = _default_date_range()
+        response = client.get(
+            "/spend/logs/ui",
+            params={"start_date": start_date, "end_date": end_date, "group_by_session": "true", "page_size": 1},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert [row["request_id"] for row in data["data"]] == ["req-c"]
+        assert data["next_session_cursor"] == f"{tied}|hashed-key|c"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def _session_window(session_count, rows_per_session, newer_filtered_out_rows=0):
+    """Session keys of a window's rows, newest first, each session's rows back to back; None marks a newer row the
+    request's filters exclude."""
+    return [None] * newer_filtered_out_rows + [
+        f"sess-{index}" for index in range(session_count) for _ in range(rows_per_session)
+    ]
+
+
+def _counting_prisma(window):
+    """Mock prisma answering the count walk and the grouped count from ``window``, recording the rows each walk read."""
+    rows_read_per_walk = []
+
+    async def mock_query_raw(sql_query, *params):
+        if "newest_rows" in sql_query:
+            newest = window[: params[-1]]
+            rows_read_per_walk.append(len(newest))
+            return [{"rows_read": len(newest), "sessions": len(set(newest) - {None})}]
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": min(len(set(window) - {None}), params[-1])}]
+        raise AssertionError(f"unexpected query: {sql_query}")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+    return mock_prisma, rows_read_per_walk
+
+
+_COUNT_CAP = spend_management_endpoints.SPEND_LOGS_PAGINATION_COUNT_CAP
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("window", "expected_total", "walk_settles", "walk_reads_every_row"),
+    [
+        pytest.param(_session_window(30000, 5), (_COUNT_CAP, True), True, False, id="many-sessions-stop-at-the-cap"),
+        pytest.param(
+            _session_window(_COUNT_CAP + 2000, 5), (_COUNT_CAP, True), True, True, id="cap-passed-after-the-first-batch"
+        ),
+        pytest.param(_session_window(_COUNT_CAP, 5), (_COUNT_CAP, False), True, True, id="exactly-the-cap-is-exact"),
+        pytest.param(_session_window(1000, 5), (1000, False), True, True, id="small-window-is-counted-exactly"),
+        pytest.param(_session_window(20, 20000), (20, False), False, False, id="long-sessions-fall-back-to-grouping"),
+        pytest.param(
+            _session_window(10, 5, newer_filtered_out_rows=400000),
+            (10, False),
+            False,
+            False,
+            id="filter-matching-no-recent-rows-falls-back-at-once",
+        ),
+    ],
+)
+async def test_session_count_matches_the_grouped_count_and_stops_early(
+    window, expected_total, walk_settles, walk_reads_every_row
+):
+    """The newest-first count gives the grouped count's answer, reading only part of a window of many sessions."""
+    mock_prisma, rows_read_per_walk = _counting_prisma(window)
+
+    counted = await spend_management_endpoints._count_sessions_newest_first(mock_prisma, "TRUE", "TRUE", (), 1)
+    total = (
+        counted
+        if counted is not None
+        else await spend_management_endpoints._count_grouped_sessions(mock_prisma, "TRUE", (), 1)
+    )
+
+    assert total == expected_total
+    assert (counted is not None) is walk_settles
+    assert (max(rows_read_per_walk) == len(window)) is walk_reads_every_row
+    assert max(rows_read_per_walk) <= spend_management_endpoints._SESSION_COUNT_MAX_ROWS
+    if not walk_settles:
+        assert rows_read_per_walk == [spend_management_endpoints._SESSION_COUNT_FIRST_BATCH_ROWS], (
+            "a walk that cannot reach the cap within its row budget must stop after its first batch"
+        )
 
 
 @pytest.mark.asyncio
