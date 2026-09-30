@@ -212,6 +212,60 @@ async fn schema_supports_span_rollups_and_spend_joins(
 
 #[rstest]
 #[tokio::test]
+async fn trace_detail_loads_when_handoff_errors_exceed_response_limit(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let message = format!("ParentCommand: {}", "x".repeat(460_000));
+    let rows = (0..10)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "Timestamp": timestamp + index,
+                "TraceId": "large-handoff-trace",
+                "SpanId": format!("span-{index}"),
+                "SpanName": "tools",
+                "StatusCode": "STATUS_CODE_ERROR",
+                "StatusMessage": message,
+            }))
+        })
+        .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
+    insert_rows(&database, "otel_traces", rows).await?;
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let parameters = BTreeMap::from([
+        (
+            "trace_id".into(),
+            Parameter::Text("large-handoff-trace".into()),
+        ),
+        ("team_ids".into(), Parameter::Strings(vec![])),
+        ("api_key_hash".into(), Parameter::Text(String::new())),
+        ("trace_ref".into(), Parameter::Text(String::new())),
+    ]);
+    let body = execute_named_read(
+        &database.client,
+        &reader,
+        ReadQuery::TraceSpans,
+        &parameters,
+    )
+    .await?;
+    let result: serde_json::Value = serde_json::from_str(&body)?;
+    let spans = result["data"]
+        .as_array()
+        .expect("trace query returns spans");
+    assert_eq!(spans.len(), 10);
+    assert!(spans.iter().all(|span| {
+        span["status"] == "STATUS_CODE_ERROR"
+            && span["status_message"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("ParentCommand: ") && value.len() <= 1024)
+    }));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn insert_rejects_unknown_columns_even_if_url_requests_skipping_them(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
