@@ -1674,6 +1674,24 @@
         "interactions": true
       }
     },
+    "kimchi": {
+      "display_name": "Kimchi (`kimchi`)",
+      "url": "https://docs.litellm.ai/docs/providers/kimchi",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "morph": {
       "display_name": "Morph (`morph`)",
       "url": "https://docs.litellm.ai/docs/providers/morph",
