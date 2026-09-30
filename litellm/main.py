@@ -119,6 +119,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
+from litellm.llms.fireworks_ai.common_utils import absorb_shared_affinity_param
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -1864,6 +1865,7 @@ def _complete_fireworks_ai(
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
+    absorb_shared_affinity_param(litellm_params, ctx.optional_params)
     optional_params: Final = (
         provider_config.map_extra_body_params(optional_params=ctx.optional_params, model=model)
         if isinstance(provider_config, litellm.FireworksAIConfig)

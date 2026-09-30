@@ -72,6 +72,32 @@ def get_fireworks_session_id(
     return None
 
 
+def absorb_shared_affinity_param(litellm_params: dict, optional_params: Mapping[str, object]) -> None:
+    """
+    Move a top-level `fireworks_shared_session_affinity` kwarg into litellm_params metadata.
+
+    The flag is a LiteLLM routing hint, not a Fireworks API field: left in optional_params
+    (or in optional_params.extra_body, where openai-compatible param handling stashes
+    unknown kwargs) it would be serialized into the request body and rejected by Fireworks.
+    Reads both the top-level param and its extra_body-nested form; strips it from both.
+    """
+    value: object = optional_params.get("fireworks_shared_session_affinity")
+    extra_body: Final = optional_params.get("extra_body")
+    if value is None and isinstance(extra_body, Mapping):
+        value = extra_body.get("fireworks_shared_session_affinity")
+    if value is None:
+        return
+    if isinstance(extra_body, dict) and "fireworks_shared_session_affinity" in extra_body:
+        extra_body.pop("fireworks_shared_session_affinity", None)
+    if "fireworks_shared_session_affinity" in optional_params:
+        optional_params.pop("fireworks_shared_session_affinity", None)
+    metadata: Final = litellm_params.get("metadata")
+    if isinstance(metadata, dict):
+        metadata.setdefault("fireworks_shared_session_affinity", value)
+    else:
+        litellm_params["metadata"] = {"fireworks_shared_session_affinity": value}
+
+
 def with_fireworks_session_affinity(
     headers: Mapping[str, str], litellm_params: Mapping[str, object]
 ) -> Mapping[str, str]:
@@ -141,6 +167,7 @@ class FireworksAIMixin:
         content_type_header: Final = (
             {} if any(key.lower() == "content-type" for key in auth_headers) else {"Content-Type": "application/json"}
         )
+        absorb_shared_affinity_param(litellm_params, optional_params)
         return self._add_session_affinity_header({**auth_headers, **content_type_header}, litellm_params)
 
     def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:

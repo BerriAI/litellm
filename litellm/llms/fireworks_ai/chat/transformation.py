@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
@@ -43,6 +44,7 @@ from ..common_utils import (
     FIREROUTER,
     FireworksAIException,
     FireworksAIMixin,
+    absorb_shared_affinity_param,
     resolve_fireworks_resource_name,
 )
 
@@ -222,6 +224,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
+        absorb_shared_affinity_param(litellm_params, optional_params)
         return self._add_session_affinity_header(validated_headers, litellm_params)
 
     def get_supported_openai_params(self, model: str):
@@ -651,6 +654,29 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         return provider_specific_model_info
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        """
+        Pull `fireworks_shared_session_affinity` out of extra_body before the handler
+        merges extra_body into the request body. The flag is a LiteLLM routing hint, not
+        a Fireworks API field ("Extra inputs are not permitted"); it must only reach
+        Fireworks as the x-session-affinity header, which the affinity logic derives
+        from litellm_params.metadata.
+        """
+        filtered: Final = {k: v for k, v in extra_body.items() if k != "fireworks_shared_session_affinity"}
+        if "fireworks_shared_session_affinity" not in extra_body:
+            return super().transform_extra_body(
+                extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+            )
+        if filtered:
+            return MappingProxyType(filtered)
+        return MappingProxyType({})
+
     def transform_request(
         self,
         model: str,
@@ -663,6 +689,11 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         messages = self._transform_messages_helper(
             messages=messages, model=resolved_model, litellm_params=litellm_params
         )
+        # `fireworks_shared_session_affinity` is a LiteLLM routing hint, not a Fireworks API
+        # field: it must not reach the request body ("Extra inputs are not permitted") —
+        # stash it in litellm_params metadata where the affinity-header logic reads it.
+        absorb_shared_affinity_param(litellm_params, optional_params)
+        optional_params.pop("fireworks_shared_session_affinity", None)
         if "tools" in optional_params and optional_params["tools"] is not None:
             tools: Final = self._transform_tools(tools=optional_params["tools"])
             optional_params["tools"] = tools
