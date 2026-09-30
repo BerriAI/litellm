@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS {db}.{AGENT_TRACES_TABLE}
     InputTokens   SimpleAggregateFunction(sum, UInt64),
     OutputTokens  SimpleAggregateFunction(sum, UInt64),
     Models        SimpleAggregateFunction(groupUniqArrayArray, Array(String)),
+    AgentNames    SimpleAggregateFunction(groupUniqArrayArray, Array(String)),
     RequestIds    SimpleAggregateFunction(groupArrayArray, Array(String))
 )
 ENGINE = AggregatingMergeTree
@@ -116,6 +117,7 @@ SELECT
     sum(InputTokens)                                       AS InputTokens,
     sum(OutputTokens)                                      AS OutputTokens,
     groupUniqArrayIf(toString(Model), Model != '')         AS Models,
+    groupUniqArrayIf(SpanName, ObservationType = 'agent')  AS AgentNames,
     groupArrayIf(LiteLLMRequestId, LiteLLMRequestId != '') AS RequestIds
 FROM {db}.{OTEL_TRACES_TABLE}
 GROUP BY TeamId, TraceId
