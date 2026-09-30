@@ -32,8 +32,10 @@ StreamingAction: TypeAlias = Literal["converse-stream", "invoke-with-response-st
 NonStreamingAction: TypeAlias = Literal["converse", "invoke"]
 BedrockAction: TypeAlias = StreamingAction | NonStreamingAction
 BEDROCK_MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
+BEDROCK_FALSE_POSITIVE_MODEL_ID: Final = "anthropic.claude-converse-stream-test-v1:0"
 BEDROCK_EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
+SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
 STREAMING_ACTIONS: Final[tuple[StreamingAction, ...]] = (
     "converse-stream",
     "invoke-with-response-stream",
@@ -136,6 +138,12 @@ def _provider(request: Request) -> Reply:
     marker: Final = _marker(body)
     target: Final = request.target.split("?", 1)[0]
     if target.startswith("/passthrough"):
+        if body.get("stream") is True:
+            streamed_response: Final = _json({"received": body})
+            return Reply(
+                content_type="text/event-stream",
+                chunks=(b"data: " + streamed_response + b"\n\n", b"data: [DONE]\n\n"),
+            )
         return Reply(body=_json({"received": body}))
     if target.endswith("/converse-stream"):
         return Reply(body=_bedrock_converse_stream(marker), content_type=BEDROCK_EVENT_STREAM)
@@ -268,6 +276,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ReproRig]:
                 {
                     "chat": "scope-chat",
                     "bedrock_router": "scope-bedrock-router",
+                    "bedrock_false_positive_router": "scope-bedrock-converse-stream-model",
                 }
             )
             config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
@@ -292,6 +301,16 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ReproRig]:
                     "model_name": models["bedrock_router"],
                     "litellm_params": {
                         "model": f"bedrock/{BEDROCK_MODEL_ID}",
+                        "api_base": provider.url,
+                        "aws_access_key_id": "AKIASYNTHETICSTREAMSCOPE",
+                        "aws_secret_access_key": "synthetic-bedrock-secret",
+                        "aws_region_name": "us-east-1",
+                    },
+                },
+                {
+                    "model_name": models["bedrock_false_positive_router"],
+                    "litellm_params": {
+                        "model": f"bedrock/{BEDROCK_FALSE_POSITIVE_MODEL_ID}",
                         "api_base": provider.url,
                         "aws_access_key_id": "AKIASYNTHETICSTREAMSCOPE",
                         "aws_secret_access_key": "synthetic-bedrock-secret",
@@ -493,6 +512,46 @@ def test_bedrock_non_streaming_actions_run_non_streaming_scoped_rails(
     assert len(sink_rows) == expected_scans, (marker, model_kind, action, scope, sink_rows, response.text)
 
 
+@pytest.mark.parametrize("model_kind", ("router", "direct"))
+def test_bedrock_model_id_streaming_action_text_on_converse_is_non_streaming(
+    rig: ReproRig,
+    model_kind: ModelKind,
+) -> None:
+    marker: Final = f"scope-bedrock-converse-model-{uuid.uuid4().hex}"
+    model_path: Final = (
+        rig.models["bedrock_false_positive_router"] if model_kind == "router" else BEDROCK_FALSE_POSITIVE_MODEL_ID
+    )
+    path, body = _bedrock_request("converse", model_path, marker)
+    call_id: Final = f"stream-scope-bedrock-{uuid.uuid4().hex}"
+    key: Final = rig.scenario.key(
+        guardrails=[
+            rig.rails["bedrock_streaming"],
+            rig.rails["bedrock_non_streaming"],
+        ]
+    )
+    candidate: Final = rig.candidate if model_kind == "router" else rig.direct_candidate
+    response: Final = candidate.request(
+        "POST",
+        path,
+        body,
+        key=key,
+        headers={"x-litellm-call-id": call_id},
+    )
+    assert response.status_code == 200, response.text
+    assert marker in response.text, response.text
+    provider_rows: Final = _matching_requests(rig.provider, marker)
+    assert len(provider_rows) == 1, (marker, model_kind, provider_rows, response.text)
+    sink_rows: Final = _matching_requests(rig.sink, marker)
+    streaming_rows: Final = tuple(
+        row for row in sink_rows if row.target.startswith(f"/{rig.rails['bedrock_streaming']}/")
+    )
+    non_streaming_rows: Final = tuple(
+        row for row in sink_rows if row.target.startswith(f"/{rig.rails['bedrock_non_streaming']}/")
+    )
+    assert streaming_rows == (), (marker, model_kind, sink_rows, response.text)
+    assert len(non_streaming_rows) == 1, (marker, model_kind, sink_rows, response.text)
+
+
 @pytest.mark.parametrize("streamed", (False, True), ids=("stream-absent", "stream-true"))
 def test_configured_passthrough_forwards_caller_is_streaming_request_field(
     rig: ReproRig,
@@ -517,7 +576,12 @@ def test_configured_passthrough_forwards_caller_is_streaming_request_field(
         response.text,
     )
     assert upstream_body == body, (marker, body, upstream_body, response.text)
-    response_body: Final = JSON_OBJECT.validate_json(response.content)
+    if streamed:
+        assert response.headers.get("content-type", "").lower().startswith("text/event-stream"), dict(response.headers)
+        event_body: Final = response.text.removeprefix("data: ").split("\n", maxsplit=1)[0]
+        response_body: Final = JSON_OBJECT.validate_json(event_body)
+    else:
+        response_body = JSON_OBJECT.validate_json(response.content)
     assert response_body == {"received": body}, response.text
 
 
@@ -590,22 +654,34 @@ def test_configured_passthrough_cannot_spoof_server_stream_classification(
     )
 
 
-@pytest.mark.parametrize("streamed", (True, False), ids=("streaming", "non-streaming"))
-def test_passthrough_scope_follows_proxy_stream_decision(rig: ReproRig, streamed: bool) -> None:
+@pytest.mark.parametrize(
+    ("streamed", "request_fields"),
+    ((True, {"stream": True}), (False, {"stream": False}), (False, {})),
+    ids=("stream-true", "stream-false", "stream-absent"),
+)
+def test_passthrough_scope_follows_proxy_stream_decision(
+    rig: ReproRig,
+    streamed: bool,
+    request_fields: dict[str, JsonValue],
+) -> None:
     marker: Final = f"scope-passthrough-scope-{uuid.uuid4().hex}"
-    body: Final = {"marker": marker, "stream": streamed}
+    body: Final = {"marker": marker, **request_fields}
     response: Final = rig.candidate.request("POST", "/pt-scope", body)
     assert response.status_code == 200, response.text
-    response_body: Final = JSON_OBJECT.validate_json(response.content)
-    assert response_body == {"received": body}, response.text
     if streamed:
+        expected_frame: Final = f"data: {_json({'received': body}).decode()}\n\ndata: [DONE]\n\n"
+        assert response.headers.get("content-type", "").lower().startswith("text/event-stream"), dict(response.headers)
+        assert response.text == expected_frame, response.text
         assert response.headers.get("transfer-encoding", "").lower() == "chunked", dict(response.headers)
     else:
+        response_body: Final = JSON_OBJECT.validate_json(response.content)
+        assert response_body == {"received": body}, response.text
         assert "content-length" in response.headers, dict(response.headers)
     provider_rows: Final = _matching_requests(rig.provider, marker)
     assert len(provider_rows) == 1, (marker, provider_rows, response.text)
     upstream_body: Final = JSON_OBJECT.validate_json(provider_rows[0].body)
     assert upstream_body == body, (marker, body, upstream_body, response.text)
+    assert SERVER_STREAMING_CLASSIFICATION_KEY not in upstream_body, upstream_body
     sink_rows: Final = _matching_requests(rig.sink, marker)
     streaming_rows: Final = tuple(
         row for row in sink_rows if row.target.startswith(f"/{rig.rails['passthrough_streaming']}/")
