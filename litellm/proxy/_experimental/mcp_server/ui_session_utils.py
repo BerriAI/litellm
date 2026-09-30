@@ -19,6 +19,9 @@ EffectiveAuthContexts: TypeAlias = Callable[
 TeamObjectPermission: TypeAlias = Callable[
     [UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]  # mutable-ok: Callable parameter syntax
 ]
+OwnObjectPermission: TypeAlias = Callable[
+    [UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]  # mutable-ok: Callable parameter syntax
+]
 AdmittedContext: TypeAlias = Callable[
     [UserAPIKeyAuth], Awaitable[UserAPIKeyAuth | None]  # mutable-ok: Callable parameter syntax
 ]
@@ -204,8 +207,27 @@ async def toolset_grant_contexts(
     return tuple(await load_sources(acting if acting is not None else user_api_key_auth))
 
 
-def _own_toolset_ids(own: LiteLLM_ObjectPermissionTable | None) -> Sequence[str] | None:
-    if own is None or not _restricts_mcp(own):
+async def _own_toolset_ids(
+    context: UserAPIKeyAuth,
+    load_own_permission: OwnObjectPermission,
+) -> Sequence[str] | None:
+    """The source's own toolsets, or None when it declares no MCP grant of its own. A source that names an
+    ``object_permission_id`` is a known restriction even when the row is unhydrated, unreadable or gone,
+    so it is loaded rather than read as unrestricted, and grants nothing when it cannot be read."""
+    if context.object_permission is None and not context.object_permission_id:
+        return None
+    try:
+        own: Final = await load_own_permission(context)
+    except Exception as exc:  # noqa: BLE001  # a named but unreadable own grant must deny, not widen to the team
+        verbose_logger.warning(
+            "MCP toolset grants: object permission %s unreadable, granting nothing through it: %s",
+            context.object_permission_id,
+            exc,
+        )
+        return ()
+    if own is None:
+        return ()
+    if not _restricts_mcp(own):
         return None
     return own.mcp_toolsets or ()
 
@@ -230,8 +252,9 @@ async def _context_toolset_ids(
     context: UserAPIKeyAuth,
     inherits_team: bool,
     load_team_permission: TeamObjectPermission,
+    load_own_permission: OwnObjectPermission,
 ) -> Sequence[str]:
-    own: Final = _own_toolset_ids(context.object_permission)
+    own: Final = await _own_toolset_ids(context, load_own_permission)
     if own is not None:
         return own
     if not inherits_team or not context.team_id:
@@ -244,13 +267,14 @@ async def granted_toolset_ids(
     effective_contexts: EffectiveAuthContexts = toolset_grant_contexts,
     team_object_permission: TeamObjectPermission | None = None,
     require_key_access: bool | None = None,
+    own_object_permission: OwnObjectPermission | None = None,
 ) -> frozenset[str]:
     """Toolset ids the principal holds, resolved per grant source with the key/team rule the aggregate
     /mcp listing applies: a source that declares any MCP grant of its own is scoped to its own toolsets and
     never reads its team, one that declares none inherits its team's, except a virtual key under
     ``require_key_mcp_access_defined``, which inherits nothing. A keyless subject's team sources always
-    inherit. A team that cannot be read contributes nothing while every other source still counts. No
-    grant anywhere yields the empty set."""
+    inherit. A team that cannot be read contributes nothing while every other source still counts, and an
+    own grant that is named but cannot be read grants nothing. No grant anywhere yields the empty set."""
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
@@ -263,8 +287,12 @@ async def granted_toolset_ids(
     )
     inherits_team: Final = is_keyless_mcp_subject(user_api_key_auth) or not require
     load_team_permission: Final = team_object_permission or MCPRequestHandler.team_object_permission
+    load_own_permission: Final = own_object_permission or MCPRequestHandler.key_object_permission_hydrated
     contexts: Final = await effective_contexts(user_api_key_auth)
     per_context: Final = await asyncio.gather(
-        *(_context_toolset_ids(context, inherits_team, load_team_permission) for context in contexts)
+        *(
+            _context_toolset_ids(context, inherits_team, load_team_permission, load_own_permission)
+            for context in contexts
+        )
     )
     return frozenset(chain.from_iterable(per_context))

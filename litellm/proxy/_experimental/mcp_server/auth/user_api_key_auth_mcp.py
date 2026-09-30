@@ -2101,6 +2101,12 @@ class MCPRequestHandler:
         return await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
 
     @staticmethod
+    async def key_object_permission_hydrated(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        return await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)
+
+    @staticmethod
     async def admitted_subject_sources(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
         return await MCPRequestHandler._admitted_subject_sources(auth)
 

@@ -433,3 +433,60 @@ async def test_a_key_whose_only_grant_source_is_an_unreadable_team_is_granted_no
     key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a")
 
     assert await granted_toolset_ids(key, _same_context, _team_a_unreadable, require_key_access=False) == frozenset()
+
+
+async def _hydrates_op_key_to_srv_own(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+    if auth.object_permission is not None:
+        return auth.object_permission
+    if auth.object_permission_id == "op-key":
+        return LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["srv-own"])
+    return None
+
+
+@pytest.mark.asyncio
+async def test_a_key_cached_with_its_own_grant_unhydrated_is_scoped_to_that_grant_not_its_team():
+    """The main auth flow can cache a key with object_permission_id set and object_permission None. The
+    row it names is the key's ceiling, so it is loaded and read as the key's own grant instead of letting the
+    key inherit its team's toolsets."""
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a", object_permission_id="op-key")
+
+    granted = await granted_toolset_ids(
+        key,
+        _same_context,
+        _team_grants_ts_team,
+        require_key_access=False,
+        own_object_permission=_hydrates_op_key_to_srv_own,
+    )
+
+    assert granted == frozenset()
+
+
+async def _own_row_unreadable(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+    raise RuntimeError("object permission row unreadable")
+
+
+async def _own_row_gone(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("load_own", [_own_row_unreadable, _own_row_gone])
+async def test_a_key_naming_an_own_grant_that_cannot_be_read_is_granted_nothing_rather_than_its_team(load_own):
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a", object_permission_id="op-key")
+
+    granted = await granted_toolset_ids(
+        key, _same_context, _team_grants_ts_team, require_key_access=False, own_object_permission=load_own
+    )
+
+    assert granted == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_a_key_naming_no_own_grant_is_not_hydrated_before_inheriting_its_team():
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a")
+
+    granted = await granted_toolset_ids(
+        key, _same_context, _team_grants_ts_team, require_key_access=False, own_object_permission=_own_row_unreadable
+    )
+
+    assert granted == {"ts-team"}
