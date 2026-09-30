@@ -59,13 +59,32 @@ def openapi_spec(spec_dict: Dict[str, Any]) -> OpenAPI:
 class TestRequestCompliance:
     """Tests that our request bodies match the OpenAPI spec."""
 
-    def test_create_model_interaction_request_schema(self, spec_dict):
-        """Verify CreateModelInteractionParams schema fields."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+    @staticmethod
+    def _model_interaction_schema(spec_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve the model request schema used by the create operation."""
+        request_schema = spec_dict["paths"]["/{api_version}/interactions"]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        request_variants = request_schema["oneOf"]
+        model_ref = next(
+            variant["$ref"]
+            for variant in request_variants
+            if variant.get("$ref", "").endswith("/ModelInteraction")
+        )
+        return spec_dict["components"]["schemas"][model_ref.rsplit("/", 1)[-1]]
 
-        # Required fields per spec
-        assert "model" in schema["required"]
-        assert "input" in schema["required"]
+    def test_create_model_interaction_request_schema(self, spec_dict):
+        """Verify the model request fields exposed by the live spec.
+
+        Google renamed the generated schema from ``CreateModelInteractionParams``
+        to ``ModelInteraction`` and now reuses it for response fields. Resolve
+        the schema through the POST request instead of depending on a generated
+        class name or requiring fields that the shared schema marks optional.
+        """
+        schema = self._model_interaction_schema(spec_dict)
+
+        assert "model" in schema["properties"]
+        assert "input" in schema["properties"]
 
         # Check our supported optional fields exist in spec
         our_optional_fields = [
@@ -87,8 +106,8 @@ class TestRequestCompliance:
             print(f"✓ Field '{field}' exists in spec")
 
     def test_input_types_match_spec(self, spec_dict):
-        """Verify input field supports string, Content, Content[], Turn[]."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        """Verify input field supports string, Content, Content[], and Step[]."""
+        schema = self._model_interaction_schema(spec_dict)
         input_schema = schema["properties"]["input"]
 
         # The input property may be inline oneOf or a $ref to InteractionsInput
@@ -209,7 +228,7 @@ class TestResponseCompliance:
         """Verify our InteractionsAPIResponse has correct fields."""
         # The response is the dedicated `Interaction` schema. Google moved the
         # output-only fields (notably the `steps` array, formerly `outputs`)
-        # off `CreateModelInteractionParams` and onto `Interaction`; the request
+        # off the model request schema and onto `Interaction`; the request
         # schema no longer carries `steps`. Google later moved `role` off
         # `Interaction` onto the per-turn `Turn` schema (asserted in
         # test_turn_schema), so it is no longer a top-level output field here.
@@ -308,29 +327,29 @@ class TestEndpointCompliance:
         print(f"✓ Create endpoint: POST {create_path}")
 
     def test_get_endpoint_exists(self, spec_dict):
-        """Verify GET /interactions/{id} endpoint exists."""
+        """Verify GET /interactions/{interaction_id} endpoint exists."""
         paths = spec_dict["paths"]
 
         get_path = None
         for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "get" in methods:
+            if "interactions" in path and path.endswith("}") and "get" in methods:
                 get_path = path
                 break
 
-        assert get_path is not None, "GET /interactions/{id} endpoint not found"
+        assert get_path is not None, "GET /interactions/{interaction_id} endpoint not found"
         print(f"✓ Get endpoint: GET {get_path}")
 
     def test_delete_endpoint_exists(self, spec_dict):
-        """Verify DELETE /interactions/{id} endpoint exists."""
+        """Verify DELETE /interactions/{interaction_id} endpoint exists."""
         paths = spec_dict["paths"]
 
         delete_path = None
         for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "delete" in methods:
+            if "interactions" in path and path.endswith("}") and "delete" in methods:
                 delete_path = path
                 break
 
-        assert delete_path is not None, "DELETE /interactions/{id} endpoint not found"
+        assert delete_path is not None, "DELETE /interactions/{interaction_id} endpoint not found"
         print(f"✓ Delete endpoint: DELETE {delete_path}")
 
 
