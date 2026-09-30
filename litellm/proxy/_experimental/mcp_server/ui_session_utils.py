@@ -19,6 +19,9 @@ EffectiveAuthContexts: TypeAlias = Callable[
 TeamObjectPermission: TypeAlias = Callable[
     [UserAPIKeyAuth], Awaitable[LiteLLM_ObjectPermissionTable | None]  # mutable-ok: Callable parameter syntax
 ]
+AdmittedContext: TypeAlias = Callable[
+    [UserAPIKeyAuth], Awaitable[UserAPIKeyAuth | None]  # mutable-ok: Callable parameter syntax
+]
 
 
 def clone_user_api_key_auth_with_team(
@@ -118,10 +121,10 @@ async def acting_user_auth(user_api_key_auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
     both surfaces. An admin session keeps its operator view and any caller-passed credential is
     returned unchanged, never widened.
 
-    Do not combine this with a narrowing that rewrites a single credential's ``object_permission``
-    (toolset scope): the admitted subject resolves per grant source and a team source deliberately
-    carries none of the caller's own grants, so the narrowing would silently evaporate on every
-    team-granted server. A request carrying such a scope keeps the caller's own credential."""
+    A toolset narrowing is never applied to the admitted subject by rewriting its ``object_permission``:
+    it resolves per grant source and a team source deliberately carries none of the caller's own grants,
+    so the rewrite would evaporate on every team-granted server. The route pins ``mcp_toolset_id``
+    instead, which every source's grant is intersected with."""
 
     if not is_ui_session_credential(user_api_key_auth):
         return user_api_key_auth
@@ -173,48 +176,95 @@ def _restricts_mcp(permission: LiteLLM_ObjectPermissionTable | None) -> bool:
     )
 
 
-def _context_toolset_ids(
-    own: LiteLLM_ObjectPermissionTable | None,
-    team: LiteLLM_ObjectPermissionTable | None,
-    inherits_team: bool,
+def is_keyless_mcp_subject(user_api_key_auth: UserAPIKeyAuth) -> bool:
+    """A principal with no virtual key to declare MCP access on: the dashboard's own session token or a
+    gateway-admitted user. Its grants are resolved per source, never through a key row."""
+
+    return is_ui_session_credential(user_api_key_auth) or user_api_key_auth.mcp_admitted_user_subject is True
+
+
+async def toolset_grant_contexts(
+    user_api_key_auth: UserAPIKeyAuth,
+    admitted_context: AdmittedContext = admitted_user_context,
+    admitted_sources: EffectiveAuthContexts | None = None,
+) -> Sequence[UserAPIKeyAuth]:
+    """The grant sources a toolset is looked up through. A virtual key is its own single source. A keyless
+    subject fans out exactly as the aggregate /mcp resolution does: its own user row plus every team whose
+    live roster still lists it, so a membership that only survives in the user's cached team list grants
+    nothing."""
+
+    if not is_keyless_mcp_subject(user_api_key_auth):
+        return (user_api_key_auth,)
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    load_sources: Final = admitted_sources or MCPRequestHandler.admitted_subject_sources
+    acting: Final = await admitted_context(user_api_key_auth)
+    return tuple(await load_sources(acting if acting is not None else user_api_key_auth))
+
+
+def _own_toolset_ids(own: LiteLLM_ObjectPermissionTable | None) -> Sequence[str] | None:
+    if own is None or not _restricts_mcp(own):
+        return None
+    return own.mcp_toolsets or ()
+
+
+async def _inherited_toolset_ids(
+    context: UserAPIKeyAuth,
+    load_team_permission: TeamObjectPermission,
 ) -> Sequence[str]:
-    if own is not None and _restricts_mcp(own):
-        return own.mcp_toolsets or ()
-    if not inherits_team or team is None:
+    try:
+        team: Final = await load_team_permission(context)
+    except Exception as exc:  # noqa: BLE001  # an unreadable team grants nothing through this source and must not fail the caller's other sources
+        verbose_logger.warning(
+            "MCP toolset grants: team %s unreadable, inheriting nothing from it: %s",
+            context.team_id,
+            exc,
+        )
         return ()
-    return team.mcp_toolsets or ()
+    return () if team is None else (team.mcp_toolsets or ())
+
+
+async def _context_toolset_ids(
+    context: UserAPIKeyAuth,
+    inherits_team: bool,
+    load_team_permission: TeamObjectPermission,
+) -> Sequence[str]:
+    own: Final = _own_toolset_ids(context.object_permission)
+    if own is not None:
+        return own
+    if not inherits_team or not context.team_id:
+        return ()
+    return await _inherited_toolset_ids(context, load_team_permission)
 
 
 async def granted_toolset_ids(
     user_api_key_auth: UserAPIKeyAuth,
-    effective_contexts: EffectiveAuthContexts = build_effective_auth_contexts,
+    effective_contexts: EffectiveAuthContexts = toolset_grant_contexts,
     team_object_permission: TeamObjectPermission | None = None,
     require_key_access: bool | None = None,
 ) -> frozenset[str]:
-    """Toolset ids the credential holds, resolved per effective context with the key/team rule the
-    aggregate /mcp listing applies: a context that declares any MCP grant of its own is scoped to its own
-    toolsets, one that declares none inherits its team's, except a virtual key under
-    ``require_key_mcp_access_defined``, which inherits nothing. A dashboard session or gateway-admitted
-    user has no key to declare access on, so its team contexts always inherit. No grant anywhere yields
-    the empty set."""
+    """Toolset ids the principal holds, resolved per grant source with the key/team rule the aggregate
+    /mcp listing applies: a source that declares any MCP grant of its own is scoped to its own toolsets and
+    never reads its team, one that declares none inherits its team's, except a virtual key under
+    ``require_key_mcp_access_defined``, which inherits nothing. A keyless subject's team sources always
+    inherit. A team that cannot be read contributes nothing while every other source still counts. No
+    grant anywhere yields the empty set."""
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
     from litellm.proxy.proxy_server import general_settings
 
-    keyless: Final = is_ui_session_credential(user_api_key_auth) or user_api_key_auth.mcp_admitted_user_subject
     require: Final = (
         bool(general_settings.get("require_key_mcp_access_defined", False))
         if require_key_access is None
         else require_key_access
     )
-    inherits_team: Final = keyless or not require
+    inherits_team: Final = is_keyless_mcp_subject(user_api_key_auth) or not require
     load_team_permission: Final = team_object_permission or MCPRequestHandler.team_object_permission
     contexts: Final = await effective_contexts(user_api_key_auth)
-    team_permissions: Final = await asyncio.gather(*(load_team_permission(context) for context in contexts))
-    return frozenset(
-        chain.from_iterable(
-            _context_toolset_ids(context.object_permission, team, inherits_team)
-            for context, team in zip(contexts, team_permissions, strict=True)
-        )
+    per_context: Final = await asyncio.gather(
+        *(_context_toolset_ids(context, inherits_team, load_team_permission) for context in contexts)
     )
+    return frozenset(chain.from_iterable(per_context))

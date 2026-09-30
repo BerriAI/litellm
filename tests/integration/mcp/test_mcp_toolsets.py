@@ -143,3 +143,63 @@ def test_a_key_with_its_own_toolset_grant_does_not_inherit_the_team_toolset(gate
         assert gateway.client.get(f"/v1/mcp/toolset/{team_only_id}", headers=headers).status_code == 403
         assert _toolset_rpc(gateway, headers, team_only_name, "tools/list", {}).status == 403
         assert _toolset_rpc(gateway, headers, own_name, "tools/list", {}).tools == (f"{alias}-add",)
+
+
+def _team_member_with_own_grant(scenario: Scenario, team_id: str, own_server_id: str) -> str:
+    user_id: Final = scenario.user(user_role="internal_user", object_permission={"mcp_servers": [own_server_id]})
+    scenario.gateway.post("/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}})
+    return user_id
+
+
+def test_dashboard_session_serves_the_team_toolset_despite_a_disjoint_grant_on_the_user_row(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The member's own row grants a different server outright. That grant must not cap the team's toolset
+    to nothing, and the team's sibling toolset must not leak onto the granted toolset's route."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-integration-salt")
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit6029_" + uuid.uuid4().hex[:8]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        own_server_id: Final = register_mcp(scenario, peer, "lit6029_own_" + uuid.uuid4().hex[:8])
+        granted_id, granted_name = _toolset(scenario, server_id, "add")
+        sibling_id, sibling_name = _toolset(scenario, server_id, "multiply")
+        team_id: Final = scenario.team(object_permission={"mcp_toolsets": [granted_id, sibling_id]})
+        user_id: Final = _team_member_with_own_grant(scenario, team_id, own_server_id)
+        headers: Final = {"Authorization": f"Bearer {_dashboard_ui_session_token(user_id)}"}
+
+        assert set(_listed_toolset_ids(gateway, headers)) == {granted_id, sibling_id}
+        listed: Final = _toolset_rpc(gateway, headers, granted_name, "tools/list", {})
+        assert listed.ok, listed.raw
+        assert listed.tools == (f"{alias}-add",), listed.raw
+        assert _toolset_rpc(gateway, headers, sibling_name, "tools/list", {}).tools == (f"{alias}-multiply",)
+        peer.drain()
+        called: Final = _toolset_rpc(
+            gateway, headers, granted_name, "tools/call", {"name": f"{alias}-add", "arguments": ADD}
+        )
+        assert called.ok and called.text == "9", called.raw
+        assert len(tool_calls(peer.drain())) == 1
+        stranger: Final = {
+            "Authorization": f"Bearer {_dashboard_ui_session_token(scenario.user(user_role='internal_user'))}"
+        }
+        assert _toolset_rpc(gateway, stranger, granted_name, "tools/list", {}).status == 403
+
+
+def test_a_member_removed_from_the_team_loses_its_toolset_on_the_dashboard_session(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-integration-salt")
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit6029_" + uuid.uuid4().hex[:8]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        granted_id, granted_name = _toolset(scenario, server_id, "add")
+        team_id: Final = scenario.team(object_permission={"mcp_toolsets": [granted_id]})
+        user_id: Final = scenario.member(team_id)
+        headers: Final = {"Authorization": f"Bearer {_dashboard_ui_session_token(user_id)}"}
+        assert _listed_toolset_ids(gateway, headers) == (granted_id,)
+        assert _toolset_rpc(gateway, headers, granted_name, "tools/list", {}).tools == (f"{alias}-add",)
+
+        gateway.post("/team/member_delete", {"team_id": team_id, "user_id": user_id})
+
+        assert _listed_toolset_ids(gateway, headers) == ()
+        assert gateway.client.get(f"/v1/mcp/toolset/{granted_id}", headers=headers).status_code == 403
+        assert _toolset_rpc(gateway, headers, granted_name, "tools/list", {}).status == 403

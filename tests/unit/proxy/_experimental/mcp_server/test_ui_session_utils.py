@@ -10,6 +10,7 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
     clone_user_api_key_auth_with_team,
     granted_toolset_ids,
+    toolset_grant_contexts,
     resolve_ui_session_team_ids,
 )
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
@@ -338,3 +339,97 @@ async def test_require_key_mcp_access_defined_stops_a_key_inheriting_team_toolse
     assert await granted_toolset_ids(session, _same_context, _team_grants_ts_team, require_key_access=True) == {
         "ts-team"
     }
+
+
+@pytest.mark.asyncio
+async def test_toolset_grant_contexts_of_a_virtual_key_is_the_key_alone():
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a")
+
+    async def never(auth: UserAPIKeyAuth) -> None:
+        raise AssertionError("a virtual key has no admitted sources")
+
+    assert await toolset_grant_contexts(key, admitted_context=never, admitted_sources=never) == (key,)
+
+
+def _admitted(user_id: str, own: LiteLLM_ObjectPermissionTable | None = None) -> UserAPIKeyAuth:
+    subject = UserAPIKeyAuth(user_id=user_id, object_permission=own)
+    subject.mcp_admitted_user_subject = True
+    return subject
+
+
+@pytest.mark.asyncio
+async def test_toolset_grant_contexts_of_a_dashboard_session_are_its_admitted_users_grant_sources():
+    """The dashboard session fans out through the same roster-checked source builder as the aggregate
+    /mcp resolution, applied to the admitted user it acts as, so a cached membership a team has since
+    revoked never reaches the toolset check."""
+    session = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-1")
+    admitted = _admitted("user-1")
+    own_source = UserAPIKeyAuth(user_id="user-1")
+    team_source = UserAPIKeyAuth(user_id="user-1", team_id="team-a")
+
+    async def admitted_context(auth: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        assert auth is session
+        return admitted
+
+    async def admitted_sources(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+        assert auth is admitted
+        return [own_source, team_source]
+
+    assert await toolset_grant_contexts(session, admitted_context, admitted_sources) == (own_source, team_source)
+
+
+@pytest.mark.asyncio
+async def test_toolset_grant_contexts_of_a_gateway_admitted_user_are_its_own_grant_sources():
+    admitted = _admitted("user-1")
+    team_source = UserAPIKeyAuth(user_id="user-1", team_id="team-a")
+
+    async def no_dashboard_context(auth: UserAPIKeyAuth) -> None:
+        return None
+
+    async def admitted_sources(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+        assert auth is admitted
+        return [team_source]
+
+    assert await toolset_grant_contexts(admitted, no_dashboard_context, admitted_sources) == (team_source,)
+
+
+@pytest.mark.asyncio
+async def test_a_source_declaring_its_own_mcp_grant_never_reads_its_team():
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a", object_permission=_toolset_permission("ts-own"))
+    team_reads: list[str | None] = []  # mutable-ok: records the lookups the code under test performs
+
+    async def team_permission(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+        team_reads.append(auth.team_id)
+        return _toolset_permission("ts-team")
+
+    granted = await granted_toolset_ids(key, _same_context, team_permission, require_key_access=False)
+
+    assert granted == {"ts-own"}
+    assert team_reads == []
+
+
+async def _team_a_unreadable(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+    if auth.team_id == "team-a":
+        raise RuntimeError("team row unreadable")
+    return _toolset_permission("ts-b")
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_team_grants_nothing_while_the_direct_and_other_team_grants_still_count():
+    """A dashboard user whose own row grants ts-user and who sits on team-a and team-b keeps ts-user and
+    ts-b when team-a cannot be read; team-a itself contributes nothing rather than failing the lookup."""
+    admitted = _admitted("user-1", _toolset_permission("ts-user"))
+    team_a = UserAPIKeyAuth(user_id="user-1", team_id="team-a")
+    team_b = UserAPIKeyAuth(user_id="user-1", team_id="team-b")
+
+    async def sources(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+        return [admitted, team_a, team_b]
+
+    assert await granted_toolset_ids(admitted, sources, _team_a_unreadable) == {"ts-user", "ts-b"}
+
+
+@pytest.mark.asyncio
+async def test_a_key_whose_only_grant_source_is_an_unreadable_team_is_granted_nothing():
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a")
+
+    assert await granted_toolset_ids(key, _same_context, _team_a_unreadable, require_key_access=False) == frozenset()

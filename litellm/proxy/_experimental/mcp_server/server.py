@@ -66,7 +66,11 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_route_relative_request_path,
     well_known_root_suffix,
 )
-from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids, is_ui_session_credential
+from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    acting_user_auth,
+    granted_toolset_ids,
+    is_ui_session_credential,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -1517,14 +1521,17 @@ if MCP_AVAILABLE:
         toolset_id: str,
     ) -> UserAPIKeyAuth:
         """
-        Restrict a key's MCP permissions to a single toolset.
+        Pin a principal's MCP permissions to a single toolset for /toolset/{name}/mcp.
 
-        When a request arrives via /toolset/{name}/mcp we override the key's
-        object_permission so that only the toolset's tools are visible.
+        A virtual key (and an admin session) has its object_permission rewritten to
+        the toolset's servers and tools. A keyless subject resolves per grant source,
+        so a non-admin dashboard session first becomes its admitted user and the
+        toolset rides along as ``mcp_toolset_id``, which every source's grant is
+        intersected with; a team-granted toolset is served without the user's own
+        row capping it.
 
-        Raises HTTPException(403) unless the key holds toolset_id through one of
-        its grant sources (its own object_permission, its team, or, for a dashboard
-        session, any of the user's teams or the user row). Admin keys always pass.
+        Raises HTTPException(403) unless the principal holds toolset_id through one
+        of its grant sources. Admins always pass.
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
@@ -1540,18 +1547,21 @@ if MCP_AVAILABLE:
                 detail="API key is scoped to no MCP servers; toolset access is denied.",
             )
 
-        is_admin: Final = _user_has_admin_view(user_api_key_auth)
-        if not is_admin and toolset_id not in await granted_toolset_ids(user_api_key_auth):
+        acting: Final = await acting_user_auth(user_api_key_auth)
+        is_admin: Final = _user_has_admin_view(acting)
+        if not is_admin and toolset_id not in await granted_toolset_ids(acting):
             raise HTTPException(
                 status_code=403,
                 detail=f"API key does not have access to toolset '{toolset_id}'.",
             )
+        if _is_mcp_admitted_user_subject(acting):
+            return acting.model_copy(update={"mcp_toolset_id": toolset_id})
 
         tool_permissions = await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(
             toolset_ids=[toolset_id]
         )
         server_ids: Final = list(tool_permissions.keys())
-        existing_op: Final = user_api_key_auth.object_permission
+        existing_op: Final = acting.object_permission
         if existing_op is not None:
             updated_op = existing_op.model_copy(
                 update={
@@ -1568,7 +1578,12 @@ if MCP_AVAILABLE:
                 mcp_servers=server_ids,
                 mcp_tool_permissions=tool_permissions,
             )
-        return user_api_key_auth.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
+        return acting.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
+
+    async def _toolset_server_ids(toolset_id: str) -> set[str]:
+        return set(
+            await operations.global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=[toolset_id])
+        )
 
     async def _raise_preemptive_401_for_unauthenticated_servers(
         scope: Scope,
@@ -1999,8 +2014,7 @@ if MCP_AVAILABLE:
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
-                op: Final = user_api_key_auth.object_permission
-                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+                toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived
@@ -2347,8 +2361,7 @@ if MCP_AVAILABLE:
             toolset_allowed_server_ids: set[str] | None = None
             if active_toolset_id and user_api_key_auth is not None:
                 user_api_key_auth = await _apply_toolset_scope(user_api_key_auth, active_toolset_id)
-                op: Final = user_api_key_auth.object_permission
-                toolset_allowed_server_ids = set(op.mcp_servers or []) if op else set()
+                toolset_allowed_server_ids = await _toolset_server_ids(active_toolset_id)
 
             # https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
             # Must run after toolset scoping so the challenge set is derived

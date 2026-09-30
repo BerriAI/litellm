@@ -131,6 +131,56 @@ class TestApplyToolsetScope:
         assert result.object_permission.mcp_tool_permissions == toolset_perms
 
     @pytest.mark.asyncio
+    async def test_a_non_admin_dashboard_session_is_pinned_as_its_admitted_user_instead_of_rewritten(self):
+        """The dashboard session acts as its admitted user, whose team grants resolve per source, so a
+        team-granted toolset is not capped by the user's own row: the row stays intact and the toolset
+        rides along as mcp_toolset_id (LIT-6029)."""
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+
+        session = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-1")
+        own_row = LiteLLM_ObjectPermissionTable(object_permission_id="user-op", mcp_servers=["server-own"])
+        admitted = UserAPIKeyAuth(user_id="user-1", object_permission=own_row)
+        admitted.mcp_admitted_user_subject = True
+        granted = AsyncMock(return_value=frozenset({"toolset-123"}))
+        resolve = AsyncMock(return_value={"server-team": ["tool1"]})
+        with (
+            patch.object(MCPRequestHandler, "reload_admitted_user", new=AsyncMock(return_value=admitted)),
+            patch("litellm.proxy._experimental.mcp_server.server.granted_toolset_ids", new=granted),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server."
+                "global_mcp_server_manager.resolve_toolset_tool_permissions",
+                new=resolve,
+            ),
+        ):
+            result = await _apply_toolset_scope(session, "toolset-123")
+
+        assert granted.await_args is not None and granted.await_args.args[0].mcp_admitted_user_subject is True
+        assert result.mcp_admitted_user_subject is True
+        assert result.mcp_toolset_id == "toolset-123"
+        assert result.object_permission == own_row
+        resolve.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_gateway_admitted_user_without_the_toolset_in_any_source_is_denied(self):
+        from litellm.proxy._experimental.mcp_server.server import _apply_toolset_scope
+
+        admitted = UserAPIKeyAuth(user_id="user-1", object_permission=None)
+        admitted.mcp_admitted_user_subject = True
+        granted = AsyncMock(return_value=frozenset({"toolset-other"}))
+        with (
+            patch("litellm.proxy._experimental.mcp_server.server.granted_toolset_ids", new=granted),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await _apply_toolset_scope(admitted, "toolset-123")
+
+        assert exc_info.value.status_code == 403
+        granted.assert_awaited_once_with(admitted)
+
+    @pytest.mark.asyncio
     async def test_team_grant_for_another_toolset_does_not_admit_a_key_to_this_one(self):
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
