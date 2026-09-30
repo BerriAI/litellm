@@ -8903,7 +8903,7 @@ def _reported_cost_is_priced_by_calculator(response: ModelResponse, logging_obj:
     if provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS:
         return True
     # same rule the cost calculator applies, so both paths agree on what counts as custom-priced
-    return logging_obj._custom_pricing_for(response)  # pyright: ignore[reportPrivateUsage]
+    return logging_obj._custom_pricing_for(response)  # pyright: ignore[reportPrivateUsage]  # no public accessor
 
 
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
