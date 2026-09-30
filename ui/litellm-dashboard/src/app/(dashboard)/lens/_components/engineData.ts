@@ -127,7 +127,11 @@ export function analysisModelOptions(models: string[], details: AnalysisModelInf
       if (info?.supported_openai_params?.includes("response_format")) return "JSON output supported";
       return "JSON output support unverified";
     };
-    return { value: name, label: name, sublabel: [info?.providers.join(", "), capability()].filter(Boolean).join(" · ") };
+    return {
+      value: name,
+      label: name,
+      sublabel: [info?.providers.join(", "), capability()].filter(Boolean).join(" · "),
+    };
   });
 }
 

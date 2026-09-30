@@ -135,7 +135,13 @@ export function ActivityScope({
             : "An agent run contains the steps recorded under one trace ID. Separate sessions are not joined automatically."}
         </p>
         <label className="grid gap-2 text-sm">
-          {{ requests: "Model group (optional)", traces: "Application (optional)", both: "Application or model group (optional)" }[value.source ?? "traces"]}
+          {
+            {
+              requests: "Model group (optional)",
+              traces: "Application (optional)",
+              both: "Application or model group (optional)",
+            }[value.source ?? "traces"]
+          }
           <Input
             list={`${id}-services`}
             value={value.service}
@@ -149,7 +155,14 @@ export function ActivityScope({
           </datalist>
         </label>
         <p className="text-xs text-muted-foreground">
-          {{ requests: "The model alias configured on your LiteLLM gateway. Leave blank for all models.", both: "Matches the application name on agent runs or the model group on requests. Leave blank to include both without a name filter.", traces: "The service.name recorded by your agent’s OpenTelemetry instrumentation. Leave blank for all applications." }[value.source ?? "traces"]}
+          {
+            {
+              requests: "The model alias configured on your LiteLLM gateway. Leave blank for all models.",
+              both: "Matches the application name on agent runs or the model group on requests. Leave blank to include both without a name filter.",
+              traces:
+                "The service.name recorded by your agent’s OpenTelemetry instrumentation. Leave blank for all applications.",
+            }[value.source ?? "traces"]
+          }
         </p>
         <div className="space-y-2">
           <p className="text-sm font-medium">

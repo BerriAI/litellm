@@ -10,6 +10,8 @@ vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn() } }));
 
 const executionId = btoa(JSON.stringify(["traces", "", "trace-42"]));
 const pattern: Finding = {
+  reason: "",
+  suggestion: "",
   id: "pattern",
   check_id: "check",
   title: "Agents ignored misleading document instructions",
@@ -32,13 +34,23 @@ const issue: Finding = {
   priority: "high",
 };
 const engine: Engine = {
+  version: 0,
+  spent: 0,
   id: "lens",
-  scope: { all_teams: true },
+  scope: { all_teams: true, api_key_hash: "", team_id: "" },
   settings: {
+    context: "",
+    source: "traces",
+    lookback_hours: 24,
+    service: "",
+    filters: [],
+    interval_minutes: 15,
+    sample_size: 100,
+    monthly_budget: 20,
     name: "Release reviews",
     model: "analysis",
     enabled: false,
-    checks: [{ id: "check", instruction: "Find unsupported decisions" }],
+    checks: [{ enabled: true, id: "check", instruction: "Find unsupported decisions" }],
   },
   revision: 1,
   created_at: "2026-09-30T10:00:00Z",
@@ -48,15 +60,38 @@ const engine: Engine = {
   jobs: [
     {
       id: "scan",
+      attempts: 0,
+      error: "",
+      cost: 0,
+      coverage: {
+        eligible: 0,
+        selected: 0,
+        screened: 0,
+        investigated: 0,
+        grouping_batches: 0,
+        grouped_batches: 0,
+        candidates: 0,
+        partial: 0,
+        unassessable: 0,
+      },
       status: "completed",
       stage: "Complete",
       created_at: "2026-09-30T10:00:00Z",
       start: "2026-09-29T10:00:00Z",
       end: "2026-09-30T10:00:00Z",
       settings: {
+        context: "",
+        source: "traces",
+        lookback_hours: 24,
+        service: "",
+        filters: [],
+        interval_minutes: 15,
+        sample_size: 100,
+        monthly_budget: 20,
+        enabled: false,
         name: "Release reviews",
         model: "analysis",
-        checks: [{ id: "check", instruction: "Find unsupported decisions" }],
+        checks: [{ enabled: true, id: "check", instruction: "Find unsupported decisions" }],
       },
       revision: 1,
       sample: {
@@ -64,6 +99,10 @@ const engine: Engine = {
         executions: [
           {
             id: executionId,
+            trace_ref: "",
+            metadata: [],
+            root_seen: true,
+            service: "",
             source: "traces",
             trace_id: "trace-42",
             team_id: "",
@@ -105,7 +144,7 @@ describe("Lens findings and runs", () => {
   it("shows the actual frozen run selection in the Runs tab", async () => {
     const user = userEvent.setup();
     renderWithProviders(<EngineView accessToken="test" readOnly />);
-    await user.click(await screen.findByRole("tab", { name: "Runs", exact: true }));
+    await user.click(await screen.findByRole("tab", { name: "Runs" }));
     expect(screen.getByText("Release-42")).toBeInTheDocument();
     expect(screen.getByText("trace-42")).toBeInTheDocument();
     expect(screen.getByText(/1 selected from 1 matches/)).toBeInTheDocument();

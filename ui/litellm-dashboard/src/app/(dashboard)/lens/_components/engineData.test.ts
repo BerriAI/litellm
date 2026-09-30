@@ -8,7 +8,23 @@ import {
   type Job,
 } from "./engineData";
 
+const coverage: Job["coverage"] = {
+  eligible: 0,
+  selected: 0,
+  screened: 0,
+  investigated: 0,
+  grouping_batches: 0,
+  grouped_batches: 0,
+  candidates: 0,
+  partial: 0,
+  unassessable: 0,
+};
+
 const job: Job = {
+  coverage,
+  attempts: 0,
+  error: "",
+  cost: 0,
   id: "scan",
   status: "running",
   stage: "Reading executions",
@@ -17,18 +33,27 @@ const job: Job = {
   end: "2026-09-30T12:00:00Z",
   revision: 1,
   settings: {
+    context: "",
+    source: "traces",
+    lookback_hours: 24,
+    service: "",
+    filters: [],
+    enabled: false,
+    interval_minutes: 15,
+    sample_size: 100,
+    monthly_budget: 20,
     name: "Release reviews",
     model: "analysis",
-    checks: [{ id: "failures", instruction: "Find failed outcomes" }],
+    checks: [{ enabled: true, id: "failures", instruction: "Find failed outcomes" }],
   },
 };
 
 describe("Analysis progress", () => {
   it("measures review progress against the sample, not all eligible runs", () => {
     const expected = { step: 0, done: 7, total: 20, detail: "7 of 20 selected runs reviewed" };
-    expect(analysisProgress({ ...job, coverage: { eligible: 1000, selected: 20, screened: 7 } })).toMatchObject(
-      expected,
-    );
+    expect(
+      analysisProgress({ ...job, coverage: { ...coverage, eligible: 1000, selected: 20, screened: 7 } }),
+    ).toMatchObject(expected);
   });
 
   it("shows actual grouping progress instead of treating reviewed runs as a finished scan", () => {
@@ -37,13 +62,15 @@ describe("Analysis progress", () => {
       analysisProgress({
         ...job,
         stage: "Grouping observations",
-        coverage: { screened: 21, grouped_batches: 2, grouping_batches: 4 },
+        coverage: { ...coverage, screened: 21, grouped_batches: 2, grouping_batches: 4 },
       }),
     ).toMatchObject(expected);
   });
 
   it("keeps older worker grouping responses indeterminate", () => {
-    expect(analysisProgress({ ...job, stage: "Grouping observations", coverage: { screened: 21 } })).toMatchObject({
+    expect(
+      analysisProgress({ ...job, stage: "Grouping observations", coverage: { ...coverage, screened: 21 } }),
+    ).toMatchObject({
       step: 1,
       total: 0,
       detail: "Comparing observations across 21 reviewed runs",
@@ -55,7 +82,7 @@ describe("Analysis progress", () => {
       analysisProgress({
         ...job,
         stage: "Checking original evidence",
-        coverage: { screened: 21, investigated: 2, candidates: 5 },
+        coverage: { ...coverage, screened: 21, investigated: 2, candidates: 5 },
       }),
     ).toMatchObject({
       step: 2,
@@ -89,6 +116,12 @@ describe("Lens selection and findings", () => {
   });
   it("puts high priority issues ahead of newer low priority findings", () => {
     const base: Finding = {
+      kind: "issue",
+      status: "open",
+      reason: "",
+      suggestion: "",
+      limitation: "",
+      occurrences: [],
       id: "low",
       check_id: "check",
       title: "Recovered error",

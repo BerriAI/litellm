@@ -29,6 +29,10 @@ export function DurationInput({
           { label: "days", scale: 24 },
         ];
   const [scale, setScale] = useState(() => [...units].reverse().find((unit) => value % unit.scale === 0)?.scale ?? 1);
+  function changeUnit(next: number) {
+    onChange((value / scale) * next);
+    setScale(next);
+  }
   return (
     <div className="space-y-2">
       <label htmlFor={id} className="text-sm">
@@ -48,11 +52,7 @@ export function DurationInput({
           aria-label={`${label} unit`}
           value={scale}
           className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            onChange((value / scale) * next);
-            setScale(next);
-          }}
+          onChange={(event) => changeUnit(Number(event.target.value))}
         >
           {units.map((unit) => (
             <option key={unit.scale} value={unit.scale}>

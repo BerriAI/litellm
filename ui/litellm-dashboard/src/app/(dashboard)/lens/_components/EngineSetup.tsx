@@ -62,6 +62,8 @@ export function EngineSetup({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const reviewUnit = { traces: "runs", requests: "requests", both: "runs and requests" }[source];
+
   const settings = (): Settings => ({
     name: name.trim(),
     source,
@@ -202,7 +204,8 @@ export function EngineSetup({
                   </p>
                 ))}
                 <p className="text-muted-foreground">
-                  Up to {sampleSize} matching runs · {questions.split("\n").filter((q) => q.trim()).length} questions
+                  Up to {sampleSize} matching {reviewUnit} · {questions.split("\n").filter((q) => q.trim()).length}{" "}
+                  questions
                 </p>
               </div>
               <div className="space-y-2">
@@ -242,7 +245,7 @@ export function EngineSetup({
                   />
                 </label>
                 <label className="grid gap-2 text-sm">
-                  Runs per scan
+                  Maximum {reviewUnit} to review
                   <Input
                     type="number"
                     min="1"
@@ -252,6 +255,10 @@ export function EngineSetup({
                   />
                 </label>
               </div>
+              <p className="text-xs text-muted-foreground">
+                Each scan reviews up to this many matching recorded {reviewUnit}. If more match, Lens reviews a sample.
+                A higher limit takes longer and costs more.
+              </p>
               <fieldset className="space-y-3">
                 <legend className="mb-2 text-sm font-medium">When to run</legend>
                 <label className="flex items-center gap-2 text-sm">

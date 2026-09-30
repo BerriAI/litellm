@@ -1,6 +1,6 @@
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import Final, Protocol, TypedDict, cast
 from types import MappingProxyType
+from typing import Final, Protocol, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
