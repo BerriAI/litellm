@@ -1,6 +1,7 @@
 import React from "react";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AttachmentTable from "./AttachmentTable";
@@ -181,5 +182,81 @@ describe("AttachmentTable", () => {
     const attachments = [makeAttachment({ tags: ["prod"] })];
     renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
     expect(screen.getByText("prod")).toBeInTheDocument();
+  });
+
+  describe("URL table state under the att_ prefix", () => {
+    const olderAlpha = makeAttachment({
+      attachment_id: "att-old0001",
+      policy_name: "policy-alpha",
+      created_at: "2023-01-01T00:00:00Z",
+    });
+    const newerZeta = makeAttachment({
+      attachment_id: "att-new0001",
+      policy_name: "policy-zeta",
+      created_at: "2025-01-01T00:00:00Z",
+    });
+    const manyAttachments = Array.from({ length: 30 }, (_, index) =>
+      makeAttachment({
+        attachment_id: `att-${index}`,
+        policy_name: `policy-${String(index).padStart(2, "0")}`,
+        created_at: `2024-01-${String(index + 1).padStart(2, "0")}T00:00:00Z`,
+      }),
+    );
+    const rowNames = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getByText(/^policy-/).textContent);
+    const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0];
+
+    it("orders rows by the prefixed sort in the URL", () => {
+      renderWithProviders(<AttachmentTable {...defaultProps} attachments={[newerZeta, olderAlpha]} />, {
+        searchParams: "?att_sort_by=policy_name&att_sort_order=asc",
+      });
+      expect(rowNames()).toEqual(["policy-alpha", "policy-zeta"]);
+    });
+
+    it("ignores the unprefixed sort keys that belong to the policies table", () => {
+      renderWithProviders(<AttachmentTable {...defaultProps} attachments={[olderAlpha, newerZeta]} />, {
+        searchParams: "?sort_by=policy_name&sort_order=asc",
+      });
+      expect(rowNames()).toEqual(["policy-zeta", "policy-alpha"]);
+    });
+
+    it("writes the sort under the prefix when a header is clicked", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AttachmentTable {...defaultProps} attachments={[newerZeta, olderAlpha]} />, {
+        onUrlUpdate,
+      });
+
+      await user.click(screen.getByTestId("sort-header-policy_name"));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("att_sort_by")).toBe("policy_name"));
+      const params = lastUrlUpdate(onUrlUpdate)?.searchParams;
+      expect(params?.get("att_sort_order")).toBe("asc");
+      expect(params?.has("sort_by")).toBe(false);
+      expect(rowNames()).toEqual(["policy-alpha", "policy-zeta"]);
+    });
+
+    it("opens the prefixed page named in the URL", () => {
+      renderWithProviders(<AttachmentTable {...defaultProps} attachments={manyAttachments} />, {
+        searchParams: "?att_page=2&page=1",
+      });
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+      expect(rowNames()).toEqual(["policy-04", "policy-03", "policy-02", "policy-01", "policy-00"]);
+    });
+
+    it("writes the page under the prefix when paging forward", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<AttachmentTable {...defaultProps} attachments={manyAttachments} />, { onUrlUpdate });
+
+      await user.click(screen.getByRole("button", { name: "Go to next page" }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("att_page")).toBe("2"));
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("page")).toBe(false);
+    });
   });
 });

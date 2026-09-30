@@ -6,7 +6,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/lib/toast";
 import { Info, TriangleAlert, X } from "lucide-react";
 import { isAdminRole } from "@/utils/roles";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import PolicyTable from "./PolicyTable";
+import { usePolicyUrlState } from "./usePolicyUrlState";
 import PolicyInfoView from "./policy_info";
 import AddPolicyForm from "./add_policy_form";
 import { FlowBuilderPage } from "./pipeline_flow_builder";
@@ -81,6 +83,8 @@ const AboutPoliciesAlert = () => (
   </DismissibleAlert>
 );
 
+const POLICY_TABS = ["templates", "policies", "attachments", "simulator"] as const;
+
 interface PoliciesPanelProps {
   accessToken: string | null;
   userRole?: string;
@@ -94,9 +98,9 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   const [isAttachmentsLoading, setIsAttachmentsLoading] = useState(false);
   const [isAddPolicyModalVisible, setIsAddPolicyModalVisible] = useState(false);
   const [isAddAttachmentModalVisible, setIsAddAttachmentModalVisible] = useState(false);
-  const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
-  const [selectedPolicyId, setSelectedPolicyId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>("templates");
+  const [templatePrefill, setTemplatePrefill] = useState<Policy | null>(null);
+  const [hasFetchedPolicies, setHasFetchedPolicies] = useState(false);
+  const [activeTab, setActiveTab] = useUrlTab(POLICY_TABS, "templates");
   const [isDeleting, setIsDeleting] = useState(false);
   const [policyToDelete, setPolicyToDelete] = useState<Policy | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -106,7 +110,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
   const [existingGuardrailNames, setExistingGuardrailNames] = useState<Set<string>>(new Set());
   const [isCreatingGuardrails, setIsCreatingGuardrails] = useState(false);
-  const [showFlowBuilder, setShowFlowBuilder] = useState(false);
+  const [isNewPolicyFlowOpen, setIsNewPolicyFlowOpen] = useState(false);
   const [isParameterModalOpen, setIsParameterModalOpen] = useState(false);
   const [isEnrichingTemplate, setIsEnrichingTemplate] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<any>(null);
@@ -129,6 +133,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       toast.error("Failed to fetch policies");
     } finally {
       setIsLoading(false);
+      setHasFetchedPolicies(true);
     }
   }, [accessToken]);
 
@@ -164,22 +169,48 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
     fetchGuardrails();
   }, [fetchPolicies, fetchAttachments, fetchGuardrails]);
 
+  const {
+    selectedPolicyId,
+    selectPolicy,
+    editPolicyId,
+    editingPolicy,
+    isEditingPolicyPending,
+    openPolicyEditor,
+    showPolicyVersion,
+    closePolicyEditor,
+  } = usePolicyUrlState({ policies: policiesList, hasFetched: hasFetchedPolicies, isLoading });
+
+  const [deepLinkNeedsPoliciesTab] = useState(
+    () => activeTab === "templates" && (selectedPolicyId !== null || editPolicyId !== null),
+  );
+  useEffect(() => {
+    if (deepLinkNeedsPoliciesTab) setActiveTab("policies");
+  }, [deepLinkNeedsPoliciesTab, setActiveTab]);
+
+  const editPolicy = (policy: Policy) => {
+    setIsNewPolicyFlowOpen(false);
+    openPolicyEditor(policy);
+  };
+
+  const closeFlowBuilder = () => {
+    setIsNewPolicyFlowOpen(false);
+    closePolicyEditor();
+  };
+
   const handleAddPolicy = () => {
-    if (selectedPolicyId) {
-      setSelectedPolicyId(null);
-    }
-    setEditingPolicy(null);
+    selectPolicy(null);
+    setTemplatePrefill(null);
     setIsAddPolicyModalVisible(true);
   };
 
   const handleCloseModal = () => {
     setIsAddPolicyModalVisible(false);
-    setEditingPolicy(null);
+    setTemplatePrefill(null);
   };
 
   const handleSuccess = () => {
     fetchPolicies();
-    setEditingPolicy(null);
+    setTemplatePrefill(null);
   };
 
   const handleDeleteClick = (policyId: string, policyName: string) => {
@@ -361,7 +392,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       setIsCreatingGuardrails(false);
 
       // Pre-fill the add policy form with template data
-      setEditingPolicy(selectedTemplate.templateData as Policy);
+      setTemplatePrefill(selectedTemplate.templateData as Policy);
       setIsAddPolicyModalVisible(true);
       setActiveTab("policies");
 
@@ -406,16 +437,20 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
     setTemplateQueueProgress(null);
   };
 
-  if (showFlowBuilder) {
+  if (isEditingPolicyPending) {
+    return (
+      <div role="status" className="m-8 p-2 text-sm text-muted-foreground">
+        Loading policy…
+      </div>
+    );
+  }
+
+  if (editingPolicy !== null || isNewPolicyFlowOpen) {
     return (
       <FlowBuilderPage
-        onBack={() => {
-          setShowFlowBuilder(false);
-          setEditingPolicy(null);
-        }}
+        onBack={closeFlowBuilder}
         onSuccess={() => {
           fetchPolicies();
-          setEditingPolicy(null);
         }}
         accessToken={accessToken}
         editingPolicy={editingPolicy}
@@ -423,14 +458,12 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         createPolicy={createPolicyCall}
         updatePolicy={updatePolicyCall}
         onVersionCreated={(newPolicy) => {
-          setEditingPolicy(newPolicy);
+          editPolicy(newPolicy);
           fetchPolicies();
         }}
-        onSelectVersion={(policy) => {
-          setEditingPolicy(policy);
-        }}
+        onSelectVersion={editPolicy}
         onVersionStatusUpdated={(updatedPolicy) => {
-          setEditingPolicy(updatedPolicy);
+          showPolicyVersion(updatedPolicy);
           fetchPolicies();
         }}
       />
@@ -477,12 +510,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
           {selectedPolicyId ? (
             <PolicyInfoView
               policyId={selectedPolicyId}
-              onClose={() => setSelectedPolicyId(null)}
-              onEdit={(policy) => {
-                setEditingPolicy(policy);
-                setSelectedPolicyId(null);
-                setShowFlowBuilder(true);
-              }}
+              onClose={() => selectPolicy(null)}
+              onEdit={editPolicy}
               accessToken={accessToken}
               isAdmin={isAdmin}
               getPolicy={getPolicyInfo}
@@ -492,11 +521,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
               policies={policiesList}
               isLoading={isLoading}
               onDeleteClick={handleDeleteClick}
-              onEditClick={(policy) => {
-                setEditingPolicy(policy);
-                setShowFlowBuilder(true);
-              }}
-              onViewClick={(policyId) => setSelectedPolicyId(policyId)}
+              onEditClick={editPolicy}
+              onViewClick={selectPolicy}
               isAdmin={isAdmin}
             />
           )}
@@ -507,10 +533,10 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
             onSuccess={handleSuccess}
             onOpenFlowBuilder={() => {
               setIsAddPolicyModalVisible(false);
-              setShowFlowBuilder(true);
+              setIsNewPolicyFlowOpen(true);
             }}
             accessToken={accessToken}
-            editingPolicy={editingPolicy}
+            editingPolicy={templatePrefill}
             existingPolicies={policiesList}
             availableGuardrails={guardrailsList}
             createPolicy={createPolicyCall}

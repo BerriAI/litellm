@@ -22,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, ChevronRight, CopyIcon } from "lucide-react";
+import { useTagUrlState } from "./useTagUrlState";
 
 const tagEditShape = {
   name: z.string().min(1, "Please input a tag name"),
@@ -147,12 +148,15 @@ interface TagInfoViewProps {
   onClose: () => void;
   accessToken: string | null;
   is_admin: boolean;
-  editTag: boolean;
 }
 
-const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
-  const [tagDetails, setTagDetails] = useState<Tag | null>(null);
-  const [isEditing, setIsEditing] = useState<boolean>(editTag);
+type TagDetailsState = { status: "loading" } | { status: "loaded"; tag: Tag } | { status: "not_found" };
+
+const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin }) => {
+  const [details, setDetails] = useState<TagDetailsState>({ status: "loading" });
+  const [{ edit: isEditing }, setTagUrl] = useTagUrlState();
+  const [openedInEditMode] = useState(isEditing);
+  const setIsEditing = (edit: boolean) => void setTagUrl({ edit });
   const [userModels, setUserModels] = useState<string[]>([]);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
 
@@ -171,12 +175,11 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
     try {
       const response = await tagInfoCall(accessToken, [tagId]);
       const tagData = response[tagId];
-      if (tagData) {
-        setTagDetails(tagData);
-      }
+      setDetails(tagData ? { status: "loaded", tag: tagData } : { status: "not_found" });
     } catch (error) {
       console.error("Error fetching tag details:", error);
       toast.fromError("Error fetching tag details: " + error);
+      setDetails((current) => (current.status === "loaded" ? current : { status: "not_found" }));
     }
   };
 
@@ -213,17 +216,32 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
     }
   };
 
-  if (!tagDetails) {
+  if (details.status === "loading") {
     return <div>Loading...</div>;
   }
+
+  const backButton = (
+    <Button onClick={onClose} className="mb-4">
+      ← Back to Tags
+    </Button>
+  );
+
+  if (details.status === "not_found") {
+    return (
+      <div className="p-4">
+        {backButton}
+        <p className="text-sm text-destructive">Tag not found</p>
+      </div>
+    );
+  }
+
+  const tagDetails = details.tag;
 
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <Button onClick={onClose} className="mb-4">
-            ← Back to Tags
-          </Button>
+          {backButton}
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium">Tag Name:</span>
             <span className="font-mono px-2 py-1 bg-muted rounded-sm text-sm border border-border">
@@ -252,7 +270,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
           <CardContent>
             <TagEditForm
               tag={tagDetails}
-              seedBudgetFields={editTag}
+              seedBudgetFields={openedInEditMode}
               userModels={userModels}
               onCancel={() => setIsEditing(false)}
               onSave={handleSave}

@@ -1,6 +1,7 @@
 import React from "react";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PolicyTable from "./PolicyTable";
@@ -174,5 +175,63 @@ describe("PolicyTable", () => {
     expect(defaultProps.onViewClick).toHaveBeenCalledWith("db-draft-id");
     await user.click(screen.getByTestId("policy-actions-db-draft-id"));
     expect(await screen.findByTestId("policy-action-edit")).not.toHaveAttribute("data-disabled");
+  });
+
+  describe("URL table state", () => {
+    const olderZeta = makePolicy({ policy_name: "policy-zeta", policy_id: "id-z", created_at: "2023-01-01T00:00:00Z" });
+    const newerAlpha = makePolicy({
+      policy_name: "policy-alpha",
+      policy_id: "id-a",
+      created_at: "2025-01-01T00:00:00Z",
+    });
+    const manyPolicies = Array.from({ length: 30 }, (_, index) =>
+      makePolicy({ policy_name: `policy-${String(index).padStart(2, "0")}`, policy_id: `id-${index}` }),
+    );
+    const rowNames = () =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => within(row).getByRole("button", { name: /^policy-/ }).textContent);
+    const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0];
+
+    it("orders rows by the sort in the URL", () => {
+      renderWithProviders(<PolicyTable {...defaultProps} policies={[olderZeta, newerAlpha]} />, {
+        searchParams: "?sort_by=created_at&sort_order=asc",
+      });
+      expect(rowNames()).toEqual(["policy-zeta", "policy-alpha"]);
+    });
+
+    it("writes the sort to the URL as a header cycles through directions", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PolicyTable {...defaultProps} policies={[olderZeta, newerAlpha]} />, { onUrlUpdate });
+
+      await user.click(screen.getByTestId("sort-header-created_at"));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sort_by")).toBe("created_at"));
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("sort_order")).toBe(false);
+      expect(rowNames()).toEqual(["policy-zeta", "policy-alpha"]);
+
+      await user.click(screen.getByTestId("sort-header-created_at"));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("sort_order")).toBe("desc"));
+      expect(rowNames()).toEqual(["policy-alpha", "policy-zeta"]);
+    });
+
+    it("opens the page named in the URL", () => {
+      renderWithProviders(<PolicyTable {...defaultProps} policies={manyPolicies} />, { searchParams: "?page=2" });
+      expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+      expect(rowNames()).toEqual(["policy-25", "policy-26", "policy-27", "policy-28", "policy-29"]);
+    });
+
+    it("writes the page to the URL when paging forward", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PolicyTable {...defaultProps} policies={manyPolicies} />, { onUrlUpdate });
+
+      await user.click(screen.getByRole("button", { name: "Go to next page" }));
+
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("page")).toBe("2"));
+      expect(rowNames()[0]).toBe("policy-25");
+    });
   });
 });

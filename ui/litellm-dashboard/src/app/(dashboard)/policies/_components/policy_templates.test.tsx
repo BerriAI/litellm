@@ -1,6 +1,7 @@
 import React from "react";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
@@ -150,5 +151,65 @@ describe("PolicyTemplates", () => {
   it("should not fetch templates when accessToken is null", () => {
     renderWithProviders(<PolicyTemplates {...defaultProps} accessToken={null} />);
     expect(networking.getPolicyTemplates).not.toHaveBeenCalled();
+  });
+
+  describe("?template_tags= filter", () => {
+    const taggedTemplates = [
+      makeTemplate({ id: "tpl-1", title: "Alpha Template", tags: ["alpha"] }),
+      makeTemplate({ id: "tpl-2", title: "Beta Template", tags: ["beta"] }),
+      makeTemplate({ id: "tpl-3", title: "Both Template", tags: ["alpha", "beta"] }),
+    ];
+    const lastUrlUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
+      onUrlUpdate.mock.calls.at(-1)?.[0];
+
+    beforeEach(() => {
+      vi.mocked(networking.getPolicyTemplates).mockResolvedValue(taggedTemplates);
+    });
+
+    it("applies the tags in the URL on load", async () => {
+      renderWithProviders(<PolicyTemplates {...defaultProps} />, { searchParams: "?template_tags=alpha,beta" });
+
+      expect(await screen.findByText("Both Template")).toBeInTheDocument();
+      expect(screen.queryByText("Alpha Template")).not.toBeInTheDocument();
+      expect(screen.queryByText("Beta Template")).not.toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: /alpha/i })).toBeChecked();
+      expect(screen.getByRole("checkbox", { name: /beta/i })).toBeChecked();
+    });
+
+    it("writes each toggled tag to the URL and drops the key when the last one is unchecked", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PolicyTemplates {...defaultProps} />, { onUrlUpdate });
+      await screen.findByText("Alpha Template");
+
+      await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("template_tags")).toBe("alpha"));
+
+      await user.click(screen.getByRole("checkbox", { name: /beta/i }));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("template_tags")).toBe("alpha,beta"));
+
+      await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.get("template_tags")).toBe("beta"));
+
+      await user.click(screen.getByRole("checkbox", { name: /beta/i }));
+      await waitFor(() => expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("template_tags")).toBe(false));
+      expect(screen.getByText("Alpha Template")).toBeInTheDocument();
+    });
+
+    it("removes the key from the URL when Clear all is clicked", async () => {
+      const user = userEvent.setup();
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PolicyTemplates {...defaultProps} />, {
+        searchParams: "?template_tags=beta",
+        onUrlUpdate,
+      });
+      await screen.findByText("Beta Template");
+
+      await user.click(screen.getByRole("button", { name: /^clear all$/i }));
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("template_tags")).toBe(false);
+      expect(screen.getByText("Alpha Template")).toBeInTheDocument();
+    });
   });
 });
