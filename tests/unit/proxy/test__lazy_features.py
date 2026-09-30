@@ -1,4 +1,6 @@
 import sys
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from types import ModuleType
 from typing import Final
 
@@ -39,7 +41,7 @@ def _has_lazy_middleware(app: FastAPI) -> bool:
 
 
 @pytest.mark.parametrize("value", ("1", "true", "TRUE", "yes", "on"))
-def test_flag_registers_every_feature_while_the_app_is_built(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+def test_flag_registers_every_feature_at_startup(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv(FLAG, value)
     features: Final = (
         _feature_module(monkeypatch, "alpha", "/alpha/list"),
@@ -49,13 +51,39 @@ def test_flag_registers_every_feature_while_the_app_is_built(monkeypatch: pytest
 
     attach_lazy_features(app, features)
 
-    assert {"/alpha/list", "/beta/list"} <= set(_paths(app))
     assert WARMUP_PATH not in _paths(app)
     assert not _has_lazy_middleware(app)
-    assert loaded_lazy_modules(app) == {features[0].module_path, features[1].module_path}
+    assert loaded_lazy_modules(app) == set()
     with TestClient(app) as client:
+        at_startup: Final = _paths(app)
+        assert {"/alpha/list", "/beta/list"} <= set(at_startup)
+        assert loaded_lazy_modules(app) == {features[0].module_path, features[1].module_path}
         assert client.get("/beta/list").json() == {"feature": "beta"}
         assert client.post("/lazy/warm/alpha").status_code == 404
+        assert _paths(app) == at_startup, "first feature request changed the table"
+
+
+def test_flag_registers_before_the_inner_lifespan_and_after_late_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(FLAG, "true")
+    features: Final = (_feature_module(monkeypatch, "epsilon", "/epsilon/{name}"),)
+    seen_by_inner_lifespan: Final[list[tuple[str, ...]]] = []  # mutable-ok: captured from inside the lifespan
+
+    @asynccontextmanager
+    async def inner_lifespan(app_: FastAPI) -> AsyncGenerator[None]:
+        seen_by_inner_lifespan.append(_paths(app_))
+        yield
+
+    async def late() -> dict[str, str]:
+        return {"feature": "late"}
+
+    app: Final = FastAPI(lifespan=inner_lifespan)
+    attach_lazy_features(app, features)
+    app.add_api_route("/epsilon/list", late, methods=["GET"])
+
+    with TestClient(app) as client:
+        assert client.get("/epsilon/list").json() == {"feature": "late"}, "late eager route must win, as in lazy mode"
+        assert client.get("/epsilon/x").json() == {"feature": "epsilon"}
+    assert seen_by_inner_lifespan == [_paths(app)], "startup hooks inside the proxy lifespan must see the full table"
 
 
 @pytest.mark.parametrize("value", (None, "", "0", "false", "off"))
@@ -89,9 +117,9 @@ def test_flag_keeps_registering_after_one_feature_fails_to_import(monkeypatch: p
 
     attach_lazy_features(app, (broken, healthy))
 
-    assert "/delta/list" in _paths(app)
-    assert loaded_lazy_modules(app) == {broken.module_path, healthy.module_path}
     with TestClient(app) as client:
+        assert "/delta/list" in _paths(app)
+        assert loaded_lazy_modules(app) == {broken.module_path, healthy.module_path}
         assert client.get("/delta/list").json() == {"feature": "delta"}
         assert client.get("/broken").status_code == 404
 

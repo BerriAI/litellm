@@ -11,14 +11,15 @@ instead, so the route table is complete before the first request.
 import asyncio
 import importlib
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from starlette.routing import BaseRoute, Match
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Lifespan, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.route_priority import hot_routes_first
@@ -506,10 +507,25 @@ def register_all_features(app: "FastAPI", features: tuple[LazyFeature, ...] = LA
 
 def attach_lazy_features(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> None:
     if lazy_routes_disabled():
-        register_all_features(app, features)
+        app.router.lifespan_context = _register_all_on_startup(app.router.lifespan_context, features)
         return
     app.include_router(_make_warmup_router(app, features))
     app.add_middleware(LazyFeatureMiddleware, fastapi_app=app, features=features)
+
+
+def _register_all_on_startup(inner: "Lifespan[FastAPI]", features: tuple[LazyFeature, ...]) -> "Lifespan[FastAPI]":
+    """Registering at startup, once every route the app defines exists, lands the features
+    where lazy mode splices them: after every eager route (so /mcp/proxy, defined after
+    attach_lazy_features(), still beats the /mcp mount) and before LITELLM_WORKER_STARTUP_HOOKS
+    or an outer lifespan can filter the table."""
+
+    @asynccontextmanager
+    async def lifespan(app: "FastAPI") -> AsyncGenerator[None]:
+        register_all_features(app, features)
+        async with inner(app):
+            yield
+
+    return lifespan
 
 
 def _make_warmup_router(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY_FEATURES) -> "APIRouter":
