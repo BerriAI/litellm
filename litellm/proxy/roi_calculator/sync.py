@@ -210,6 +210,35 @@ async def _estimate_with_fallback(
         return estimate
 
 
+async def _unavailable_record(github: GitHub, repo: str, pull: GitHubPullListItem, error: SourceError) -> ROIPullRecord:
+    login: Final = pull.user.login if pull.user and pull.user.login else "deleted-user"
+    profile: Final = await github.profile_email(login)
+    estimate: Final[ROIEstimate] = {
+        "status": "needs_review",
+        "hours": None,
+        "reasoning": f"PR metadata could not be read: {error} Run analysis again to retry this PR.",
+    }
+    return ROIPullRecord(
+        repo=repo,
+        number=pull.number,
+        title=pull.title,
+        url=pull.html_url,
+        login=login,
+        emails=(profile,) if profile else (),
+        profile_email=profile,
+        commit_emails=(),
+        merged_at=pull.merged_at or pull.updated_at,
+        head_sha=pull.head.sha if pull.head else "",
+        additions=0,
+        deletions=0,
+        changed_files=0,
+        commit_count=0,
+        incomplete_metadata=True,
+        estimate=estimate,
+        cache_key=None,
+    )
+
+
 class SyncManager:
     def __init__(
         self,
@@ -398,7 +427,12 @@ class SyncManager:
                     )
                     self._update_estimate_progress(cached_record["estimate"])
                     return index, cached_record
-                evidence: Final = await github.evidence(repo, pull)
+                try:
+                    evidence: Final = await github.evidence(repo, pull)
+                except SourceError as exc:
+                    unavailable: Final = await _unavailable_record(github, repo, pull, exc)
+                    self._update_estimate_progress(unavailable["estimate"])
+                    return index, unavailable
                 estimate: Final = await _estimate_with_fallback(estimator, evidence)
                 evidence_item: Final = GitHubPullListItem.model_validate(
                     MappingProxyType(

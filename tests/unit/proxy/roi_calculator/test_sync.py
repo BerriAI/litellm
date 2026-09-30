@@ -10,6 +10,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.proxy.roi_calculator.estimator import CompletionCaller
+from litellm.proxy.roi_calculator.github import GitHubPullListItem
 from litellm.proxy.roi_calculator.sync import SpendReader, SyncManager, read_spend
 from litellm.types.roi_calculator import (
     ROICompletionRequest,
@@ -274,7 +275,7 @@ async def test_read_spend_joins_user_emails_and_preserves_unmatched_identities()
 
 
 @pytest.mark.asyncio
-async def test_sync_does_not_persist_a_report_when_github_fails() -> None:
+async def test_unreadable_pr_is_reported_and_retried_on_next_run() -> None:
     repository: Final = _ReportRepository()
     manager: Final = SyncManager(clock=_fixed_now)
 
@@ -287,8 +288,19 @@ async def test_sync_does_not_persist_a_report_when_github_fails() -> None:
     )
     await _wait_until_finished(manager)
 
-    assert not repository.values
-    assert manager.status.phase == "error"
+    assert manager.status.phase == "complete"
+    assert manager.status.needs_attention == 1
+    failed: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert failed["pulls"][0]["estimate"]["status"] == "needs_review"
+    assert failed["pulls"][0]["estimate"]["hours"] is None
+    assert failed["pulls"][0]["incomplete_metadata"] is True
+    assert failed["pulls"][0]["cache_key"] is None
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), _transport())
+    await _wait_until_finished(manager)
+    recovered: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert recovered["pulls"][0]["estimate"]["status"] == "estimated"
+    assert recovered["pulls"][0]["estimate"]["hours"] == 4
+    assert manager.status.reused == 0
 
 
 @pytest.mark.asyncio
@@ -411,3 +423,31 @@ async def test_expired_lease_can_restart_without_restarting_the_gateway() -> Non
     assert cancelled.is_set()
     assert manager.status.phase == "complete"
     assert manager.status.estimated == 1
+
+
+@pytest.mark.asyncio
+async def test_one_unreadable_pr_preserves_other_estimates_in_report() -> None:
+    baseline: Final = _transport()
+    listed: Final = TypeAdapter(tuple[GitHubPullListItem, ...]).validate_json(_PULL_LIST_JSON)[0]
+    second: Final = listed.model_copy(update=MappingProxyType({"number": 43}))
+    listing: Final = TypeAdapter(tuple[GitHubPullListItem, ...]).dump_json((listed, second))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/org/repo/pulls":
+            return httpx.Response(200, content=listing)
+        if request.url.path == "/repos/org/repo/pulls/43":
+            return httpx.Response(404)
+        return baseline.handle_request(request)
+
+    repository: Final = _ReportRepository()
+    manager: Final = SyncManager(clock=_fixed_now)
+    assert await manager.start(_settings(), repository, _spend_reader(), _completion(), httpx.MockTransport(respond))
+    await _wait_until_finished(manager)
+    report: Final = TypeAdapter(ROIReport).validate_python(repository.values["roi_calculator_report"])
+    assert tuple((pull["number"], pull["estimate"]["status"]) for pull in report["pulls"]) == (
+        (42, "estimated"),
+        (43, "needs_review"),
+    )
+    assert manager.status.phase == "complete"
+    assert manager.status.estimated == 1
+    assert manager.status.needs_attention == 1

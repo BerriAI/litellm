@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -19,7 +20,7 @@ from litellm.proxy.management_endpoints.roi_calculator_endpoints import (
 )
 from litellm.proxy.roi_calculator.estimator import estimator_options
 from litellm.proxy.roi_calculator.sample import sample_report
-from litellm.types.roi_calculator import ROISettings, ROISyncStatus
+from litellm.types.roi_calculator import ROIReport, ROISettings, ROISyncStatus
 
 _JSON_HEADERS: Final = MappingProxyType({"content-type": "application/json"})
 
@@ -209,3 +210,29 @@ def test_schedule_normalizes_legacy_and_offset_timestamps(anchor: str) -> None:
     )
     report: Final = sample_report(datetime(2026, 9, 30, tzinfo=timezone.utc))
     assert _next_update(settings, status, report) == datetime(2026, 9, 30, 13, tzinfo=timezone.utc)
+
+
+def test_manual_match_recalculates_saved_report_and_removal_restores_cohort() -> None:
+    repository: Final = _ConfigRepository()
+    report: Final[ROIReport] = {**sample_report(datetime(2026, 9, 30, tzinfo=timezone.utc)), "mode": "live"}
+    serialized: Final = TypeAdapter(dict[str, object]).validate_json(TypeAdapter(ROIReport).dump_json(report))
+    asyncio.run(repository.set_param("roi_calculator_report", serialized))
+    client: Final = _client(LitellmUserRoles.PROXY_ADMIN, repository)
+    before: Final = client.get("/roi-calculator/report")
+    assert before.status_code == 200
+    assert before.json()["report"]["metrics"]["output_hours"] == 10.5
+    matched: Final = client.put(
+        "/roi-calculator/identity-map",
+        content='{"github_login":" CASEY ","email":"Alex@Example.com"}',
+        headers=_JSON_HEADERS,
+    )
+    assert matched.status_code == 200
+    assert matched.json()["identity_map"]["casey"] == "alex@example.com"
+    assert matched.json()["report"]["metrics"]["output_hours"] == 16
+    assert matched.json()["report"]["metrics"]["cost_per_hour"] == pytest.approx(31 / 16)
+    removed: Final = client.put(
+        "/roi-calculator/identity-map", content='{"github_login":"casey","email":null}', headers=_JSON_HEADERS
+    )
+    assert removed.status_code == 200
+    assert not removed.json()["identity_map"]
+    assert removed.json()["report"]["metrics"] == before.json()["report"]["metrics"]

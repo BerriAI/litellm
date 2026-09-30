@@ -127,7 +127,14 @@ class SyncStore:
 
     async def cancel(self) -> None:
         await self._db.execute_raw(
-            """UPDATE "LiteLLM_Config" SET param_value = jsonb_set(param_value, '{cancel}', 'true'::jsonb)
+            """UPDATE "LiteLLM_Config"
+               SET param_value = param_value || jsonb_build_object(
+                   'cancel', true, 'owner', '',
+                   'status', (param_value->'status') || jsonb_build_object(
+                       'running', false, 'phase', 'cancelled', 'stage', 'Sync cancelled',
+                       'finished_at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"+00:00"')
+                   )
+               ), last_run_at = NOW()
                WHERE param_name = $1 AND param_value->'status'->>'running' = 'true' """,
             _SYNC_KEY,
         )

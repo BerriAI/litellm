@@ -110,7 +110,7 @@ async def get_roi_config_repository(
             status_code=500,
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
-    return ConfigRepository(prisma_client)
+    return ConfigRepository(prisma_client, use_writer=True)
 
 
 def get_roi_sync_manager() -> SyncManager:
@@ -561,7 +561,7 @@ async def run_scheduled_sync() -> None:
 
     if prisma_client is None:
         return
-    repository: Final = ConfigRepository(prisma_client)
+    repository: Final = ConfigRepository(prisma_client, use_writer=True)
     settings: Final = await _load_settings(repository)
     if not settings.update_interval_minutes or not _public_settings(settings).ready:
         return

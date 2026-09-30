@@ -9,6 +9,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.roi_calculator.sample import sample_report
 from litellm.proxy.roi_calculator.sync_store import SyncStore
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.roi_calculator import ROIPullRecord, ROIReport, ROISyncStatus
 from tests.integration._support.database import read_rows, scratch_database, write_rows
 
@@ -18,7 +19,7 @@ async def test_roi_cache_survives_scope_changes_and_uses_writer(monkeypatch: pyt
     with scratch_database() as writer_url, scratch_database() as reader_url:
         write_rows(
             'CREATE TABLE "LiteLLM_Config" (param_name TEXT PRIMARY KEY, param_value JSONB NOT NULL, '
-            "last_run_at TIMESTAMP NOT NULL DEFAULT NOW())",
+            "last_run_at TIMESTAMP NOT NULL DEFAULT NOW(), reload_revision BIGINT NOT NULL DEFAULT 0)",
             (),
             database_url=writer_url,
         )
@@ -29,6 +30,13 @@ async def test_roi_cache_survives_scope_changes_and_uses_writer(monkeypatch: pyt
         await client.connect()
         try:
             store: Final = SyncStore(client)
+            repository: Final = ConfigRepository(client, use_writer=True)
+            await repository.set_param("roi_calculator_settings", '{"repos":["example/repo"]}')
+            settings_row: Final = await repository.get_param("roi_calculator_settings")
+            assert settings_row is not None
+            assert TypeAdapter(dict[str, tuple[str, ...]]).validate_python(settings_row.param_value)["repos"] == (
+                "example/repo",
+            )
             report: Final = sample_report(datetime(2026, 9, 30, tzinfo=timezone.utc))
             pull: Final[ROIPullRecord] = {
                 **report["pulls"][0],
@@ -70,6 +78,12 @@ async def test_roi_cache_survives_scope_changes_and_uses_writer(monkeypatch: pyt
                     database_url=writer_url,
                 )
             ) == ("roi_calculator_pull_new", "roi_calculator_pull_outside-window")
+            published: Final = await repository.get_param("roi_calculator_report")
+            assert published is not None
+            assert TypeAdapter(ROIReport).validate_python(published.param_value)["pulls"] == (pull,)
+            cached: Final = await repository.get_param("roi_calculator_pull_new")
+            assert cached is not None
+            assert TypeAdapter(ROIPullRecord).validate_python(cached.param_value)["cache_key"] == "new"
             assert not await store.acquire("scheduled", running, 1440)
             assert await store.acquire("manual", running)
             write_rows(
@@ -94,5 +108,12 @@ async def test_roi_cache_survives_scope_changes_and_uses_writer(monkeypatch: pyt
                 )
                 == 2
             )
+            assert await store.acquire("remote", running)
+            await store.cancel()
+            cancelled: Final = await store.status()
+            assert cancelled is not None and cancelled.phase == "cancelled" and not cancelled.running
+            assert not await store.heartbeat("remote", running)
+            assert not await store.finish("remote", complete, narrowed)
+            assert await store.acquire("after-cancel", running)
         finally:
             await client.disconnect()

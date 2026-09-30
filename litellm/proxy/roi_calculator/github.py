@@ -37,6 +37,7 @@ class _GitHubHead(_GitHubModel):
 
 class GitHubPullListItem(_GitHubModel):
     number: int
+    html_url: str = ""
     merged_at: str | None = None
     updated_at: str
     title: str
