@@ -1,4 +1,5 @@
 import asyncio
+from typing import Final
 import json
 import traceback
 
@@ -3790,42 +3791,30 @@ def test_completion_openai_prompt():
 # test_completion_openai_prompt()
 
 
-def test_completion_openai_engine_and_model():
-    try:
-        print("\n text 003 test\n")
-        litellm.set_verbose = True
-        response = text_completion(
-            model="gpt-3.5-turbo-instruct",
-            engine="anything",
-            prompt="What's the weather in SF?",
-            max_tokens=5,
-        )
-        print(response)
-        response_str = response["choices"][0]["text"]
-        # print(response.choices[0])
-        # print(response.choices[0].text)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+def test_completion_openai_engine_and_model() -> None:
+    response: Final = text_completion(
+        model="gpt-6-luna",
+        engine="anything",
+        reasoning_effort="none",
+        prompt="What's the weather in SF?",
+        max_tokens=5,
+    )
+    assert response.model == "gpt-6-luna"
+    assert response.choices[0].text
 
 
 # test_completion_openai_engine_and_model()
 
 
-def test_completion_openai_engine():
-    try:
-        print("\n text 003 test\n")
-        litellm.set_verbose = True
-        response = text_completion(
-            engine="gpt-3.5-turbo-instruct",
-            prompt="What's the weather in SF?",
-            max_tokens=5,
-        )
-        print(response)
-        response_str = response["choices"][0]["text"]
-        # print(response.choices[0])
-        # print(response.choices[0].text)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+def test_completion_openai_engine() -> None:
+    response: Final = text_completion(
+        engine="gpt-6-luna",
+        reasoning_effort="none",
+        prompt="What's the weather in SF?",
+        max_tokens=5,
+    )
+    assert response.model == "gpt-6-luna"
+    assert response.choices[0].text
 
 
 # test_completion_openai_engine()
@@ -4048,34 +4037,18 @@ def test_async_text_completion_together_ai():
 # test_async_text_completion()
 
 
-def test_async_text_completion_stream():
-    # tests atext_completion + streaming - assert only one finish reason sent
-    litellm.set_verbose = False
-    print("test_async_text_completion with stream")
-
-    async def test_get_response():
-        try:
-            response = await litellm.atext_completion(
-                model="gpt-3.5-turbo-instruct",
-                prompt="good morning",
-                stream=True,
-            )
-            print(f"response: {response}")
-
-            num_finish_reason = 0
-            async for chunk in response:
-                print(chunk)
-                if chunk["choices"][0].get("finish_reason") is not None:
-                    num_finish_reason += 1
-                    print("finish_reason", chunk["choices"][0].get("finish_reason"))
-
-            assert (
-                num_finish_reason == 1
-            ), f"expected only one finish reason. Got {num_finish_reason}"
-        except Exception as e:
-            pytest.fail(f"GOT exception for gpt-3.5 instruct In streaming{e}")
-
-    asyncio.run(test_get_response())
+@pytest.mark.asyncio
+async def test_async_text_completion_stream() -> None:
+    response: Final = await litellm.atext_completion(
+        model="gpt-6-luna",
+        reasoning_effort="none",
+        prompt="good morning",
+        stream=True,
+        max_tokens=32,
+    )
+    chunks: Final = [chunk async for chunk in response]
+    assert sum(chunk.choices[0].finish_reason is not None for chunk in chunks) == 1
+    assert any(chunk.choices[0].text for chunk in chunks)
 
 
 # test_async_text_completion_stream()
