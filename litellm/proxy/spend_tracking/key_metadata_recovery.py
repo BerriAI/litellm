@@ -4,7 +4,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final, Literal, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -17,6 +17,7 @@ from litellm.constants import (
     SPEND_LOG_KEY_METADATA_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
+    SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE,
 )
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.utils import PrismaClient
@@ -39,26 +40,58 @@ WHERE encode(sha256(convert_to(token, 'UTF8')), 'hex') = ANY($1::text[])
 ORDER BY token, deleted_at DESC
 """
 
-_SPEND_LOG_ALIAS_SQL: Final = """
-SELECT api_key AS digest,
-    MIN(key_alias) AS first_alias,
-    MAX(key_alias) AS last_alias,
-    MIN(team_id) AS first_team,
-    MAX(team_id) AS last_team,
-    MIN(user_id) AS first_owner,
-    MAX(user_id) AS last_owner
-FROM (
-    SELECT api_key,
-        NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
-        COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
-        COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
-    FROM "LiteLLM_SpendLogs"
-    WHERE api_key = ANY($1::text[])
-      AND "startTime" >= $2::timestamp
-      AND "startTime" < $3::timestamp
-) named
-WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
-GROUP BY api_key
+
+def _named_spend_log_edge_row_sql(
+    direction: Literal["ASC", "DESC"], since: Literal["$2::timestamp", "oldest_probe.stopped_at"]
+) -> str:
+    return f"""
+    SELECT "startTime", key_alias, team_id, user_id
+    FROM (
+        SELECT "startTime",
+            NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
+            COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
+            COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
+        FROM (
+            SELECT "startTime", metadata, team_id, "user"
+            FROM "LiteLLM_SpendLogs"
+            WHERE api_key = keys.digest
+              AND "startTime" >= {since}
+              AND "startTime" < $3::timestamp
+            ORDER BY "startTime" {direction}
+            LIMIT {SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE}
+        ) edge
+    ) named
+    WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
+    ORDER BY "startTime" {direction}
+    LIMIT 1
+    """
+
+
+_OLDEST_PROBE_STOPPED_AT_SQL: Final = f"""
+    SELECT COALESCE(first_row."startTime", (
+        SELECT "startTime"
+        FROM "LiteLLM_SpendLogs"
+        WHERE api_key = keys.digest
+          AND "startTime" >= $2::timestamp
+          AND "startTime" < $3::timestamp
+        ORDER BY "startTime" ASC
+        OFFSET {SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE - 1}
+        LIMIT 1
+    )) AS stopped_at
+"""
+
+_SPEND_LOG_ALIAS_SQL: Final = f"""
+SELECT keys.digest,
+    first_row.key_alias AS first_alias,
+    last_row.key_alias AS last_alias,
+    first_row.team_id AS first_team,
+    last_row.team_id AS last_team,
+    first_row.user_id AS first_owner,
+    last_row.user_id AS last_owner
+FROM unnest($1::text[]) AS keys(digest)
+LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("ASC", "$2::timestamp")}) first_row ON true
+LEFT JOIN LATERAL ({_OLDEST_PROBE_STOPPED_AT_SQL}) oldest_probe ON true
+LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("DESC", "oldest_probe.stopped_at")}) last_row ON true
 """
 
 _DAILY_USER_SPEND_OWNER_SQL: Final = """
@@ -69,6 +102,7 @@ GROUP BY api_key
 """
 
 _SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
+_SPEND_LOG_NO_BITMAP_SCAN_SQL: Final = "SET LOCAL enable_bitmapscan = off"
 _SPEND_LOG_TRANSACTION_TIMEOUT: Final = timedelta(milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS)
 
 _HASHED_JWT_PREFIX: Final = "hashed-jwt-"
@@ -91,7 +125,9 @@ class _TokenDigestRow(BaseModel):
 
 
 def _unanimous(first: str | None, last: str | None) -> str | None:
-    return first if first == last else None
+    if first is None:
+        return last
+    return first if last is None or first == last else None
 
 
 class _SpendLogDigestRow(BaseModel):
@@ -148,9 +184,12 @@ async def _rows_within_the_statement_timeout(
     prisma_client: PrismaClient,
     sql: str,
     *params: object,
+    planner_settings: tuple[str, ...] = (),
 ) -> Sequence[Mapping[str, object]]:
     async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
         await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
+        for setting in planner_settings:
+            await transaction.execute_raw(setting)
         return await transaction.query_raw(sql, *params)
 
 
@@ -364,7 +403,14 @@ async def _query_spend_log_metadata(
 ) -> Mapping[str, KeyMetadataDict] | None:
     start, end = window
     rows: Final = await _db_or_empty(
-        lambda: _rows_within_the_statement_timeout(prisma_client, _SPEND_LOG_ALIAS_SQL, sorted(digests), start, end),
+        lambda: _rows_within_the_statement_timeout(
+            prisma_client,
+            _SPEND_LOG_ALIAS_SQL,
+            sorted(digests),
+            start,
+            end,
+            planner_settings=(_SPEND_LOG_NO_BITMAP_SCAN_SQL,),
+        ),
         "Failed spend-log alias recovery for %d missing keys: %s",
         len(digests),
     )

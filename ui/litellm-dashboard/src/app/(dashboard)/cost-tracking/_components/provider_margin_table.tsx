@@ -123,10 +123,11 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
         },
         {
           header: "Margin",
+          numeric: true,
           cell: (row) => {
             const displayName = marginRowDisplayName(row.provider);
             return (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center justify-end gap-2">
                 {editingProvider === row.provider ? (
                   <>
                     <div className="flex items-center gap-2">
