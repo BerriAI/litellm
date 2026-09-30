@@ -946,13 +946,15 @@ def test_bedrock_auth_tests_restore_aws_env_after_a_failed_call(
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "key-id-before-the-test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret-before-the-test")
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    monkeypatch.setitem(globals(), "completion", failing_completion)
+    failing_call = Mock(side_effect=failing_completion)
+    monkeypatch.setitem(globals(), "completion", failing_call)
 
     with pytest.MonkeyPatch.context() as auth_test_env, contextlib.suppress(
         pytest.fail.Exception
     ):
         auth_test(auth_test_env)
 
+    failing_call.assert_called_once()
     assert os.environ["AWS_ACCESS_KEY_ID"] == "key-id-before-the-test"
     assert os.environ["AWS_SECRET_ACCESS_KEY"] == "secret-before-the-test"
     assert os.environ["AWS_REGION_NAME"] == "us-west-2"
