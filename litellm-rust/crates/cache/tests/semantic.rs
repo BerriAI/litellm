@@ -100,6 +100,45 @@ fn context(messages: Option<Value>, input: Option<Value>) -> SemanticCacheContex
     json!([{"role": "tool", "search_results": [{"citations": false}, {"citations": 3}]}]),
     "false3",
 )]
+#[case::anthropic_tool_use_name_and_input_without_id(
+    json!([
+        {"role": "user", "content": "fix the failing test"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}},
+        ]},
+    ]),
+    r#"fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}"#,
+)]
+#[case::anthropic_string_tool_result(
+    json!([{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "calc.py"},
+    ]}]),
+    "calc.py",
+)]
+#[case::anthropic_nested_text_tool_result_then_text(
+    json!([{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": [
+            {"type": "text", "text": "a"},
+            {"type": "text", "text": "b"},
+        ]},
+        {"type": "text", "text": "next"},
+    ]}]),
+    "abnext",
+)]
+#[case::openai_tool_calls_in_order_before_tool_result(
+    json!([
+        {"role": "assistant", "content": "writing", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "write", "arguments": "{\"path\": \"a\"}"}},
+            {"id": "c2", "type": "function", "function": {"name": "write", "arguments": "{\"path\": \"b\"}"}},
+        ]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ]),
+    r#"writing{"name":"write","arguments":"{\"path\": \"a\"}"}{"name":"write","arguments":"{\"path\": \"b\"}"}ok"#,
+)]
+#[case::malformed_tool_call_entries(
+    json!([{"role": "assistant", "content": null, "tool_calls": [{"id": "c1", "type": "function"}, "junk"]}]),
+    r#"{"name":null,"arguments":null}"#,
+)]
 fn str_from_messages_matches_python(#[case] messages: Value, #[case] expected: &str) {
     assert_eq!(str_from_messages(messages.as_array().unwrap()), expected);
 }
@@ -192,6 +231,15 @@ fn prompt_from_messages_reads_messages_only(
 )]
 #[case::nested_lists(None, Some(json!([["a", [" b "]], "", "c"])), Some("a\nb\nc"))]
 #[case::scalars_ignored(None, Some(json!([1, true, null, "kept"])), Some("kept"))]
+#[case::responses_function_call(
+    None,
+    Some(json!([
+        {"role": "user", "content": "update the config"},
+        {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": "{\"path\":\"a.yaml\"}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+    ])),
+    Some("update the config\n{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.yaml\\\"}\"}\nok"),
+)]
 fn prompt_from_context_matches_python(
     #[case] messages: Option<Value>,
     #[case] input: Option<Value>,

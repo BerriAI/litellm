@@ -24,7 +24,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_str_from_messages_with_tools,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -286,7 +286,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_str_from_messages_with_tools(messages)
 
         # create an embedding for prompt
         embedding_response: Final = cast(
@@ -325,7 +325,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_str_from_messages_with_tools(messages)
 
         # convert to embedding
         embedding_response: Final = cast(
@@ -400,7 +400,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_str_from_messages_with_tools(messages)
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
@@ -435,7 +435,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_str_from_messages_with_tools(messages)
 
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 

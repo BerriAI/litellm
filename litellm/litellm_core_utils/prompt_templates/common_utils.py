@@ -13,6 +13,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from pydantic import BaseModel
+from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped message payloads without a runtime conversion
+
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -190,6 +193,66 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     for message in messages:
         text += convert_content_list_to_str(message=message)
     return text
+
+
+def get_str_from_messages_with_tools(messages: object) -> str:
+    """
+    ``get_str_from_messages`` that also keeps each conversation's tool calls and tool results, so agent turns
+    that differ only in their tool exchange (Anthropic ``tool_use`` / ``tool_result``, OpenAI ``tool_calls``)
+    produce different text
+    """
+    return "".join(_message_str_with_tools(message) for message in _str_mappings(messages))
+
+
+def tool_call_str(name: object, arguments: object) -> str:
+    return json.dumps({"name": name, "arguments": arguments}, separators=(",", ":"), default=str)
+
+
+def _message_str_with_tools(message: Mapping[str, object]) -> str:
+    return (
+        _content_str_with_tools(message.get("content"))
+        + "".join(_openai_tool_call_str(tool_call) for tool_call in _str_mappings(message.get("tool_calls")))
+        + extract_search_results_text(message.get("search_results"))
+    )
+
+
+def _content_str_with_tools(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    return "".join(_block_str_with_tools(block) for block in _str_mappings(content))
+
+
+def _block_str_with_tools(block: Mapping[str, object]) -> str:
+    match block.get("type"):
+        case "tool_use":
+            return tool_call_str(block.get("name"), block.get("input"))
+        case "tool_result":
+            return _content_str_with_tools(block.get("content"))
+        case _:
+            text: Final = block.get("text")
+            return text if isinstance(text, str) else ""
+
+
+def _openai_tool_call_str(tool_call: Mapping[str, object]) -> str:
+    function: Final = _as_str_mapping(tool_call.get("function")) or {}
+    return tool_call_str(function.get("name"), function.get("arguments"))
+
+
+def _str_mappings(values: object) -> Iterator[Mapping[str, object]]:
+    items: Final = values if isinstance(values, (list, tuple)) else ()
+    return (mapping for item in items if (mapping := _as_str_mapping(item)) is not None)
+
+
+def _as_str_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if _is_str_mapping(value):
+        return value
+    return None
+
+
+def _is_str_mapping(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: message and block keys are str
+    return isinstance(value, Mapping)
 
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:

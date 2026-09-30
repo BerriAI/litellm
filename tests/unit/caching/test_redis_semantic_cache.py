@@ -579,6 +579,41 @@ def test_redis_semantic_cache_prompt_extraction_prefers_messages():
     assert prompt == "message prompt"
 
 
+def test_redis_semantic_cache_prompt_extraction_keeps_tool_turns_distinct():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    def turn(command: str) -> list[dict[str, object]]:
+        return [
+            {"role": "user", "content": "fix the failing test"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": command}}],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        ]
+
+    assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("ls")) == (
+        'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}ok'
+    )
+    assert RedisSemanticCache._get_prompt_from_kwargs(messages=turn("pwd")) == (
+        'fix the failing test{"name":"Bash","arguments":{"cmd":"pwd"}}ok'
+    )
+
+
+def test_redis_semantic_cache_prompt_extraction_keeps_responses_function_calls():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input=[
+            {"role": "user", "content": "update the config"},
+            {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": '{"path":"a.yaml"}'},
+            {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+        ]
+    )
+
+    assert prompt == 'update the config\n{"name":"write_file","arguments":"{\\"path\\":\\"a.yaml\\"}"}\nok'
+
+
 def test_redis_semantic_cache_prompt_extraction_handles_model_objects():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 

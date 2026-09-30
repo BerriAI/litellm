@@ -21,7 +21,8 @@ from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_str_from_messages_with_tools,
+    tool_call_str,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -263,7 +264,7 @@ class RedisSemanticCache(BaseCache):
         """
         messages: Final = kwargs.get("messages")
         if messages:
-            return get_str_from_messages(messages)
+            return get_str_from_messages_with_tools(messages)
 
         if "input" not in kwargs:
             return None
@@ -291,6 +292,10 @@ class RedisSemanticCache(BaseCache):
             return
 
         if isinstance(value, dict):
+            if value.get("type") == "function_call":
+                prompt_parts.append(tool_call_str(value.get("name"), value.get("arguments")))
+                return
+
             content = value.get("content")
             if content is not None:
                 cls._collect_responses_input_text(content, prompt_parts)

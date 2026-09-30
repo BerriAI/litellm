@@ -7,6 +7,8 @@ from typing import Final
 
 import pytest
 
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     ENCRYPTED_REASONING_SIGNATURE_PREFIX,
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -16,6 +18,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
     get_format_from_file_id,
+    get_str_from_messages,
+    get_str_from_messages_with_tools,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
@@ -2004,3 +2008,115 @@ class TestMergeConsecutiveSystemMessages:
         )
 
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
+
+
+_TASK: Final = {"role": "user", "content": "fix the failing test"}
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        pytest.param(
+            [
+                _TASK,
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"cmd": "ls"}}],
+                },
+            ],
+            'fix the failing test{"name":"Bash","arguments":{"cmd":"ls"}}',
+            id="anthropic-tool-use-name-and-input-without-id",
+        ),
+        pytest.param(
+            [_TASK, {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "calc.py"}]}],
+            "fix the failing testcalc.py",
+            id="anthropic-string-tool-result",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "t1",
+                            "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
+                        },
+                        {"type": "text", "text": "next"},
+                    ],
+                }
+            ],
+            "abnext",
+            id="anthropic-nested-text-tool-result-then-text",
+        ),
+        pytest.param(
+            [
+                _TASK,
+                {
+                    "role": "assistant",
+                    "content": "writing",
+                    "tool_calls": [
+                        {"id": "c1", "type": "function", "function": {"name": "write", "arguments": '{"path": "a"}'}},
+                        {"id": "c2", "type": "function", "function": {"name": "write", "arguments": '{"path": "b"}'}},
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+            ],
+            'fix the failing testwriting{"name":"write","arguments":"{\\"path\\": \\"a\\"}"}'
+            '{"name":"write","arguments":"{\\"path\\": \\"b\\"}"}ok',
+            id="openai-tool-calls-in-order-before-tool-result",
+        ),
+        pytest.param(
+            [
+                Message(
+                    content=None,
+                    tool_calls=[ChatCompletionMessageToolCall(id="c1", function=Function(name="read", arguments="{}"))],
+                )
+            ],
+            '{"name":"read","arguments":"{}"}',
+            id="openai-response-message-object",
+        ),
+        pytest.param(
+            [{"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function"}, "junk"]}, "junk"],
+            '{"name":null,"arguments":null}',
+            id="malformed-tool-call-entries",
+        ),
+    ],
+)
+def test_get_str_from_messages_with_tools_keeps_tool_exchange(messages: list[object], expected: str) -> None:
+    assert get_str_from_messages_with_tools(messages) == expected
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([_TASK, {"role": "assistant", "content": "done"}], id="string-content"),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is "},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                        {"type": "text", "text": "this"},
+                    ],
+                }
+            ],
+            id="text-and-image-parts",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "content": "small",
+                    "search_results": [{"source": "s", "title": "t"}],
+                }
+            ],
+            id="search-results",
+        ),
+        pytest.param([{"role": "assistant", "content": None}, {"role": "user"}], id="missing-content"),
+    ],
+)
+def test_get_str_from_messages_with_tools_matches_get_str_from_messages_without_tools(messages: list[object]) -> None:
+    assert get_str_from_messages_with_tools(messages) == get_str_from_messages(messages)  # pyright: ignore[reportArgumentType]  # untyped fixtures

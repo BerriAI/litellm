@@ -1,6 +1,6 @@
 //! The embedding and prompt contract every semantic backend shares.
 //!
-//! Python's semantic caches all read their prompt through `get_str_from_messages`, and
+//! Python's semantic caches all read their prompt through `get_str_from_messages_with_tools`, and
 //! `RedisSemanticCache._get_prompt_from_kwargs` (inherited by Valkey) adds Responses API
 //! `input`. Qdrant reads messages only. Each backend picks one of the two extractors here.
 
@@ -8,7 +8,7 @@ use std::{future::Future, io};
 
 use serde::Serialize;
 use serde_json::{
-    Value,
+    Value, json,
     ser::{CharEscape, Formatter, Serializer},
 };
 
@@ -83,24 +83,55 @@ impl Embedder for PreparedEmbedding {
     }
 }
 
-/// `get_str_from_messages`: every message's text content followed by its search results.
+/// `get_str_from_messages_with_tools`: every message's content text, tool calls and tool results,
+/// then its OpenAI `tool_calls`, then its search results.
 pub fn str_from_messages(messages: &[Value]) -> String {
     let mut text = String::new();
     for message in messages.iter().filter_map(Value::as_object) {
-        match message.get("content") {
-            Some(Value::String(content)) => text.push_str(content),
-            Some(Value::Array(parts)) => {
-                for part in parts {
-                    if let Some(part_text) = part.get("text").and_then(Value::as_str) {
-                        text.push_str(part_text);
-                    }
-                }
+        push_content_text(&mut text, message.get("content"));
+        if let Some(Value::Array(tool_calls)) = message.get("tool_calls") {
+            for tool_call in tool_calls.iter().filter_map(Value::as_object) {
+                let function = tool_call.get("function");
+                text.push_str(&tool_call_json(
+                    function.and_then(|function| function.get("name")),
+                    function.and_then(|function| function.get("arguments")),
+                ));
             }
-            _ => {}
         }
         push_search_results_text(&mut text, message.get("search_results"));
     }
     text
+}
+
+/// `_content_str_with_tools`: text parts, Anthropic `tool_use` blocks and `tool_result` content.
+fn push_content_text(text: &mut String, content: Option<&Value>) {
+    match content {
+        Some(Value::String(content)) => text.push_str(content),
+        Some(Value::Array(blocks)) => {
+            for block in blocks.iter().filter_map(Value::as_object) {
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_use") => {
+                        text.push_str(&tool_call_json(block.get("name"), block.get("input")));
+                    }
+                    Some("tool_result") => push_content_text(text, block.get("content")),
+                    _ => {
+                        if let Some(block_text) = block.get("text").and_then(Value::as_str) {
+                            text.push_str(block_text);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `tool_call_str`: the compact `{"name":...,"arguments":...}` a tool call contributes.
+fn tool_call_json(name: Option<&Value>, arguments: Option<&Value>) -> String {
+    compact_json(&json!({
+        "name": name.unwrap_or(&Value::Null),
+        "arguments": arguments.unwrap_or(&Value::Null),
+    }))
 }
 
 /// The messages prompt Qdrant embeds: `None` when the request carries no messages.
@@ -159,6 +190,10 @@ fn collect_input_text(value: &Value, parts: &mut Vec<String>) {
             }
         }
         Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("function_call") {
+                parts.push(tool_call_json(map.get("name"), map.get("arguments")));
+                return;
+            }
             if let Some(content) = map.get("content").filter(|content| !content.is_null()) {
                 collect_input_text(content, parts);
                 return;
