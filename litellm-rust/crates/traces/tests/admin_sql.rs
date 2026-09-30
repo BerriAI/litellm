@@ -40,7 +40,12 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
         "CREATE DATABASE litellm",
         "CREATE TABLE litellm.otel_traces (n UInt8) ENGINE = Memory",
         "INSERT INTO litellm.otel_traces VALUES (1)",
+        "CREATE TABLE litellm.agent_traces (n UInt8) ENGINE = Memory",
+        "INSERT INTO litellm.agent_traces VALUES (2)",
+        "CREATE TABLE litellm.spend_logs (n UInt8) ENGINE = Memory",
+        "INSERT INTO litellm.spend_logs VALUES (3)",
         "CREATE TABLE litellm.private_traces (n UInt8) ENGINE = Memory",
+        "CREATE TABLE private_traces (n UInt8) ENGINE = Memory",
     ] {
         client
             .post(&admin_url)

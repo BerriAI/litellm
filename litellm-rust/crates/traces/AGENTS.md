@@ -2,5 +2,6 @@
 - Keep this crate independent of Python; PyO3 conversion and public Python exceptions belong in `python-bridge`
 - Keep the SQL migrations here as the only ClickHouse schema definition
 - Use typed query parameters and a dedicated SELECT-only reader with server-side limits
+- Keep `config/reader.xml` grants on the database the schema is created in (CLICKHOUSE_DATABASE, default `litellm`)
 - Bound insert time and encoded bytes; make retry deduplication behavior explicit for supported ClickHouse versions
 - Test storage behavior through the crate's public API against ClickHouse

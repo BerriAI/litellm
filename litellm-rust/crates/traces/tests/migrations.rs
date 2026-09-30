@@ -156,6 +156,50 @@ async fn schema_supports_span_rollups_and_spend_joins(
 
 #[rstest]
 #[tokio::test]
+async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url, "default", "")?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let rows = vec![
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": "shared-id", "SpanId": "root-one",
+            "ParentSpanId": "", "SpanName": "root-one", "Input": "private-one",
+            "ResourceAttributes": {"litellm.api_key_hash": "key-one"}
+        }))?,
+        serde_json::from_value(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": "shared-id", "SpanId": "root-two",
+            "ParentSpanId": "", "SpanName": "root-two", "Input": "private-two",
+            "ResourceAttributes": {"litellm.api_key_hash": "key-two"}
+        }))?,
+    ];
+    insert_rows(&database, "otel_traces", rows).await?;
+    execute_write(
+        &database,
+        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+    )
+    .await?;
+    let rows = read_json(
+        &database,
+        "SELECT ApiKeyHash, any(RootInput) AS RootInput \
+         FROM trace_test.agent_traces_by_key WHERE TraceId = 'shared-id' \
+         GROUP BY ApiKeyHash ORDER BY ApiKeyHash",
+    )
+    .await?;
+    assert_eq!(
+        rows["data"],
+        serde_json::json!([
+            {"ApiKeyHash": "key-one", "RootInput": "private-one"},
+            {"ApiKeyHash": "key-two", "RootInput": "private-two"}
+        ])
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn rollup_merges_spans_across_days_without_losing_root_fields(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
