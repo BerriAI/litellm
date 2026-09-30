@@ -1,253 +1,145 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { Workflow } from "lucide-react";
-import { Fragment, useState } from "react";
+import { ArrowDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatCellDate } from "@/components/shared/table_cells/date_cell";
-import { cn } from "@/lib/cva.config";
 
-import { agentTraceCall } from "../../networking";
-import { AgentTracePill, SpanStatusBadge, SpanTypePill } from "./TracePills";
-import type { Span, TraceSummary } from "./traceTypes";
-import {
-  agentBadgeLabel,
-  fmtMs,
-  fmtTok,
-  llmSpans,
-  previewText,
-  shortId,
-  spanLabel,
-  summaryHasErrors,
-  traceDisplayName,
-} from "./traceUtils";
+import { StatusMark } from "./StatusMark";
+import type { TraceSummary } from "./traceTypes";
+import { fmtMs, previewText, traceDisplayName } from "./traceUtils";
 
 interface AgentTracesTableProps {
-  accessToken: string;
   traces: TraceSummary[];
   isLoading: boolean;
   error: Error | null;
   hasMore: boolean;
   onLoadMore: () => void;
-  /** Open the trace drawer, optionally focused on one span. */
-  onOpenTrace: (traceId: string, spanId?: string) => void;
-  /** Compact mode is used in "All" where the table sits above the request logs. */
-  compact?: boolean;
+  onOpenTrace: (traceId: string) => void;
 }
 
-const COLUMNS = ["", "Time", "Type", "Status", "Trace", "Input", "Duration", "Model", "Tokens"] as const;
+/** Spend is only on summaries once the spend-enrichment PR lands; show Cost when it's there. */
+type SummaryWithSpend = TraceSummary & { spend?: number };
 
-const TRUNC = "block max-w-[280px] truncate";
+const SECOND_MS = 1000;
+const MINUTE_S = 60;
+const HOUR_M = 60;
+const DAY_H = 24;
 
-function ChildRows({
-  accessToken,
-  traceId,
-  onOpenTrace,
-}: {
-  accessToken: string;
-  traceId: string;
-  onOpenTrace: AgentTracesTableProps["onOpenTrace"];
-}) {
-  const traceQuery = useQuery({
-    queryKey: ["agentTrace", traceId, accessToken],
-    queryFn: () => agentTraceCall(accessToken, traceId),
-    staleTime: 30_000,
-  });
-  if (traceQuery.isLoading || traceQuery.isError) {
-    return (
-      <TableRow>
-        <TableCell colSpan={COLUMNS.length} className="bg-muted/40 pl-10 text-xs text-muted-foreground">
-          {traceQuery.isError ? `Could not load trace: ${traceQuery.error.message}` : "Loading LLM calls…"}
-        </TableCell>
-      </TableRow>
-    );
-  }
-  const spans = llmSpans(traceQuery.data?.spans ?? []);
-  return (
-    <>
-      {spans.map((span) => (
-        <ChildRow key={span.span_id} span={span} onClick={() => onOpenTrace(traceId, span.span_id)} />
-      ))}
-    </>
-  );
+export function relativeTime(iso: string, now: number = Date.now()): string {
+  const diffS = Math.round((now - new Date(iso).getTime()) / SECOND_MS);
+  if (diffS < 5) return "just now";
+  if (diffS < MINUTE_S) return `${diffS}s ago`;
+  const diffM = Math.round(diffS / MINUTE_S);
+  if (diffM < HOUR_M) return `${diffM}m ago`;
+  const diffH = Math.round(diffM / HOUR_M);
+  if (diffH < DAY_H) return `${diffH}h ago`;
+  return `${Math.round(diffH / DAY_H)}d ago`;
 }
 
-function ChildRow({ span, onClick }: { span: Span; onClick: () => void }) {
-  const tokens = span.input_tokens + span.output_tokens;
-  return (
-    <TableRow
-      onClick={onClick}
-      className="cursor-pointer bg-muted/40 text-xs [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-violet-200)]"
-    >
-      <TableCell />
-      <TableCell className="text-muted-foreground">+{fmtMs(span.start_offset_ms)}</TableCell>
-      <TableCell>
-        <SpanTypePill type="llm" />
-      </TableCell>
-      <TableCell>
-        <SpanStatusBadge status={span.status} />
-      </TableCell>
-      <TableCell className="font-mono text-[11px]">
-        {span.litellm_request_id ? (
-          shortId(span.litellm_request_id, 22)
-        ) : (
-          <span className="text-muted-foreground">{span.agent}</span>
-        )}
-      </TableCell>
-      <TableCell className="text-muted-foreground">
-        <span className={TRUNC}>{previewText(span.input_preview)}</span>
-      </TableCell>
-      <TableCell>{fmtMs(span.duration_ms)}</TableCell>
-      <TableCell>{spanLabel(span)}</TableCell>
-      <TableCell>{fmtTok(tokens)}</TableCell>
-    </TableRow>
-  );
-}
+export const formatCost = (cost: number): string => {
+  if (cost === 0) return "$0.00";
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
+};
 
-function TraceRow({
-  trace,
-  expanded,
-  onToggle,
-  onOpen,
-}: {
-  trace: TraceSummary;
-  expanded: boolean;
-  onToggle: () => void;
-  onOpen: () => void;
-}) {
-  const failed = summaryHasErrors(trace);
-  // Roots that never closed report "unset"; with no errors the run reads as a success.
-  const status = failed ? "error" : "ok";
-  const handleToggle = (event: React.MouseEvent) => {
-    event.stopPropagation();
-    onToggle();
-  };
-  return (
-    <TableRow
-      data-testid="agent-trace-row"
-      onClick={onOpen}
-      className={cn("cursor-pointer", failed && "bg-destructive/5")}
-    >
-      <TableCell className="w-6">
-        <button
-          type="button"
-          aria-label={expanded ? "Hide LLM calls" : "Show LLM calls"}
-          aria-expanded={expanded}
-          onClick={handleToggle}
-          className={cn("inline-block w-3.5 text-muted-foreground transition-transform", expanded && "rotate-90")}
-        >
-          ▸
-        </button>
-      </TableCell>
-      <TableCell className="text-muted-foreground">{formatCellDate(new Date(trace.start_time), "datetime")}</TableCell>
-      <TableCell>
-        <AgentTracePill label={agentBadgeLabel(trace)} />
-      </TableCell>
-      <TableCell>
-        <SpanStatusBadge status={status} />
-        {trace.error_count > 0 && <span className="ml-1 text-[11px] text-destructive">{trace.error_count} err</span>}
-      </TableCell>
-      <TableCell>
-        <div className="font-medium">{traceDisplayName(trace)}</div>
-        <div className="font-mono text-[11px] text-muted-foreground">{shortId(trace.trace_id)}</div>
-      </TableCell>
-      <TableCell>
-        <span className={TRUNC} title={previewText(trace.input_preview)}>
-          {previewText(trace.input_preview)}
-        </span>
-      </TableCell>
-      <TableCell>{fmtMs(trace.duration_ms)}</TableCell>
-      <TableCell>
-        <span className={TRUNC}>{trace.models.join(", ")}</span>
-      </TableCell>
-      <TableCell>
-        {fmtTok(trace.input_tokens + trace.output_tokens)}{" "}
-        <span className="text-muted-foreground">
-          ({fmtTok(trace.input_tokens)}+{fmtTok(trace.output_tokens)})
-        </span>
-      </TableCell>
-    </TableRow>
-  );
-}
+const firstLine = (text: string): string => text.split("\n")[0] ?? text;
 
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center gap-1 py-6">
-      <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
-        <Workflow className="size-5 text-muted-foreground" />
-      </div>
-      <div className="text-sm font-medium">No agent traces in this time range</div>
-      <div className="max-w-xs text-center text-sm text-muted-foreground">
-        Agent runs exported over OTLP to this proxy will appear here.
-      </div>
-    </div>
-  );
-}
+const TH = "px-3 font-medium";
+const TH_NUM = "px-3 text-right font-medium";
+const TD_NUM = "px-3 text-right font-mono tabular-nums text-muted-foreground";
 
-/** Agent trace rows: violet badge, ▸ expands the trace's LLM calls, click opens the trace drawer. */
+/** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
-  accessToken,
   traces,
   isLoading,
   error,
   hasMore,
   onLoadMore,
   onOpenTrace,
-  compact = false,
 }: AgentTracesTableProps) {
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const toggle = (traceId: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(traceId)) next.delete(traceId);
-      else next.add(traceId);
-      return next;
-    });
-
-  if (compact && traces.length === 0) return null;
-
+  const showCost = traces.some((t) => typeof (t as SummaryWithSpend).spend === "number");
+  const isEmpty = !isLoading && !error && traces.length === 0;
   return (
-    <div
-      className={cn(
-        "rounded-lg border",
-        compact ? "mb-3 max-h-[40vh] shrink-0 overflow-y-auto" : "min-h-0 flex-1 overflow-y-auto",
-      )}
-    >
-      <Table aria-label="Agent traces">
-        <TableHeader>
-          <TableRow>
-            {COLUMNS.map((column, i) => (
-              <TableHead key={i} className="text-xs text-muted-foreground">
-                {column}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {traces.map((trace) => (
-            <Fragment key={trace.trace_id}>
-              <TraceRow
-                trace={trace}
-                expanded={expanded.has(trace.trace_id)}
-                onToggle={() => toggle(trace.trace_id)}
-                onOpen={() => onOpenTrace(trace.trace_id)}
-              />
-              {expanded.has(trace.trace_id) && (
-                <ChildRows accessToken={accessToken} traceId={trace.trace_id} onOpenTrace={onOpenTrace} />
+    <div className="min-h-0 flex-1 overflow-auto" data-testid="runs-table">
+      <table aria-label="Agent runs" className="w-full min-w-[900px] table-fixed border-collapse text-left">
+        <thead className="sticky top-0 z-sticky bg-muted/40 backdrop-blur">
+          <tr className="h-8 border-b border-border text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
+            <th className={`w-[96px] ${TH}`}>
+              <span className="inline-flex items-center gap-1">
+                Time <ArrowDown className="size-2.5" />
+              </span>
+            </th>
+            <th className={`w-[160px] ${TH}`}>Service</th>
+            <th className={TH}>Input</th>
+            <th className={`w-[72px] ${TH_NUM}`}>Agents</th>
+            <th className={`w-[74px] ${TH_NUM}`}>Steps</th>
+            <th className={`w-[86px] ${TH_NUM}`}>Duration</th>
+            {showCost && <th className={`w-[80px] ${TH_NUM}`}>Cost</th>}
+            <th className={`w-[72px] ${TH_NUM}`}>Failed</th>
+            <th className="w-8" />
+          </tr>
+        </thead>
+        <tbody>
+          {traces.map((run) => (
+            <tr
+              key={run.trace_id}
+              data-testid="agent-trace-row"
+              onClick={() => onOpenTrace(run.trace_id)}
+              className="h-9 cursor-pointer border-b border-border/60 text-[12px] hover:bg-accent/50"
+            >
+              <td
+                className="px-3 font-mono text-[11px] tabular-nums text-muted-foreground"
+                title={new Date(run.start_time).toLocaleString()}
+              >
+                {relativeTime(run.start_time)}
+              </td>
+              <td className="truncate px-3 text-muted-foreground" title={run.service}>
+                {run.service}
+              </td>
+              <td className="px-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
+                  <span className="truncate text-foreground">
+                    {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
+                  </span>
+                  <span className="hidden shrink-0 font-mono text-[10px] text-muted-foreground 2xl:inline">
+                    {run.trace_id}
+                  </span>
+                </div>
+              </td>
+              <td className={TD_NUM}>{run.agent_count.toLocaleString()}</td>
+              <td className={TD_NUM}>{run.span_count.toLocaleString()}</td>
+              <td className="px-3 text-right font-mono tabular-nums text-foreground">{fmtMs(run.duration_ms)}</td>
+              {showCost && (
+                <td className="px-3 text-right font-mono tabular-nums text-foreground">
+                  {formatCost((run as SummaryWithSpend).spend ?? 0)}
+                </td>
               )}
-            </Fragment>
+              <td className="px-3 text-right">
+                {run.error_count > 0 ? (
+                  <StatusMark status="error" count={run.error_count} />
+                ) : (
+                  <span className="font-mono text-[11px] text-muted-foreground/60">0</span>
+                )}
+              </td>
+              <td>
+                <ChevronRight className="size-3 text-muted-foreground/60" />
+              </td>
+            </tr>
           ))}
-        </TableBody>
-      </Table>
-      {isLoading && <div className="py-6 text-center text-sm text-muted-foreground">Loading agent traces…</div>}
-      {error && <div className="py-4 text-center text-sm text-destructive">Could not load traces: {error.message}</div>}
-      {!isLoading && !error && traces.length === 0 && <EmptyState />}
+        </tbody>
+      </table>
+      {isLoading && <div className="py-16 text-center text-[12px] text-muted-foreground">Loading runs…</div>}
+      {error && (
+        <div className="py-16 text-center text-[12px] text-muted-foreground">Could not load runs: {error.message}</div>
+      )}
+      {isEmpty && (
+        <div className="py-16 text-center text-[12px] text-muted-foreground">No runs match these filters.</div>
+      )}
       {hasMore && (
-        <div className="flex justify-center border-t py-2">
-          <Button variant="ghost" size="sm" onClick={onLoadMore}>
-            Load more traces
+        <div className="border-t border-border/60 px-3 py-2">
+          <Button size="xs" variant="ghost" onClick={onLoadMore}>
+            Load more
           </Button>
         </div>
       )}
