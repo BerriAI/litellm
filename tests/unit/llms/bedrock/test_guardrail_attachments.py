@@ -405,7 +405,11 @@ def test_converse_null_document_is_not_an_attachment():
         pytest.param(
             {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "hi"}}, id="text"
         ),
-        pytest.param({"type": "document", "source": {"type": "content", "content": [TEXT]}}, id="content"),
+        pytest.param(
+            {"type": "document", "source": {"type": "content", "content": [{"type": "text", "text": "hi"}]}},
+            id="content",
+        ),
+        pytest.param({"type": "document", "source": {"type": "content", "content": "hi"}}, id="content-string"),
     ],
 )
 @pytest.mark.parametrize(
@@ -418,6 +422,7 @@ def test_text_source_document_is_not_an_attachment(block, call_type):
 
     assert found.images == ()
     assert found.unscannable == ("document",)
+    assert found.document_texts == ("hi",)
 
 
 def test_unpadded_and_url_safe_base64_are_sent_as_standard_base64():
@@ -461,6 +466,7 @@ def test_images_inside_a_content_source_document_are_scanned(call_type):
 
     assert list(found.images) == [_png_item()]
     assert found.unscannable == ("document",)
+    assert found.document_texts == ("hello",)
 
 
 def test_document_images_inside_a_tool_result_follow_the_tool_scope():

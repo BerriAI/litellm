@@ -26,6 +26,7 @@ BedrockImageFormat = Literal["png", "jpeg"]
 class RequestAttachments(NamedTuple):
     images: tuple[BedrockContentItem, ...]
     unscannable: tuple[str, ...]
+    document_texts: tuple[str, ...] = ()
 
 
 class _Image(NamedTuple):
@@ -36,12 +37,17 @@ class _Unscannable(NamedTuple):
     label: str
 
 
+class _DocumentText(NamedTuple):
+    text: str
+
+
 class _Block(NamedTuple):
     block: Mapping[str, object]
     from_tool: bool
+    in_document: bool = False
 
 
-_Classified = _Image | _Unscannable | None
+_Classified = _Image | _Unscannable | _DocumentText | None
 _BlockClassifier = Callable[[Mapping[str, object]], _Classified]
 _NestedToolBlocks = Callable[[Mapping[str, object]], tuple[Mapping[str, object], ...]]
 
@@ -75,7 +81,7 @@ def find_request_attachments(
     latest_user_message_only: bool,
     scan_only_tool_results: bool = False,
 ) -> RequestAttachments:
-    """List the scannable images and the unscannable attachments in the message content and tool results."""
+    """List the scannable images, the document text and the unscannable attachments in the message content and tool results."""
     messages, classify, nested_tool_blocks = _messages_and_classifier(data, call_type)
     selected: Final = messages if not latest_user_message_only else _latest_user_message(messages)
     classified: Final = tuple(
@@ -83,12 +89,30 @@ def find_request_attachments(
         for message in selected
         for entry in _message_blocks(message, nested_tool_blocks)
         if _in_scope(entry, skip_tool_messages, scan_only_tool_results)
-        and (result := classify(entry.block)) is not None
+        and (result := _classify_entry(entry, classify)) is not None
     )
     return RequestAttachments(
         images=tuple(result.item for result in classified if isinstance(result, _Image)),
         unscannable=tuple(result.label for result in classified if isinstance(result, _Unscannable)),
+        document_texts=tuple(result.text for result in classified if isinstance(result, _DocumentText)),
     )
+
+
+def _classify_entry(entry: _Block, classify: _BlockClassifier) -> _Classified:
+    text: Final = _document_text(entry)
+    return _DocumentText(text) if text else classify(entry.block)
+
+
+def _document_text(entry: _Block) -> str | None:
+    block: Final = entry.block
+    if entry.in_document:
+        text: Final = block.get("text") if block.get("type") == "text" else None
+        return text if isinstance(text, str) else None
+    source: Final = block.get("source") if block.get("type") == "document" else None
+    if not _is_mapping(source):
+        return None
+    source_text: Final = source.get("data") if source.get("type") == "text" else source.get("content")
+    return source_text if source.get("type") in _TEXT_DOCUMENT_SOURCE_TYPES and isinstance(source_text, str) else None
 
 
 def _messages_and_classifier(
@@ -161,7 +185,10 @@ def _with_document_content(entry: _Block) -> tuple[_Block, ...]:
     source: Final = entry.block.get("source")
     if entry.block.get("type") != "document" or not _is_mapping(source) or source.get("type") != "content":
         return (entry,)
-    return (entry, *(_Block(inner, from_tool=entry.from_tool) for inner in _mappings(source.get("content"))))
+    return (
+        entry,
+        *(_Block(inner, from_tool=entry.from_tool, in_document=True) for inner in _mappings(source.get("content"))),
+    )
 
 
 def _in_scope(entry: _Block, skip_tool_messages: bool, scan_only_tool_results: bool) -> bool:

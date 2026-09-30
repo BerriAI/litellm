@@ -2561,7 +2561,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None:
-        """Scan the request's inline PNG/JPEG images with ApplyGuardrail, 20 per call, and block attachments it cannot scan.
+        """Scan the request's inline PNG/JPEG images and text documents, and block attachments it cannot scan.
+
+        Images go to ApplyGuardrail 20 per call. Text documents go through ``make_bedrock_api_request``
+        as one user turn, and any intervention on them blocks the request, since their text cannot be
+        rewritten with a mask.
 
         Documents, files, audio, video, and images sent by URL, by file id or in another format block the
         request unless ``skip_unscannable_attachments`` is set. ``checks`` mode calls the text-only
@@ -2593,6 +2597,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 self.guardrail_name,
                 len(unscannable),
             )
+        if attachments.document_texts:
+            await self._scan_document_texts(attachments.document_texts, request_data=data, event_type=event_type)
         if not images:
             return
         bedrock_request_data, api_key = self._bedrock_request_body(BedrockRequest(source="INPUT"), data)
@@ -2614,6 +2620,26 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 raise
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to scan attachments: %s", str(e))
             raise Exception(f"Bedrock guardrail failed: {e}") from e
+
+    async def _scan_document_texts(
+        self,
+        document_texts: Sequence[str],
+        request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        event_type: GuardrailEventHooks,
+    ) -> None:
+        """Scan text documents like a user turn and block when the guardrail intervenes on them."""
+        response: Final = await self.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": text} for text in document_texts],
+            request_data=request_data,
+            logging_event_type=event_type,
+        )
+        if response.get("action") == "GUARDRAIL_INTERVENED":
+            raise self._unscannable_attachments_exception(
+                tuple("document (text the guardrail would mask)" for _ in document_texts),
+                request_data=request_data,
+                event_type=event_type,
+            )
 
     def _unscannable_attachments_exception(
         self,

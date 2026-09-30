@@ -6410,6 +6410,73 @@ async def test_text_only_debug_log_prints_the_signed_request_body():
     assert "'content': ({'text': {'text': 'hello'}},)" in body_lines[0]
 
 
+def _text_document_messages_request(text: str) -> dict:
+    return {
+        "model": "claude",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": text}},
+                    {"type": "text", "text": "summarize"},
+                ],
+            }
+        ],
+    }
+
+
+def _anonymizing_bedrock_httpx_response() -> MagicMock:
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "SSN {US_SOCIAL_SECURITY_NUMBER}"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "US_SOCIAL_SECURITY_NUMBER", "action": "ANONYMIZED"}]
+                }
+            }
+        ],
+        "usage": {"contentPolicyUnits": 1},
+    }
+    return response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response, blocked",
+    [
+        pytest.param(_passing_bedrock_httpx_response("ok"), False, id="pass"),
+        pytest.param(_blocking_bedrock_httpx_response("deny"), True, id="block"),
+        pytest.param(_anonymizing_bedrock_httpx_response(), True, id="anonymize"),
+    ],
+)
+async def test_attachment_scan_sends_text_document_as_text(response, blocked):
+    guardrail = _attachment_guardrail()
+    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(guardrail, response)
+
+    with post_patch as mock_post, credentials_patch, prepare_patch as mock_prepare:
+        if blocked:
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.async_scan_request_attachments(
+                    data=_text_document_messages_request("SSN 123-45-6789"),
+                    call_type=CallTypes.anthropic_messages.value,
+                )
+            assert exc_info.value.status_code == 400
+        else:
+            result = await guardrail.async_scan_request_attachments(
+                data=_text_document_messages_request("SSN 123-45-6789"),
+                call_type=CallTypes.anthropic_messages.value,
+            )
+            assert result is None
+
+    assert mock_post.await_count == 1
+    sent_body = mock_prepare.call_args.kwargs["data"]
+    assert sent_body["source"] == "INPUT"
+    assert sent_body["content"] == ({"text": {"text": "SSN 123-45-6789"}},)
+
+
 class _CustomApplyGuardrail(BedrockGuardrail):
     async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
         return inputs
