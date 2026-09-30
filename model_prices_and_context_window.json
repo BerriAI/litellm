@@ -3358,7 +3358,7 @@
         "supports_function_calling": true
     },
     "azure_ai/claude-haiku-4-5": {
-        "deprecation_date": "2026-10-19",
+        "deprecation_date": "2026-11-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -3378,10 +3378,11 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/claude-opus-4-5": {
-        "deprecation_date": "2026-10-19",
+        "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -3402,7 +3403,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_output_config": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/claude-opus-4-6": {
         "deprecation_date": "2027-02-02",
@@ -3640,7 +3642,7 @@
         "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-5": {
-        "deprecation_date": "2026-10-19",
+        "deprecation_date": "2026-11-15",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -3660,7 +3662,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule"
     },
     "azure_ai/claude-sonnet-5": {
         "deprecation_date": "2027-06-30",
@@ -30721,6 +30724,7 @@
         "output_cost_per_image": 0.08
     },
     "gemini/veo-3.1-fast-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -30737,6 +30741,7 @@
         ]
     },
     "gemini/veo-3.1-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -30752,6 +30757,7 @@
         ]
     },
     "gemini/veo-3.1-lite-generate-preview": {
+        "deprecation_date": "2026-10-22",
         "litellm_provider": "gemini",
         "max_input_tokens": 1024,
         "max_tokens": 1024,
@@ -38611,6 +38617,7 @@
     },
     "mistral/zai-glm-5-2": {
         "cache_read_input_token_cost": 1.4e-07,
+        "deprecation_date": "2026-10-31",
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "mistral",
         "max_input_tokens": 1048576,
@@ -38741,6 +38748,7 @@
         "source": "https://mistral.ai/pricing#api-pricing"
     },
     "mistral/mistral-ocr-4-0": {
+        "deprecation_date": "2026-09-30",
         "litellm_provider": "mistral",
         "ocr_cost_per_page": 0.004,
         "ocr_cost_per_page_batches": 0.002,
@@ -60616,6 +60624,7 @@
         "supports_vision": true
     },
     "mistral/labs-leanstral-1-5": {
+        "deprecation_date": "2026-09-30",
         "input_cost_per_token": 0.0,
         "litellm_provider": "mistral",
         "max_input_tokens": 262144,
