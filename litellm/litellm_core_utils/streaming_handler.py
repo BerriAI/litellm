@@ -1132,7 +1132,10 @@ class CustomStreamWrapper:
                 chunk.choices[0].finish_reason = None
             return _ProviderChunkEarlyReturn(chunk)
 
-        is_generic_chunk: Final = isinstance(chunk, dict) and generic_chunk_has_all_required_fields(chunk=chunk)
+        is_generic_chunk: Final = isinstance(chunk, dict) and (
+            generic_chunk_has_all_required_fields(chunk=chunk)
+            or (is_registered_custom_provider and _GCHUNK_REQUIRED_FIELDS <= chunk.keys())
+        )
         if (
             isinstance(chunk, dict)
             and not is_generic_chunk

@@ -2551,6 +2551,34 @@ def test_chunk_creator_records_incomplete_usage_chunk(
     assert initialized_custom_stream_wrapper.chunks[-1].usage.prompt_tokens == 1
 
 
+def test_custom_provider_complete_generic_chunk_with_extra_fields_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    custom_llm_provider = "my-custom-llm"
+    monkeypatch.setattr(litellm, "_custom_providers", [custom_llm_provider])
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter(
+            [
+                {
+                    "text": "hello",
+                    "is_finished": True,
+                    "finish_reason": "stop",
+                    "usage": None,
+                    "custom_metadata": {"trace_id": "trace-1"},
+                }
+            ]
+        ),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    chunks = list(wrapper)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "hello"
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
 def _run_dispatch(wrapper: CustomStreamWrapper, chunk):
     model_response = wrapper.model_response_creator()
     completion_obj = {"content": ""}
