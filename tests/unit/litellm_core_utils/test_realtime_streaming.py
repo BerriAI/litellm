@@ -902,10 +902,12 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
 
 
 @pytest.mark.asyncio
-async def test_non_transcription_completed_event_still_triggers_response_create():
+async def test_completed_transcription_without_guardrails_does_not_inject_response_create():
     """
-    Regression guard: a normal (non-transcription) session with no guardrails must
-    keep triggering response.create on a completed transcription event.
+    Regression guard for #31726. Without a ``realtime_input_transcription`` guardrail the
+    backend's server-VAD auto-response stays on, so the backend already created this turn's
+    response. The proxy must not send its own ``response.create`` (the backend would reject it
+    with ``conversation_already_has_active_response``), but must still forward the transcript.
     """
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -931,7 +933,55 @@ async def test_non_transcription_completed_event_still_triggers_response_create(
 
     assert streaming._is_transcription_session is False
     sent_to_backend = [json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args]
-    assert any(e.get("type") == "response.create" for e in sent_to_backend)
+    assert all(e.get("type") != "response.create" for e in sent_to_backend), sent_to_backend
+    forwarded = [json.loads(c.args[0]) for c in client_ws.send_text.call_args_list if c.args]
+    assert any(e.get("type") == "conversation.item.input_audio_transcription.completed" for e in forwarded)
+
+
+@pytest.mark.asyncio
+async def test_provider_config_completed_transcription_without_guardrails_does_not_inject_response_create():
+    """Same contract on the provider_config path (OpenAI / Gemini / Vertex transformed backends)."""
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    completed_event = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "transcript": "hi",
+        "item_id": "item_1",
+    }
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [completed_event],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gpt-realtime",
+    )
+    await streaming._handle_provider_config_message(json.dumps(completed_event))
+
+    assert backend_ws.send.await_count == 0
+    forwarded = [json.loads(c.args[0]) for c in client_ws.send_text.call_args_list if c.args]
+    assert any(e.get("type") == "conversation.item.input_audio_transcription.completed" for e in forwarded)
 
 
 def test_client_session_update_marks_transcription_session():
