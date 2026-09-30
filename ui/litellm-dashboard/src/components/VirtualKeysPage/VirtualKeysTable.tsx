@@ -3,6 +3,7 @@
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
@@ -140,16 +141,25 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
   const rowCount = keys?.total_count ?? 0;
 
+  const teamIds = useMemo(
+    () =>
+      Array.from(
+        new Set(keyList.flatMap((key) => (key.max_budget == null && key.team_id && key.user_id ? [key.team_id] : []))),
+      ),
+    [keyList],
+  );
+  const teamMemberBudgets = useTeamMemberBudgets(teamIds);
   const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
 
   const columnDeps = useMemo(
     () => ({
       allTeams,
       organizations,
+      teamMemberBudgets,
       onSelectKey: (key: KeyResponse) => void setSelectedKeyId(key.token),
       applyUserBudgetToTeamKeys,
     }),
-    [allTeams, organizations, setSelectedKeyId, applyUserBudgetToTeamKeys],
+    [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys],
   );
   const columns = useMemo(() => getKeyTableColumns(columnDeps), [columnDeps]);
 
