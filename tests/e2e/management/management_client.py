@@ -411,6 +411,27 @@ class ManagementClient:
         assert last is not None
         raise AssertionError(last)
 
+    def add_team_members(self, team_id: str, members: list[TeamMemberEntry]) -> None:
+        """Bulk form of /team/member_add: `member` accepts a list, so one call
+        seeds a whole roster the way an admin import does."""
+        _ = unwrap(
+            self.proxy.transport.post(
+                "/team/member_add",
+                headers=self.proxy.management_headers(),
+                json=TeamMemberAddBody(team_id=team_id, member=members),
+                response_type=NoBody,
+            )
+        )
+
+    def delete_team_status(self, team_id: str) -> StreamingResponse:
+        """POST /team/delete judged by HTTP outcome: the raw status and body, so a
+        test can assert on what a caller actually sees when the delete fails."""
+        return self.proxy.transport.send(
+            "/team/delete",
+            headers=self.proxy.management_headers(),
+            json=TeamDeleteBody(team_ids=[team_id]),
+        )
+
     def delete_team_member(self, team_id: str, user_id: str) -> None:
         _ = unwrap(
             self.proxy.transport.post(
