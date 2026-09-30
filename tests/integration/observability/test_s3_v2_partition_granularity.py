@@ -1016,13 +1016,24 @@ def test_s3_v2_hour_sink_outage_mid_mixed_burst_lands_every_id_exactly_once(gate
     marker: Final = "s3hout" + uuid.uuid4().hex[:8]
     upstream: Final = CountingUpstream()
     sink: Final = RecordingS3Sink(delay_seconds=0.05, fail_until=float("inf"), fail_status=503)
+    openai_model: Final = f"{marker}openai"
+    anthropic_model: Final = f"{marker}anthropic"
     with (
         wire_server(upstream.respond) as provider,
         wire_server(sink.respond) as bucket,
-        _s3_proxy(gateway, tmp_path, bucket.url, HOUR) as owned,
+        _s3_proxy(
+            gateway,
+            tmp_path,
+            bucket.url,
+            HOUR,
+            models=(
+                _config_model(openai_model, "openai/gpt-4o-mini", provider.url + "/v1"),
+                _config_model(anthropic_model, ANTHROPIC_MODEL, provider.url),
+            ),
+        ) as owned,
         owned.gateway.scenario() as scenario,
     ):
-        openai_model, anthropic_model, key = _models(scenario, provider.url)
+        key: Final = scenario.key(models=[openai_model, anthropic_model])
         answered: Final = mixed_burst(owned.gateway, openai_model, anthropic_model, key, marker, per_surface=6)
         eventually(lambda: sink.attempts, lambda attempts: attempts >= 1, seconds=30)
         during: Final = owned.gateway.client.get("/health/readiness")
