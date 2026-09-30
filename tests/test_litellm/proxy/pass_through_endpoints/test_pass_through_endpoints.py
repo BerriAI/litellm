@@ -24,6 +24,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -49,6 +50,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -7771,6 +7773,18 @@ async def _run_guarded_passthrough(body: bytes, guardrails: list[str] | None):
     return error.value
 
 
+@contextmanager
+def _registered_guardrail(name: str, mode: GuardrailEventHooks):
+    """Register a real guardrail the way the proxy does, so the code under test resolves its
+    event mode instead of being told the answer."""
+    guardrail = CustomGuardrail(guardrail_name=name, event_hook=mode)
+    litellm.callbacks.append(guardrail)
+    try:
+        yield
+    finally:
+        litellm.callbacks.remove(guardrail)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
@@ -7780,15 +7794,35 @@ async def _run_guarded_passthrough(body: bytes, guardrails: list[str] | None):
         pytest.param(b"123", id="number"),
     ],
 )
-async def test_guarded_route_refuses_a_body_its_guardrails_cannot_read(body: bytes):
-    """Guardrails inspect the parsed body, which for a non-object payload carries none of the
-    caller's content, while the bytes forwarded upstream carry all of it. Running them would
-    report "inspected" on content nobody looked at, so the request must be refused instead."""
-    raised = await _run_guarded_passthrough(body, guardrails=["my-guard"])
+async def test_route_with_a_request_guardrail_refuses_a_body_it_cannot_read(body: bytes):
+    """A pre_call guardrail inspects the parsed body, which for a non-object payload carries
+    none of the caller's content, while the bytes forwarded upstream carry all of it. Running
+    it would report "inspected" on content nobody looked at, so refuse instead."""
+    with _registered_guardrail("precall-guard", GuardrailEventHooks.pre_call):
+        raised = await _run_guarded_passthrough(body, guardrails=["precall-guard"])
 
     assert raised.code == "400"
     assert raised.type == "invalid_request_error"
     assert "cannot inspect a JSON body that is not an object" in raised.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode",
+    [
+        pytest.param(GuardrailEventHooks.post_call, id="post_call"),
+        pytest.param(GuardrailEventHooks.logging_only, id="logging_only"),
+    ],
+)
+async def test_a_response_only_guardrail_does_not_gate_the_request_body(mode: GuardrailEventHooks):
+    """A guardrail that inspects the response never reads the request body, so a body it was
+    never going to look at is no reason to turn the request away."""
+    body = b'[{"role": "user", "content": "hi"}]'
+
+    with _registered_guardrail("response-guard", mode):
+        upstream = await _capture_upstream_request(body, guardrails=["response-guard"])
+
+    assert upstream.content == body
 
 
 @pytest.mark.asyncio
@@ -7801,10 +7835,13 @@ async def test_unguarded_route_still_forwards_a_non_object_body():
 
 
 @pytest.mark.asyncio
-async def test_guarded_route_accepts_an_object_body():
-    """An object body is fully readable by guardrails, so guardrails being configured must not
-    turn it away: it still reaches the provider."""
-    upstream = await _capture_upstream_request(b'{"model": "claude-sonnet-4-5"}', guardrails=["my-guard"])
+async def test_a_request_guardrail_still_accepts_an_object_body():
+    """An object body is fully readable, so a pre_call guardrail being configured must not turn
+    it away: it still reaches the provider."""
+    with _registered_guardrail("precall-guard", GuardrailEventHooks.pre_call):
+        upstream = await _capture_upstream_request(
+            b'{"model": "claude-sonnet-4-5"}', guardrails=["precall-guard"]
+        )
 
     assert json.loads(upstream.content)["model"] == "claude-sonnet-4-5"
 

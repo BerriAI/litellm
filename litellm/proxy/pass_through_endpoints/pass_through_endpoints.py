@@ -1143,10 +1143,15 @@ async def pass_through_request(
             passthrough_guardrails_config=guardrails_config,
         )
 
-        if guardrails_to_run and uninspectable_body is not None:
-            # Guardrails read the parsed body, which for a non-object payload carries none of
-            # the caller's content, while the bytes forwarded upstream carry all of it. Running
-            # them would report "inspected" on content nobody looked at, so refuse instead.
+        if (
+            guardrails_to_run
+            and uninspectable_body is not None
+            and PassthroughGuardrailHandler.any_inspects_the_request_body(guardrails_to_run)
+        ):
+            # A request-inspecting guardrail reads the parsed body, which for a non-object
+            # payload carries none of the caller's content, while the bytes forwarded upstream
+            # carry all of it. Running it would report "inspected" on content nobody looked at,
+            # so refuse instead. A post_call guardrail reads the response, so it does not gate.
             raise ProxyException(
                 message=(
                     "Guardrails are configured for this route and cannot inspect a JSON body "

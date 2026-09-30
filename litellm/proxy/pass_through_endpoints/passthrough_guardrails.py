@@ -7,15 +7,37 @@ Handles guardrail execution for passthrough endpoints with:
 - Automatic inheritance from org/team/key levels when enabled
 """
 
+from collections.abc import Collection
 from typing import Any, Final
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import (
     PassThroughGuardrailsConfig,
     PassThroughGuardrailSettings,
     UserAPIKeyAuth,
 )
 from litellm.proxy.pass_through_endpoints.jsonpath_extractor import JsonPathExtractor
+from litellm.types.guardrails import GuardrailEventHooks
+
+# The hooks that read the request body. ``post_call`` and ``logging_only`` read the response.
+_REQUEST_INSPECTING_EVENT_HOOKS: Final = (
+    GuardrailEventHooks.pre_call,
+    GuardrailEventHooks.during_call,
+)
+
+
+def _reads_the_request_body(callback: object, guardrail_names: Collection[str]) -> bool:
+    if not isinstance(callback, CustomGuardrail) or callback.guardrail_name not in guardrail_names:
+        return False
+    # Same private predicate common_request_processing.py uses to ask a callback which
+    # lifecycle hooks it is configured for, rather than re-deriving the matching rules.
+    return any(
+        callback._event_hook_is_event_type(hook)  # pyright: ignore[reportPrivateUsage]  # no public equivalent
+        for hook in _REQUEST_INSPECTING_EVENT_HOOKS
+    )
+
 
 # Type for raw guardrails config input (before normalization)
 # Can be a list of names or a dict with settings
@@ -272,6 +294,16 @@ class PassthroughGuardrailHandler:
         )
 
         return guardrails_to_run if guardrails_to_run else None
+
+    @staticmethod
+    def any_inspects_the_request_body(guardrail_names: Collection[str]) -> bool:
+        """Whether any of these guardrails reads the request body.
+
+        A ``post_call`` or ``logging_only`` guardrail inspects the response, so a request
+        body it never reads is no reason to turn the request away. A name with no
+        initialized callback inspects nothing either, since there is nothing to run.
+        """
+        return any(_reads_the_request_body(callback, guardrail_names) for callback in litellm.callbacks)
 
     @staticmethod
     def get_field_targeted_text(
