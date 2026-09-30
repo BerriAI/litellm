@@ -1230,6 +1230,7 @@ class LiteLLMParamsBody(BaseModel):
     api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
+    drop_params: bool | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None

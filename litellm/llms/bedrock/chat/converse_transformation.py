@@ -390,7 +390,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _requires_min_max_tokens(model: str) -> bool:
-        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
+        return re.search(r"openai\.gpt-\d|xai\.grok-|moonshotai\.kimi-k3", model) is not None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
