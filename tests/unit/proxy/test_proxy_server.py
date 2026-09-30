@@ -33,7 +33,7 @@ logging.basicConfig(
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
@@ -49,7 +49,7 @@ from litellm.proxy.utils import ProxyLogging
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
-@pytest.mark.parametrize("failure_phase", ["startup", "serving", "shutdown", "cancelled"])
+@pytest.mark.parametrize("failure_phase", ["startup", "serving", "shutdown", "cancelled", "license"])
 async def test_admin_mcp_failure_still_closes_proxy_resources(
     monkeypatch: pytest.MonkeyPatch, failure_phase: str
 ) -> None:
@@ -59,6 +59,7 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
     from litellm_admin_mcp.gateway import Gateway
 
     from litellm.proxy import proxy_server
+    from litellm.proxy.auth.litellm_license import LicenseCheck
     from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
     from litellm.proxy.shutdown.scheduled_jobs import AwaitableAsyncIOExecutor
 
@@ -67,7 +68,9 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
     monkeypatch.delenv("WORKER_CONFIG", raising=False)
     monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.delenv("LITELLM_LICENSE", raising=False)
+    monkeypatch.setattr(proxy_server, "_license_check", LicenseCheck())
+    monkeypatch.setattr(proxy_server, "premium_user", failure_phase != "license")
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_info_refresh": True})
     executor: Final = AwaitableAsyncIOExecutor()
@@ -101,9 +104,9 @@ async def test_admin_mcp_failure_still_closes_proxy_resources(
             if failure_phase == "cancelled":
                 raise asyncio.CancelledError("cancelled failed")
 
-    with pytest.raises(
-        asyncio.CancelledError if failure_phase == "cancelled" else RuntimeError, match=f"{failure_phase} failed"
-    ):
+    expected_error: Final = {"license": HTTPException, "cancelled": asyncio.CancelledError}.get(failure_phase, RuntimeError)
+    message: Final = "LITELLM_LICENSE" if failure_phase == "license" else f"{failure_phase} failed"
+    with pytest.raises(expected_error, match=message):
         await run_lifespan()
 
     assert proxy_server.shared_aiohttp_session is not None

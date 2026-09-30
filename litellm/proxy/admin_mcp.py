@@ -29,6 +29,12 @@ _REQUEST_HEADERS: Final = frozenset(
 )
 
 
+def _require_enterprise_license() -> None:
+    from litellm.proxy.utils import require_enterprise_license
+
+    require_enterprise_license("Hosted admin MCP")
+
+
 class _CallerContext:
     def __init__(self, app: ASGIApp, caller: ContextVar[Request]) -> None:
         self.app = app
@@ -38,6 +44,7 @@ class _CallerContext:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        _require_enterprise_license()
         token: Final = self.caller.set(Request(scope))
         try:
             await self.app(scope, receive, send)
@@ -53,6 +60,7 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         return
     if enabled not in ("true", "1"):
         raise ValueError("LITELLM_ENABLE_ADMIN_MCP must be true or false")
+    _require_enterprise_license()
 
     try:
         import httpx2

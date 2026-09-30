@@ -8203,7 +8203,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
     )
 
 
-def _premium_user_check(feature: str | None = None):
+def require_enterprise_license(feature: str | None = None) -> None:
     """
     Raises an HTTPException if the user is not a premium user
     """
@@ -8221,6 +8221,9 @@ def _premium_user_check(feature: str | None = None):
             status_code=403,
             detail={"error": detail_msg},
         )
+
+
+_premium_user_check: Final = require_enterprise_license
 
 
 def is_known_model(model: str | None, llm_router: Router | None) -> bool:

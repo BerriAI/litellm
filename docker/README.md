@@ -21,14 +21,21 @@ This guide provides instructions for building and running the LiteLLM applicatio
 ## Enable the built-in admin MCP
 
 The images built from `Dockerfile` and `docker/Dockerfile.non_root` include the
-[LiteLLM Admin MCP](https://github.com/BerriAI/liteadmin-mcp). It is disabled by
-default. Enable it on the existing LiteLLM service and restart the container:
+[LiteLLM Admin MCP](https://github.com/BerriAI/liteadmin-mcp). Hosting it requires
+a valid base LiteLLM Enterprise license. It is disabled by default. Set the
+license and enable flag on the existing service, then restart the container:
 
 ```yaml
 environment:
+  LITELLM_LICENSE: "<your-enterprise-license>"
   LITELLM_ENABLE_ADMIN_MCP: "true"
   PROXY_BASE_URL: "https://litellm.example.com"
 ```
+
+An enabled connector without a valid enterprise license prevents startup with
+the standard enterprise-license error. Each MCP request also checks the proxy's
+current enterprise status. A base license is sufficient; no additional feature
+entitlement is required. The flag being off does not require a license
 
 Keep your existing database, authentication, configuration mount and HTTPS reverse
 proxy. The MCP endpoint is `https://litellm.example.com/admin/mcp`, on the same

@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from starlette.testclient import TestClient
 
+from litellm.proxy import proxy_server
 from litellm.proxy.admin_mcp import admin_mcp_lifespan
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
@@ -27,6 +28,7 @@ class KeyRequest(BaseModel):
 
 @pytest.fixture
 def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+    monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
     monkeypatch.setenv("LITELLM_ADMIN_TOOLS", "list_keys")
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
@@ -81,6 +83,7 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 
 @pytest.mark.parametrize("enabled", [None, "false", "0"])
 def test_disabled_preserves_existing_admin_namespace(monkeypatch: pytest.MonkeyPatch, enabled: str | None) -> None:
+    monkeypatch.setattr(proxy_server, "premium_user", False)
     monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
     if enabled is None:
         monkeypatch.delenv("LITELLM_ENABLE_ADMIN_MCP", raising=False)
@@ -99,11 +102,48 @@ def test_disabled_preserves_existing_admin_namespace(monkeypatch: pytest.MonkeyP
 
 
 def test_enabled_without_connector_explains_installation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_server, "premium_user", True)
     monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
     monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
     with pytest.raises(RuntimeError, match="admin-mcp dependency group"):
         with TestClient(FastAPI(lifespan=admin_mcp_lifespan)):
             pytest.fail("Enabling the connector without its dependency must fail startup")
+
+
+def test_unlicensed_opt_in_fails_before_loading_connector(
+    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setitem(sys.modules, "litellm_admin_mcp.config", None)
+    with pytest.raises(HTTPException) as exc:
+        with TestClient(management_app):
+            pytest.fail("An unlicensed deployment must not serve the hosted admin connector")
+    assert exc.value.status_code == 403
+    assert "LITELLM_LICENSE" in str(exc.value.detail)
+    assert all(route.name != "admin_mcp" for route in management_app.routes)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+def test_losing_enterprise_status_blocks_admin_tool_calls(
+    management_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_ADMIN_TOOLS", "create_key")
+    headers: Final = {"Authorization": "Bearer admin-a", "Accept": "application/json, text/event-stream"}
+    payload: Final = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "create_key", "arguments": {"body": {"key_alias": "licensed-write"}}},
+    }
+    with TestClient(management_app, base_url="http://localhost:4000") as client:
+        licensed: Final = client.post("/admin/mcp", headers=headers, json=payload)
+        assert licensed.status_code == 200, licensed.text
+        assert licensed.json()["result"]["isError"] is False
+        monkeypatch.setattr(proxy_server, "premium_user", False)
+        denied: Final = client.post("/admin/mcp", headers=headers, json=payload)
+    assert denied.status_code == 403, denied.text
+    assert "LITELLM_LICENSE" in denied.text
+    assert management_app.state.created_aliases == ["licensed-write"]
 
 
 def test_invalid_flag_fails_startup(monkeypatch: pytest.MonkeyPatch) -> None:
