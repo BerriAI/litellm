@@ -6432,3 +6432,27 @@ async def test_attachment_scan_skipped_when_subclass_overrides_apply_guardrail()
     assert pdf_result is None
     assert image_result is None
     assert mock_post.await_count == 0
+
+
+class _CustomRequestGuardrail(BedrockGuardrail):
+    async def make_bedrock_api_request(self, source, messages=None, response=None, request_data=None, **kwargs):
+        return {"action": "NONE"}
+
+
+@pytest.mark.asyncio
+async def test_attachment_scan_skipped_when_subclass_overrides_make_bedrock_api_request():
+    guardrail = _CustomRequestGuardrail(
+        guardrail_name="bedrock-attachments", guardrailIdentifier="gid", guardrailVersion="DRAFT"
+    )
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+        pdf_result = await guardrail.async_scan_request_attachments(
+            data=_pdf_chat_request(), call_type=CallTypes.acompletion.value
+        )
+        image_result = await guardrail.async_scan_request_attachments(
+            data=_image_only_chat_request(), call_type=CallTypes.acompletion.value
+        )
+
+    assert pdf_result is None
+    assert image_result is None
+    assert mock_post.await_count == 0

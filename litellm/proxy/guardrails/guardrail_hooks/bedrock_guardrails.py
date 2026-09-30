@@ -2567,9 +2567,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request unless ``skip_unscannable_attachments`` is set. ``checks`` mode calls the text-only
         InvokeGuardrailChecks API, so there every image counts as unscannable too. A failed ApplyGuardrail
         call raises the same error the text scan of the same hook raises. A subclass that overrides
-        ``apply_guardrail`` skips this scan.
+        ``apply_guardrail`` or ``make_bedrock_api_request`` skips this scan.
         """
-        if type(self).apply_guardrail is not BedrockGuardrail.apply_guardrail:
+        if (
+            type(self).apply_guardrail is not BedrockGuardrail.apply_guardrail
+            or type(self).make_bedrock_api_request is not BedrockGuardrail.make_bedrock_api_request
+        ):
             return
         attachments: Final = find_request_attachments(
             data,

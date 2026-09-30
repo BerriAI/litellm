@@ -56,8 +56,11 @@ _OPENAI_UNSCANNABLE_TYPES: Final = frozenset(
     {"file", "input_file", "input_audio", "video_url", "audio_url", "document", "container_upload"}
 )
 _ANTHROPIC_UNSCANNABLE_TYPES: Final = frozenset({"document", "container_upload"})
+_TEXT_DOCUMENT_SOURCE_TYPES: Final = frozenset({"text", "content"})
 _CONVERSE_UNSCANNABLE_KEYS: Final = ("document", "video", "audio")
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
+_MAX_IMAGE_BASE64_CHARS: Final = -(-_MAX_IMAGE_BYTES // 3) * 4
+_URL_SAFE_TO_STANDARD_BASE64: Final = str.maketrans("-_", "+/")
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _TOOL_OUTPUT_ITEM_TYPES: Final = frozenset({"function_call_output", "custom_tool_call_output", "computer_call_output"})
@@ -171,7 +174,7 @@ def _classify_nothing(block: Mapping[str, object]) -> _Classified:
 
 def _classify_openai_block(block: Mapping[str, object]) -> _Classified:
     block_type: Final = block.get("type")
-    if block_type == "image":
+    if block_type in ("image", "document"):
         return _classify_anthropic_block(block)
     if isinstance(block_type, str) and block_type in _OPENAI_IMAGE_TYPES:
         image_url: Final = block.get("image_url")
@@ -189,9 +192,17 @@ def _classify_anthropic_block(block: Mapping[str, object]) -> _Classified:
         if _is_mapping(source) and source.get("type") == "base64":
             return _classify_base64(source.get("media_type"), source.get("data"), "image")
         return _Unscannable("image (url or file source)")
+    if block_type == "document" and _is_text_document(block):
+        return None
     if isinstance(block_type, str) and block_type in _ANTHROPIC_UNSCANNABLE_TYPES:
         return _Unscannable(block_type)
     return None
+
+
+def _is_text_document(block: Mapping[str, object]) -> bool:
+    source: Final = block.get("source")
+    source_type: Final = source.get("type") if _is_mapping(source) else None
+    return isinstance(source_type, str) and source_type in _TEXT_DOCUMENT_SOURCE_TYPES
 
 
 def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
@@ -224,19 +235,29 @@ def _classify_base64(mime: object, encoded: object, label: str) -> _Classified:
     image_format: Final = _IMAGE_FORMAT_BY_MIME.get(mime.lower()) if isinstance(mime, str) else None
     if image_format is None:
         return _Unscannable(f"{label} ({mime[:_MAX_LABEL_MIME_CHARS]})" if isinstance(mime, str) and mime else label)
-    compact: Final = "".join(encoded.split()) if isinstance(encoded, str) else ""
-    decoded_size: Final = _decoded_size(compact)
+    standard: Final = _standard_base64(encoded)
+    if len(standard) > _MAX_IMAGE_BASE64_CHARS:
+        return _Unscannable(f"{label} (over 4 MB)")
+    decoded_size: Final = _decoded_size(standard)
     if decoded_size is None:
         return _Unscannable(f"{label} (invalid base64)")
     if decoded_size > _MAX_IMAGE_BYTES:
         return _Unscannable(f"{label} (over 4 MB)")
-    return _Image(BedrockContentItem(image=BedrockImageContent(format=image_format, source={"bytes": compact})))
+    return _Image(BedrockContentItem(image=BedrockImageContent(format=image_format, source={"bytes": standard})))
 
 
-def _decoded_size(compact: str) -> int | None:
-    if not compact:
+def _standard_base64(encoded: object) -> str:
+    """Return the payload as padded standard base64, accepting whitespace, missing padding and the URL-safe alphabet."""
+    compact: Final = (
+        "".join(encoded.split()).translate(_URL_SAFE_TO_STANDARD_BASE64) if isinstance(encoded, str) else ""
+    )
+    return compact + "=" * (-len(compact) % 4)
+
+
+def _decoded_size(standard: str) -> int | None:
+    if not standard:
         return None
     try:
-        return len(base64.b64decode(compact, validate=True))
+        return len(base64.b64decode(standard, validate=True))
     except (binascii.Error, ValueError):
         return None

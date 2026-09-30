@@ -397,3 +397,53 @@ def test_converse_null_document_is_not_an_attachment():
 
     assert list(found.images) == [_png_item()]
     assert found.unscannable == ("audio",)
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param(
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "hi"}}, id="text"
+        ),
+        pytest.param({"type": "document", "source": {"type": "content", "content": [TEXT]}}, id="content"),
+    ],
+)
+@pytest.mark.parametrize(
+    "call_type", [CallTypes.anthropic_messages.value, CallTypes.acompletion.value], ids=["messages", "chat"]
+)
+def test_text_source_document_is_not_an_attachment(block, call_type):
+    pdf = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": PDF_B64}}
+
+    found = find_request_attachments(_chat(TEXT, block, pdf), call_type, False, False)
+
+    assert found.images == ()
+    assert found.unscannable == ("document",)
+
+
+def test_unpadded_and_url_safe_base64_are_sent_as_standard_base64():
+    raw = b"\x89PNG\r\n\x1a\n\xfb\xff\xfe-fake"
+    standard = base64.b64encode(raw).decode()
+    unpadded = standard.rstrip("=")
+    url_safe = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    data = _chat(
+        *(
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
+            for encoded in (unpadded, url_safe)
+        )
+    )
+
+    found = find_request_attachments(data, CallTypes.acompletion.value, False, False)
+
+    assert unpadded != standard
+    assert set("-_") & set(url_safe)
+    assert list(found.images) == [_png_item(standard), _png_item(standard)]
+    assert found.unscannable == ()
+
+
+def test_oversize_base64_is_refused_by_length_before_decoding():
+    encoded = "!" * (len(OVERSIZE_PNG_B64) + 4)
+    data = _chat({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}})
+
+    found = find_request_attachments(data, CallTypes.acompletion.value, False, False)
+
+    assert found.unscannable == ("image_url (over 4 MB)",)
