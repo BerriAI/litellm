@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+time = { workspace = true, features = ["formatting"] }
 litellm-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true

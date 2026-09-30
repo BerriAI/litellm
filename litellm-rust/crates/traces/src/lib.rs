@@ -1,8 +1,10 @@
 mod error;
+mod insert;
 mod schema;
 mod sql;
 
 pub use error::Error;
+pub use insert::encode_rows;
 pub use schema::schema_statements;
 pub use sql::{Parameter, execute_read};
 use url::Url;
