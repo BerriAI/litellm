@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 
 import { uiSpendLogsCall } from "../../networking";
@@ -25,20 +25,23 @@ export function useSpanRequestLog(
   spanStartMs: number,
   enabled: boolean,
 ) {
-  return useQuery({
+  const fetchLog = async (): Promise<LogEntry | null> => {
+    if (requestId === null) return null;
+    const logsOptions: Parameters<typeof uiSpendLogsCall>[0] = {
+      accessToken,
+      ...spanLogWindow(spanStartMs),
+      page: 1,
+      page_size: 1,
+      params: { request_id: requestId },
+    };
+    const response = await uiSpendLogsCall(logsOptions);
+    return response.data.find((log: LogEntry) => log.request_id === requestId) ?? null;
+  };
+  const queryOptions: UseQueryOptions<LogEntry | null> = {
     queryKey: ["logs", "spanRequest", requestId, spanStartMs, accessToken],
-    queryFn: async (): Promise<LogEntry | null> => {
-      if (requestId === null) return null;
-      const response = await uiSpendLogsCall({
-        accessToken,
-        ...spanLogWindow(spanStartMs),
-        page: 1,
-        page_size: 1,
-        params: { request_id: requestId },
-      });
-      return response.data.find((log: LogEntry) => log.request_id === requestId) ?? null;
-    },
+    queryFn: fetchLog,
     enabled: enabled && requestId !== null,
     staleTime: Infinity,
-  });
+  };
+  return useQuery(queryOptions);
 }
