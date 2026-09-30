@@ -61,11 +61,11 @@ async def test_apply_guardrail_endpoint_returns_correct_response(
         assert response.response_text == "Redacted text: [REDACTED] and [REDACTED]"
 
         # Verify the guardrail was called with correct parameters
-        mock_guardrail.apply_guardrail.assert_called_once_with(
-            inputs={"texts": ["Test text with PII"]},
-            request_data={},
-            input_type="request",
-        )
+        mock_guardrail.apply_guardrail.assert_called_once()
+        call = mock_guardrail.apply_guardrail.call_args.kwargs
+        assert call["inputs"] == {"texts": ["Test text with PII"]}
+        assert call["input_type"] == "request"
+        assert call["request_data"]["metadata"]["user_api_key_hash"] == user_api_key_dict.api_key
 
 
 @pytest.mark.asyncio
@@ -197,6 +197,8 @@ async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_loggi
         assert response.response_text == "Processed text"
 
         # Verify the guardrail was called with correct parameters
-        mock_guardrail.apply_guardrail.assert_called_once_with(
-            inputs={"texts": ["Test text"]}, request_data={}, input_type="request"
-        )
+        mock_guardrail.apply_guardrail.assert_called_once()
+        call = mock_guardrail.apply_guardrail.call_args.kwargs
+        assert call["inputs"] == {"texts": ["Test text"]}
+        assert call["input_type"] == "request"
+        assert call["request_data"]["metadata"]["user_api_key_hash"] == user_api_key_dict.api_key

@@ -103,6 +103,32 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    skip_if_key_alias_in: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Skip the guardrail on the request and response hooks when the calling virtual key's "
+            "alias is in this list: nothing is sent to the guardrail endpoint and the call is "
+            "logged as not_run. On the proxy the match trusts the alias the auth layer resolved "
+            "for the key, never the request body. That alias is chosen by whoever creates or "
+            "edits the key, and by default internal users can create keys and rename their own, "
+            "so any of them can claim an alias that is unused or has been freed. List only "
+            "aliases held by admin-owned keys, and use skip_if_team_id_in for exemptions that "
+            "must hold. Outside the proxy the caller builds request_data, so the match is only "
+            "as trustworthy as that code. MCP tool results (post_mcp_call) are still scanned."
+        ),
+    )
+
+    skip_if_team_id_in: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Skip the guardrail for calls from a key whose team id is in this list, with the "
+            "same behavior as skip_if_key_alias_in. On the proxy the match trusts the team the "
+            "auth layer resolved for the key. Team ids are unique, and by default only admins "
+            "create teams and manage their members, so prefer this option when an exemption "
+            "must hold."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],

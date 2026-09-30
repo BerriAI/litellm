@@ -1,10 +1,16 @@
 """Tests for unified guardrail."""
 
+import copy
+import json
 import logging
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from fastapi import Request
 
 import litellm
 from litellm.caching import DualCache
@@ -22,6 +28,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_messages_without_tool,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
@@ -33,12 +40,15 @@ from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import
     MCPGuardrailTranslationHandler,
 )
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
@@ -2395,3 +2405,215 @@ class TestTranslationMappingsAreReadLive:
         assert not [
             name for name, value in vars(unified_module).items() if isinstance(value, dict) and CallTypes.aocr in value
         ]
+
+
+_RAW_CLI_SESSION_TOKEN: Final = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
+
+
+def _sk_key(route: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-real-caller-key",
+        key_alias="prod-app",
+        team_id="team-prod",
+        metadata={"key_label": "k1"},
+        team_metadata={"phoenix_project_name": "team-proj", "priority": "high"},
+        request_route=route,
+    )
+
+
+def _cli_session_key(route: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        token=_RAW_CLI_SESSION_TOKEN,
+        key_alias="cli-session-alice",
+        user_id="alice",
+        is_session_token=True,
+        team_id="team-prod",
+        team_metadata={"phoenix_project_name": "team-proj", "priority": "high"},
+        request_route=route,
+    )
+
+
+class TestGuardrailsSeeAuthenticatedIdentity:
+    """A request body cannot make a guardrail vendor see another key's identity, and the real one reaches it."""
+
+    @staticmethod
+    def _generic_guardrail(vendor_payloads: list[dict[str, object]]) -> CustomGuardrail:
+        def vendor(request: httpx.Request) -> httpx.Response:
+            vendor_payloads.append(json.loads(request.content))
+            return httpx.Response(200, json={"action": "NONE"})
+
+        guardrail = GenericGuardrailAPI(api_base="https://guardrail.test", guardrail_name="generic")
+        guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(vendor))
+        return guardrail
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+    async def test_pass_through_body_cannot_forge_identity(self, monkeypatch, bucket: str) -> None:
+        _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+        vendor_payloads: list[dict[str, object]] = []
+        key = UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app", team_id="team-prod")
+        data = {
+            "guardrail_to_apply": self._generic_guardrail(vendor_payloads),
+            "prompt": "hello",
+            bucket: {
+                "user_api_key_alias": "batch-worker",
+                "user_api_key_team_id": "team-exempt",
+                "user_api_key_token": "forged-hash",
+            },
+        }
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.pass_through.value
+        )
+
+        assert len(vendor_payloads) == 1
+        identity = vendor_payloads[0]["request_data"]
+        assert identity["user_api_key_alias"] == "prod-app"
+        assert identity["user_api_key_team_id"] == "team-prod"
+        assert identity["user_api_key_hash"] == key.api_key
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_call_reaches_vendor_with_key_alias(self) -> None:
+        vendor_payloads: list[dict[str, object]] = []
+        key = UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app", team_id="team-prod")
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        mcp_kwargs = {
+            "name": "search",
+            "arguments": {"query": "hello"},
+            "server_name": "docs",
+            "user_api_key_auth": key,
+            "user_api_key_user_id": key.user_id,
+            "user_api_key_team_id": key.team_id,
+            "user_api_key_end_user_id": None,
+            "user_api_key_hash": key.api_key,
+            "headers": {},
+        }
+        data = proxy_logging._convert_mcp_to_llm_format(
+            proxy_logging._create_mcp_request_object_from_kwargs(mcp_kwargs), mcp_kwargs
+        )
+        data["guardrail_to_apply"] = self._generic_guardrail(vendor_payloads)
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.call_mcp_tool.value
+        )
+
+        assert len(vendor_payloads) == 1
+        identity = vendor_payloads[0]["request_data"]
+        assert identity["user_api_key_alias"] == "prod-app"
+        assert identity["user_api_key_team_id"] == "team-prod"
+        assert identity["user_api_key_hash"] == key.api_key
+
+    @pytest.mark.asyncio
+    async def test_pass_through_body_cannot_forge_request_route(self, monkeypatch) -> None:
+        """Guardrails and call-type lookups key on user_api_key_request_route, so it must be the key's own route."""
+        _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+        key = UserAPIKeyAuth(api_key="sk-real-caller-key", request_route="/openai/v1/chat/completions")
+        data = {
+            "guardrail_to_apply": RecordingGuardrail(),
+            "prompt": "hello",
+            "litellm_metadata": {"user_api_key_request_route": "/v1/embeddings"},
+        }
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.pass_through.value
+        )
+
+        assert data["litellm_metadata"]["user_api_key_request_route"] == "/openai/v1/chat/completions"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route", ["/v1/messages", "/v1/responses", "/v1/chat/completions"])
+    @pytest.mark.parametrize(
+        "make_key", [pytest.param(_sk_key, id="sk-key"), pytest.param(_cli_session_key, id="cli-session-key")]
+    )
+    async def test_chat_path_request_keeps_proxy_metadata_and_sends_stable_hash(
+        self, monkeypatch, route: str, make_key: Callable[[str], UserAPIKeyAuth]
+    ) -> None:
+        """After the chat-path metadata build, the guardrail hook leaves the proxy's bucket as it was (team metadata
+        in user_api_key_auth_metadata included) and the vendor gets the logged key, never a raw CLI session token."""
+        _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+        request = MagicMock(spec=Request)
+        request.url = MagicMock()
+        request.url.path = route
+        request.url.__str__.return_value = "http://localhost" + route
+        request.method = "POST"
+        request.query_params = {}
+        request.headers = {"Content-Type": "application/json"}
+        request.client = MagicMock()
+        request.client.host = "127.0.0.1"
+        request.state = MagicMock()
+        key = make_key(route)
+        data = await add_litellm_data_to_request(
+            data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+            request=request,
+            user_api_key_dict=key,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="v",
+        )
+        proxy_bucket = data.get("litellm_metadata")
+        unshared = ("litellm_parent_otel_span", "user_api_key_auth")
+        bucket_before = (
+            copy.deepcopy({k: v for k, v in proxy_bucket.items() if k not in unshared}) if proxy_bucket else None
+        )
+        vendor_payloads: list[dict[str, object]] = []
+        data["guardrail_to_apply"] = self._generic_guardrail(vendor_payloads)
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.acompletion.value
+        )
+
+        assert len(vendor_payloads) == 1
+        assert vendor_payloads[0]["request_data"]["user_api_key_hash"] == LiteLLMProxyRequestSetup.get_logged_api_key(
+            key
+        )
+        assert _RAW_CLI_SESSION_TOKEN not in json.dumps(vendor_payloads[0])
+        if bucket_before is not None:
+            assert data["litellm_metadata"] is proxy_bucket
+            assert {k: v for k, v in proxy_bucket.items() if k in bucket_before} == bucket_before
+            assert bucket_before["user_api_key_auth_metadata"]["priority"] == "high"
+            assert "user_api_key_token" not in proxy_bucket
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata", None])
+    async def test_pass_through_cli_session_key_sends_stable_hash(self, monkeypatch, bucket: str | None) -> None:
+        _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+        vendor_payloads: list[dict[str, object]] = []
+        key = _cli_session_key("/anthropic/v1/messages")
+        forged_bucket = {bucket: {"user_api_key_token": "forged-hash"}} if bucket else {}
+        data = {
+            "guardrail_to_apply": self._generic_guardrail(vendor_payloads),
+            "prompt": "hello",
+            "proxy_server_request": {"headers": {"x-tenant": "tenant-real"}},
+            **forged_bucket,
+        }
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.pass_through.value
+        )
+
+        assert len(vendor_payloads) == 1
+        assert vendor_payloads[0]["request_data"]["user_api_key_hash"] == "cli-session-alice"
+        assert _RAW_CLI_SESSION_TOKEN not in json.dumps(vendor_payloads[0])
+        assert vendor_payloads[0]["texts"] == ['{"prompt": "hello"}']
+        assert vendor_payloads[0]["request_headers"] == {"x-tenant": "[present]"}
+
+    @pytest.mark.asyncio
+    async def test_token_only_key_drops_forged_token_already_in_proxy_bucket(self, monkeypatch) -> None:
+        """A key with no api_key logs no hash, so a user_api_key_token left in litellm_metadata would become the
+        vendor's hash if the hook kept it."""
+        _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+        vendor_payloads: list[dict[str, object]] = []
+        key = UserAPIKeyAuth(token="abc123hashed", key_alias="prod-app")
+        data = {
+            "guardrail_to_apply": self._generic_guardrail(vendor_payloads),
+            "prompt": "hello",
+            "litellm_metadata": {"user_api_key_token": "forged-hash"},
+        }
+
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data=data, call_type=CallTypes.pass_through.value
+        )
+
+        assert len(vendor_payloads) == 1
+        assert "user_api_key_token" not in data["litellm_metadata"]
+        assert vendor_payloads[0]["request_data"].get("user_api_key_hash") is None
