@@ -1,3 +1,4 @@
+mod context;
 mod diagnostic;
 
 pub mod audio_transcription;
@@ -16,7 +17,7 @@ pub use error::RouteError;
 
 #[derive(Clone, Default)]
 pub struct CallOptions {
-    pub cache: Option<litellm_cache_response::CacheOptions>,
+    pub cache: Option<litellm_cache_response::CachePolicy>,
     pub observers: Option<litellm_host::observation::ObservationSender>,
 }
 
@@ -29,8 +30,8 @@ impl From<Option<litellm_host::observation::ObservationSender>> for CallOptions 
     }
 }
 
-impl From<litellm_cache_response::CacheOptions> for CallOptions {
-    fn from(cache: litellm_cache_response::CacheOptions) -> Self {
+impl From<litellm_cache_response::CachePolicy> for CallOptions {
+    fn from(cache: litellm_cache_response::CachePolicy) -> Self {
         Self {
             cache: Some(cache),
             observers: None,

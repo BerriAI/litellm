@@ -23,7 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import LimitedSizeOrderedDict
+from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SESSION_KEY_PREFIX,
@@ -591,10 +591,9 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
 
     The group is resolved through ``Router.get_model_list()``, the same resolution
     ``get_model_group_info()`` applies when the caller reads the cost a few lines earlier, so the
-    two lookups cannot disagree: names defined in ``Router.model_group_alias`` are not
-    ``model_name`` entries in ``Router.model_list``, and scanning that list by exact name reported
-    every aliased group as unconfigured. It also reaches a deployment that prices itself through
-    its ``model_info`` block, whose entry lands in the cost map under the deployment id.
+    two lookups cannot disagree, including for names defined in ``Router.model_group_alias``.
+    It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
+    lands in the cost map under the deployment id.
     """
     for deployment in llm_router.get_model_list(model_name=model) or ():
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
@@ -1785,11 +1784,12 @@ async def _load_bounded_registry(
     if not isinstance(cached, _RegistryNotCached):
         return cached
 
+    waited_for_another_load: Final = load_lock.locked()
     async with load_lock:
-        # The request that held the lock has since cached an answer for everyone waiting on it.
-        cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
-        if not isinstance(cached_after_wait, _RegistryNotCached):
-            return cached_after_wait
+        if waited_for_another_load:
+            cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+            if not isinstance(cached_after_wait, _RegistryNotCached):
+                return cached_after_wait
 
         return await _fetch_and_cache_registry(
             cache_key=cache_key,
@@ -2783,17 +2783,12 @@ async def _cache_team_object(
     team_table.last_refreshed_at = time.time()
 
     key: Final = f"team_id:{team_id}"
+    usage_cache: Final = None if proxy_logging_obj is None else proxy_logging_obj.internal_usage_cache.dual_cache
+    # On a shared Redis the write below replaces the team entry and the alias DEL below removes the alias entry
+    # for both caches, so the usage cache only has its own memory to clear.
+    redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_cache
 
-    if proxy_logging_obj is not None:
-        try:
-            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
-        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the write
-            verbose_proxy_logger.warning(
-                "Failed to invalidate internal usage cache entry %s; "
-                "a stale team object may be served until its TTL expires: %s",
-                key,
-                e,
-            )
+    await _invalidate_usage_cache_entry(usage_cache, key, redis_shared=redis_shared, stale="team object")
 
     # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
@@ -2820,9 +2815,11 @@ async def _cache_team_object(
     if team_table.team_alias:
         alias_key: Final = f"team_alias:{team_table.team_alias}"
         try:
-            user_api_key_cache.delete_cache(key=alias_key)
-            if proxy_logging_obj is not None:
-                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=alias_key)
+            pipelined_delete: Final = await user_api_key_cache.async_delete_cache_pre_call(alias_key)
+            if pipelined_delete is None:
+                await user_api_key_cache.async_delete_cache(key=alias_key)
+            else:
+                await pipelined_delete
         except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the mutation
             verbose_proxy_logger.warning(
                 "Failed to invalidate cached team alias entry %s; "
@@ -2830,6 +2827,30 @@ async def _cache_team_object(
                 alias_key,
                 e,
             )
+        await _invalidate_usage_cache_entry(usage_cache, alias_key, redis_shared=redis_shared, stale="team alias")
+
+
+async def _invalidate_usage_cache_entry(
+    usage_cache: DualCache | None,
+    key: str,
+    *,
+    redis_shared: bool,
+    stale: str,
+) -> None:
+    if usage_cache is None:
+        return
+    try:
+        if redis_shared:
+            usage_cache.in_memory_cache.delete_cache(key)
+        else:
+            await usage_cache.async_delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not fail the write
+        verbose_proxy_logger.warning(
+            "Failed to invalidate internal usage cache entry %s; a stale %s may be served until its TTL expires: %s",
+            key.replace("\r", "").replace("\n", ""),
+            stale,
+            e,
+        )
 
 
 async def invalidate_team_member_spend_state(
@@ -3566,13 +3587,16 @@ async def get_org_object_by_alias(
         )
 
 
+LITELLM_SESSION_TOKEN_PREFIX: Final = "litellm_login_"
+
+
 class ExperimentalUIJWTToken:
     @staticmethod
     def get_experimental_ui_login_jwt_auth_token(user_info: LiteLLM_UserTable) -> str:
         from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            encrypt_value_helper,
+            encrypt_bearer_token,
         )
 
         if user_info.user_role is None:
@@ -3598,7 +3622,7 @@ class ExperimentalUIJWTToken:
             user_role=LitellmUserRoles(user_info.user_role),
         )
 
-        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)
 
     @staticmethod
     def get_cli_jwt_auth_token(
@@ -3629,7 +3653,7 @@ class ExperimentalUIJWTToken:
         from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            encrypt_value_helper,
+            encrypt_bearer_token,
         )
 
         if user_info.user_role is None:
@@ -3667,7 +3691,7 @@ class ExperimentalUIJWTToken:
             is_session_token=True,
         )
 
-        return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
+        return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)
 
     @staticmethod
     def get_key_object_from_ui_hash_key(
@@ -3677,10 +3701,10 @@ class ExperimentalUIJWTToken:
 
         from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-            decrypt_value_helper,
+            decrypt_bearer_token,
         )
 
-        decrypted_token: Final = decrypt_value_helper(hashed_token, key="ui_hash_key", exception_type="debug")
+        decrypted_token: Final = decrypt_bearer_token(hashed_token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
         if decrypted_token is None:
             return None
         try:

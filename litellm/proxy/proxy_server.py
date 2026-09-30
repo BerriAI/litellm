@@ -269,6 +269,12 @@ import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
+from litellm.caching.dual_cache import DeclaredBatchRead
+from litellm.caching.redis_batch import (
+    active_post_call_redis_batch,
+    active_request_redis_batches,
+    drain_post_call_redis_batches,
+)
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
@@ -681,6 +687,7 @@ from litellm.proxy.middleware.billable_request_metrics_middleware import (
 from litellm.proxy.middleware.budget_reservation_release_middleware import (
     BudgetReservationReleaseMiddleware,
 )
+from litellm.proxy.middleware.redis_request_batch_middleware import RedisRequestBatchMiddleware
 from litellm.proxy.plugin_routes import (
     register_plugins_from_config,
 )
@@ -759,6 +766,7 @@ from litellm.proxy.shutdown.scheduled_jobs import (
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
     release_unbound_budget_reservation,
+    stamp_budget_reservation_actual_cost,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
@@ -1110,6 +1118,7 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
+    await drain_post_call_redis_batches()
     if litellm.cache is not None:
         await litellm.cache.disconnect()
 
@@ -2421,6 +2430,7 @@ app.add_middleware(
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
+app.add_middleware(RedisRequestBatchMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -2851,13 +2861,16 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
     if spend_counter_cache.redis_cache is not None:
         forget_spend_counter(counter_key)
         try:
-            await spend_counter_cache.redis_cache.async_set_max(key=counter_key, value=db_spend)
+            repaired: Final = await spend_counter_cache.redis_cache.async_set_max(key=counter_key, value=db_spend)
         except Exception:
             verbose_proxy_logger.debug(
                 "Unable to repair stale spend counter %s in Redis",
                 counter_key,
                 exc_info=True,
             )
+            return
+        if repaired is not None:
+            record_spend_counter_value(counter_key, repaired)
 
 
 async def reseed_spend_counter_from_db(counter_key: str) -> bool:
@@ -3054,13 +3067,17 @@ async def _increment_spend_counters_batched(
     model_access_groups: Sequence[str] | None,
     project_id: str | None = None,
 ):
-    """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET."""
-    reserved_counter_keys: Final = await _reconcile_budget_reservation_for_counter_update(
+    """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
+    the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
+    reservation_update: Final = await _reconcile_budget_reservation_for_counter_update(
         budget_reservation=budget_reservation,
         response_cost=response_cost,
     )
+    reserved_counter_keys: Final = reservation_update.reserved_counter_keys
 
     if response_cost is None or response_cost == 0:
+        await _apply_spend_counter_increments(pending=reservation_update.pending)
+        stamp_budget_reservation_actual_cost(budget_reservation=budget_reservation, actual_cost=response_cost)
         if budget_reservation is not None:
             budget_reservation["finalized"] = True
         return
@@ -3281,7 +3298,8 @@ async def _increment_spend_counters_batched(
         for item in scope
         if not isinstance(item, BaseException)
     )
-    await _apply_spend_counter_increments(pending=pending)
+    await _apply_spend_counter_increments(pending=reservation_update.pending + pending)
+    stamp_budget_reservation_actual_cost(budget_reservation=budget_reservation, actual_cost=response_cost)
     if scope_errors:
         raise scope_errors[0]
 
@@ -3289,12 +3307,21 @@ async def _increment_spend_counters_batched(
         budget_reservation["finalized"] = True
 
 
+@dataclass(frozen=True, slots=True)
+class _ReservationCounterUpdate:
+    """The reserved counters the direct increment must skip, and the adjustments that settle them on the actual
+    cost, still to be written; both empty when the reservation could not be reconciled and was dropped."""
+
+    reserved_counter_keys: frozenset[str] = frozenset()
+    pending: tuple[PendingSpendIncrement, ...] = ()
+
+
 async def _reconcile_budget_reservation_for_counter_update(
     budget_reservation: dict | None,
     response_cost: float | None,
-) -> set[str]:
+) -> _ReservationCounterUpdate:
     if budget_reservation is None or budget_reservation.get("finalized") is True:
-        return set()
+        return _ReservationCounterUpdate()
 
     from litellm.proxy.spend_tracking.budget_reservation import (
         get_reserved_counter_keys,
@@ -3304,10 +3331,11 @@ async def _reconcile_budget_reservation_for_counter_update(
 
     reserved_counter_keys: Final = get_reserved_counter_keys(budget_reservation=budget_reservation)
     try:
-        await reconcile_budget_reservation(
+        pending: Final = await reconcile_budget_reservation(
             budget_reservation=budget_reservation,
             actual_cost=response_cost or 0.0,
             finalize=False,
+            apply_consistent=False,
         )
     except Exception:
         verbose_proxy_logger.warning(
@@ -3320,8 +3348,8 @@ async def _reconcile_budget_reservation_for_counter_update(
             verbose_proxy_logger.exception(
                 "Failed to invalidate reserved counters after reservation reconciliation failed"
             )
-        return set()
-    return reserved_counter_keys
+        return _ReservationCounterUpdate()
+    return _ReservationCounterUpdate(reserved_counter_keys=frozenset(reserved_counter_keys), pending=pending)
 
 
 async def _prepare_end_user_and_tag_spend_increments(
@@ -3699,6 +3727,8 @@ async def _invalidate_spend_counter(counter_key: str):
 
 
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:
+    if _defer_spend_counter_increments(pending):
+        return
     try:
         await increment_spend_counters_pipeline(pending=pending)
     except Exception as e:
@@ -3707,31 +3737,148 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
         raise
 
 
-async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> None:
-    """One INCRBYFLOAT+EXPIRE pipeline for every pending counter; on failure every counter is invalidated
-    before the error propagates, so no caller can read a half-applied batch."""
+def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> bool:
+    """Post-call increments ride the request's post-call pipeline with the other counters. Each counter's
+    new value lands in memory when the pipeline settles; a failed one is invalidated so no reader trusts a
+    counter whose increment may not have applied, as ``increment_spend_counters_pipeline`` does."""
+    redis_cache: Final = spend_counter_cache.redis_cache
+    if redis_cache is None or not pending:
+        return False
+    batch: Final = active_post_call_redis_batch(redis_cache)
+    if batch is None:
+        return False
+    ttl: Final = redis_cache.get_ttl()
+    for item in pending:
+        batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
+    return True
+
+
+def _settle_spend_counter_increment(item: PendingSpendIncrement) -> Callable[[asyncio.Future[float]], Awaitable[None]]:
+    async def settle(future: asyncio.Future[float]) -> None:
+        if not future.cancelled() and future.exception() is None:
+            current_value: Final = float(future.result())
+            spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
+            record_spend_counter_value(item.counter_key, current_value)
+            return
+        if future.cancelled():
+            if spend_counter_cache.in_memory_cache.get_cache(key=item.counter_key) is not None:
+                spend_counter_cache.in_memory_cache.increment_cache(key=item.counter_key, value=item.increment)
+            return
+        verbose_proxy_logger.warning(
+            "Spend counter %s increment did not land in the post-call pipeline; invalidating it", item.counter_key
+        )
+        await _invalidate_spend_counter(counter_key=item.counter_key)
+
+    return settle
+
+
+async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+    """One INCRBYFLOAT+EXPIRE pipeline for every pending counter, returning each counter's new value in order; on
+    failure every counter is invalidated before the error propagates, so no caller can read a half-applied batch."""
+    if spend_counter_cache.redis_cache is None:
+        return await run_spend_counter_pipeline(pending=pending)
+    try:
+        return await run_spend_counter_pipeline(pending=pending)
+    except Exception:
+        await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
+        raise
+
+
+async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -> tuple[float | None, ...]:
+    """The pipeline behind ``increment_spend_counters_pipeline`` without its invalidation: the caller decides what
+    happens to counters whose increment may or may not have landed when the pipeline fails."""
     if not pending:
-        return
+        return ()
     redis_cache: Final = spend_counter_cache.redis_cache
     if redis_cache is None:
-        for item in pending:
-            await SpendCounterReseed.increment_in_memory(
-                spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
-            )
-        return
+        return tuple(
+            [
+                await SpendCounterReseed.increment_in_memory(
+                    spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
+                )
+                for item in pending
+            ]
+        )
     ttl: Final = redis_cache.get_ttl()
     increment_list: Final = [  # mutable-ok: async_increment_pipeline signature requires list[RedisPipelineIncrementOperation]
         RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
         for item in pending
     ]
-    try:
-        results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
-    except Exception:
-        await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
-        raise
+    results: Final = await redis_cache.async_increment_pipeline(increment_list=increment_list)
     for item, current_value in zip(pending, results or ()):
         spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
         record_spend_counter_value(item.counter_key, float(current_value))
+    return tuple(float(current_value) for current_value in results or ())
+
+
+def update_cache_read_keys(
+    user_id: str | None,
+    end_user_id: str | None,
+    team_id: str | None,
+    tags: Sequence[object] | None,
+    response_cost: float | None,
+) -> tuple[str, ...]:
+    if response_cost is None:
+        return ()
+    user_keys: tuple[str, ...] = (user_id, GLOBAL_PROXY_SPEND_CACHE_KEY) if user_id is not None else ()
+    end_user_keys: tuple[str, ...] = (end_user_cache_key(end_user_id),) if end_user_id is not None else ()
+    team_keys: tuple[str, ...] = (f"team_id:{team_id}",) if team_id is not None else ()
+    tag_keys: tuple[str, ...] = tuple(tag_cache_key(tag) for tag in tags or () if isinstance(tag, str) and tag)
+    return user_keys + end_user_keys + team_keys + tag_keys
+
+
+_UPDATE_CACHE_PREFETCH_SLOT: Final = "update_cache_read"
+
+
+async def arm_update_cache_read(keys: Sequence[str], cache: DualCache | None = None) -> None:
+    """Declares the ``update_cache`` read on the request pipeline once the spend is persisted, so it rides the same
+    round trip as the post-call spend counter read instead of its own."""
+    request: Final = active_request_redis_batches()
+    target: Final = user_api_key_cache if cache is None else cache
+    if request is None or target.redis_cache is None or not keys:
+        return
+    request.prefetched[_UPDATE_CACHE_PREFETCH_SLOT] = await target.declare_batch_get(
+        keys, request.batch(target.redis_cache)
+    )
+
+
+async def _take_armed_update_cache_read(keys: Sequence[str], cache: DualCache) -> Mapping[str, object] | None:
+    request: Final = active_request_redis_batches()
+    if request is None:
+        return None
+    armed: Final = request.prefetched.pop(_UPDATE_CACHE_PREFETCH_SLOT, None)
+    if not isinstance(armed, DeclaredBatchRead) or armed.keys != tuple(keys):
+        return None
+    values: Final = await cache.async_resolve_batch_get(armed)
+    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
+
+
+async def _read_update_cache_values(
+    keys: Sequence[str], parent_otel_span: Span | None, cache: DualCache | None = None
+) -> Mapping[str, object]:
+    """One batched read for every object ``update_cache`` refreshes; a failed read leaves them all untouched,
+    exactly as a failed per-object GET left that object untouched."""
+    if not keys:
+        return MappingProxyType({})
+    target: Final = user_api_key_cache if cache is None else cache
+    try:
+        armed: Final = await _take_armed_update_cache_read(keys, target)
+        if armed is not None:
+            return armed
+        values: Final = await target.async_batch_get_cache(
+            keys=list(keys), parent_otel_span=parent_otel_span, throttle_redis=False
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Spend tracking - failed to read cached spend objects. Budget enforcement may use stale spend values. "
+            "keys=%s - %s",
+            keys,
+            str(e),
+        )
+        return MappingProxyType({})
+    if values is None:
+        return MappingProxyType({})
+    return MappingProxyType({key: value for key, value in zip(keys, values) if value is not None})
 
 
 async def update_cache(
@@ -3750,6 +3897,12 @@ async def update_cache(
     """
 
     values_to_update_in_cache: Final[list[tuple[str, object]]] = []
+    cached_values: Final = await _read_update_cache_values(
+        keys=update_cache_read_keys(
+            user_id=user_id, end_user_id=end_user_id, team_id=team_id, tags=tags, response_cost=response_cost
+        ),
+        parent_otel_span=parent_otel_span,
+    )
 
     ### UPDATE KEY SPEND ###
     async def _update_key_cache(token: str, response_cost: float):
@@ -3815,7 +3968,7 @@ async def update_cache(
                 # Fetch the existing cost for the given user
                 if _id is None:
                     continue
-                cached_user = await user_api_key_cache.async_get_cache(key=_id)
+                cached_user = cached_values.get(_id)
                 if cached_user is None:
                     # do nothing if there is no cache value
                     return
@@ -3838,11 +3991,11 @@ async def update_cache(
                     )
                 )
             ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend: Final = await user_api_key_cache.async_get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
-            if global_proxy_spend is None:
+            global_proxy_spend: Final = cached_values.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
+            if not isinstance(global_proxy_spend, (int, float)):
                 # do nothing if not in cache
                 return
-            elif response_cost is not None and global_proxy_spend is not None:
+            elif response_cost is not None:
                 increment: Final = global_proxy_spend + response_cost
                 values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
@@ -3864,7 +4017,7 @@ async def update_cache(
         _id: Final = end_user_cache_key(end_user_id)
         try:
             # Fetch the existing cost for the given user
-            cached_end_user: Final = await user_api_key_cache.async_get_cache(key=_id)
+            cached_end_user: Final = cached_values.get(_id)
             if cached_end_user is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 # do nothing if end-user not in api key cache
@@ -3905,7 +4058,7 @@ async def update_cache(
 
         _id: Final = f"team_id:{team_id}"
         try:
-            cached_team: Final = await user_api_key_cache.async_get_cache(key=_id)
+            cached_team: Final = cached_values.get(_id)
             if cached_team is None:
                 # do nothing if team not in api key cache
                 return
@@ -3955,7 +4108,7 @@ async def update_cache(
 
                 cache_key = tag_cache_key(tag_name)
                 # Fetch the existing tag object from cache
-                cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
+                cached_tag = cached_values.get(cache_key)
                 if cached_tag is None:
                     # do nothing if tag not in api key cache
                     continue
@@ -9301,9 +9454,10 @@ def _fast_serialize_simple_model_response_stream(
         "object": getattr(chunk, "object", None),
         "created": getattr(chunk, "created", None),
         "model": model,
+        "service_tier": getattr(chunk, "service_tier", None),
         "choices": [choice_dict],
     }
-    for top_level_key in ("id", "object", "created"):
+    for top_level_key in ("id", "object", "created", "service_tier"):
         if payload[top_level_key] is None:
             payload.pop(top_level_key)
     return orjson.dumps(payload)

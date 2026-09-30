@@ -1263,8 +1263,8 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads session rollups folded once per request at spend-write time, so this endpoint
-         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+         *     Reads session rollups folded once per request at spend-write time, with bounded
+         *     retained-log recovery for historical comparisons. A user filter selects only turns attributed to that
          *     internal user when written; older key-only history remains outside user views. A session
          *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
@@ -24407,6 +24407,45 @@ export interface components {
             /** Uri */
             uri?: string;
         };
+        /** AgentIdentityBinding */
+        AgentIdentityBinding: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Agent Id */
+            agent_id: string;
+            /** Client Id */
+            client_id: string;
+            /** Issuer */
+            issuer: string;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Required Roles
+             * @default []
+             */
+            required_roles: string[];
+            /**
+             * Required Scopes
+             * @default [
+             *       "user_impersonation"
+             *     ]
+             */
+            required_scopes: string[];
+            /** Revision */
+            revision: string;
+            /** Service Principal Id */
+            service_principal_id?: string | null;
+            /** Tenant Id */
+            tenant_id: string;
+        };
         /**
          * AgentInterface
          * @description Declares a combination of a target URL and a transport protocol.
@@ -24562,8 +24601,30 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Mode
+             * @default autonomous
+             * @enum {string}
+             */
+            execution_mode: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["AgentIdentityBinding"] | null;
+            /**
+             * Identity Managed
+             * @default false
+             */
+            identity_managed: boolean;
+            /**
+             * Jwt Auth Configured
+             * @default false
+             */
+            jwt_auth_configured: boolean;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
@@ -25021,17 +25082,17 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description Covered savings over covered baseline spend, as a percentage
+             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
              */
             saved_pct: number | null;
             /**
              * Saved Per Session
-             * @description Average session savings; unavailable unless every turn is covered
+             * @description Recorded savings per session, including historical estimates
              */
             saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed savings for covered turns only; null when traffic has no current estimates
+             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
              */
             saved_spend: number | null;
             /**
@@ -25040,8 +25101,13 @@ export interface components {
              */
             savings_estimated_actual_spend: number;
             /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
+            /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25085,17 +25151,17 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description Covered savings over covered baseline spend, as a percentage
+             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
              */
             saved_pct: number | null;
             /**
              * Saved Per Session
-             * @description Average session savings; unavailable unless every turn is covered
+             * @description Recorded savings per session, including historical estimates
              */
             saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed savings for covered turns only; null when traffic has no current estimates
+             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
              */
             saved_spend: number | null;
             /**
@@ -25104,8 +25170,13 @@ export interface components {
              */
             savings_estimated_actual_spend: number;
             /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
+            /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25382,12 +25453,12 @@ export interface components {
         AutoRouterSessionResponse: {
             /**
              * Baseline Model
-             * @description The savings baseline most covered turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             * @description The savings baseline recorded by most session turns, including historical turns, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
              */
             baseline_model: string | null;
             /**
              * Baseline Models
-             * @description Covered turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             * @description Session turns recording each baseline model; more than one entry means the router's baseline changed mid-session; these counts do not imply savings coverage
              */
             baseline_models: {
                 [key: string]: number;
@@ -25414,7 +25485,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Estimated savings for covered turns only, net of classifier cost
+             * @description Recorded historical savings plus newer estimates, net of classifier cost
              */
             saved_spend: number | null;
             /**
@@ -25429,7 +25500,7 @@ export interface components {
             savings_estimated_baseline_spend: number | null;
             /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Session Id */
@@ -33081,6 +33152,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -33109,6 +33182,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -33135,6 +33210,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Per Second */
+            cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
@@ -33191,6 +33268,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -33318,6 +33397,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -34470,6 +34551,11 @@ export interface components {
              * @default true
              */
             fail_on_error: boolean | null;
+            /**
+             * Gateway Name
+             * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
+             */
+            gateway_name?: string | null;
             /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.
@@ -47185,6 +47271,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -47213,6 +47301,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -47239,6 +47329,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Per Second */
+            cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
@@ -47295,6 +47387,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -47422,6 +47516,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -66686,7 +66782,7 @@ export interface operations {
                 group_by_session?: boolean;
                 /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
                 session_cursor?: string | null;
-                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
             };
             header?: never;
@@ -66806,7 +66902,7 @@ export interface operations {
                 group_by_session?: boolean;
                 /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
                 session_cursor?: string | null;
-                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
             };
             header?: never;

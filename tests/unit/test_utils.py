@@ -31,6 +31,7 @@ from litellm._logging import (
 )
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
+from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams
@@ -648,6 +650,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_image_4K",
         "input_cost_per_pixel",
         "output_cost_per_pixel",
+        "cost_per_second",
         "input_cost_per_second",
         "output_cost_per_second",
         "output_cost_per_second_480p",
@@ -765,12 +768,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_batches": {"type": "number"},
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
+                "cache_creation_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
@@ -779,7 +784,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {"type": "number"},
+                "cache_read_input_token_cost_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
+                "input_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_batches": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
@@ -806,11 +813,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_balanced": {"type": "number"},
+                "cache_read_input_token_cost_ultrafast": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_flex": {"type": "number"},
                 "input_cost_per_token_priority": {"type": "number"},
                 "input_cost_per_token_balanced": {"type": "number"},
+                "input_cost_per_token_ultrafast": {"type": "number"},
                 "input_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_priority": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens_batches": {"type": "number"},
@@ -819,8 +828,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_flex": {"type": "number"},
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_balanced": {"type": "number"},
+                "output_cost_per_token_ultrafast": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "output_cost_per_token_above_272k_tokens_ultrafast": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_batches": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_flex": {"type": "number"},
                 "regional_endpoint_uplift_multiplier": {"type": "number"},
@@ -829,6 +840,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
+                "cost_per_second": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
@@ -4740,6 +4752,119 @@ async def test_wrapper_async_replays_cached_converted_responses_stream_as_stream
     assert route.call_count == 1
 
     _assert_cache_hit_logged_as_stream(capture, await _wait_for_success_kwargs(capture, count=2))
+
+
+class _ReadCountingInMemoryCache(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads = 0
+
+    def get_cache(self, key: str, **kwargs: object) -> object:
+        self.reads += 1
+        return super().get_cache(key, **kwargs)
+
+
+_NATIVE_RESPONSES_BODY: Final = {
+    "id": "resp_native_replay",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.6",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_native_replay",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "native body", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+}
+
+
+def _native_responses_route(stream: bool) -> respx.Route:
+    if not stream:
+        return respx.post("https://api.openai.com/v1/responses").respond(json=_NATIVE_RESPONSES_BODY)
+    sse_body: Final = "".join(
+        f"event: {event_type}\ndata: {json.dumps({'type': event_type, 'response': _NATIVE_RESPONSES_BODY})}\n\n"
+        for event_type in ("response.created", "response.completed")
+    )
+    return respx.post("https://api.openai.com/v1/responses").respond(
+        text=sse_body, headers={"content-type": "text/event-stream"}
+    )
+
+
+async def _drain_responses_result(result: object) -> None:
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    if isinstance(result, BaseResponsesAPIStreamingIterator):
+        assert [event async for event in result][-1].type == "response.completed"
+        return
+    assert isinstance(result, ResponsesAPIResponse)
+
+
+async def _wait_for_success_kwargs_with_input(
+    capture: _SuccessKwargsCapture, input_text: str, count: int
+) -> dict[str, object]:
+    expected_messages: Final = [{"role": "user", "content": input_text}]
+
+    def _logged_messages(kwargs: dict[str, object]) -> object:
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        return standard_logging_object.get("messages") if isinstance(standard_logging_object, dict) else None
+
+    def _matching() -> tuple[dict[str, object], ...]:
+        return tuple(kwargs for kwargs in capture.success_kwargs if _logged_messages(kwargs) == expected_messages)
+
+    for _ in range(50):
+        if len(_matching()) >= count and not _PENDING_CACHE_WRITES:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.2)
+    matching: Final = _matching()
+    assert len(matching) == count
+    return matching[-1]
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize(
+    "supported_call_types",
+    [["aresponses", "responses"], ["responses"]],
+    ids=["both_call_types", "responses_only"],
+)
+async def test_wrapper_aresponses_reads_cache_once_and_replays_from_that_read(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, supported_call_types: list[CachingSupportedCallTypes]
+) -> None:
+    capture: Final = _install_converted_stream_callbacks(monkeypatch)
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    counting: Final = _ReadCountingInMemoryCache()
+    monkeypatch.setattr(
+        litellm, "cache", Cache(type="local", _backend=counting, supported_call_types=supported_call_types)
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = _native_responses_route(stream)
+    request: Final = {
+        "model": "openai/gpt-5.6",
+        "input": "read me once",
+        "stream": stream,
+        "api_key": "sk-test",
+        "num_retries": 0,
+    }
+
+    await _drain_responses_result(await litellm.aresponses(**request))
+    await _wait_for_success_kwargs_with_input(capture, request["input"], count=1)
+    assert counting.reads == 1, "aresponses must look the response cache up once, not again on the executor thread"
+
+    await _drain_responses_result(await litellm.aresponses(**request))
+    assert counting.reads == 2
+    assert route.call_count == 1, "the single async cache read must hit the key the first call stored"
+    success_kwargs: Final = await _wait_for_success_kwargs_with_input(capture, request["input"], count=2)
+    standard_logging_object: Final = success_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["cache_hit"] is True
 
 
 def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
