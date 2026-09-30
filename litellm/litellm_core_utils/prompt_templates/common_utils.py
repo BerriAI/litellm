@@ -205,7 +205,11 @@ def get_str_from_messages_with_tools(messages: object) -> str:
 
 
 def tool_call_str(name: object, arguments: object) -> str:
-    return json.dumps({"name": name, "arguments": arguments}, separators=(",", ":"), default=str)
+    return f'{{"name":{_compact_json(name)},"arguments":{_compact_json(arguments)}}}'
+
+
+def _compact_json(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"), default=str)
 
 
 def _message_str_with_tools(message: Mapping[str, object]) -> str:
@@ -234,7 +238,9 @@ def _block_str_with_tools(block: Mapping[str, object]) -> str:
 
 
 def _openai_tool_call_str(tool_call: Mapping[str, object]) -> str:
-    function: Final = _as_str_mapping(tool_call.get("function")) or {}
+    function: Final = _as_str_mapping(tool_call.get("function"))
+    if function is None:
+        return tool_call_str(None, None)
     return tool_call_str(function.get("name"), function.get("arguments"))
 
 

@@ -276,7 +276,7 @@ class RedisSemanticCache(BaseCache):
 
     @classmethod
     def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:
-        value = cls._coerce_response_input_value(value)
+        value = cls._function_call_as_prompt(cls._coerce_response_input_value(value))
         if value is None:
             return
 
@@ -292,10 +292,6 @@ class RedisSemanticCache(BaseCache):
             return
 
         if isinstance(value, dict):
-            if value.get("type") == "function_call":
-                prompt_parts.append(tool_call_str(value.get("name"), value.get("arguments")))
-                return
-
             content = value.get("content")
             if content is not None:
                 cls._collect_responses_input_text(content, prompt_parts)
@@ -322,6 +318,12 @@ class RedisSemanticCache(BaseCache):
                 if stripped_text:
                     prompt_parts.append(stripped_text)
                     return
+
+    @staticmethod
+    def _function_call_as_prompt(value: object) -> object:
+        if isinstance(value, dict) and value.get("type") == "function_call":
+            return tool_call_str(value.get("name"), value.get("arguments"))
+        return value
 
     @staticmethod
     def _coerce_response_input_value(value: object) -> object:
