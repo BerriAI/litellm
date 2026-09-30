@@ -1,15 +1,22 @@
 import json
+import os
+import signal
+import socket
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
+import httpx
+import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
-from integration._support.process import owned_proxy
+from integration._support.process import group_members, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from openai import AsyncOpenAI, OpenAI
 
 
 @pytest.mark.covers("other.observability.guardrails.rewrite_reaches_correct_anthropic_positions")
@@ -208,8 +215,6 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
         with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
             model: Final = scenario.model()
             key: Final = scenario.key(models=[model])
-            import httpx
-
             with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
                 observed.get("/__observations")
                 denied: Final = candidate.request(
@@ -228,6 +233,613 @@ def test_guardrail_denial_prevents_provider_and_preserves_allowed_control(gatewa
                 )
                 assert len(observed.get("/__observations").json()["requests"]) == 1
             assert len(policy.drain()) == 2
+
+
+def test_panw_latest_role_message_only_scans_only_latest_turn_on_responses_input(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    latest: Final = "latest turn " + uuid.uuid4().hex
+    history: Final = ({"role": "user", "content": "first turn"}, {"role": "assistant", "content": "first reply"})
+    shapes: Final = {
+        "plain": {"input": [*history, {"role": "user", "content": latest}]},
+        "instructions": {"instructions": "answer briefly", "input": [*history, {"role": "user", "content": latest}]},
+        "function_call_output": {
+            "input": [
+                *history,
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "tool result"},
+                {"role": "user", "content": latest},
+            ]
+        },
+        "reasoning": {
+            "input": [
+                *history,
+                {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]},
+                {"role": "user", "content": latest},
+            ]
+        },
+        "tool_loop_after_latest": {
+            "input": [
+                *history,
+                {"role": "user", "content": latest},
+                {"type": "reasoning", "id": "rs_2", "content": [{"type": "reasoning_text", "text": "thinking"}]},
+                {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_2", "output": "tool result"},
+            ]
+        },
+    }
+
+    def scanner(request: Request) -> Reply:
+        assert request.target == "/v1/scan/sync/request"
+        body: Final = json.loads(request.body)
+        return Reply(
+            body=json.dumps(
+                {
+                    "action": "allow",
+                    "category": "benign",
+                    "profile_name": "synthetic-profile",
+                    "report_id": "R" + body["tr_id"],
+                    "scan_id": "S" + body["tr_id"],
+                    "tr_id": body["tr_id"],
+                    "prompt_detected": {"injection": False, "url_cats": False, "dlp": False},
+                    "response_detected": {},
+                }
+            ).encode()
+        )
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/responses"
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_" + identity,
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-4.1-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_" + identity,
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "permitted response", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(scanner) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-panw-key",
+                    "profile_name": "synthetic-profile",
+                    "experimental_use_latest_role_message_only": True,
+                },
+            }
+        ]
+        path: Final = tmp_path / "panw.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for name, shape in shapes.items():
+                response = candidate.request("POST", "/v1/responses", {"model": model, **shape})
+                assert response.status_code == 200, response.text
+                assert response.json()["output"][0]["content"][0]["text"] == "permitted response"
+                scanned = [json.loads(scan.body)["contents"][0]["prompt"] for scan in policy.drain()]
+                assert scanned == [latest], f"{name}: latest-only scanned {scanned}"
+                assert json.loads(upstream.drain()[0].body)["input"] == shape["input"]
+
+
+def test_panw_scans_and_masks_top_level_instructions_on_responses_input(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    ssn: Final = "123-45-6789"
+    instructions: Final = "Never repeat the SSN " + ssn + " back " + uuid.uuid4().hex
+    latest: Final = "latest turn " + uuid.uuid4().hex
+    shapes: Final = {
+        "list_input": ([{"role": "user", "content": "first turn"}, {"role": "user", "content": latest}], "first turn"),
+        "string_input": (latest, None),
+    }
+
+    def scanner(request: Request) -> Reply:
+        assert request.target == "/v1/scan/sync/request"
+        body: Final = json.loads(request.body)
+        prompt: Final = body["contents"][0]["prompt"]
+        masked: Final = {"prompt_masked_data": {"data": prompt.replace(ssn, "<US_SSN>")}} if ssn in prompt else {}
+        return Reply(
+            body=json.dumps(
+                {
+                    "action": "allow",
+                    "category": "dlp" if masked else "benign",
+                    "profile_name": "synthetic-profile",
+                    "report_id": "R" + body["tr_id"],
+                    "scan_id": "S" + body["tr_id"],
+                    "tr_id": body["tr_id"],
+                    "prompt_detected": {"injection": False, "url_cats": False, "dlp": bool(masked)},
+                    "response_detected": {},
+                    **masked,
+                }
+            ).encode()
+        )
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/responses"
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_" + identity,
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-4.1-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_" + identity,
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "permitted response", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(scanner) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-panw-key",
+                    "profile_name": "synthetic-profile",
+                },
+            }
+        ]
+        path: Final = tmp_path / "panw.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for name, (shape, first_turn) in shapes.items():
+                response = candidate.request(
+                    "POST", "/v1/responses", {"model": model, "instructions": instructions, "input": shape}
+                )
+                assert response.status_code == 200, response.text
+                assert response.json()["output"][0]["content"][0]["text"] == "permitted response"
+                scanned = [json.loads(scan.body)["contents"][0]["prompt"] for scan in policy.drain()]
+                expected = [instructions, *([first_turn] if first_turn else []), latest]
+                assert scanned == expected, f"{name}: scanned {scanned}"
+                sent = json.loads(upstream.drain()[0].body)
+                assert sent["instructions"] == instructions.replace(ssn, "<US_SSN>"), f"{name}: sent {sent}"
+                assert sent["input"] == shape, f"{name}: sent {sent}"
+
+
+_SSN: Final = "123-45-6789"
+_MASKED_SSN: Final = "<US_SSN>"
+_DENIED_TERM: Final = "RIGBLOCKME"
+
+
+def _panw_scanner(request: Request) -> Reply:
+    assert request.target == "/v1/scan/sync/request"
+    body: Final = json.loads(request.body)
+    prompt: Final = body["contents"][0]["prompt"]
+    denied: Final = _DENIED_TERM in prompt
+    masked: Final = {"prompt_masked_data": {"data": prompt.replace(_SSN, _MASKED_SSN)}} if _SSN in prompt else {}
+    return Reply(
+        body=json.dumps(
+            {
+                "action": "block" if denied else "allow",
+                "category": "malicious" if denied else ("dlp" if masked else "benign"),
+                "profile_name": "synthetic-profile",
+                "report_id": "R" + body["tr_id"],
+                "scan_id": "S" + body["tr_id"],
+                "tr_id": body["tr_id"],
+                "prompt_detected": {"injection": denied, "url_cats": False, "dlp": bool(masked)},
+                "response_detected": {},
+                **masked,
+            }
+        ).encode()
+    )
+
+
+def _responses_provider(request: Request) -> Reply:
+    if request.method == "GET" and request.target.endswith("/models"):
+        return Reply(body=json.dumps({"object": "list", "data": []}).encode())
+    assert request.target == "/v1/responses", request.target
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "resp_" + uuid.uuid4().hex,
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "completed",
+                "model": "gpt-4.1-mini",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_synthetic",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "permitted response", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+            }
+        ).encode()
+    )
+
+
+def _panw_config(tmp_path: Path, identity: str, policy_url: str, **flags: bool) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": identity,
+            "litellm_params": {
+                "guardrail": "panw_prisma_airs",
+                "mode": "pre_call",
+                "default_on": True,
+                "api_base": policy_url,
+                "api_key": "synthetic-panw-key",
+                "profile_name": "synthetic-profile",
+                **flags,
+            },
+        }
+    ]
+    path: Final = tmp_path / "panw.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def _scanned_prompts(scans: tuple[Request, ...]) -> list[str]:
+    return [json.loads(scan.body)["contents"][0]["prompt"] for scan in scans]
+
+
+def _forwarded_bodies(requests: tuple[Request, ...]) -> list[dict[str, object]]:
+    return [json.loads(request.body) for request in requests if request.method == "POST"]
+
+
+def test_guardrail_denies_responses_request_whose_only_flagged_text_is_in_instructions(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    instructions: Final = "You are terse and say " + _DENIED_TERM + " " + uuid.uuid4().hex
+    shapes: Final = {"string_input": "say hi", "list_input": [{"role": "user", "content": "say hi"}]}
+    with wire_server(_panw_scanner) as policy, wire_server(_responses_provider) as upstream:
+        config: Final = _panw_config(tmp_path, identity, policy.url)
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for name, shape in shapes.items():
+                response = candidate.request(
+                    "POST", "/v1/responses", {"model": model, "instructions": instructions, "input": shape}
+                )
+                assert response.status_code == 400, f"{name}: {response.text}"
+                assert "Prompt blocked by PANW Prisma AI Security policy" in response.text, response.text
+                assert _scanned_prompts(policy.drain()) == [instructions], name
+                assert _forwarded_bodies(upstream.drain()) == [], (
+                    f"{name}: denied instructions must not reach the provider"
+                )
+
+
+def test_empty_instructions_are_not_scanned_while_input_and_chat_system_masking_are_unchanged(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    secret: Final = "my SSN is " + _SSN + " " + uuid.uuid4().hex
+    masked: Final = secret.replace(_SSN, _MASKED_SSN)
+
+    def chat_provider(request: Request) -> Reply:
+        assert request.target == "/v1/chat/completions"
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "chatcmpl_" + identity,
+                    "object": "chat.completion",
+                    "created": 1700000000,
+                    "model": "gpt-4.1-mini",
+                    "choices": [
+                        {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}
+                    ],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+                }
+            ).encode()
+        )
+
+    def provider(request: Request) -> Reply:
+        return chat_provider(request) if request.target == "/v1/chat/completions" else _responses_provider(request)
+
+    with wire_server(_panw_scanner) as policy, wire_server(provider) as upstream:
+        config: Final = _panw_config(tmp_path, identity, policy.url, mask_request_content=True)
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for instructions in ("", None):
+                body = {"model": model, "input": secret, **({} if instructions is None else {"instructions": ""})}
+                response = candidate.request("POST", "/v1/responses", body)
+                assert response.status_code == 200, response.text
+                assert _scanned_prompts(policy.drain()) == [secret], f"instructions={instructions!r}"
+                (sent,) = _forwarded_bodies(upstream.drain())
+                assert sent.get("instructions") == instructions, f"instructions={instructions!r}: sent {sent}"
+                assert sent["input"] == masked, f"instructions={instructions!r}: sent {sent}"
+
+            response = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "system", "content": secret}, {"role": "user", "content": "hi"}],
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert _scanned_prompts(policy.drain()) == [secret, "hi"]
+            (sent_chat,) = _forwarded_bodies(upstream.drain())
+            assert sent_chat["messages"] == [
+                {"role": "system", "content": masked},
+                {"role": "user", "content": "hi"},
+            ]
+
+
+def test_skip_system_message_leaves_instructions_and_system_items_unscanned_on_responses(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    instructions: Final = "Escalations go to " + _SSN + " " + uuid.uuid4().hex
+    system_item: Final = "House rules: never share " + _SSN + " " + uuid.uuid4().hex
+    developer_item: Final = "Developer note " + _SSN + " " + uuid.uuid4().hex
+    latest: Final = "my contact is " + _SSN + " " + uuid.uuid4().hex
+
+    with wire_server(_panw_scanner) as policy, wire_server(_responses_provider) as upstream:
+        config: Final = _panw_config(
+            tmp_path, identity, policy.url, mask_request_content=True, skip_system_message_in_guardrail=True
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            response = candidate.request(
+                "POST",
+                "/v1/responses",
+                {
+                    "model": model,
+                    "instructions": instructions,
+                    "input": [
+                        {"role": "system", "content": system_item},
+                        {"role": "developer", "content": developer_item},
+                        {"role": "user", "content": latest},
+                    ],
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert _scanned_prompts(policy.drain()) == [developer_item, latest]
+            (sent,) = _forwarded_bodies(upstream.drain())
+            assert sent["instructions"] == instructions, f"sent {sent}"
+            assert sent["input"] == [
+                {"role": "system", "content": system_item},
+                {"role": "developer", "content": developer_item.replace(_SSN, _MASKED_SSN)},
+                {"role": "user", "content": latest.replace(_SSN, _MASKED_SSN)},
+            ], f"sent {sent}"
+
+
+def test_instructions_masking_lands_next_to_multimodal_and_tool_loop_input_items(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    instructions: Final = "Never repeat the SSN " + _SSN + " back " + uuid.uuid4().hex
+    latest: Final = "latest turn with " + _SSN + " " + uuid.uuid4().hex
+    image: Final = {"type": "input_image", "image_url": "https://example.test/receipt.png", "detail": "low"}
+    shapes: Final = {
+        "multimodal": [
+            {"role": "user", "content": [{"type": "input_text", "text": "first turn"}, image]},
+            {"role": "user", "content": [image, {"type": "input_text", "text": latest}]},
+        ],
+        "tool_loop": [
+            {"role": "user", "content": "first turn"},
+            {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "tool result with " + _SSN},
+            {"role": "user", "content": latest},
+        ],
+    }
+    with wire_server(_panw_scanner) as policy, wire_server(_responses_provider) as upstream:
+        config: Final = _panw_config(tmp_path, identity, policy.url, mask_request_content=True)
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for name, shape in shapes.items():
+                response = candidate.request(
+                    "POST", "/v1/responses", {"model": model, "instructions": instructions, "input": shape}
+                )
+                assert response.status_code == 200, f"{name}: {response.text}"
+                assert _scanned_prompts(policy.drain()) == [instructions, "first turn", latest], name
+                (sent,) = _forwarded_bodies(upstream.drain())
+                assert sent["instructions"] == instructions.replace(_SSN, _MASKED_SSN), f"{name}: sent {sent}"
+                expected = json.loads(json.dumps(shape).replace(latest, latest.replace(_SSN, _MASKED_SSN)))
+                assert sent["input"] == expected, f"{name}: sent {sent}"
+
+
+def test_panw_latest_only_with_instructions_masks_only_the_latest_turn(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    instructions: Final = "Keep " + _SSN + " confidential " + uuid.uuid4().hex
+    latest: Final = "latest turn with " + _SSN + " " + uuid.uuid4().hex
+    history: Final = ({"role": "user", "content": "first turn"}, {"role": "assistant", "content": "first reply"})
+    shapes: Final = {
+        "plain": [*history, {"role": "user", "content": latest}],
+        "reasoning": [
+            *history,
+            {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]},
+            {"role": "user", "content": latest},
+        ],
+    }
+    with wire_server(_panw_scanner) as policy, wire_server(_responses_provider) as upstream:
+        config: Final = _panw_config(
+            tmp_path, identity, policy.url, mask_request_content=True, experimental_use_latest_role_message_only=True
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for name, shape in shapes.items():
+                response = candidate.request(
+                    "POST", "/v1/responses", {"model": model, "instructions": instructions, "input": shape}
+                )
+                assert response.status_code == 200, f"{name}: {response.text}"
+                assert _scanned_prompts(policy.drain()) == [latest], name
+                (sent,) = _forwarded_bodies(upstream.drain())
+                assert sent["instructions"] == instructions, f"{name}: latest-only must leave instructions alone"
+                assert sent["input"] == [*shape[:-1], {"role": "user", "content": latest.replace(_SSN, _MASKED_SSN)}], (
+                    f"{name}: sent {sent}"
+                )
+
+
+def test_bedrock_latest_only_masks_latest_turn_on_responses_input_with_instructions(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    guardrail_id: Final = "synthetic" + uuid.uuid4().hex[:8]
+    instructions: Final = "Keep " + _SSN + " confidential " + uuid.uuid4().hex
+    latest: Final = "latest turn with " + _SSN + " " + uuid.uuid4().hex
+
+    def guardrail(request: Request) -> Reply:
+        assert request.target == f"/guardrail/{guardrail_id}/version/DRAFT/apply", request.target
+        body: Final = json.loads(request.body)
+        assert body["source"] == "INPUT", body
+        assert body["content"] == [{"text": {"text": latest}}], body
+        return Reply(
+            body=json.dumps(
+                {
+                    "action": "GUARDRAIL_INTERVENED",
+                    "outputs": [{"text": latest.replace(_SSN, _MASKED_SSN)}],
+                    "assessments": [
+                        {
+                            "sensitiveInformationPolicy": {
+                                "piiEntities": [
+                                    {"type": "US_SOCIAL_SECURITY_NUMBER", "match": _SSN, "action": "ANONYMIZED"}
+                                ]
+                            }
+                        }
+                    ],
+                }
+            ).encode()
+        )
+
+    with wire_server(guardrail) as policy, wire_server(_responses_provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "mask_request_content": True,
+                    "experimental_use_latest_role_message_only": True,
+                    "guardrailIdentifier": guardrail_id,
+                    "guardrailVersion": "DRAFT",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "AKIASYNTHETICGUARDRAIL",
+                    "aws_secret_access_key": "synthetic-secret",
+                    "aws_bedrock_runtime_endpoint": policy.url,
+                },
+            }
+        ]
+        path: Final = tmp_path / "bedrock-instructions.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path, workers=2) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/responses",
+                {
+                    "model": model,
+                    "instructions": instructions,
+                    "input": [
+                        {"role": "user", "content": "first turn"},
+                        {"role": "assistant", "content": "first reply"},
+                        {"role": "user", "content": latest},
+                    ],
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert len(policy.drain()) == 1
+            (sent,) = _forwarded_bodies(upstream.drain())
+            assert sent["instructions"] == instructions, sent
+            assert sent["input"] == [
+                {"role": "user", "content": "first turn"},
+                {"role": "assistant", "content": "first reply"},
+                {"role": "user", "content": latest.replace(_SSN, _MASKED_SSN)},
+            ], sent
+
+
+def test_instructions_masking_holds_under_concurrent_load_across_two_workers(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    with wire_server(_panw_scanner) as policy, wire_server(_responses_provider) as upstream:
+        config: Final = _panw_config(tmp_path, identity, policy.url, mask_request_content=True)
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            tags: Final = tuple(uuid.uuid4().hex for _ in range(16))
+
+            def send(tag: str) -> httpx.Response:
+                return candidate.request(
+                    "POST",
+                    "/v1/responses",
+                    {"model": model, "instructions": "Keep " + _SSN + " private " + tag, "input": "say hi " + tag},
+                )
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                responses: Final = tuple(pool.map(send, tags))
+            assert [response.status_code for response in responses] == [200] * len(tags), [
+                response.text for response in responses
+            ]
+            sent: Final = {str(body["input"]): body for body in _forwarded_bodies(upstream.drain())}
+            assert sorted(_scanned_prompts(policy.drain())) == sorted(
+                [text for tag in tags for text in ("Keep " + _SSN + " private " + tag, "say hi " + tag)]
+            )
+            assert {tag: sent["say hi " + tag]["instructions"] for tag in tags} == {
+                tag: "Keep " + _MASKED_SSN + " private " + tag for tag in tags
+            }
 
 
 @pytest.mark.covers("other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content")
@@ -500,3 +1112,687 @@ def test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls(gateway:
                     assert len(calls) == 1
                     assert calls[0]["body"]["params"]["name"] == tool
                     assert calls[0]["body"]["params"]["arguments"] == arguments
+
+
+_RESPONSES_DENIAL: Final = "This model is not currently available."
+
+
+def _deny_guardrail(name: str, denial: str = _RESPONSES_DENIAL) -> dict[str, object]:
+    return {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "custom_code",
+            "mode": "pre_call",
+            "default_on": False,
+            "custom_code": (f"def apply_guardrail(inputs, request_data, input_type):\n    return block({denial!r})\n"),
+        },
+    }
+
+
+def _responses_denial_config(tmp_path: Path, identity: str, denial: str = _RESPONSES_DENIAL) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [_deny_guardrail(identity, denial)]
+    path: Final = tmp_path / "responses-deny.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def _assert_blocked_message_item(item: dict[str, object], response: dict[str, object]) -> None:
+    assert item["type"] == "message", item
+    assert item["role"] == "assistant", item
+    assert item["status"] == "completed", item
+    assert str(item["id"]).startswith("msg_"), item
+    assert item["content"] == [{"type": "output_text", "text": _RESPONSES_DENIAL, "annotations": []}], item
+    assert response["status"] == "completed", response
+    usage: Final = response["usage"]
+    assert isinstance(usage, dict), response
+    assert (usage["input_tokens"], usage["output_tokens"], usage["total_tokens"]) == (0, 0, 0), usage
+
+
+def _response_id(index: int, response: httpx.Response) -> str:
+    assert response.status_code == 200, (index, response.text)
+    if index % 3 == 0:
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        return str(_blocked_stream_events(response.text)[-1]["response"]["id"])
+    if index % 3 == 1:
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        blocked: Final = _blocked_stream_events(response.text)[-1]["response"]
+        _assert_blocked_message_item(blocked["output"][0], blocked)
+        return str(blocked["id"])
+    assert response.headers["content-type"].startswith("application/json"), response.text
+    body: Final = response.json()
+    _assert_blocked_message_item(body["output"][0], body)
+    return str(body["id"])
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_streams_typed_message")
+def test_responses_pre_call_denial_streams_sse_with_typed_message_item(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+            observed.get("/__observations")
+            response: Final = candidate.request(
+                "POST",
+                "/v1/responses",
+                {"model": model, "input": "say hi", "stream": True, "guardrails": [identity]},
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"].startswith("text/event-stream"), (
+                response.headers["content-type"],
+                response.text,
+            )
+            lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
+            assert lines[-1] == "data: [DONE]", response.text
+            events: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+            kinds: Final = tuple(event["type"] for event in events)
+            assert tuple(kind for kind in kinds if kind != "response.output_text.delta") == (
+                "response.created",
+                "response.in_progress",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.done",
+                "response.content_part.done",
+                "response.output_item.done",
+                "response.completed",
+            ), kinds
+            assert kinds.index("response.output_text.delta") == kinds.index("response.content_part.added") + 1, kinds
+            assert "".join(event["delta"] for event in events if event["type"] == "response.output_text.delta") == (
+                _RESPONSES_DENIAL
+            )
+            completed: Final = events[-1]["response"]
+            assert completed["output"] == [events[-2]["item"]], (completed, events[-2])
+            _assert_blocked_message_item(completed["output"][0], completed)
+            assert observed.get("/__observations").json()["requests"] == []
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_returns_typed_message")
+def test_responses_pre_call_denial_returns_json_with_typed_message_item(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+            observed.get("/__observations")
+            response: Final = candidate.request(
+                "POST", "/v1/responses", {"model": model, "input": "say hi", "guardrails": [identity]}
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"].startswith("application/json"), response.headers["content-type"]
+            body: Final = response.json()
+            assert body["object"] == "response", body
+            assert len(body["output"]) == 1, body
+            _assert_blocked_message_item(body["output"][0], body)
+            assert observed.get("/__observations").json()["requests"] == []
+
+
+_RESPONSES_OUTPUT_DENIAL: Final = "Output withheld by policy."
+_UPSTREAM_INPUT_TOKENS: Final = 20
+_UPSTREAM_OUTPUT_TOKENS: Final = 20
+_UPSTREAM_TOTAL_TOKENS: Final = 40
+
+
+def _responses_output_denial_config(tmp_path: Path, identity: str, model: str) -> Path:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": identity,
+            "litellm_params": {
+                "guardrail": "custom_code",
+                "mode": "post_call",
+                "default_on": False,
+                "custom_code": (
+                    "def apply_guardrail(inputs, request_data, input_type):\n"
+                    f"    return block({_RESPONSES_OUTPUT_DENIAL!r})\n"
+                ),
+            },
+        }
+    ]
+    config["policies"] = {
+        f"{identity}-pipeline": {
+            "guardrails": {"add": [identity]},
+            "pipeline": {
+                "mode": "post_call",
+                "steps": [
+                    {
+                        "guardrail": identity,
+                        "on_pass": "allow",
+                        "on_fail": "modify_response",
+                        "modify_response_message": _RESPONSES_OUTPUT_DENIAL,
+                    }
+                ],
+            },
+        }
+    }
+    config["policy_attachments"] = [{"policy": f"{identity}-pipeline", "models": [model]}]
+    path: Final = tmp_path / "responses-output-deny.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def _blocked_stream_events(text: str) -> tuple[dict[str, object], ...]:
+    lines: Final = tuple(line for line in text.split("\n") if line.startswith("data: "))
+    assert lines[-1] == "data: [DONE]", text
+    return tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+
+
+def _dead_api_base() -> str:
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        port: Final = reserve.getsockname()[1]
+    return f"http://127.0.0.1:{port}/v1"
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_openai_sdk_streams_typed_message")
+def test_responses_pre_call_denial_openai_sdk_streams_typed_message(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        client: Final = OpenAI(
+            base_url=f"{candidate.client.base_url}/v1", api_key=candidate.key, max_retries=0, timeout=15
+        )
+        events: Final = tuple(
+            client.responses.create(model=model, input="say hi", stream=True, extra_body={"guardrails": [identity]})
+        )
+        assert events[-1].type == "response.completed", [event.type for event in events]
+        completed: Final = events[-1].response
+        assert completed is not None and len(completed.output) == 1, completed
+        item: Final = completed.output[0]
+        assert item.type == "message", item
+        assert item.role == "assistant" and item.status == "completed", item
+        assert item.content[0].type == "output_text" and item.content[0].text == _RESPONSES_DENIAL, item.content
+        assert completed.usage is not None and completed.usage.total_tokens == 0, completed.usage
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_openai_async_sdk_streams_typed_message")
+async def test_responses_pre_call_denial_openai_async_sdk_streams_typed_message(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        client: Final = AsyncOpenAI(
+            base_url=f"{candidate.client.base_url}/v1", api_key=candidate.key, max_retries=0, timeout=15
+        )
+        stream: Final = await client.responses.create(
+            model=model, input="say hi", stream=True, extra_body={"guardrails": [identity]}
+        )
+        kinds: Final = [event.type async for event in stream]
+        assert kinds[-1] == "response.completed", kinds
+        assert "response.output_text.delta" in kinds, kinds
+        assert "response.in_progress" in kinds, kinds
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_openai_sdk_returns_typed_message")
+def test_responses_pre_call_denial_openai_sdk_returns_typed_message(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        client: Final = OpenAI(
+            base_url=f"{candidate.client.base_url}/v1", api_key=candidate.key, max_retries=0, timeout=15
+        )
+        body: Final = client.responses.create(model=model, input="say hi", extra_body={"guardrails": [identity]})
+        assert body.object == "response" and body.status == "completed", body
+        assert len(body.output) == 1, body.output
+        item: Final = body.output[0]
+        assert item.type == "message" and item.role == "assistant", item
+        assert item.content[0].type == "output_text" and item.content[0].text == _RESPONSES_DENIAL, item.content
+        assert body.output_text == _RESPONSES_DENIAL, body
+        assert body.usage is not None and body.usage.total_tokens == 0, body.usage
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_false_returns_json")
+def test_responses_pre_call_denial_stream_false_returns_json(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        response: Final = candidate.request(
+            "POST", "/v1/responses", {"model": model, "input": "say hi", "stream": False, "guardrails": [identity]}
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("application/json"), response.text
+        body: Final = response.json()
+        _assert_blocked_message_item(body["output"][0], body)
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_string_true_returns_json")
+def test_responses_pre_call_denial_stream_string_true_returns_json(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        response: Final = candidate.request(
+            "POST", "/v1/responses", {"model": model, "input": "say hi", "stream": "true", "guardrails": [identity]}
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("application/json"), (
+            response.headers["content-type"],
+            response.text,
+        )
+        body: Final = response.json()
+        _assert_blocked_message_item(body["output"][0], body)
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_event_vocabulary")
+def test_responses_pre_call_denial_stream_event_vocabulary(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    second: Final = "guardrail-2-" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    loaded: Final = yaml.safe_load(config.read_text())
+    loaded["guardrails"].append(_deny_guardrail(second))
+    config.write_text(yaml.safe_dump(loaded))
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+            observed.get("/__observations")
+            response: Final = candidate.request(
+                "POST",
+                "/v1/responses",
+                {"model": model, "input": "say hi", "stream": True, "guardrails": [identity, second]},
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"].startswith("text/event-stream"), response.text
+            events: Final = _blocked_stream_events(response.text)
+            kinds: Final = {event["type"] for event in events}
+            assert kinds == {
+                "response.created",
+                "response.in_progress",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta",
+                "response.output_text.done",
+                "response.content_part.done",
+                "response.output_item.done",
+                "response.completed",
+            }, kinds
+            item_done: Final = tuple(event for event in events if event["type"] == "response.output_item.done")
+            assert len(item_done) == 1, events
+            assert len(events[-1]["response"]["output"]) == 1, events[-1]
+            assert observed.get("/__observations").json()["requests"] == []
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_large_denial_text")
+def test_responses_pre_call_denial_stream_large_denial_text(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    denial: Final = ("Denied: " + "mixed ascii and unicode text " * 200 + "fin")[:5000]
+    config: Final = _responses_denial_config(tmp_path, identity, denial)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        response: Final = candidate.request(
+            "POST",
+            "/v1/responses",
+            {"model": model, "input": "say hi", "stream": True, "guardrails": [identity]},
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        events: Final = _blocked_stream_events(response.text)
+        assert "".join(event["delta"] for event in events if event["type"] == "response.output_text.delta") == denial
+        done: Final = next(event for event in events if event["type"] == "response.output_text.done")
+        assert done["text"] == denial, done
+        completed: Final = events[-1]["response"]
+        assert completed["output"][0]["content"][0]["text"] == denial, completed
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_requests_have_distinct_ids")
+def test_responses_pre_call_denial_stream_requests_have_distinct_ids(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(use_chat_completions_api=True)
+        with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+            observed.get("/__observations")
+            responses: Final = tuple(
+                candidate.request(
+                    "POST",
+                    "/v1/responses",
+                    {"model": model, "input": "say hi", "stream": True, "guardrails": [identity]},
+                )
+                for _ in range(2)
+            )
+            completed: Final = tuple(_blocked_stream_events(response.text)[-1]["response"] for response in responses)
+            for response in responses:
+                assert response.status_code == 200, response.text
+                assert response.headers["content-type"].startswith("text/event-stream"), response.text
+            assert completed[0]["id"] != completed[1]["id"], completed
+            assert completed[0]["output"][0]["id"] != completed[1]["output"][0]["id"], completed
+            assert observed.get("/__observations").json()["requests"] == []
+
+
+def _register_named_model(candidate: Gateway, name: str, api_base: str | None = None, **parameters: object) -> str:
+    created: Final = candidate.post(
+        "/model/new",
+        {
+            "model_name": name,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "integration-provider-key",
+                "api_base": api_base or f"{candidate.upstream_url}/v1",
+                **parameters,
+            },
+        },
+    )
+    return str(created["model_info"]["id"])
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_post_call_pipeline_denial_streams_real_usage")
+def test_responses_post_call_pipeline_denial_streams_real_usage(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    model: Final = f"integration-{uuid.uuid4().hex}"
+    config: Final = _responses_output_denial_config(tmp_path, identity, model)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+        model_id: Final = _register_named_model(candidate, model, use_chat_completions_api=True)
+        try:
+            response: Final = candidate.request(
+                "POST", "/v1/responses", {"model": model, "input": f"say hi {uuid.uuid4().hex}", "stream": True}
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"].startswith("text/event-stream"), response.text
+            events: Final = _blocked_stream_events(response.text)
+            assert events[-1]["type"] == "response.completed", events
+            completed: Final = events[-1]["response"]
+            item: Final = completed["output"][0]
+            assert item["type"] == "message" and item["role"] == "assistant", item
+            assert item["content"][0]["type"] == "output_text", item
+            assert item["content"][0]["text"] == _RESPONSES_OUTPUT_DENIAL, item
+            usage: Final = completed["usage"]
+            assert (
+                usage["input_tokens"],
+                usage["output_tokens"],
+                usage["total_tokens"],
+            ) == (_UPSTREAM_INPUT_TOKENS, _UPSTREAM_OUTPUT_TOKENS, _UPSTREAM_TOTAL_TOKENS), usage
+        finally:
+            candidate.post("/model/delete", {"id": model_id})
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_post_call_pipeline_denial_returns_real_usage")
+def test_responses_post_call_pipeline_denial_returns_real_usage(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    model: Final = f"integration-{uuid.uuid4().hex}"
+    config: Final = _responses_output_denial_config(tmp_path, identity, model)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+        model_id: Final = _register_named_model(candidate, model, use_chat_completions_api=True)
+        try:
+            response: Final = candidate.request(
+                "POST", "/v1/responses", {"model": model, "input": f"say hi {uuid.uuid4().hex}"}
+            )
+            assert response.status_code == 200, response.text
+            body: Final = response.json()
+            item: Final = body["output"][0]
+            assert item["type"] == "message" and item["role"] == "assistant", item
+            assert item["content"][0]["type"] == "output_text", item
+            assert item["content"][0]["text"] == _RESPONSES_OUTPUT_DENIAL, item
+            usage: Final = body["usage"]
+            assert (
+                usage["input_tokens"],
+                usage["output_tokens"],
+                usage["total_tokens"],
+            ) == (_UPSTREAM_INPUT_TOKENS, _UPSTREAM_OUTPUT_TOKENS, _UPSTREAM_TOTAL_TOKENS), usage
+        finally:
+            candidate.post("/model/delete", {"id": model_id})
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_denial_requires_authentication")
+def test_responses_denial_requires_authentication(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model()
+        response: Final = candidate.request(
+            "POST", "/v1/responses", {"model": model, "input": "say hi", "guardrails": [identity]}, key="sk-invalid"
+        )
+        assert response.status_code == 401, (response.status_code, response.text)
+        assert response.json()["error"]["type"] == "token_not_found_in_db", response.text
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_does_not_reach_upstream")
+def test_responses_pre_call_denial_stream_does_not_reach_upstream(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(api_base=_dead_api_base())
+        response: Final = candidate.request(
+            "POST",
+            "/v1/responses",
+            {"model": model, "input": "say hi", "stream": True, "guardrails": [identity]},
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        events: Final = _blocked_stream_events(response.text)
+        completed: Final = events[-1]["response"]
+        _assert_blocked_message_item(completed["output"][0], completed)
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_unguarded_stream_reaches_upstream")
+def test_responses_unguarded_stream_reaches_upstream(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        dead: Final = scenario.model(api_base=_dead_api_base())
+        denied: Final = candidate.request(
+            "POST",
+            "/v1/responses",
+            {"model": dead, "input": "say hi", "stream": True, "guardrails": [identity]},
+        )
+        assert denied.status_code == 200, denied.text
+        model: Final = scenario.model(use_chat_completions_api=True)
+        with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+            observed.get("/__observations")
+            response: Final = candidate.request(
+                "POST",
+                "/v1/responses",
+                {"model": model, "input": f"say hi {uuid.uuid4().hex}", "stream": True, "guardrails": []},
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"].startswith("text/event-stream"), response.text
+            assert "response.completed" in response.text, response.text
+            requests: Final = eventually(
+                lambda: observed.get("/__observations").json()["requests"],
+                lambda values: len(values) >= 1,
+                seconds=30,
+            )
+            assert len(requests) == 1, requests
+            assert requests[0]["path"] == "/v1/chat/completions", requests
+
+
+@pytest.mark.covers("other.observability.guardrails.chat_pre_call_denial_streams_content_filter")
+def test_chat_pre_call_denial_streams_content_filter(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model()
+        response: Final = candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "say hi"}],
+                "stream": True,
+                "guardrails": [identity],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
+        assert lines[-1] == "data: [DONE]", response.text
+        chunks: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+        assert chunks[0]["choices"][0]["delta"]["content"] == _RESPONSES_DENIAL, chunks
+        assert chunks[-1]["choices"][0]["finish_reason"] == "stop", chunks
+
+
+@pytest.mark.covers("other.observability.guardrails.chat_pre_call_denial_returns_content_filter")
+def test_chat_pre_call_denial_returns_content_filter(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model()
+        response: Final = candidate.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "say hi"}],
+                "guardrails": [identity],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        choice: Final = body["choices"][0]
+        assert choice["finish_reason"] == "content_filter", body
+        assert choice["message"]["content"] == _RESPONSES_DENIAL, body
+        assert (
+            body["usage"]["prompt_tokens"],
+            body["usage"]["completion_tokens"],
+            body["usage"]["total_tokens"],
+        ) == (0, 0, 0), body["usage"]
+
+
+@pytest.mark.covers("other.observability.guardrails.messages_pre_call_denial_returns_message")
+def test_messages_pre_call_denial_returns_message(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model()
+        response: Final = candidate.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "say hi"}],
+                "max_tokens": 16,
+                "guardrails": [identity],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        assert body["type"] == "message" and body["role"] == "assistant", body
+        assert body["content"] == [{"type": "text", "text": _RESPONSES_DENIAL}], body
+        assert body["stop_reason"] == "end_turn", body
+        assert (body["usage"]["input_tokens"], body["usage"]["output_tokens"]) == (0, 0), body
+
+
+@pytest.mark.covers("other.observability.guardrails.messages_pre_call_denial_streams_message")
+def test_messages_pre_call_denial_streams_message(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model()
+        response: Final = candidate.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "say hi"}],
+                "max_tokens": 16,
+                "stream": True,
+                "guardrails": [identity],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream"), response.text
+        lines: Final = tuple(line for line in response.text.split("\n") if line.startswith("data: "))
+        assert len(lines) == 1, response.text
+        body: Final = json.loads(lines[0].removeprefix("data: "))
+        assert body["type"] == "message" and body["role"] == "assistant", body
+        assert body["content"] == [{"type": "text", "text": _RESPONSES_DENIAL}], body
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_writes_zero_spend_row")
+def test_responses_pre_call_denial_writes_zero_spend_row(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model()
+        response: Final = candidate.request(
+            "POST", "/v1/responses", {"model": model, "input": "say hi", "guardrails": [identity]}
+        )
+        assert response.status_code == 200, response.text
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, total_tokens FROM "LiteLLM_SpendLogs" WHERE model=%s AND call_type=%s',
+                (model, "aresponses"),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert float(rows[0]["spend"]) == 0, rows
+        assert rows[0]["total_tokens"] == 0, rows
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_survives_worker_burst")
+def test_responses_pre_call_denial_stream_survives_worker_burst(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy(gateway, tmp_path, {}, config=config, workers=2) as candidate, candidate.scenario() as scenario:
+        model: Final = scenario.model(api_base=_dead_api_base())
+        healthy: Final = scenario.model(use_chat_completions_api=True)
+        with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as observed:
+            observed.get("/__observations")
+
+            def burst(index: int) -> httpx.Response:
+                if index % 3 == 0:
+                    return candidate.request(
+                        "POST",
+                        "/v1/responses",
+                        {"model": healthy, "input": f"say hi {uuid.uuid4().hex} {index}", "stream": True},
+                    )
+                stream: Final = index % 3 == 1
+                return candidate.request(
+                    "POST",
+                    "/v1/responses",
+                    {"model": model, "input": f"say hi {index}", "stream": stream, "guardrails": [identity]},
+                )
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                responses: Final = tuple(pool.map(burst, range(30)))
+            response_ids: Final = frozenset(_response_id(index, response) for index, response in enumerate(responses))
+            assert len(response_ids) == 30, response_ids
+            assert len(observed.get("/__observations").json()["requests"]) == 10
+
+
+@pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_stream_survives_worker_kill")
+def test_responses_pre_call_denial_stream_survives_worker_kill(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
+        candidate: Final = owned.gateway
+        with candidate.scenario() as scenario:
+            model: Final = scenario.model(api_base=_dead_api_base())
+            members: Final = tuple(
+                member for member in group_members(owned.process.pid) if member.pid != owned.process.pid
+            )
+            children: Final = tuple(member.pid for member in members)
+            workers: Final = tuple(
+                member.pid for member in members if any("spawn_main" in part for part in member.cmdline())
+            )
+            assert len(workers) >= 2, workers
+            os.kill(workers[0], signal.SIGKILL)
+            expected: Final = len(children)
+            eventually(
+                lambda: tuple(
+                    member.pid
+                    for member in group_members(owned.process.pid)
+                    if member.pid != owned.process.pid
+                    and member.is_running()
+                    and member.status() != psutil.STATUS_ZOMBIE
+                ),
+                lambda pids: len(pids) >= expected and any(pid not in children for pid in pids),
+                seconds=30,
+            )
+
+            def burst(index: int) -> httpx.Response:
+                return candidate.request(
+                    "POST",
+                    "/v1/responses",
+                    {"model": model, "input": f"say hi {index}", "stream": True, "guardrails": [identity]},
+                )
+
+            with ThreadPoolExecutor(max_workers=5) as pool:
+                responses: Final = tuple(pool.map(burst, range(10)))
+            for response in responses:
+                assert response.status_code == 200, response.text
+                assert response.headers["content-type"].startswith("text/event-stream"), response.text

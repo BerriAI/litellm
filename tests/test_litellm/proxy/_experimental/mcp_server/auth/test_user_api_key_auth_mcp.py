@@ -2,6 +2,7 @@ import contextlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -341,6 +342,15 @@ class TestMCPRequestHandler:
         mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
         return mock_manager
 
+    def _real_manager_with_toolsets(self, toolset_perms):
+        """A real MCPServerManager so the real expand_tool_permissions runs;
+        only the DB-backed toolset lookup is stubbed"""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+        manager = MCPServerManager()
+        manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
+        return manager
+
     async def test_get_allowed_mcp_servers_for_key_includes_toolset_servers(self):
         """A key granted only mcp_toolsets must reach the toolset's servers on
         every path (list, call, REST); regression for the list-ok/call-403 bug"""
@@ -359,7 +369,9 @@ class TestMCPRequestHandler:
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
         assert result == ["server-a"]
-        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(
+            toolset_ids=["toolset-1"], requires_fresh_policy=False
+        )
 
     async def test_get_allowed_mcp_servers_for_key_skips_toolset_resolution_when_none_granted(self):
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
@@ -506,6 +518,141 @@ class TestMCPRequestHandler:
             )
 
         assert result is None
+
+    @pytest.mark.parametrize(
+        "direct,via_toolsets,expected",
+        [
+            (["*"], None, None),
+            (["*"], ["read_file"], None),
+            (None, None, None),
+            ([], None, ()),
+            (None, ["read_file"], ("read_file",)),
+        ],
+    )
+    def test_union_tool_grants_wildcard_and_union_cases(self, direct, via_toolsets, expected):
+        """A direct ["*"] makes the level unrestricted even beside a toolset
+        list (regression: mapping ["*"] to None in expand_tool_permissions let
+        a same-level toolset list deny every other tool)"""
+        result = MCPRequestHandler._union_tool_grants(direct, via_toolsets)
+
+        if expected is None:
+            assert result is None
+        else:
+            assert result is not None
+            assert set(result) == set(expected)
+
+    def test_union_tool_grants_unions_two_concrete_lists(self):
+        result = MCPRequestHandler._union_tool_grants(["read_file"], ["write_file"])
+
+        assert result is not None
+        assert set(result) == {"read_file", "write_file"}
+
+    async def test_key_wildcard_allows_a_tool_never_enumerated(self):
+        """End to end at the key level: object_permission sits on the auth
+        object already, no team named, so no patching is needed; the real
+        global manager expands ["*"] and the level reads unrestricted"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": ["*"]},
+            ),
+        )
+
+        allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+        brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+            tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+
+        assert allowed is None
+        assert brand_new_tool_allowed is True
+
+    async def test_key_wildcard_stays_capped_by_team_allowlist(self):
+        """A wildcard on the key must never widen a team's enumerated ceiling:
+        the intersection keeps only the team's named tools"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": ["*"]},
+            ),
+        )
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_permissions = {"server-a": ["read_file"]}
+        manager = self._real_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+            brand_new_tool_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+                tool_name="brand_new_tool", server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert allowed == ["read_file"]
+        assert brand_new_tool_allowed is False
+
+    async def test_team_wildcard_stays_capped_by_key_allowlist(self):
+        """A wildcard on the team leaves the key's enumerated list as the
+        effective ceiling"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": ["read_file"]},
+            ),
+        )
+        team_object_permission = self._toolset_only_object_permission([])
+        team_object_permission.mcp_tool_permissions = {"server-a": ["*"]}
+        manager = self._real_manager_with_toolsets({})
+
+        with (
+            patch.object(  # test-quality-ok: stub the DB team loader to drive the real team-server resolution path
+                MCPRequestHandler, "_get_team_object_permission", AsyncMock(return_value=team_object_permission)
+            ),
+            patch(  # test-quality-ok: isolate the MCP registry, same seam as the sibling tests
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-a", user_api_key_auth=user_api_key_auth
+            )
+
+        assert allowed == ["read_file"]
+
+    async def test_key_empty_tool_list_stays_deny_all(self):
+        """[] on the key is deny-all, distinct from the wildcard: it must not
+        be widened into allow-all"""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="perm-1",
+                mcp_tool_permissions={"server-a": []},
+            ),
+        )
+
+        allowed = await MCPRequestHandler.get_allowed_tools_for_server(
+            server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+        read_file_allowed = await MCPRequestHandler.is_tool_allowed_for_server(
+            tool_name="read_file", server_id="server-a", user_api_key_auth=user_api_key_auth
+        )
+
+        assert allowed == []
+        assert read_file_allowed is False
 
     # ------------------------------------------------------------------
     # LIT-5749: toolsets attached to a TEAM, ORG, or internal USER must be
@@ -4002,7 +4149,7 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
                 "group-server2",
             }
 
-            mock_get_access_group_servers.assert_called_once_with(["dev-group"])
+            mock_get_access_group_servers.assert_called_once_with(["dev-group"], requires_fresh_policy=False)
     finally:
         for sid in ("direct-server1", "direct-server2"):
             global_mcp_server_manager.registry.pop(sid, None)
@@ -4171,7 +4318,7 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
 
         assert set(result) == {"direct-server", "group-server"}
         mock_get_perm.assert_not_called()
-        mock_access_groups.assert_called_once_with(["grp-alpha"])
+        mock_access_groups.assert_called_once_with(["grp-alpha"], requires_fresh_policy=False)
     finally:
         global_mcp_server_manager.registry.pop("direct-server", None)
 
@@ -4238,7 +4385,7 @@ class TestAgentMCPPermissions:
                 self._team_servers({"callers": ["server_2", "server_3"]}),
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: neither the agent's owner nor the caller has a personal grant
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({})
@@ -4257,7 +4404,7 @@ class TestAgentMCPPermissions:
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: same seam, keyed by which user is being asked about
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": ["server_1"]})
@@ -4276,13 +4423,112 @@ class TestAgentMCPPermissions:
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_team", self._team_servers({})
             ),
             patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
-                MCPRequestHandler, "_get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
+                MCPRequestHandler, "get_allowed_mcp_servers_for_agent", AsyncMock(return_value=[])
             ),
             patch.object(  # test-quality-ok: None is the resolver's own "entitlement unresolvable" signal
                 MCPRequestHandler, "_get_allowed_mcp_servers_for_user", self._user_servers({"alice": None})
             ),
         ):
             assert await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth=agent_key) == []
+
+    @staticmethod
+    def _tool_grants(grants: dict[str, dict[str, list[str]]], keyed_by: Literal["team_id", "user_id"]) -> AsyncMock:
+        """Object permissions keyed by the ``team_id`` or ``user_id`` being asked about; anyone else has none."""
+
+        async def by_principal(user_api_key_auth: UserAPIKeyAuth | None = None) -> LiteLLM_ObjectPermissionTable | None:
+            assert user_api_key_auth is not None
+            principal = (user_api_key_auth.team_id if keyed_by == "team_id" else user_api_key_auth.user_id) or ""
+            tools = grants.get(principal)
+            if tools is None:
+                return None
+            return LiteLLM_ObjectPermissionTable(object_permission_id=f"perm-{principal}", mcp_tool_permissions=tools)
+
+        return AsyncMock(side_effect=by_principal)
+
+    @contextlib.contextmanager
+    def _caller_tool_levels(
+        self, team_grants: dict[str, dict[str, list[str]]], user_grants: dict[str, dict[str, list[str]]]
+    ):
+        with (
+            patch.object(  # test-quality-ok: the level loaders read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which team is being asked about
+                MCPRequestHandler, "_get_team_object_permission", self._tool_grants(team_grants, keyed_by="team_id")
+            ),
+            patch.object(  # test-quality-ok: same seam, keyed by which user is being asked about
+                MCPRequestHandler, "_get_user_object_permission", self._tool_grants(user_grants, keyed_by="user_id")
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+        ):
+            yield
+
+    async def test_agent_key_acting_for_a_user_only_sees_the_tools_that_user_may_call(self):
+        """The agent's key may call every tool on server-a, the invoking team grants two of them and the
+        invoking user only one, so on that user's behalf the agent sees exactly that one tool."""
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        with self._caller_tool_levels(
+            team_grants={"callers": {"server-a": ["read_wiki_structure", "ask_wiki_question"]}},
+            user_grants={"alice": {"server-a": ["read_wiki_structure", "read_wiki_contents"]}},
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == [
+                "read_wiki_structure"
+            ]
+
+    async def test_agent_key_acting_for_a_user_without_tool_grants_keeps_its_own_tools(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        with self._caller_tool_levels(team_grants={}, user_grants={}):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+
+    async def test_agent_key_acting_for_a_team_is_capped_at_that_teams_tools_on_the_server(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        with self._caller_tool_levels(
+            team_grants={"callers": {"server-a": ["ask_wiki_question"], "server-b": ["other"]}}, user_grants={}
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == ["ask_wiki_question"]
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-c", agent_key) is None
+
+    async def test_agent_key_not_acting_for_anyone_ignores_the_caller_tool_ceiling(self):
+        agent_key = UserAPIKeyAuth(api_key="agent-key", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
+
+        with self._caller_tool_levels(
+            team_grants={"callers": {"server-a": ["ask_wiki_question"]}},
+            user_grants={"alice": {"server-a": ["read_wiki_structure"]}},
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) is None
+
+    async def test_agent_key_acting_for_a_caller_whose_team_is_unreadable_gets_no_tools(self):
+        agent_key = self._agent_key_acting_for(user_id="alice", team_id="callers")
+
+        async def only_the_callers_team_is_unreadable(
+            user_api_key_auth: UserAPIKeyAuth | None = None,
+        ) -> LiteLLM_ObjectPermissionTable | None:
+            if user_api_key_auth is not None and user_api_key_auth.team_id == "callers":
+                raise RuntimeError("db down")
+            return None
+
+        with (
+            patch.object(  # test-quality-ok: the level loaders read proxy_server globals with no injection seam
+                MCPRequestHandler, "_get_key_object_permission", return_value=None
+            ),
+            patch.object(  # test-quality-ok: same seam; the agent's own team resolves, the caller's team does not
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                AsyncMock(side_effect=only_the_callers_team_is_unreadable),
+            ),
+            patch.object(  # test-quality-ok: same seam
+                MCPRequestHandler, "_get_user_object_permission", AsyncMock(return_value=None)
+            ),
+            patch.object(  # test-quality-ok: agent object_permission lookup hits the DB, not under test here
+                MCPRequestHandler, "_get_agent_object_permission", AsyncMock(return_value=None)
+            ),
+        ):
+            assert await MCPRequestHandler.get_allowed_tools_for_server("server-a", agent_key) == []
 
     async def test_get_allowed_mcp_servers_agent_intersection(self):
         """Key/team allow [server_1, server_2]; agent allows [server_1]. Result = [server_1]."""
@@ -4294,7 +4540,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_1"]
@@ -4311,7 +4557,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = []  # no agent-level restriction
@@ -4354,8 +4600,7 @@ class TestAgentMCPPermissions:
         assert result == frozenset({"ag-server-id"})
         assert asked == ["agent-ag"]
         assert (
-            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve)
-            is None
+            await MCPRequestHandler._get_agent_access_group_server_ceiling(UserAPIKeyAuth(api_key="k"), resolve) is None
         )
         assert asked == ["agent-ag"]
 
@@ -4368,7 +4613,7 @@ class TestAgentMCPPermissions:
         )
         with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_key") as mock_key:
             with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_team") as mock_team:
-                with patch.object(MCPRequestHandler, "_get_allowed_mcp_servers_for_agent") as mock_agent:
+                with patch.object(MCPRequestHandler, "get_allowed_mcp_servers_for_agent") as mock_agent:
                     mock_key.return_value = ["server_1", "server_2"]
                     mock_team.return_value = []
                     mock_agent.return_value = ["server_2", "server_3"]
@@ -4394,7 +4639,7 @@ class TestAgentMCPPermissions:
             ):
                 with patch.object(
                     MCPRequestHandler,
-                    "_get_agent_tool_permissions_for_server",
+                    "get_agent_tool_permissions_for_server",
                     new_callable=AsyncMock,
                     return_value=["tool_a"],
                 ) as mock_agent_tools:
@@ -4426,7 +4671,7 @@ class TestAgentMCPPermissions:
             ):
                 with patch.object(
                     MCPRequestHandler,
-                    "_get_agent_tool_permissions_for_server",
+                    "get_agent_tool_permissions_for_server",
                     new_callable=AsyncMock,
                     return_value=None,
                 ):
@@ -4475,10 +4720,12 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            result = await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+            result = await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth)
 
         assert sorted(result) == ["server-a", "server-direct"]
-        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(
+            toolset_ids=["toolset-1"], requires_fresh_policy=False
+        )
 
     async def test_get_allowed_mcp_servers_toolset_only_agent_caps_key_servers(self):
         """Regression: an agent whose only grant is a toolset used to resolve to [] and place
@@ -4492,7 +4739,9 @@ class TestAgentMCPPermissions:
                 stack.enter_context(patcher)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4515,10 +4764,12 @@ class TestAgentMCPPermissions:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
             with pytest.raises(UnloadableEntitlementError):
-                await MCPRequestHandler._get_allowed_mcp_servers_for_agent(user_api_key_auth)
+                await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth)
             stack.enter_context(
                 patch.object(  # test-quality-ok: key resolution has its own tests; pin its grants here
-                    MCPRequestHandler, "_get_allowed_mcp_servers_for_key", AsyncMock(return_value=["server-a", "server-b"])
+                    MCPRequestHandler,
+                    "_get_allowed_mcp_servers_for_key",
+                    AsyncMock(return_value=["server-a", "server-b"]),
                 )
             )
             stack.enter_context(
@@ -4542,9 +4793,15 @@ class TestAgentMCPPermissions:
         with contextlib.ExitStack() as stack:
             for patcher in self._agent_toolset_patches(agent_object_permission, mock_manager):
                 stack.enter_context(patcher)
-            server_a_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-a", user_api_key_auth)
-            server_b_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-b", user_api_key_auth)
-            server_c_tools = await MCPRequestHandler._get_agent_tool_permissions_for_server("server-c", user_api_key_auth)
+            server_a_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
+                "server-a", user_api_key_auth
+            )
+            server_b_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
+                "server-b", user_api_key_auth
+            )
+            server_c_tools = await MCPRequestHandler.get_agent_tool_permissions_for_server(
+                "server-c", user_api_key_auth
+            )
 
         assert sorted(server_a_tools) == ["tool_direct", "tool_via_toolset"]
         assert server_b_tools == ["tool_b"]
@@ -5580,7 +5837,7 @@ def test_expand_permission_list_does_not_honor_all_proxy_sentinel():
 
 
 @pytest.mark.asyncio
-async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynamically():
+async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynamically(monkeypatch):
     """The TEAM resolver expands the all-proxy sentinel to every registered server and
     picks up a server registered later, so a team scoped to all-proxy tracks the live
     registry without any change to its stored permission. Reverting the team-side
@@ -5596,6 +5853,9 @@ async def test_get_allowed_mcp_servers_for_team_expands_all_proxy_sentinel_dynam
     )
     from litellm.types.mcp import MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setattr(global_mcp_server_manager, "registry", {})
+    monkeypatch.setattr(global_mcp_server_manager, "config_mcp_servers", {})
 
     for sid in ("srv-x", "srv-y"):
         global_mcp_server_manager.registry[sid] = MCPServer(
@@ -8052,7 +8312,7 @@ class TestUserSubjectTeamUnion:
         ) == ["t1"]
         # An admitted subject never fans out HERE: it resolves one source per team first, and each of
         # those pins a team_id, so this helper only ever answers the single-team question. The fan-out
-        # itself is _admitted_subject_sources' job, asserted below.
+        # itself is admitted_subject_sources' job, asserted below.
         with self._patch(teams_by_id={}, user_teams=["t2", "t3"]):
             assert await MCPRequestHandler._team_ids_for_mcp_grant(_make_admitted_subject("u")) == []
         # keyless, no user_id -> nothing
@@ -8615,7 +8875,7 @@ class TestUserSubjectTeamUnion:
         teams["t-member"].organization_id = "org-a"
         auth = _make_admitted_subject("sso-user")
         with self._patch(teams_by_id=teams, user_teams=["t-member", "t-stale"]):
-            sources = await MCPRequestHandler._admitted_subject_sources(auth)
+            sources = await MCPRequestHandler.admitted_subject_sources(auth)
 
         assert [(s.team_id, s.org_id) for s in sources] == [(None, None), ("t-member", "org-a")]
         # The user's own source carries their grants; a team source must NOT, or the team would be
@@ -9420,7 +9680,10 @@ class TestGetUserObjectPermission:
 
     def _prisma_with_user(self, user_row):
         prisma_client = MagicMock()
-        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+        from litellm.proxy._types import LiteLLM_UserTable
+
+        row = LiteLLM_UserTable(user_id="human", object_permission_id=user_row.object_permission_id) if user_row is not None else None
+        prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
         return prisma_client
 
     async def test_resolves_through_the_shared_permission_cache(self):
@@ -9435,7 +9698,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission",
                 new_callable=AsyncMock,
@@ -9462,7 +9725,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch("litellm.proxy.auth.auth_checks.get_object_permission", new_callable=AsyncMock) as mock_get_perm,
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
@@ -9481,7 +9744,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
@@ -9495,7 +9758,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
         ):
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
@@ -9512,7 +9775,7 @@ class TestGetUserObjectPermission:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock()))),
             patch(
                 "litellm.proxy.auth.auth_checks.get_object_permission",
                 new_callable=AsyncMock,
@@ -9832,3 +10095,47 @@ class TestScopedSessionAdmission:
     def test_scope_field_cannot_be_forged_through_construction(self):
         forged = UserAPIKeyAuth(user_id="u1", mcp_session_resource_server_id="any-server")
         assert forged.mcp_session_resource_server_id is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(monkeypatch):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    cached = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="revoked")
+    current = LiteLLM_UserTable(user_id="fresh-human", object_permission_id="current")
+    cache = DualCache()
+    await cache.async_set_cache(key="fresh-human", value=cached)
+    database = MagicMock()
+    database.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=current)
+    database.db.litellm_usertable.find_unique = AsyncMock(return_value=cached)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    assert await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True) == "current"
+    database.db.litellm_usertable.find_unique.assert_not_awaited()
+    database.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("unavailable")
+    with pytest.raises(HTTPException) as denied:
+        await MCPRequestHandler._user_object_permission_id("fresh-human", database, check_db_only=True)
+    assert denied.value.status_code == 503
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["servers", "tools"])
+async def test_managed_agent_permission_resolution_outage_is_not_an_unrestricted_grant(monkeypatch, operation):
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.types.agents import AgentResponse
+
+    auth = UserAPIKeyAuth(agent_id="managed")
+    auth.managed_agent_policy = AgentResponse(agent_id="managed", agent_name="Managed", agent_card_params={})
+    permission = LiteLLM_ObjectPermissionTable(object_permission_id="policy", mcp_toolsets=["unavailable"])
+    manager = MagicMock()
+    manager.expand_permission_list.return_value = []
+    manager.resolve_toolset_tool_permissions = AsyncMock(side_effect=RuntimeError("policy unavailable"))
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    resolution = (
+        MCPRequestHandler.get_allowed_mcp_servers_for_agent(auth, permission)
+        if operation == "servers"
+        else MCPRequestHandler.get_agent_tool_permissions_for_server("slack", auth, permission)
+    )
+    with pytest.raises(RuntimeError, match="policy unavailable"):
+        await resolution

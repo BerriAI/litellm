@@ -14,6 +14,7 @@ from pydantic import BaseModel, JsonValue
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    CLI_SESSION_KEY_PREFIX,
     EMPTY_MAPPING,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -43,6 +44,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -102,19 +104,28 @@ _NON_SECRET_KEY_ALIASES: Final = frozenset(
 )
 
 
-def _is_non_secret_key_value(value: str) -> bool:
+def _is_cli_session_alias(value: str, key_alias: object) -> bool:
+    return value.startswith(f"{CLI_SESSION_KEY_PREFIX}-") and value == key_alias
+
+
+def _is_non_secret_key_value(value: str, *, key_alias: object = None) -> bool:
     return (
-        value in _NON_SECRET_KEY_ALIASES or is_valid_sha256_hash(value) or _HASHED_JWT_RE.fullmatch(value) is not None
+        value in _NON_SECRET_KEY_ALIASES
+        or is_valid_sha256_hash(value)
+        or _HASHED_JWT_RE.fullmatch(value) is not None
+        or _is_cli_session_alias(value, key_alias)
     )
 
 
-def _redact_logged_api_key(value: str | None, *, already_redacted: bool = False) -> str | None:
+def _redact_logged_api_key(
+    value: str | None, *, already_redacted: bool = False, key_alias: object = None
+) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     stripped: Final = re.sub(r"(?i)^bearer ", "", value)
     if not stripped:
         return None
-    if already_redacted and _is_non_secret_key_value(stripped):
+    if already_redacted and _is_non_secret_key_value(stripped, key_alias=key_alias):
         return stripped
     return hash_token(stripped)
 
@@ -230,10 +241,15 @@ def _get_spend_logs_metadata(
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
+    _key_alias: Final = metadata.get("user_api_key_alias")
     _already_redacted: Final = (
-        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == _raw_key
+        isinstance(_trusted_hash, str)
+        and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
+        and _trusted_hash == _raw_key
     )
-    clean_metadata["user_api_key"] = _redact_logged_api_key(_raw_key, already_redacted=_already_redacted)
+    clean_metadata["user_api_key"] = _redact_logged_api_key(
+        _raw_key, already_redacted=_already_redacted, key_alias=_key_alias
+    )
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["batch_successful_requests"] = batch_successful_requests
@@ -537,10 +553,13 @@ def get_logging_payload(
         standard_logging_completion_tokens = standard_logging_payload.get("completion_tokens", 0)
         standard_logging_total_tokens = standard_logging_payload.get("total_tokens", 0)
     _trusted_hash = metadata.get("user_api_key_hash")
+    _key_alias = metadata.get("user_api_key_alias")
     _key_already_redacted = (
-        isinstance(_trusted_hash, str) and _is_non_secret_key_value(_trusted_hash) and _trusted_hash == api_key
+        isinstance(_trusted_hash, str)
+        and _is_non_secret_key_value(_trusted_hash, key_alias=_key_alias)
+        and _trusted_hash == api_key
     )
-    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted) or ""
+    api_key = _redact_logged_api_key(api_key, already_redacted=_key_already_redacted, key_alias=_key_alias) or ""
 
     if (
         standard_logging_payload is not None
@@ -548,7 +567,9 @@ def get_logging_payload(
         api_key = (
             api_key
             or _redact_logged_api_key(
-                standard_logging_payload["metadata"].get("user_api_key_hash"), already_redacted=True
+                standard_logging_payload["metadata"].get("user_api_key_hash"),
+                already_redacted=True,
+                key_alias=standard_logging_payload["metadata"].get("user_api_key_alias"),
             )
             or ""
         )
@@ -1063,6 +1084,11 @@ def _get_messages_for_spend_logs_payload(
 
 
 _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
+_REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
+
+
+def _is_request_body_credential(key: str, value: object) -> bool:
+    return isinstance(value, str) and _REQUEST_BODY_CREDENTIAL_MASKER.is_sensitive_key(key)
 
 
 def _sanitize_request_body_for_spend_logs_payload(
@@ -1074,8 +1100,9 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
 
-    Also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields
-    which contains raw HTTP headers including Authorization tokens).
+    At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
+    which holds raw HTTP headers including Authorization tokens), and replaces string values under keys
+    SensitiveDataMasker classifies as credentials with REDACTED_BY_LITELM_STRING.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1132,7 +1159,11 @@ def _sanitize_request_body_for_spend_logs_payload(
             return value
         return value
 
-    return {k: _sanitize_value(v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
+    return {
+        k: REDACTED_BY_LITELM_STRING if _is_request_body_credential(k, v) else _sanitize_value(v)
+        for k, v in request_body.items()
+        if k not in _SENSITIVE_REQUEST_BODY_KEYS
+    }
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by

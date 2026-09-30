@@ -1,17 +1,43 @@
 use std::time::Duration;
 
-use litellm_llms::{
-    anthropic::common_utils::AnthropicModelCapabilities,
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
+use bytes::Bytes;
+use litellm_host::call::CallOutput;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms_types::{
+    formats::messages::{MessagesRequest, MessagesResponse},
+    headers::ProviderSpecificHeaders,
 };
-use litellm_types::utils::ProviderSpecificHeaders;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+
+use super::Error;
+
+pub struct MessagesCall {
+    pub body: MessagesRequest,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub custom_llm_provider: Option<String>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub provider_specific_header: Option<ProviderSpecificHeaders>,
+    pub timeout: Option<Duration>,
+    pub shaping: MessagesShaping,
+}
+
+pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error> {
+    serde_json::from_value(Value::Object(body)).map_err(invalid_request)
+}
+
+pub(super) fn invalid_request(err: serde_json::Error) -> Error {
+    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
+}
+
+pub type MessagesCallResponse =
+    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
     #[serde(default)]
-    pub capabilities: AnthropicModelCapabilities,
+    pub capabilities: MessagesModelCapabilities,
     #[serde(default)]
     pub drop_params: bool,
     #[serde(default)]
@@ -20,33 +46,11 @@ pub struct MessagesShaping {
     pub additional_drop_params: Vec<String>,
 }
 
-pub struct MessagesRequest<'a> {
-    pub model: &'a str,
-    pub body: Value,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
-    pub extra_headers: Option<Map<String, Value>>,
-    pub provider_specific_header: Option<ProviderSpecificHeaders>,
-    pub timeout: Option<Duration>,
-    pub shaping: MessagesShaping,
-}
-
-pub struct ProviderMessagesRequest {
-    pub provider: String,
-    pub model: String,
-    pub config: &'static dyn BaseAnthropicMessagesConfig,
-    pub url: String,
-    pub body: Value,
-    pub upstream_headers: Vec<(String, String)>,
-    pub timeout: Option<Duration>,
-}
-
 #[cfg(test)]
 mod tests {
-    use litellm_llms::anthropic::common_utils::SupportedEffortTiers;
+    use litellm_llms::base_llm::messages::context::SupportedEffortTiers;
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -70,9 +74,9 @@ mod tests {
     #[case::partial_capabilities(
         json!({"capabilities": {"supports_reasoning": true}}),
         MessagesShaping {
-            capabilities: AnthropicModelCapabilities {
+            capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
-                ..AnthropicModelCapabilities::default()
+                ..MessagesModelCapabilities::default()
             },
             ..MessagesShaping::default()
         },
@@ -94,7 +98,7 @@ mod tests {
             "additional_drop_params": ["metadata.user_id", "thinking"]
         }),
         MessagesShaping {
-            capabilities: AnthropicModelCapabilities {
+            capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,

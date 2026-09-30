@@ -612,7 +612,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     request_body = {
         "text": long_string,
         "number": 42,
-        "nested": {"list": ["short", long_string], "dict": {"key": long_string}},
+        "nested": {"list": ["short", long_string], "dict": {"value": long_string}},
     }
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
 
@@ -631,7 +631,7 @@ def test_sanitize_request_body_for_spend_logs_payload_mixed_types():
     assert sanitized["number"] == 42
     assert sanitized["nested"]["list"][0] == "short"
     assert len(sanitized["nested"]["list"][1]) == expected_length
-    assert len(sanitized["nested"]["dict"]["key"]) == expected_length
+    assert len(sanitized["nested"]["dict"]["value"]) == expected_length
 
 
 def test_sanitize_request_body_for_spend_logs_payload_uses_runtime_env_override(
@@ -1207,7 +1207,7 @@ def test_get_logging_payload_placeholders_the_metadata_copied_into_the_stored_re
     stored_request_body: Final = json.loads(payload["proxy_server_request"])
     assert stored_request_body["metadata"]["model_group"] == expected_stored_model_group
     assert stored_request_body["metadata"]["error_information"]["error_message"] == expected_stored_error_message
-    assert stored_request_body["metadata"]["user_api_key"] == "sk-test"
+    assert stored_request_body["metadata"]["user_api_key"] == REDACTED_BY_LITELM_STRING
     assert ("medical records" in payload["proxy_server_request"]) == bool(deployment_info)
 
 
@@ -2692,6 +2692,104 @@ def test_sanitize_request_body_strips_secret_fields():
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
+def test_proxy_server_request_payload_strips_nested_aws_credentials(mock_should_store: MagicMock) -> None:
+    mock_should_store.return_value = True
+    credentials: Final = {
+        "aws_access_key_id": "AKIA-canary",
+        "aws_secret_access_key": "secret-canary",
+        "aws_session_token": "token-canary",
+        "aws_web_identity_token": "wit-canary",
+    }
+    tool_parameters: Final = {"type": "object", "properties": {"aws_secret_access_key": {"type": "string"}}}
+    litellm_params: Final = {
+        "proxy_server_request": {
+            "body": {
+                "model": "bedrock-claude",
+                "messages": [{"role": "user", "content": "hello"}],
+                "fallbacks": [{"model": "bedrock-b", "aws_region_name": "us-west-2", **credentials}],
+                "extra_body": {"aws_role_name": "arn:aws:iam::123456789012:role/r", **credentials},
+                "tools": [{"type": "function", "function": {"name": "f", "parameters": tool_parameters}}],
+                **credentials,
+            }
+        }
+    }
+
+    parsed: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(metadata={}, litellm_params=litellm_params, kwargs={})
+    )
+
+    assert "canary" not in json.dumps(parsed)
+    masked: Final = dict.fromkeys(credentials, REDACTED_BY_LITELM_STRING)
+    assert parsed["fallbacks"] == [{"model": "bedrock-b", "aws_region_name": "us-west-2", **masked}]
+    assert parsed["extra_body"] == {"aws_role_name": "arn:aws:iam::123456789012:role/r", **masked}
+    assert {name: parsed[name] for name in credentials} == masked
+    assert parsed["tools"][0]["function"]["parameters"] == tool_parameters
+    assert parsed["messages"] == [{"role": "user", "content": "hello"}]
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
+def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_store: MagicMock) -> None:
+    mock_should_store.return_value = True
+    credentials: Final = {
+        "azure_password": "canary-azure-password",
+        "client_secret": "canary-client-secret",
+        "azure_ad_token": "canary-azure-ad-token",
+        "vertex_credentials": "canary-vertex-credentials",
+        "s3_secret_access_key": "canary-s3-secret",
+        "token": "canary-watsonx-token",
+        "apikey": "canary-watsonx-apikey",
+        "zen_api_key": "canary-zen-api-key",
+        "gemini_api_key": "canary-gemini-api-key",
+        "gigachat_access_token": "canary-gigachat-token",
+        "oci_key": "canary-oci-key",
+    }
+    metadata: Final = {"user_api_key": "custom-auth-raw-key", "requester_ip_address": "10.0.0.1"}
+    tool_parameters: Final = {"type": "object", "properties": {"client_secret": {"type": "string"}}}
+    litellm_params: Final = {
+        "proxy_server_request": {
+            "body": {
+                "model": "azure-gpt",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 10,
+                "prompt_cache_key": "user-123-cache",
+                "vertex_credentials": {"private_key": "canary-private-key", "client_email": "sa@example.com"},
+                "extra_headers": {"Authorization": "Bearer canary-extra-header"},
+                "tools": [
+                    {"type": "function", "function": {"name": "f", "parameters": tool_parameters}},
+                    {"type": "mcp", "server_url": "https://mcp.example.com", "headers": {"Authorization": "canary-mcp"}},
+                ],
+                "fallbacks": [{"model": "azure-b", **credentials}],
+                "metadata": metadata,
+                **credentials,
+            }
+        }
+    }
+
+    parsed: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(metadata={}, litellm_params=litellm_params, kwargs={})
+    )
+
+    assert "canary" not in json.dumps(parsed)
+    assert {name: parsed[name] for name in credentials} == dict.fromkeys(credentials, REDACTED_BY_LITELM_STRING)
+    assert parsed["vertex_credentials"] == REDACTED_BY_LITELM_STRING
+    assert parsed["extra_headers"] == {"Authorization": REDACTED_BY_LITELM_STRING}
+    assert parsed["tools"][0]["function"]["parameters"] == tool_parameters
+    assert parsed["tools"][1]["server_url"] == "https://mcp.example.com"
+    assert parsed["metadata"] == {"user_api_key": REDACTED_BY_LITELM_STRING, "requester_ip_address": "10.0.0.1"}
+    assert parsed["max_tokens"] == 10
+    assert parsed["prompt_cache_key"] == REDACTED_BY_LITELM_STRING
+    assert parsed["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_sanitize_response_redacts_credential_named_fields() -> None:
+    response: Final = {"access_token": "canary-oauth-token", "usage": {"prompt_tokens": 1}}
+
+    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+        "response": {"access_token": REDACTED_BY_LITELM_STRING, "usage": {"prompt_tokens": 1}}
+    }
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     """
     End-to-end test: when the proxy_server_request body contains
@@ -4089,7 +4187,7 @@ async def test_spend_log_request_id_is_the_message_id_a_bridged_streaming_caller
     adapter mints itself, and it is the only request id that call ever shows the caller, so
     GET /spend/logs?request_id=msg_... has to land on the row."""
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator import (
         AnthropicResponsesStreamWrapper,
     )
     from litellm.types.llms.openai import (
@@ -5154,6 +5252,64 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+_CLI_SESSION_ALIAS: Final = "cli-session-alice"
+_CLI_SESSION_TOKEN: Final = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
+
+
+def _cli_session_request_metadata(logged_key: str) -> dict[str, str]:
+    return {
+        "user_api_key": logged_key,
+        "user_api_key_hash": logged_key,
+        "user_api_key_alias": _CLI_SESSION_ALIAS,
+        "user_api_key_user_id": "alice",
+    }
+
+
+@pytest.mark.parametrize("call_type", ["acompletion", "anthropic_messages", "aresponses"])
+def test_get_logging_payload_attributes_a_cli_session_to_its_alias(call_type: str):
+    payload = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.4-nano",
+            "response_cost": 0.00001,
+            "litellm_params": {"metadata": _cli_session_request_metadata(_CLI_SESSION_ALIAS)},
+        },
+        response_obj=litellm.ModelResponse(id=f"{call_type}-1", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == _CLI_SESSION_ALIAS
+    assert json.loads(payload["metadata"])["user_api_key"] == _CLI_SESSION_ALIAS
+    assert json.loads(payload["metadata"])["user_api_key_alias"] == _CLI_SESSION_ALIAS
+
+
+@pytest.mark.parametrize("call_type", ["acompletion", "anthropic_messages", "aresponses"])
+def test_get_logging_payload_never_lands_a_raw_cli_session_token(call_type: str):
+    payload = get_logging_payload(
+        kwargs={
+            "call_type": call_type,
+            "model": "gpt-5.4-nano",
+            "litellm_params": {"metadata": _cli_session_request_metadata(_CLI_SESSION_TOKEN)},
+        },
+        response_obj=litellm.ModelResponse(id=f"{call_type}-2", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == hash_token(_CLI_SESSION_TOKEN)
+    assert json.loads(payload["metadata"])["user_api_key"] == hash_token(_CLI_SESSION_TOKEN)
+
+
+def test_redact_logged_api_key_cli_session_alias_needs_alias_provenance():
+    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True, key_alias=_CLI_SESSION_ALIAS) == (
+        _CLI_SESSION_ALIAS
+    )
+    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, already_redacted=True) == hash_token(_CLI_SESSION_ALIAS)
+    assert _redact_logged_api_key(_CLI_SESSION_ALIAS, key_alias=_CLI_SESSION_ALIAS) == hash_token(_CLI_SESSION_ALIAS)
+    assert _redact_logged_api_key("alice", already_redacted=True, key_alias="alice") == hash_token("alice")
 
 
 def test_azure_spillover_stamped_from_response_headers():

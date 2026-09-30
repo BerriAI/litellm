@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -32,6 +32,7 @@ from starlette.types import Receive, Scope, Send
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -102,8 +103,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.common_utils.sse_keepalive import (
     SSE_COMMENT_PING_BYTES,
+    SSE_STREAM_START_TAIL,
+    advance_sse_tail,
     coerce_keepalive_interval,
     resolve_ttft_keepalive_interval,
+    seal_open_sse_frame,
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -735,7 +739,7 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
-            data: Final = orjson.loads(json_str)
+            data: Final[object] = orjson.loads(json_str)
             if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
                 error_code_raw: Final = data["error"].get("code")
                 error_code: int | None = None
@@ -788,7 +792,7 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
             return default_error
 
         try:
-            data: Final = orjson.loads(json_str)
+            data: Final[object] = orjson.loads(json_str)
             if isinstance(data, dict) and "error" in data:
                 error_obj: Final = data["error"]
                 if isinstance(error_obj, dict):
@@ -970,7 +974,7 @@ _NO_GENERAL_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 async def create_response(
-    generator: AsyncGenerator[str, None],
+    generator: AsyncGenerator[str, None] | Coroutine[object, object, AsyncGenerator[str, None]],
     media_type: str,
     headers: Mapping[str, str],
     default_status_code: int = status.HTTP_200_OK,
@@ -998,6 +1002,17 @@ async def create_response(
         # Now get the first chunk from the actual generator
         first_chunk_value = await _buffer_first_chunk_honoring_disconnect(generator, request)
         resolved_headers: Final = await _resolve_stream_headers(headers, refresh_headers)
+
+        if isinstance(first_chunk_value, AnthropicErrorSseFrame):
+            with contextlib.suppress(Exception):
+                await generator.aclose()
+            return JSONResponse(
+                status_code=first_chunk_value.status_code,
+                content=first_chunk_value.json_body(
+                    error_body_call_id(general_settings, resolved_headers.get(LITELLM_CALL_ID_HEADER))
+                ),
+                headers=resolved_headers,
+            )
 
         if first_chunk_value is not None:
             try:
@@ -2184,6 +2199,9 @@ class ProxyBaseLLMRequestProcessing:
 
         if self._tags_before_guardrails is None:
             self._tags_before_guardrails = frozenset(get_tags_from_request_body(request_body=self.data))
+        prefetch_model = self.data.get("model")
+        if llm_router is not None and isinstance(prefetch_model, str):
+            llm_router.arm_routing_read_prefetch(prefetch_model, self.data)
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -2781,15 +2799,6 @@ class ProxyBaseLLMRequestProcessing:
                         request=request,
                     )
                     if route_type == "aresponses":
-                        # Streaming /v1/responses returns here without
-                        # reaching the non-streaming ownership tail below.
-                        # Wrap the SSE generator so container ownership is
-                        # written once the upstream iterator finishes
-                        # assembling ``completed_response`` — otherwise
-                        # code-interpreter containers created during the
-                        # stream stay unregistered and follow-up file API
-                        # calls 403. Covers the background-polling path
-                        # too, which loops ``body_iterator`` end-to-end.
                         selected_data_generator = (
                             ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
                                 original_stream_response=response,
@@ -3011,50 +3020,50 @@ class ProxyBaseLLMRequestProcessing:
         wrapped_generator: Any,
         user_api_key_dict: UserAPIKeyAuth,
     ):
-        """Forward SSE chunks, then record container ownership at stream end.
+        """Forward SSE chunks and record container ownership before the terminal chunk goes out.
 
         Streaming ``/v1/responses`` short-circuits out of
         ``base_process_llm_request`` before the non-streaming ownership
-        tail runs, so without this wrap the
-        ``LiteLLM_ManagedObjectTable`` row for any container created
-        during the stream is never written and follow-up file API calls
-        return 403.
+        tail runs. The OpenAI SDK closes the connection at ``data: [DONE]``
+        and starlette cancels the body task on disconnect, so a write that
+        waits for the generator to finish never lands. The iterator sets
+        ``completed_response`` before it hands over its terminal chunk, so
+        the ``LiteLLM_ManagedObjectTable`` row is written the moment it
+        appears, ahead of the chunk carrying ``response.completed``.
         """
-        try:
-            async for chunk in wrapped_generator:
+        async for chunk in wrapped_generator:
+            completed_obj = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+                original_stream_response
+            )
+            if completed_obj is None:
                 yield chunk
-        finally:
-            try:
-                completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
-                    original_stream_response
-                )
-                if completed_obj is not None:
-                    await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
-                        response=completed_obj,
-                        user_api_key_dict=user_api_key_dict,
-                    )
-                else:
-                    # Silent skip caused #30210: the proxy's Router wrapper
-                    # of the responses streaming iterator wasn't propagating
-                    # ``completed_response``, so this hook recorded nothing
-                    # and follow-up /v1/containers/<id>/files calls 403'd
-                    # for non-admin keys with no proxy-side hint. Log a
-                    # warning so future regressions of the same shape
-                    # surface in operator logs.
-                    verbose_proxy_logger.warning(
-                        "Container ownership recording skipped on streaming "
-                        "/v1/responses: no completed_response on stream "
-                        "iterator %s. If this stream created any tool "
-                        "container (e.g. code_interpreter), follow-up "
-                        "/v1/containers/<id>/files calls will 403 for "
-                        "non-admin keys.",
-                        type(original_stream_response).__name__,
-                    )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "Container ownership recording failed after streaming responses call: %s",
-                    e,
-                )
+                continue
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=completed_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
+            yield chunk
+            async for remaining_chunk in wrapped_generator:
+                yield remaining_chunk
+            return
+        late_completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+            original_stream_response
+        )
+        if late_completed_obj is not None:
+            await ProxyBaseLLMRequestProcessing._record_container_owners_from_responses_if_needed(
+                response=late_completed_obj,
+                user_api_key_dict=user_api_key_dict,
+            )
+            return
+        verbose_proxy_logger.warning(
+            "Container ownership recording skipped on streaming "
+            "/v1/responses: no completed_response on stream "
+            "iterator %s. If this stream created any tool "
+            "container (e.g. code_interpreter), follow-up "
+            "/v1/containers/<id>/files calls will 403 for "
+            "non-admin keys.",
+            type(original_stream_response).__name__,
+        )
 
     async def base_passthrough_process_llm_request(
         self,
@@ -3861,6 +3870,7 @@ class ProxyBaseLLMRequestProcessing:
         serialize_error: StreamErrorSerializer,
         request: Request | None = None,
         flush_tail: Callable[[], bytes] | None = None,
+        seal_open_frame: Callable[[bytes], str] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
@@ -3870,6 +3880,12 @@ class ProxyBaseLLMRequestProcessing:
         ``flush_tail`` runs once after the upstream iterator completes cleanly and
         its non-empty result is yielded, so a serializer that buffers bytes across
         chunks can emit anything still held at end of stream.
+
+        ``seal_open_frame`` is given the tail of what has been yielded when the
+        error frame goes out, and what it returns is written first. A passthrough
+        relays raw upstream bytes, so an upstream that hangs up mid-frame leaves the
+        client inside an open frame, where an error frame would be swallowed or
+        misparsed instead of raised.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3886,6 +3902,7 @@ class ProxyBaseLLMRequestProcessing:
         stream_completed = False
         client_disconnected = False
         delivered_chunk = False
+        recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
         try:
             str_so_far = ""
             async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -3931,7 +3948,9 @@ class ProxyBaseLLMRequestProcessing:
                 # False and refunds. A keepalive ping carries no provider output,
                 # so it must not suppress that refund.
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
-                yield serialize_chunk(chunk)
+                serialized = serialize_chunk(chunk)
+                recent_tail = advance_sse_tail(recent_tail, serialized)
+                yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:
                 yield serialize_chunk(held_tail)
@@ -3979,7 +3998,9 @@ class ProxyBaseLLMRequestProcessing:
                 code=stream_error_status,
             )
             stream_completed = True
-            yield serialize_error(proxy_exception)
+            error_frame: Final = serialize_error(proxy_exception)
+            seal: Final = "" if seal_open_frame is None else seal_open_frame(recent_tail)
+            yield seal + error_frame if seal else error_frame
         finally:
             await ProxyBaseLLMRequestProcessing._finalize_streaming_generator_cleanup(
                 request=request,
@@ -4001,7 +4022,7 @@ class ProxyBaseLLMRequestProcessing:
         restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
-        Anthropic /messages and Google /generateContent streaming data generator require SSE events.
+        Anthropic /messages streaming data generator, which requires SSE events.
 
         Returns the underlying ``async_streaming_data_generator`` configured with
         SSE serializers directly (rather than re-wrapping it in another
@@ -4019,11 +4040,13 @@ class ProxyBaseLLMRequestProcessing:
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
             serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
-            serialize_error=lambda proxy_exc: (
-                f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
+            serialize_error=lambda proxy_exc: anthropic_error_sse_frame(
+                status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
+                raw_message=proxy_exc.message,
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
+            seal_open_frame=seal_open_sse_frame,
         )
 
     @overload
@@ -4111,7 +4134,9 @@ class ProxyBaseLLMRequestProcessing:
                 if stripped_ln.startswith("data:"):
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
-                        obj = json.loads(json_part)
+                        obj: object = json.loads(json_part)
+                        if not isinstance(obj, dict):
+                            return None
                         maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
                             obj, model_name, litellm_logging_obj
                         )
@@ -4144,7 +4169,7 @@ class ProxyBaseLLMRequestProcessing:
         )
 
     @staticmethod
-    def _stream_usage_for_event(obj: Mapping[str, object], usage: Mapping[str, Any]) -> Usage | None:
+    def _stream_usage_for_event(obj: Mapping[str, object], usage: Mapping[str, object]) -> Usage | None:
         # Anthropic reports input_tokens excluding cache tokens, so reuse the non-streaming
         # transformation to total the prompt and keep the 5m/1h cache creation split
         if obj.get("type") == "message_delta":
