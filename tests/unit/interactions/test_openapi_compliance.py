@@ -16,6 +16,9 @@ import httpx
 import pytest
 from openapi_core import OpenAPI
 
+from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
+from litellm.types.router import GenericLiteLLMParams
+
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
 
@@ -78,6 +81,18 @@ class TestRequestCompliance:
 
         assert "model" in schema["properties"]
         assert "input" in schema["properties"]
+
+        request: Final = GoogleAIStudioInteractionsConfig().transform_request(
+            model="gemini/test-model",
+            agent=None,
+            input="Hello",
+            optional_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert request["model"] == "test-model"
+        assert request["input"] == "Hello"
+        assert "model" in schema.get("required", ())
 
         # Check our supported optional fields exist in spec
         our_optional_fields = [

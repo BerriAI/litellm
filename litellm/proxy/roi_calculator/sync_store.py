@@ -1,5 +1,6 @@
 import json
-from typing import Final, Protocol, runtime_checkable
+from datetime import datetime
+from typing import Final, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -14,23 +15,17 @@ class _StateRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
     param_value: dict[str, object]
     expired: bool = False
+    last_run_at: datetime
 
 
-@runtime_checkable
 class _SyncDatabase(Protocol):
     async def query_raw(self, query: str, *args: object) -> object: ...
     async def execute_raw(self, query: str, *args: object) -> int: ...
 
 
-def _sync_database(database: object) -> _SyncDatabase:
-    if not isinstance(database, _SyncDatabase):
-        raise TypeError("The database does not support sync coordination.")
-    return database
-
-
 class SyncStore:
     def __init__(self, prisma: PrismaClient) -> None:
-        self._db: Final = _sync_database(prisma.db)
+        self._db: Final = cast(_SyncDatabase, prisma.writer_db)  # cast-ok: PrismaWrapper delegates methods dynamically
 
     async def acquire(self, owner: str, status: ROISyncStatus, scheduled_interval: float = 0) -> bool:
         rows: Final = await self._db.query_raw(
@@ -40,11 +35,11 @@ class SyncStore:
                SET param_value = EXCLUDED.param_value, last_run_at = NOW()
                WHERE ("LiteLLM_Config".last_run_at < NOW() - INTERVAL '60 seconds'
                   OR "LiteLLM_Config".param_value->'status'->>'running' = 'false')
-                 AND ($3::float = 0 OR "LiteLLM_Config".last_run_at <= NOW() - $3::float * INTERVAL '1 minute')
+                 AND ($3::text::double precision = 0 OR "LiteLLM_Config".last_run_at <= NOW() - $3::text::double precision * INTERVAL '1 minute')
                RETURNING param_name""",
             _SYNC_KEY,
             json.dumps({"owner": owner, "status": status.model_dump(), "cancel": False}),
-            scheduled_interval,
+            str(scheduled_interval),
         )
         return bool(rows)
 
@@ -76,6 +71,14 @@ class SyncStore:
                    INSERT INTO "LiteLLM_Config" (param_name, param_value)
                    SELECT $5, $4::jsonb FROM owned WHERE $4::text IS NOT NULL
                    ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value
+               ), cache_cleanup AS (
+                   DELETE FROM "LiteLLM_Config" cached
+                   WHERE starts_with(cached.param_name, 'roi_calculator_pull_')
+                     AND EXISTS (SELECT 1 FROM owned) AND $4::text IS NOT NULL
+                     AND NOT EXISTS (
+                         SELECT 1 FROM jsonb_array_elements($4::jsonb->'pulls') pull
+                         WHERE cached.param_name = 'roi_calculator_pull_' || (pull->>'cache_key')
+                     )
                )
                UPDATE "LiteLLM_Config" SET param_value = jsonb_set(param_value, '{status}', $3::jsonb),
                    last_run_at = NOW()
@@ -91,7 +94,7 @@ class SyncStore:
     async def status(self) -> ROISyncStatus | None:
         rows: Final = TypeAdapter(tuple[_StateRow, ...]).validate_python(
             await self._db.query_raw(
-                """SELECT param_value, last_run_at < NOW() - INTERVAL '60 seconds' AS expired
+                """SELECT param_value, last_run_at, last_run_at < NOW() - INTERVAL '60 seconds' AS expired
                FROM "LiteLLM_Config" WHERE param_name = $1""",
                 _SYNC_KEY,
             )
@@ -104,6 +107,7 @@ class SyncStore:
                 update={
                     "running": False,
                     "phase": "error",
+                    "finished_at": rows[0].last_run_at.isoformat(),
                     "stage": "Sync interrupted",
                     "error": "The worker stopped responding. Run analysis again to resume saved estimates.",
                 }

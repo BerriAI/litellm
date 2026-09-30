@@ -61,7 +61,7 @@ export const filterPulls = (pulls: ROIPull[], query: string): ROIPull[] => {
   );
 };
 
-export const peopleCsv = (summary: ROISummary): string => {
+export const peopleCsv = (summary: Pick<ROISummary, "people" | "start" | "end" | "effort_basis">): string => {
   const escape = (value: unknown): string => {
     const text = value == null ? "" : String(value);
     const safe = /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;

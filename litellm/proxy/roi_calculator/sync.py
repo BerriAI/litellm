@@ -43,6 +43,7 @@ class _ReportRepository(Protocol):
 
 
 class SyncCoordinator(Protocol):
+    async def status(self) -> ROISyncStatus | None: ...
     async def acquire(self, owner: str, status: ROISyncStatus, scheduled_interval: float = 0) -> bool: ...
     async def heartbeat(self, owner: str, status: ROISyncStatus) -> bool: ...
     async def finish(self, owner: str, status: ROISyncStatus, report: ROIReport | None = None) -> bool: ...
@@ -231,6 +232,7 @@ class SyncManager:
         self._task: asyncio.Task[None] | None = None
         self._coordinator: SyncCoordinator | None = None
         self._owner: str = ""
+        self._start_lock: Final = asyncio.Lock()
 
     @property
     def status(self) -> ROISyncStatus:
@@ -259,32 +261,40 @@ class SyncManager:
         coordinator: SyncCoordinator | None = None,
         scheduled_interval: float = 0,
     ) -> bool:
-        if self._status.running or not settings.repos or not settings.estimator_model:
-            return False
-        initial_status: Final = ROISyncStatus(
-            running=True,
-            started_at=self._clock().isoformat(),
-            phase="spend",
-            stage="Reading gateway spend",
-            done=0,
-            total=0,
-            estimated=0,
-            reused=0,
-            needs_attention=0,
-            error=None,
-        )
-        owner: Final = str(uuid4())
-        if coordinator is not None and not await coordinator.acquire(owner, initial_status, scheduled_interval):
-            return False
-        self._status = initial_status
-        self._coordinator = coordinator
-        self._owner = owner
-        self._task = asyncio.create_task(
-            self._run(
-                settings, repository, spend_reader, complete, github_transport, estimator_models, coordinator, owner
+        async with self._start_lock:
+            if not settings.repos or not settings.estimator_model:
+                return False
+            if self._status.running:
+                if coordinator is None:
+                    return False
+                shared: Final = await coordinator.status()
+                if shared is not None and shared.running:
+                    return False
+                await self.cancel()
+            initial_status: Final = ROISyncStatus(
+                running=True,
+                started_at=self._clock().isoformat(),
+                phase="spend",
+                stage="Reading gateway spend",
+                done=0,
+                total=0,
+                estimated=0,
+                reused=0,
+                needs_attention=0,
+                error=None,
             )
-        )
-        return True
+            owner: Final = str(uuid4())
+            if coordinator is not None and not await coordinator.acquire(owner, initial_status, scheduled_interval):
+                return False
+            self._status = initial_status
+            self._coordinator = coordinator
+            self._owner = owner
+            self._task = asyncio.create_task(
+                self._run(
+                    settings, repository, spend_reader, complete, github_transport, estimator_models, coordinator, owner
+                )
+            )
+            return True
 
     async def cancel(self) -> bool:
         task: Final = self._task

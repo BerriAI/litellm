@@ -3,7 +3,7 @@
 import React from "react";
 
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -74,9 +74,14 @@ export function PullReasoningDialog({
             )}
             <DialogFooter>
               {pull.url && (
-                <Button variant="outline" render={<a href={pull.url} target="_blank" rel="noopener noreferrer" />}>
+                <a
+                  className={buttonVariants({ variant: "outline" })}
+                  href={pull.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
                   View on GitHub
-                </Button>
+                </a>
               )}
             </DialogFooter>
           </>

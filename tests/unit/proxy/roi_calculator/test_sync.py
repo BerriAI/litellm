@@ -16,6 +16,7 @@ from litellm.types.roi_calculator import (
     ROIReport,
     ROISettings,
     ROISpendRecord,
+    ROISyncStatus,
 )
 
 _PULL_LIST_JSON: Final = """[
@@ -352,3 +353,61 @@ async def test_saved_estimates_survive_report_reset() -> None:
     await _wait_until_finished(restarted)
     assert restarted.status.phase == "complete"
     assert restarted.status.reused == 1
+
+
+class _LeaseCoordinator:
+    def __init__(self) -> None:
+        self.current: ROISyncStatus | None = None
+        self.owner: str | None = None
+
+    async def status(self) -> ROISyncStatus | None:
+        return self.current
+
+    async def acquire(self, owner: str, status: ROISyncStatus, scheduled_interval: float = 0) -> bool:
+        if self.current is not None and self.current.running:
+            return False
+        self.owner = owner
+        self.current = status
+        return True
+
+    async def heartbeat(self, owner: str, status: ROISyncStatus) -> bool:
+        return self.owner == owner and self.current is not None and self.current.running
+
+    async def finish(self, owner: str, status: ROISyncStatus, report: ROIReport | None = None) -> bool:
+        if self.owner != owner:
+            return False
+        self.current = status
+        return True
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_can_restart_without_restarting_the_gateway() -> None:
+    coordinator: Final = _LeaseCoordinator()
+    entered: Final = asyncio.Event()
+    cancelled: Final = asyncio.Event()
+    manager: Final = SyncManager(clock=_fixed_now)
+    repository: Final = _ReportRepository()
+
+    async def blocked_completion(request: ROICompletionRequest) -> object:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    assert await manager.start(
+        _settings(), repository, _spend_reader(), blocked_completion, _transport(), coordinator=coordinator
+    )
+    await entered.wait()
+    assert not await manager.start(
+        _settings(), repository, _spend_reader(), _completion(), _transport(), coordinator=coordinator
+    )
+    assert coordinator.current is not None
+    coordinator.current = coordinator.current.model_copy(update={"running": False, "phase": "error"})
+    assert await manager.start(
+        _settings(), repository, _spend_reader(), _completion(), _transport(), coordinator=coordinator
+    )
+    await _wait_until_finished(manager)
+    assert cancelled.is_set()
+    assert manager.status.phase == "complete"
+    assert manager.status.estimated == 1

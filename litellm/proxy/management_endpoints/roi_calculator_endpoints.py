@@ -1,14 +1,18 @@
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has untyped params
+)
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
@@ -247,24 +251,31 @@ def _gateway_key(settings: ROISettings) -> str:
     return credential
 
 
-def _completion_caller(settings: ROISettings) -> CompletionCaller:
+def _gateway_http_client() -> AsyncHTTPHandler:
     from litellm.proxy.proxy_server import app
 
+    return get_async_httpx_client(
+        llm_provider="roi_calculator",
+        params={"transport": _gateway_transport(app), "timeout": 180, "follow_redirects": False},
+    )
+
+
+@lru_cache(maxsize=1)
+def _gateway_transport(app: FastAPI) -> httpx.ASGITransport:
+    return httpx.ASGITransport(app=app)
+
+
+def _completion_caller(settings: ROISettings) -> CompletionCaller:
     credential: Final = _gateway_key(settings)
-    transport: Final = httpx.ASGITransport(app=app)
 
     async def complete(request: ROICompletionRequest) -> object:
-        client: Final = AsyncHTTPHandler(transport=transport, timeout=180, follow_redirects=False)
-        try:
-            response: Final = await client.client.post(
-                "http://litellm.internal/v1/chat/completions",
-                headers=MappingProxyType({"authorization": f"Bearer {credential}", "content-type": "application/json"}),
-                content=request.model_dump_json(exclude_none=True),
-            )
-            response.raise_for_status()
-            return TypeAdapter(object).validate_python(response.json())
-        finally:
-            await client.close()
+        response: Final = await _gateway_http_client().client.post(
+            "http://litellm.internal/v1/chat/completions",
+            headers=MappingProxyType({"authorization": f"Bearer {credential}", "content-type": "application/json"}),
+            content=request.model_dump_json(exclude_none=True),
+        )
+        response.raise_for_status()
+        return TypeAdapter(object).validate_python(response.json())
 
     return complete
 
@@ -278,10 +289,8 @@ class _GatewayModels(BaseModel):
 
 
 async def _test_estimator_access(settings: ROISettings) -> None:
-    from litellm.proxy.proxy_server import app
-
     credential: Final = _gateway_key(settings)
-    client: Final = AsyncHTTPHandler(transport=httpx.ASGITransport(app=app), timeout=30, follow_redirects=False)
+    client: Final = _gateway_http_client()
     try:
         response: Final = await client.client.get(
             "http://litellm.internal/v1/models",
@@ -293,8 +302,6 @@ async def _test_estimator_access(settings: ROISettings) -> None:
             raise HTTPException(status_code=409, detail="The estimator key cannot access the selected model.")
     except (httpx.HTTPError, ValidationError):
         raise HTTPException(status_code=409, detail="The estimator key could not connect to the gateway.") from None
-    finally:
-        await client.close()
 
 
 def _spend_reader(repository: ConfigRepository) -> SpendReader:
@@ -617,7 +624,7 @@ async def reset_roi_calculator_setup(
         stored: Final = await _load_stored_settings(repository)
         settings: Final = current.model_copy(update={"repos": ()})
         await _save_settings(repository, settings, stored.github_token, stored.estimator_key)
-        await repository.prisma_client.db.execute_raw('DELETE FROM "LiteLLM_Config" WHERE param_name = $1', _REPORT_KEY)
+        await store.clear_report()
         return _public_settings(settings)
     finally:
         await store.finish(owner, status.model_copy(update={"running": False, "phase": "idle", "stage": "Idle"}))

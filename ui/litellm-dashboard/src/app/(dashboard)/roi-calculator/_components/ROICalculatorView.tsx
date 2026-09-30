@@ -30,6 +30,7 @@ type View = "overview" | "people" | "settings";
 
 const IDLE_STATUS: ROISyncStatus = {
   running: false,
+  elapsed_seconds: 0,
   phase: "idle",
   stage: "Idle",
   done: 0,

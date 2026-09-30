@@ -8,6 +8,7 @@ import {
   formatMoney,
   formatNumber,
   formatSyncedAt,
+  peopleCsv,
 } from "./roiCalculatorData";
 import type { ROIPull } from "./roiCalculatorData";
 
@@ -65,4 +66,28 @@ describe("ROI calculator display helpers", () => {
     expect(filterPulls([matchingPull], "ROUTING")).toEqual([matchingPull]);
     expect(filterPulls([matchingPull], "nobody")).toEqual([]);
   });
+});
+
+it("exports precise spend, cohort eligibility and safely quoted CSV values", () => {
+  const exportSummary = {
+    start: "2026-09-01",
+    end: "2026-09-30",
+    effort_basis: "without_ai",
+    people: [
+      {
+        email: '=HYPERLINK("bad")',
+        logins: ["alice", "bob"],
+        spend: 0.0001,
+        hours: 4,
+        prs: 1,
+        pending_prs: 0,
+        eligible: true,
+        cost_per_hour: 0.000025,
+      },
+    ],
+  };
+  const csv = peopleCsv(exportSummary);
+  expect(csv.split("\r\n")).toHaveLength(2);
+  expect(csv).toContain('"\'=HYPERLINK(""bad"")","alice;bob","0.0001","4","1","0","true","0.000025"');
+  expect(csv).toContain('"2026-09-01","2026-09-30","without_ai"');
 });
