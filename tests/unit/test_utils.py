@@ -4147,6 +4147,40 @@ def test_custom_logger_guards_ignore_subclass_instances(monkeypatch: pytest.Monk
     assert _custom_logger_class_exists_in_failure_callbacks(builtin_instance) is True
 
 
+def test_custom_logger_guards_distinguish_callback_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression LIT-9070: every OTel v2 preset (otel, arize, ...) is one OpenTelemetryV2 class,
+    so a class-only guard reported a UI-added arize as already registered whenever otel was
+    active and silently skipped it. The guard has to match on class and callback_name together:
+    the same preset twice is still a duplicate, a sibling preset or a subclass is not."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.utils import (
+        _custom_logger_class_exists_in_failure_callbacks,
+        _custom_logger_class_exists_in_success_callbacks,
+    )
+
+    class PresetLogger(CustomLogger):
+        def __init__(self, callback_name: str) -> None:
+            super().__init__()
+            self.callback_name: Final = callback_name
+
+    class UserSubclassLogger(PresetLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "success_callback", [PresetLogger("otel"), UserSubclassLogger("arize")])
+    monkeypatch.setattr(litellm, "failure_callback", [PresetLogger("otel"), UserSubclassLogger("arize")])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+
+    assert _custom_logger_class_exists_in_success_callbacks(PresetLogger("otel")) is True
+    assert _custom_logger_class_exists_in_failure_callbacks(PresetLogger("otel")) is True
+    assert _custom_logger_class_exists_in_success_callbacks(PresetLogger("arize")) is False
+    assert _custom_logger_class_exists_in_failure_callbacks(PresetLogger("arize")) is False
+    assert _custom_logger_class_exists_in_success_callbacks(UserSubclassLogger("otel")) is False
+    assert _custom_logger_class_exists_in_failure_callbacks(UserSubclassLogger("otel")) is False
+    assert _custom_logger_class_exists_in_success_callbacks(UserSubclassLogger("arize")) is True
+    assert _custom_logger_class_exists_in_failure_callbacks(UserSubclassLogger("arize")) is True
+
+
 @pytest.mark.asyncio
 async def test_s3_v2_success_callback_registers_alongside_user_subclass(
     monkeypatch: pytest.MonkeyPatch,

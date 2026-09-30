@@ -1038,6 +1038,20 @@ def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
     request.headers = {"Content-Type": "application/json"}
     request.client = MagicMock()
     request.client.host = "127.0.0.1"
+    request.scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/batches",
+        "raw_path": b"/v1/batches",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"content-type", b"application/json"), (b"host", b"localhost")],
+        "client": ("127.0.0.1", 54321),
+        "server": ("localhost", 8000),
+    }
     request.body = AsyncMock(return_value=json.dumps(body).encode())
     return request
 
