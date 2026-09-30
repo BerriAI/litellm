@@ -439,10 +439,10 @@ async def _force_load(app: "FastAPI", feat: LazyFeature, features: tuple[LazyFea
 
 
 def _install(
-    app: "FastAPI", feat: LazyFeature, module: Callable[[], object], features: tuple[LazyFeature, ...]
+    app: "FastAPI", feat: LazyFeature, import_module: Callable[[], object], features: tuple[LazyFeature, ...]
 ) -> bool:
     try:
-        _register_feature(app, feat, module(), features)
+        _register_feature(app, feat, import_module(), features)
         return True
     except Exception as exc:
         _mark_failed(app, feat, exc)
@@ -578,7 +578,7 @@ def _make_warmup_router(app: "FastAPI", features: tuple[LazyFeature, ...] = LAZY
 
 def loaded_lazy_modules(app: "FastAPI") -> frozenset[str]:
     """The set of lazy feature modules whose routers are actually registered
-    on this app (tracked by _force_load), empty before the middleware ever ran.
+    on this app (tracked by _install), empty until a feature loads or eager startup runs.
     sys.modules is the wrong signal: boot code imports several feature modules
     (mcp_management, cloudzero, vantage, config_overrides) without mounting
     their routers, and their stubs must still be injected."""
