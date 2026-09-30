@@ -382,7 +382,7 @@ export default function KeyInfoView({
       const newKeyValues = await keyUpdateCall(accessToken, formValues);
 
       setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...newKeyValues } : undefined));
-      await queryClient.invalidateQueries({ queryKey: keyKeys.all });
+      void queryClient.invalidateQueries({ queryKey: keyKeys.all });
 
       if (onKeyDataUpdate) {
         onKeyDataUpdate(newKeyValues);
