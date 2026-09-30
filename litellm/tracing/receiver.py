@@ -124,7 +124,7 @@ class TraceReceiver:
         trace = await self.store.get_trace(trace_id, scope, trace_ref)
         if trace is None:
             return None
-        return trace_to_markdown(trace, await self.store.get_span_io(trace_id, scope), span_id)
+        return trace_to_markdown(trace, await self.store.get_span_io(trace_id, scope, trace_ref), span_id)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         return await self.store.get_span(trace_id, span_id, scope, trace_ref)
