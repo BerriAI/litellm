@@ -9,6 +9,7 @@ import { cn } from "@/lib/cva.config";
 import { getProxyBaseUrl } from "../../networking";
 import { relativeTime } from "./AgentTracesTable";
 import { CopyButton } from "./CopyButton";
+import { tracingEnvSnippet } from "./TracingSetupCard";
 
 interface EndpointRow {
   label: string;
@@ -34,13 +35,6 @@ export const endpointRows = (proxyUrl: string): EndpointRow[] => [
   { label: "Auth", value: "Virtual key in the Authorization header. Runs are scoped to that key and its team." },
   { label: "Read API", value: `GET ${proxyUrl}/v1/traces · /v1/traces/{trace_id} · ?format=md` },
 ];
-
-export const endpointEnvSnippet = (proxyUrl: string): string =>
-  [
-    `export OTEL_EXPORTER_OTLP_ENDPOINT=${proxyUrl}`,
-    'export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $LITELLM_API_KEY"',
-    "export OTEL_SERVICE_NAME=my-agent",
-  ].join("\n");
 
 interface OtelEndpointPanelProps {
   /** Start time of the newest loaded run, or null when the range has none. */
@@ -70,7 +64,7 @@ function Row({ row }: { row: EndpointRow }) {
 export function OtelEndpointPanel({ newestRunStart, onOpenGuide }: OtelEndpointPanelProps) {
   const proxyUrl = proxyBaseUrl();
   const receiving = newestRunStart !== null;
-  const env = endpointEnvSnippet(proxyUrl);
+  const env = tracingEnvSnippet(proxyUrl);
   const status = receiving ? `Receiving traces, newest run ${relativeTime(newestRunStart)}` : "No runs in this range";
 
   return (
