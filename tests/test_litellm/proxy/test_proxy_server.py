@@ -46,6 +46,41 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterSt
 from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
+
+@pytest.mark.asyncio
+async def test_tracing_without_clickhouse_disables_receiver(monkeypatch):
+    monkeypatch.setattr(proxy_server_module.tracing_endpoints, "receiver", object())
+
+    await proxy_server_module.ProxyStartupEvent._init_tracing({})
+
+    assert proxy_server_module.tracing_endpoints.receiver is None
+
+
+@pytest.mark.asyncio
+async def test_tracing_requires_both_clickhouse_urls(monkeypatch):
+    monkeypatch.delenv("CLICKHOUSE_URL", raising=False)
+    monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
+
+    with pytest.raises(ValueError, match="CLICKHOUSE_URL, CLICKHOUSE_READER_URL"):
+        await proxy_server_module.ProxyStartupEvent._init_tracing({"tracing": {"store": "clickhouse"}})
+
+    assert proxy_server_module.tracing_endpoints.receiver is None
+
+
+@pytest.mark.asyncio
+async def test_tracing_fails_startup_when_clickhouse_schema_cannot_initialize(monkeypatch):
+    receiver = MagicMock()
+    receiver.start = AsyncMock(side_effect=RuntimeError("connection failed"))
+    monkeypatch.setattr(proxy_server_module, "TraceReceiver", MagicMock(from_env=MagicMock(return_value=receiver)))
+    monkeypatch.setenv("CLICKHOUSE_URL", "http://clickhouse:8123")
+    monkeypatch.setenv("CLICKHOUSE_READER_URL", "http://reader:8123")
+
+    with pytest.raises(RuntimeError, match="could not initialize the ClickHouse schema"):
+        await proxy_server_module.ProxyStartupEvent._init_tracing({"tracing": {"store": "clickhouse"}})
+
+    assert proxy_server_module.tracing_endpoints.receiver is None
+
+
 example_embedding_result = {
     "object": "list",
     "data": [

@@ -77,8 +77,14 @@ def client() -> TestClient:
 
 def test_501_when_tracing_not_enabled(client, monkeypatch):
     monkeypatch.setattr(tracing_endpoints, "receiver", None)
-    assert client.post("/v1/traces", content=b"").status_code == 501
-    assert client.get("/v1/traces").status_code == 501
+    for response in (
+        client.post("/v1/traces", content=b""),
+        client.get("/v1/traces"),
+        client.get("/v1/traces/trace-id"),
+        client.get("/v1/traces/trace-id/spans/span-id"),
+    ):
+        assert response.status_code == 501
+        assert "CLICKHOUSE_URL and CLICKHOUSE_READER_URL" in response.json()["detail"]
 
 
 def test_post_protobuf_returns_empty_protobuf(client, receiver):

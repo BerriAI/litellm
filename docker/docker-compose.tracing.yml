@@ -1,0 +1,72 @@
+name: litellm-tracing
+
+services:
+  litellm:
+    build:
+      context: ..
+      target: runtime
+    command: ["--config", "/app/tracing-config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: test
+      LITELLM_SALT_KEY: sk-local-tracing-salt-key
+      DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      CLICKHOUSE_URL: http://default:local-tracing-write@clickhouse:8123
+      CLICKHOUSE_READER_URL: http://litellm_traces_reader:local-tracing-read@clickhouse:8123
+      CLICKHOUSE_DATABASE: default
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./tracing-config.yaml:/app/tracing-config.yaml:ro
+    ports:
+      - "127.0.0.1:4002:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.9.6.6
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: local-tracing-write
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      LITELLM_TRACES_READER_PASSWORD: local-tracing-read
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./../litellm-rust/crates/traces/config/reader.xml:/etc/clickhouse-server/users.d/litellm-reader.xml:ro
+    ports:
+      - "127.0.0.1:18123:8123"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "local-tracing-write", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres_data:
+  clickhouse_data:

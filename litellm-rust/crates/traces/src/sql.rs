@@ -8,29 +8,33 @@ use crate::{Connection, Error};
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
-pub enum ReadQuery {
-    ListTraces,
-    TraceSpans,
-    SpanDetail,
+macro_rules! read_queries {
+    ($($variant:ident => $name:literal => $file:literal),+ $(,)?) => {
+        pub enum ReadQuery {
+            $($variant),+
+        }
+
+        impl ReadQuery {
+            pub fn parse(value: &str) -> Result<Self, Error> {
+                match value {
+                    $($name => Ok(Self::$variant),)+
+                    _ => Err(Error::InvalidQuery),
+                }
+            }
+
+            fn sql(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => include_str!(concat!("../query/", $file)),)+
+                }
+            }
+        }
+    };
 }
 
-impl ReadQuery {
-    pub fn parse(value: &str) -> Result<Self, Error> {
-        match value {
-            "list_traces" => Ok(Self::ListTraces),
-            "trace_spans" => Ok(Self::TraceSpans),
-            "span_detail" => Ok(Self::SpanDetail),
-            _ => Err(Error::InvalidQuery),
-        }
-    }
-
-    fn sql(&self) -> &'static str {
-        match self {
-            Self::ListTraces => include_str!("list_traces.sql"),
-            Self::TraceSpans => include_str!("trace_spans.sql"),
-            Self::SpanDetail => include_str!("span_detail.sql"),
-        }
-    }
+read_queries! {
+    ListTraces => "list_traces" => "list_traces.sql",
+    TraceSpans => "trace_spans" => "trace_spans.sql",
+    SpanDetail => "span_detail" => "span_detail.sql",
 }
 
 #[derive(Debug, Deserialize)]

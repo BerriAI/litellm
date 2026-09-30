@@ -11324,10 +11324,17 @@ class ProxyStartupEvent:
                 store: clickhouse       # CLICKHOUSE_URL / _USER / _PASSWORD / _DATABASE
         """
         settings = general_settings.get("tracing") or {}
+        tracing_endpoints.receiver = None
         if settings.get("store") != "clickhouse":
             return
+        missing: Final = tuple(name for name in ("CLICKHOUSE_URL", "CLICKHOUSE_READER_URL") if not os.getenv(name))
+        if missing:
+            raise ValueError(f"Agent tracing requires {', '.join(missing)} when tracing.store is clickhouse")
         tracing = TraceReceiver.from_env()
-        await tracing.start()
+        try:
+            await tracing.start()
+        except Exception as exc:
+            raise RuntimeError("Agent tracing could not initialize the ClickHouse schema") from exc
         tracing_endpoints.receiver = tracing
         verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
 

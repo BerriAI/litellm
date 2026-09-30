@@ -45,9 +45,20 @@ describe("AgentTracesSection", () => {
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Agent tracing is not enabled");
     expect(card).toHaveTextContent("store: clickhouse");
+    expect(card).toHaveTextContent("CLICKHOUSE_URL=<ClickHouse writer URL>");
+    expect(card).toHaveTextContent("CLICKHOUSE_READER_URL=<ClickHouse read-only URL>");
     expect(card).toHaveTextContent("LANGSMITH_TRACING_MODE=otel");
     expect(card).toHaveTextContent('OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <litellm key>"');
     expect(agentTraceListCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the tracing setup when the proxy has no traces route", async () => {
+    vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Not Found", 404, { detail: "Not Found" }));
+    renderSection("traces");
+
+    const card = await screen.findByTestId("tracing-setup-card");
+    expect(card).toHaveTextContent("This proxy does not expose /v1/traces");
+    expect(screen.queryByRole("table", { name: "Agent traces" })).not.toBeInTheDocument();
   });
 
   it("renders nothing in All when tracing is off, so request logs stay front and centre", async () => {

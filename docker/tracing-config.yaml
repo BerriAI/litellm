@@ -1,0 +1,14 @@
+model_list:
+  - model_name: gpt-5.6
+    litellm_params:
+      model: openai/gpt-5.6
+      api_key: os.environ/OPENAI_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  tracing:
+    store: clickhouse
+
+litellm_settings:
+  success_callback:
+    - clickhouse

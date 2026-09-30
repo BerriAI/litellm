@@ -7,7 +7,9 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 export const TRACING_SETUP_SNIPPET = `# proxy config
 general_settings:
   tracing:
-    store: clickhouse   # + CLICKHOUSE_URL env var
+    store: clickhouse
+export CLICKHOUSE_URL=<ClickHouse writer URL>
+export CLICKHOUSE_READER_URL=<ClickHouse read-only URL>
 # your agent app
 export LANGSMITH_TRACING=true LANGSMITH_TRACING_MODE=otel
 export OTEL_EXPORTER_OTLP_ENDPOINT=<proxy url>

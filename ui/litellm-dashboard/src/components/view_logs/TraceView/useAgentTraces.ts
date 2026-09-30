@@ -8,10 +8,11 @@ import { agentTraceListCall } from "../../networking";
 import { LIVE_TAIL_INTERVAL_MS } from "../log_filter_logic";
 import type { TracePage, TraceSummary } from "./traceTypes";
 
-export const TRACING_NOT_ENABLED_STATUS = 501;
+const TRACING_NOT_ENABLED_STATUS = 501;
+const TRACING_ROUTE_MISSING_STATUS = 404;
 
-export const isTracingNotEnabled = (error: unknown): error is ApiError =>
-  error instanceof ApiError && error.status === TRACING_NOT_ENABLED_STATUS;
+const isTracingUnavailable = (error: unknown): error is ApiError =>
+  error instanceof ApiError && (error.status === TRACING_NOT_ENABLED_STATUS || error.status === TRACING_ROUTE_MISSING_STATUS);
 
 interface UseAgentTracesOptions {
   accessToken: string;
@@ -26,7 +27,6 @@ export interface AgentTracesResult {
   traces: TraceSummary[];
   isLoading: boolean;
   isFetching: boolean;
-  /** Set when the proxy answered 501: tracing isn't configured. */
   notEnabledDetail: string | null;
   error: Error | null;
   hasMore: boolean;
@@ -58,19 +58,23 @@ export function useAgentTraces({
     initialPageParam: null,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled,
-    retry: (failureCount, error) => !isTracingNotEnabled(error) && failureCount < 1,
-    refetchInterval: (q) => (isLiveTail && !isTracingNotEnabled(q.state.error) ? LIVE_TAIL_INTERVAL_MS : false),
+    retry: (failureCount, error) => !isTracingUnavailable(error) && failureCount < 1,
+    refetchInterval: (q) => (isLiveTail && !isTracingUnavailable(q.state.error) ? LIVE_TAIL_INTERVAL_MS : false),
     refetchIntervalInBackground: false,
   });
 
   const traces = useMemo(() => query.data?.pages.flatMap((page) => page.data) ?? [], [query.data]);
-  const notEnabled = isTracingNotEnabled(query.error);
+  const notEnabled = isTracingUnavailable(query.error);
+  const unavailableDetail =
+    query.error instanceof ApiError && query.error.status === TRACING_ROUTE_MISSING_STATUS
+      ? "This proxy does not expose /v1/traces. Update the proxy to enable agent tracing."
+      : query.error?.message || "Agent tracing is not enabled";
 
   return {
     traces,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
-    notEnabledDetail: notEnabled ? query.error?.message || "Agent tracing is not enabled" : null,
+    notEnabledDetail: notEnabled ? unavailableDetail : null,
     error: notEnabled ? null : query.error,
     hasMore: query.hasNextPage,
     loadMore: () => void query.fetchNextPage(),

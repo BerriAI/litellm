@@ -35,7 +35,10 @@ def get_receiver() -> TraceReceiver:
     if receiver is None:
         raise HTTPException(
             status_code=501,
-            detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
+            detail=(
+                "Agent tracing is not enabled. Set general_settings.tracing.store to clickhouse "
+                "and configure CLICKHOUSE_URL and CLICKHOUSE_READER_URL on the proxy."
+            ),
         )
     return receiver
 
