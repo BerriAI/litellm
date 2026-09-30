@@ -107,7 +107,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
@@ -144,7 +144,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let body = read_json(
         &database,
         "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
-         FROM trace_test.agent_traces WHERE TeamId = 'team-1' AND TraceId = 'trace-1'",
+         FROM trace_test.agent_traces_by_key WHERE TeamId = 'team-1' AND TraceId = 'trace-1'",
     )
     .await?;
     assert_eq!(
@@ -160,7 +160,7 @@ async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let rows = vec![
@@ -204,7 +204,7 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let day_start = time::OffsetDateTime::now_utc()
         .replace_time(time::Time::MIDNIGHT)
@@ -223,12 +223,16 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
     insert_rows(&database, "otel_traces", vec![child]).await?;
-    execute_write(&database, "OPTIMIZE TABLE trace_test.agent_traces FINAL").await?;
+    execute_write(
+        &database,
+        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+    )
+    .await?;
     let response = read_json(
         &database,
         "SELECT count() AS rows, any(RootName) AS RootName, any(RootInput) AS RootInput, \
          any(RootStatus) AS RootStatus, sum(SpanCount) AS SpanCount \
-         FROM trace_test.agent_traces",
+         FROM trace_test.agent_traces_by_key",
     )
     .await?;
     assert_eq!(
@@ -247,7 +251,7 @@ async fn spend_deduplication_preserves_subsecond_requests_and_retries(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
     let now_ms = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
     let base_start_time = now_ms / 1000 * 1000;
@@ -299,7 +303,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
-    let writer = Connection::writer(&database.url, "default", "")?;
+    let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 30, 30).await?;
     let old_time = time::OffsetDateTime::now_utc() - time::Duration::days(20);
     let old_timestamp_ns = old_time.unix_timestamp_nanos() as i64;
@@ -315,6 +319,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
+    assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 1);
     ensure_schema(&database.client, &writer, "trace_test", 14, 14).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
@@ -337,10 +342,14 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     execute_write(&database, "OPTIMIZE TABLE trace_test.otel_traces FINAL").await?;
-    execute_write(&database, "OPTIMIZE TABLE trace_test.agent_traces FINAL").await?;
+    execute_write(
+        &database,
+        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+    )
+    .await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.spend_logs FINAL").await?;
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
-    assert_eq!(table_rows(&database, "agent_traces").await?, 0);
+    assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 0);
     assert_eq!(table_rows(&database, "spend_logs").await?, 0);
     let mutation_count = mutation_rows(&database).await?;
     ensure_schema(&database.client, &writer, "trace_test", 14, 14).await?;
@@ -359,7 +368,7 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     });
     let client = Client::no_redirect_for_test();
     let url = format!("http://{address}");
-    let writer = Connection::writer(&url, "default", "")?;
+    let writer = Connection::writer(&url)?;
     let result = tokio::time::timeout(
         Duration::from_secs(12),
         ensure_schema(&client, &writer, "trace_test", 7, 14),
