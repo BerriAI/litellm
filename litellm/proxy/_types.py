@@ -2469,6 +2469,14 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="List of HTTP methods this endpoint handles (e.g., ['GET', 'POST']). If None or empty, all methods (GET, POST, PUT, DELETE, PATCH) are supported for backward compatibility. This allows the same path to have different targets for different HTTP methods.",
     )
+    display_name: str | None = Field(
+        default=None,
+        description="Human-readable name for this endpoint. The Model Hub lists the endpoint under this name, falling back to the path when unset.",
+    )
+    show_in_model_hub: bool = Field(
+        default=False,
+        description="If True, this endpoint is published on the public Model Hub as a row in mode 'passthrough'.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):

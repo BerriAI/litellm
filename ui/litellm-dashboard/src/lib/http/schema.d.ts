@@ -36040,6 +36040,8 @@ export interface components {
             otpm?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
+            /** Pass Through Path */
+            pass_through_path?: string | null;
             /** Providers */
             providers: string[];
             /** Rpm */
@@ -37680,6 +37682,11 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Display Name
+             * @description Human-readable name for this endpoint. The Model Hub lists the endpoint under this name, falling back to the path when unset.
+             */
+            display_name?: string | null;
+            /**
              * Guardrails
              * @description Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).
              */
@@ -37721,6 +37728,12 @@ export interface components {
              * @description The route to be added to the LiteLLM Proxy Server.
              */
             path: string;
+            /**
+             * Show In Model Hub
+             * @description If True, this endpoint is published on the public Model Hub as a row in mode 'passthrough'.
+             * @default false
+             */
+            show_in_model_hub: boolean;
             /**
              * Target
              * @description The URL to which requests for this path should be forwarded.

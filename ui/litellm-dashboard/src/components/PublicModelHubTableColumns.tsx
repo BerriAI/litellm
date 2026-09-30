@@ -25,6 +25,7 @@ export interface ModelGroupInfo {
   health_status?: string;
   health_response_time?: number;
   health_checked_at?: string;
+  pass_through_path?: string | null;
   [key: string]: any;
 }
 
@@ -100,6 +101,8 @@ const getModeIcon = (mode: string) => {
       return "🔄";
     case "embedding":
       return "📄";
+    case "passthrough":
+      return "🔀";
     default:
       return "🤖";
   }

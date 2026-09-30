@@ -361,6 +361,23 @@ describe("PublicModelHub", () => {
     });
   });
 
+  it("lists a published pass-through endpoint under its display name and opens its route", async () => {
+    respondWith([
+      model({ model_group: "Clinical NER", providers: [], mode: "passthrough", pass_through_path: "/clinical-ner" }),
+    ]);
+    renderHub();
+
+    const row = (await screen.findByRole("button", { name: "Clinical NER" })).closest("tr");
+    expect(row).toHaveTextContent("passthrough");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clinical NER" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("/clinical-ner")).toBeInTheDocument();
+    expect(within(dialog).getByText(/curl -X POST "http:\/\/localhost:3000\/clinical-ner"/)).toBeInTheDocument();
+    expect(within(dialog).queryByText("Token & Cost Information")).not.toBeInTheDocument();
+  });
+
   it("shows no models when the search has no matches (LIT-5230 regression)", async () => {
     renderHub();
     expect(await screen.findByText("gpt-4")).toBeInTheDocument();

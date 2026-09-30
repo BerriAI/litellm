@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import PassThroughInfoView from "./pass_through_info";
 
 const updatePassThroughEndpoint = vi.fn();
@@ -80,7 +80,33 @@ describe("pass_through_info update payload", () => {
       auth: false,
       methods: ["GET"],
       guardrails: undefined,
+      display_name: "",
+      show_in_model_hub: false,
     });
+  });
+
+  it("sends the edited display name and Model Hub opt-in", async () => {
+    const user = setup();
+    renderWithProviders(
+      <PassThroughInfoView
+        endpointData={{ ...endpoint, display_name: "Clinical NER", show_in_model_hub: true }}
+        onClose={vi.fn()}
+        accessToken="test-token"
+        isAdmin
+        premiumUser
+      />,
+    );
+    await openEditForm(user);
+    expect(screen.getByLabelText("Display Name")).toHaveValue("Clinical NER");
+    expect(screen.getByRole("switch", { name: "Show on Model Hub" })).toBeChecked();
+    fireEvent.change(screen.getByLabelText("Display Name"), { target: { value: " Clinical NER v2 " } });
+    await user.click(screen.getByRole("switch", { name: "Show on Model Hub" }));
+
+    await save(user);
+
+    await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
+    expect(lastPayload().display_name).toBe("Clinical NER v2");
+    expect(lastPayload().show_in_model_hub).toBe(false);
   });
 
   it("submits numeric fields as numbers, not strings", async () => {

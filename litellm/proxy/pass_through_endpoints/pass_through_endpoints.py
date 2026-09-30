@@ -3443,6 +3443,16 @@ def _request_app(request: Request) -> FastAPI:
     return request.app
 
 
+async def configured_pass_through_endpoints(
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> tuple[PassThroughGenericEndpoint, ...]:
+    """Config-file endpoints plus database endpoints, the database winning on a shared path."""
+    db_endpoints: Final = await _get_pass_through_endpoints_from_db(user_api_key_dict=user_api_key_dict)
+    db_paths: Final = frozenset(endpoint.path for endpoint in db_endpoints)
+    config_only: Final = tuple(ep for ep in _get_pass_through_endpoints_from_config() if ep.path not in db_paths)
+    return (*config_only, *db_endpoints)
+
+
 async def _get_pass_through_endpoints_from_db(
     endpoint_id: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
@@ -3566,31 +3576,20 @@ async def get_pass_through_endpoints(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    # Get endpoints from DB (editable via UI)
-    db_endpoints: Final = await _get_pass_through_endpoints_from_db(
-        endpoint_id=endpoint_id, user_api_key_dict=user_api_key_dict
+    pass_through_endpoints: Final = (
+        await _get_pass_through_endpoints_from_db(endpoint_id=endpoint_id, user_api_key_dict=user_api_key_dict)
+        if endpoint_id is not None
+        else list(await configured_pass_through_endpoints(user_api_key_dict))
     )
-
-    # Get endpoints from config file (read-only, not editable via UI)
-    config_endpoints: Final = _get_pass_through_endpoints_from_config()
-
-    # Merge: config endpoints not in DB + all DB endpoints (DB overrides config for same path)
-    db_paths: Final = {ep.path for ep in db_endpoints}
-    config_only_endpoints: Final = [ep for ep in config_endpoints if ep.path not in db_paths]
-    if endpoint_id is not None:
-        # When filtering by endpoint_id, only return if found in DB (config endpoints use generated IDs)
-        pass_through_endpoints = db_endpoints
-    else:
-        pass_through_endpoints = config_only_endpoints + db_endpoints
-
-    if team_id is not None:
-        pass_through_endpoints = await _filter_endpoints_by_team_allowed_routes(
+    if team_id is None:
+        return PassThroughEndpointResponse(endpoints=pass_through_endpoints)
+    return PassThroughEndpointResponse(
+        endpoints=await _filter_endpoints_by_team_allowed_routes(
             team_id=team_id,
             pass_through_endpoints=pass_through_endpoints,
             prisma_client=prisma_client,
         )
-
-    return PassThroughEndpointResponse(endpoints=pass_through_endpoints)
+    )
 
 
 @router.post(

@@ -23,6 +23,7 @@ from litellm.proxy.list_api.list_framework import (
     handle_facet,
     handle_list,
 )
+from litellm.proxy.pass_through_endpoints.model_hub import published_pass_through_rows
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
     FacetListResponse,
@@ -184,13 +185,14 @@ MODEL_HUB_LIST_SPEC: Final[ListSpec[ModelGroupInfoProxy, ModelGroupInfoProxy]] =
 )
 
 
-def _published_rows() -> Sequence[ModelGroupInfoProxy]:
+async def _published_rows() -> Sequence[ModelGroupInfoProxy]:
     from litellm.proxy.proxy_server import (
         _get_model_group_info,  # pyright: ignore[reportPrivateUsage]  # /public/model_hub imports it the same way
         llm_router,
     )
 
-    if llm_router is None:
+    pass_through_rows: Final = await published_pass_through_rows()
+    if llm_router is None and not pass_through_rows:
         raise ManagementProblem(
             ProblemDetail(
                 type=f"{PROBLEM_TYPE_BASE}no-llm-router",
@@ -199,15 +201,18 @@ def _published_rows() -> Sequence[ModelGroupInfoProxy]:
                 detail=CommonProxyErrors.no_llm_router.value,
             )
         )
-    if litellm.public_model_groups is None:
-        return ()
-    return tuple(
-        _get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=litellm.public_model_groups,
-            model_group=None,
+    model_rows: Final = (
+        ()
+        if llm_router is None or litellm.public_model_groups is None
+        else tuple(
+            _get_model_group_info(
+                llm_router=llm_router,
+                all_models_str=litellm.public_model_groups,
+                model_group=None,
+            )
         )
     )
+    return (*model_rows, *pass_through_rows)
 
 
 def _executor(
@@ -252,7 +257,7 @@ async def public_model_hub_list(
 
         return await handle_list(
             spec=MODEL_HUB_LIST_SPEC,
-            executor=_executor(_published_rows(), prisma_client),
+            executor=_executor(await _published_rows(), prisma_client),
             request=request,
             caller=user_api_key_dict,
         )
@@ -301,7 +306,7 @@ async def public_model_hub_facet(
     try:
         return await handle_facet(
             spec=MODEL_HUB_LIST_SPEC,
-            executor=InMemoryListExecutor(rows=_published_rows(), cells=_cells),
+            executor=InMemoryListExecutor(rows=await _published_rows(), cells=_cells),
             request=request,
             caller=user_api_key_dict,
             field=MODEL_HUB_FACETS[facet],

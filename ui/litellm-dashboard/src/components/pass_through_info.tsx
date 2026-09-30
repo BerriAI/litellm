@@ -30,6 +30,8 @@ const endpointSettingsSchema = z.object({
   cost_per_request: z.number().optional(),
   timeout: z.number().optional(),
   auth: z.boolean(),
+  display_name: z.string().optional(),
+  show_in_model_hub: z.boolean(),
 });
 
 type EndpointSettingsValues = z.output<typeof endpointSettingsSchema>;
@@ -106,6 +108,8 @@ interface PassThroughEndpoint {
   auth?: boolean;
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
+  display_name?: string | null;
+  show_in_model_hub?: boolean;
 }
 
 // Password field component for headers
@@ -158,6 +162,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       cost_per_request: initialEndpointData.cost_per_request,
       timeout: initialEndpointData.timeout,
       auth: initialEndpointData.auth || false,
+      display_name: initialEndpointData.display_name ?? undefined,
+      show_in_model_hub: initialEndpointData.show_in_model_hub ?? false,
     },
   });
 
@@ -192,6 +198,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         auth: premiumUser ? values.auth : undefined,
         methods: values.methods.length > 0 ? values.methods : undefined,
         guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : undefined,
+        display_name: values.display_name?.trim() ?? "",
+        show_in_model_hub: values.show_in_model_hub,
       };
 
       await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
@@ -312,6 +320,11 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       <p className="text-sm">Cost per request: ${endpointData.cost_per_request}</p>
                     </div>
                   )}
+                  {endpointData.show_in_model_hub && (
+                    <div>
+                      <Badge variant="secondary">On Model Hub</Badge>
+                    </div>
+                  )}
                 </div>
               </Card>
             </div>
@@ -386,6 +399,21 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     <FormField control={form.control} name="target" label="Target URL">
                       {({ value, ...field }) => (
                         <Input {...field} placeholder="https://api.example.com" value={value ?? ""} />
+                      )}
+                    </FormField>
+
+                    <FormField
+                      control={form.control}
+                      name="display_name"
+                      label="Display Name"
+                      description="Shown on the Model Hub instead of the path"
+                    >
+                      {({ value, ...field }) => <Input {...field} placeholder="Clinical NER" value={value ?? ""} />}
+                    </FormField>
+
+                    <FormField control={form.control} name="show_in_model_hub" label="Show on Model Hub">
+                      {({ value, onChange, ref: _ref, ...field }) => (
+                        <Switch {...field} checked={value} onCheckedChange={onChange} />
                       )}
                     </FormField>
 
@@ -504,6 +532,18 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     <div>
                       <p className="text-sm font-medium">Target URL</p>
                       <div>{endpointData.target}</div>
+                    </div>
+                    {endpointData.display_name && (
+                      <div>
+                        <p className="text-sm font-medium">Display Name</p>
+                        <div>{endpointData.display_name}</div>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-sm font-medium">Show on Model Hub</p>
+                      <Badge variant={endpointData.show_in_model_hub ? "secondary" : "outline"}>
+                        {endpointData.show_in_model_hub ? "Yes" : "No"}
+                      </Badge>
                     </div>
                     <div>
                       <p className="text-sm font-medium">Include Subpath</p>

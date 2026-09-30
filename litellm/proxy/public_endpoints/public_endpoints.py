@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
+from litellm.proxy.pass_through_endpoints.model_hub import published_pass_through_rows
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.router_strategy.complexity_router.fuse_presets import FusePresetCatalog, get_fuse_presets
@@ -229,16 +230,18 @@ async def public_model_hub():
         prisma_client,
     )
 
-    if llm_router is None:
+    pass_through_rows: Final = await published_pass_through_rows()
+    if llm_router is None and not pass_through_rows:
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
-    model_groups: list[ModelGroupInfoProxy] = []
-    if litellm.public_model_groups is not None:
-        model_groups = _get_model_group_info(
-            llm_router=llm_router,
-            all_models_str=litellm.public_model_groups,
-            model_group=None,
-        )
+    model_groups: Final = [
+        *(
+            _get_model_group_info(llm_router=llm_router, all_models_str=litellm.public_model_groups, model_group=None)
+            if llm_router is not None and litellm.public_model_groups is not None
+            else ()
+        ),
+        *pass_through_rows,
+    ]
 
     # Fetch health check information if available
     health_checks_map: Final = {}
