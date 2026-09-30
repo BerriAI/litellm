@@ -1967,7 +1967,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             Exception(
                 "EVALSHA - all keys must map to the same key slot"
             ),  # First group fails
-            [1234, 1, 1234, 2],  # Second group succeeds
+            [1234, 2],  # Second group succeeds (one value per key)
         ]
         handler.batch_rate_limiter_script = mock_script
 
@@ -1987,8 +1987,11 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             keys_to_fetch=test_keys, now_int=1234
         )
 
-        # Verify results: 2 from fallback + 4 from successful script = 6 total
-        assert len(results) == 6, f"Expected 6 results, got {len(results)}"
+        # BATCH_RATE_LIMITER_SCRIPT returns one value per key, and values are
+        # written back to their original keys_to_fetch index, so the result
+        # length always matches the key count: 2 from fallback + 2 from the
+        # successful script = 4 total.
+        assert len(results) == 4, f"Expected 4 results, got {len(results)}"
 
         # Verify script was called twice (once per slot group)
         assert mock_script.call_count == 2
@@ -4712,3 +4715,54 @@ async def test_streaming_mirror_matches_non_streaming_header_shape(monkeypatch):
         f" non_streaming={_rl_only(non_stream_headers)}"
     )
     assert "x-ratelimit-model_per_key-remaining-requests" in stream_slp_headers
+
+
+@pytest.mark.asyncio
+async def test_execute_redis_batch_rate_limiter_script_preserves_key_order():
+    """
+    Slot grouping must not reorder the returned values relative to
+    ``keys_to_fetch``.
+
+    ``is_cache_list_over_limit`` pairs ``cache_values[i]`` with
+    ``keys_to_fetch[i]`` positionally. Two descriptors whose hash tags collide
+    into one slot are coalesced into a single group, so a third descriptor
+    sitting between them in ``keys_to_fetch`` comes back last and every
+    counter after the collision is evaluated against the wrong limit.
+
+    ``{end_user:u28551}`` and ``{api_key:sk-abc}`` are a real CRC16 collision
+    (both slot 3078); ``{team:t1}`` is slot 10988.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    keys_to_fetch = [
+        "{api_key:sk-abc}:window",
+        "{api_key:sk-abc}:requests",
+        "{team:t1}:window",
+        "{team:t1}:requests",
+        "{end_user:u28551}:window",
+        "{end_user:u28551}:requests",
+    ]
+
+    assert handler.keyslot_for_redis_cluster(
+        keys_to_fetch[0]
+    ) == handler.keyslot_for_redis_cluster(
+        keys_to_fetch[4]
+    ), "fixture assumes an api_key/end_user slot collision"
+
+    with patch.object(handler, "_is_redis_cluster", return_value=True):
+        # One value per key, tagged with the key it belongs to.
+        handler.batch_rate_limiter_script = AsyncMock(
+            side_effect=lambda keys, args: [f"v:{k}" for k in keys]
+        )
+
+        results = await handler._execute_redis_batch_rate_limiter_script(
+            keys_to_fetch=keys_to_fetch, now_int=1234
+        )
+
+    assert results == [
+        f"v:{k}" for k in keys_to_fetch
+    ], f"values must line up with keys_to_fetch, got {results}"

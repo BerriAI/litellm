@@ -784,7 +784,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return []
 
         key_groups = self._group_keys_by_hash_tag(keys_to_fetch)
-        all_cache_values = []
+
+        # Slot grouping coalesces keys whose hash tags share a slot, so group
+        # order is not keys_to_fetch order. is_cache_list_over_limit pairs
+        # cache_values[i] with keys_to_fetch[i] positionally, so write each
+        # value back to its original index instead of appending.
+        remaining_positions: Dict[str, List[int]] = {}
+        for position, key in enumerate(keys_to_fetch):
+            remaining_positions.setdefault(key, []).append(position)
+        group_positions = {
+            hash_tag: [remaining_positions[key].pop(0) for key in group_keys]
+            for hash_tag, group_keys in key_groups.items()
+        }
+
+        all_cache_values: List[Any] = [None] * len(keys_to_fetch)
 
         for hash_tag, group_keys in key_groups.items():
             try:
@@ -792,7 +805,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     keys=group_keys,
                     args=[now_int, self.window_size],  # Use integer timestamp
                 )
-                all_cache_values.extend(group_cache_values)
             except Exception as e:
                 verbose_proxy_logger.warning(f"Redis Lua script failed for hash tag {hash_tag}: {str(e)}")
                 # Fallback to in-memory cache for this group
@@ -801,7 +813,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     now_int=now_int,
                     window_size=self.window_size,
                 )
-                all_cache_values.extend(group_cache_values)
+            for position, value in zip(group_positions[hash_tag], group_cache_values):
+                all_cache_values[position] = value
 
         return all_cache_values
 
