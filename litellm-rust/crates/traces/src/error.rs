@@ -2,12 +2,8 @@
 pub enum Error {
     #[error("invalid ClickHouse HTTP URL")]
     InvalidUrl,
-    #[error("trace query requires start before end and a limit from 1 to 100")]
-    InvalidListQuery,
-    #[error("trace query requires nonempty identifiers")]
-    InvalidIdentifier,
-    #[error("trace queries require the ClickHouse table schema")]
-    SchemaPending,
+    #[error("database must be a nonempty SQL identifier and retention must be positive")]
+    InvalidSchema,
     #[error("SQL query must not be empty")]
     EmptySql,
     #[error("ClickHouse query failed with HTTP status {0}")]
