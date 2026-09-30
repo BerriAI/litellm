@@ -122,18 +122,24 @@ describe("RunView", () => {
 
 describe("initialRunSelection", () => {
   const base = research.spans.find((s) => s.parent_span_id === null) as Span;
-  const child = (over: Partial<Span>): Span => ({ ...base, parent_span_id: base.span_id, status: "ok", ...over });
+  const child = (over: Partial<Span>): Span => {
+    const defaults: Partial<Span> = { parent_span_id: base.span_id, status: "ok" };
+    return { ...base, ...defaults, ...over };
+  };
 
   it("lands on a visible failure, never on a framework span the tree hides", () => {
-    const hiddenFailure = child({ span_id: "mw", type: "framework", status: "error", start_offset_ms: 1 });
-    const toolFailure = child({ span_id: "tool", type: "tool", status: "error", start_offset_ms: 5 });
+    const hiddenFields: Partial<Span> = { span_id: "mw", type: "framework", status: "error", start_offset_ms: 1 };
+    const toolFields: Partial<Span> = { span_id: "tool", type: "tool", status: "error", start_offset_ms: 5 };
+    const hiddenFailure = child(hiddenFields);
+    const toolFailure = child(toolFields);
     const trace = { ...research, spans: [base, hiddenFailure, toolFailure] };
     expect(initialRunSelection(trace).selectedId).toBe("tool");
   });
 
   it("falls back to the nearest visible ancestor when only a hidden span failed", () => {
     const agent = child({ span_id: "agent", type: "agent", name: "researcher" });
-    const hiddenFailure = child({ span_id: "mw", parent_span_id: "agent", type: "framework", status: "error" });
+    const hiddenFields: Partial<Span> = { span_id: "mw", parent_span_id: "agent", type: "framework", status: "error" };
+    const hiddenFailure = child(hiddenFields);
     const trace = { ...research, spans: [base, agent, hiddenFailure] };
     expect(initialRunSelection(trace).selectedId).toBe("agent");
   });
