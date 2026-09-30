@@ -164,22 +164,57 @@ async def can_access_mcp_server(
     return False
 
 
+def _restricts_mcp(permission: LiteLLM_ObjectPermissionTable | None) -> bool:
+    return permission is not None and bool(
+        permission.mcp_servers
+        or permission.mcp_toolsets
+        or permission.mcp_tool_permissions
+        or permission.mcp_access_groups
+    )
+
+
+def _context_toolset_ids(
+    own: LiteLLM_ObjectPermissionTable | None,
+    team: LiteLLM_ObjectPermissionTable | None,
+    inherits_team: bool,
+) -> Sequence[str]:
+    if own is not None and _restricts_mcp(own):
+        return own.mcp_toolsets or ()
+    if not inherits_team or team is None:
+        return ()
+    return team.mcp_toolsets or ()
+
+
 async def granted_toolset_ids(
     user_api_key_auth: UserAPIKeyAuth,
     effective_contexts: EffectiveAuthContexts = build_effective_auth_contexts,
     team_object_permission: TeamObjectPermission | None = None,
+    require_key_access: bool | None = None,
 ) -> frozenset[str]:
-    """Toolset ids the credential holds through any of its effective contexts: each context's own object
-    permission plus the object permission of the team it is pinned to, the same two grant sources the
-    aggregate /mcp tool listing expands. No grant anywhere yields the empty set."""
+    """Toolset ids the credential holds, resolved per effective context with the key/team rule the
+    aggregate /mcp listing applies: a context that declares any MCP grant of its own is scoped to its own
+    toolsets, one that declares none inherits its team's, except a virtual key under
+    ``require_key_mcp_access_defined``, which inherits nothing. A dashboard session or gateway-admitted
+    user has no key to declare access on, so its team contexts always inherit. No grant anywhere yields
+    the empty set."""
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
+    from litellm.proxy.proxy_server import general_settings
 
+    keyless: Final = is_ui_session_credential(user_api_key_auth) or user_api_key_auth.mcp_admitted_user_subject
+    require: Final = (
+        bool(general_settings.get("require_key_mcp_access_defined", False))
+        if require_key_access is None
+        else require_key_access
+    )
+    inherits_team: Final = keyless or not require
     load_team_permission: Final = team_object_permission or MCPRequestHandler.team_object_permission
     contexts: Final = await effective_contexts(user_api_key_auth)
     team_permissions: Final = await asyncio.gather(*(load_team_permission(context) for context in contexts))
-    permissions: Final = (*(context.object_permission for context in contexts), *team_permissions)
     return frozenset(
-        chain.from_iterable(permission.mcp_toolsets or () for permission in permissions if permission is not None)
+        chain.from_iterable(
+            _context_toolset_ids(context.object_permission, team, inherits_team)
+            for context, team in zip(contexts, team_permissions, strict=True)
+        )
     )

@@ -102,3 +102,44 @@ def test_dashboard_session_of_a_team_member_lists_the_team_granted_toolset(
         detail: Final = gateway.client.get(f"/v1/mcp/toolset/{granted_id}", headers=headers)
         assert detail.status_code == 200, detail.text
         assert detail.json()["toolset_name"] == granted_name, detail.text
+
+
+def test_direct_grants_no_grants_and_admin_listing_are_unchanged_by_team_resolution(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit6029_" + uuid.uuid4().hex[:8]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        granted_id, granted_name = _toolset(scenario, server_id, "add")
+        withheld_id, withheld_name = _toolset(scenario, server_id, "multiply")
+        direct: Final = {"Authorization": f"Bearer {scenario.key(object_permission={'mcp_toolsets': [granted_id]})}"}
+        ungranted_team: Final = scenario.team()
+        no_grant: Final = {"Authorization": f"Bearer {scenario.key(team_id=ungranted_team)}"}
+        admin: Final = {"Authorization": f"Bearer {gateway.key}"}
+
+        assert _listed_toolset_ids(gateway, direct) == (granted_id,)
+        assert _toolset_rpc(gateway, direct, granted_name, "tools/list", {}).tools == (f"{alias}-add",)
+        assert _toolset_rpc(gateway, direct, withheld_name, "tools/list", {}).status == 403
+        assert gateway.client.get(f"/v1/mcp/toolset/{withheld_id}", headers=direct).status_code == 403
+
+        assert _listed_toolset_ids(gateway, no_grant) == ()
+        assert gateway.client.get(f"/v1/mcp/toolset/{granted_id}", headers=no_grant).status_code == 403
+        assert _toolset_rpc(gateway, no_grant, granted_name, "tools/list", {}).status == 403
+
+        assert {granted_id, withheld_id} <= set(_listed_toolset_ids(gateway, admin))
+        assert gateway.client.get(f"/v1/mcp/toolset/{withheld_id}", headers=admin).status_code == 200
+        assert _toolset_rpc(gateway, admin, withheld_name, "tools/list", {}).tools == (f"{alias}-multiply",)
+
+
+def test_a_key_with_its_own_toolset_grant_does_not_inherit_the_team_toolset(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit6029_" + uuid.uuid4().hex[:8]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        own_id, own_name = _toolset(scenario, server_id, "add")
+        team_only_id, team_only_name = _toolset(scenario, server_id, "multiply")
+        team_id: Final = scenario.team(object_permission={"mcp_toolsets": [own_id, team_only_id]})
+        key: Final = scenario.key(team_id=team_id, object_permission={"mcp_toolsets": [own_id]})
+        headers: Final = {"Authorization": f"Bearer {key}"}
+
+        assert _listed_toolset_ids(gateway, headers) == (own_id,)
+        assert gateway.client.get(f"/v1/mcp/toolset/{team_only_id}", headers=headers).status_code == 403
+        assert _toolset_rpc(gateway, headers, team_only_name, "tools/list", {}).status == 403
+        assert _toolset_rpc(gateway, headers, own_name, "tools/list", {}).tools == (f"{alias}-add",)

@@ -279,7 +279,6 @@ class LiteLLM_Proxy_MCP_Handler:
                     if prisma_client is not None:
                         toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
                         if toolset is not None:
-                            # Access control: the key itself or its team must grant this toolset.
                             if user_api_key_auth is not None:
                                 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
                                     granted_toolset_ids,

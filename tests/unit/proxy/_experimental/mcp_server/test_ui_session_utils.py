@@ -32,7 +32,9 @@ async def test_resolve_ui_session_team_ids_returns_unique_ids(monkeypatch):
         user_id="user-1",
     )
 
-    fake_user = SimpleNamespace(teams=["team-a", "team-b", "team-a", "", None, "team-c"])
+    fake_user = SimpleNamespace(
+        teams=["team-a", "team-b", "team-a", "", None, "team-c"]
+    )
 
     monkeypatch.setattr(
         "litellm.proxy.auth.auth_checks.get_user_object",
@@ -297,3 +299,42 @@ async def test_granted_toolset_ids_is_empty_when_neither_key_nor_team_grants_a_t
         return None
 
     assert await granted_toolset_ids(key, effective_contexts, no_team_permission) == frozenset()
+
+
+async def _same_context(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+    return [auth]
+
+
+async def _team_grants_ts_team(auth: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+    return _toolset_permission("ts-team")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "own",
+    [
+        LiteLLM_ObjectPermissionTable(object_permission_id="op", mcp_toolsets=["ts-own"]),
+        LiteLLM_ObjectPermissionTable(object_permission_id="op", mcp_servers=["srv-own"]),
+        LiteLLM_ObjectPermissionTable(object_permission_id="op", mcp_tool_permissions={"srv-own": ["add"]}),
+        LiteLLM_ObjectPermissionTable(object_permission_id="op", mcp_access_groups=["group-own"]),
+    ],
+)
+async def test_a_key_declaring_its_own_mcp_grant_does_not_inherit_the_team_toolsets(own):
+    """The key/team rule of the aggregate listing: a key's own MCP grant is a ceiling the team cannot widen."""
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a", object_permission=own)
+
+    granted = await granted_toolset_ids(key, _same_context, _team_grants_ts_team, require_key_access=False)
+
+    assert granted == frozenset(own.mcp_toolsets or ())
+
+
+@pytest.mark.asyncio
+async def test_require_key_mcp_access_defined_stops_a_key_inheriting_team_toolsets_but_not_a_session():
+    key = UserAPIKeyAuth(api_key="sk-test", team_id="team-a")
+    session = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-1")
+
+    assert await granted_toolset_ids(key, _same_context, _team_grants_ts_team, require_key_access=False) == {"ts-team"}
+    assert await granted_toolset_ids(key, _same_context, _team_grants_ts_team, require_key_access=True) == frozenset()
+    assert await granted_toolset_ids(session, _same_context, _team_grants_ts_team, require_key_access=True) == {
+        "ts-team"
+    }
