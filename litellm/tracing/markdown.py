@@ -8,18 +8,21 @@ the document reads as: input -> each decision / tool call / subagent (nested) ->
 """
 
 import json
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import AGENT_TRACING_MARKDOWN_MAX_FIELD_CHARS
 from litellm.tracing.types import Span, Trace
 
 _GRAPH_NODES: Final = frozenset({"model", "tools"})
+_TRACEBACK_MARKER: Final = "Traceback (most recent call last):"
+_NO_IO: Final = ("", "")
 
 
 def _hidden(span: Span) -> bool:
-    return span["parent_span_id"] is not None and (
-        span["type"] == "framework" or (span["type"] == "chain" and span["name"] in _GRAPH_NODES)
-    )
+    is_graph_node: Final = span["type"] == "chain" and span["name"] in _GRAPH_NODES
+    return span["parent_span_id"] is not None and (span["type"] == "framework" or is_graph_node)
 
 
 def _clip(text: str) -> str:
@@ -30,7 +33,9 @@ def _clip(text: str) -> str:
 
 def _first_error_line(error: str) -> str:
     """LangSmith records `repr(exc)` + traceback with no separator; keep just the exception."""
-    return error.split("Traceback (most recent call last):", 1)[0].splitlines()[0].strip()
+    head: Final = error.split(_TRACEBACK_MARKER, 1)[0].strip()
+    lines: Final = (head or error).strip().splitlines()
+    return lines[0].strip() if lines else ""
 
 
 def _messages(raw: str) -> str:
@@ -47,7 +52,8 @@ def _messages(raw: str) -> str:
         if m.get("content"):
             lines.append(f"**{m['role']}**: {_clip(str(m['content']))}")
         for call in m.get("tool_calls") or []:
-            lines.append(f"**{m['role']}** → `{call.get('name')}({json.dumps(call.get('args'), default=str)})`")
+            args: Final = _clip(json.dumps(call.get("args"), default=str))
+            lines.append(f"**{m['role']}** → `{call.get('name')}({args})`")
     return "\n".join(lines)
 
 
@@ -72,34 +78,72 @@ def _span_block(span: Span, io: tuple[str, str], depth: int) -> str:
     return "\n".join(parts)
 
 
-def trace_to_markdown(trace: Trace, io: dict[str, tuple[str, str]], span_id: str | None = None) -> str:
-    """The whole trace, or the subtree under `span_id`."""
-    spans: Final = trace["spans"]
-    by_id: Final = {s["span_id"]: s for s in spans}
+class _SpanTree:
+    """Visible-span tree: hidden spans are skipped and their children lifted; cyclic or dangling parents end at a root."""
 
-    def visible_parent(span: Span) -> str | None:
-        parent = by_id.get(span["parent_span_id"] or "")
-        while parent is not None and _hidden(parent):
-            parent = by_id.get(parent["parent_span_id"] or "")
-        return parent["span_id"] if parent else None
+    def __init__(self, spans: Sequence[Span]) -> None:
+        self.by_id: Final = MappingProxyType({s["span_id"]: s for s in spans})
+        parent_of: Final = {s["span_id"]: self._visible_parent(s) for s in spans if not _hidden(s)}
+        grouped: dict[str | None, list[Span]] = {}
+        for span in sorted((s for s in spans if s["span_id"] in parent_of), key=lambda s: s["start_offset_ms"]):
+            grouped.setdefault(parent_of[span["span_id"]], []).append(span)
+        self.children: Final[Mapping[str | None, tuple[Span, ...]]] = MappingProxyType(
+            {parent: tuple(kids) for parent, kids in grouped.items()}
+        )
 
-    children: dict[str | None, list[Span]] = {}
-    for s in spans:
-        if not _hidden(s):
-            children.setdefault(visible_parent(s), []).append(s)
-    for siblings in children.values():
-        siblings.sort(key=lambda s: s["start_offset_ms"])
+    def _visible_parent(self, span: Span) -> str | None:
+        """Nearest non-hidden ancestor present in this trace; None when it is missing or the parent chain loops."""
+        seen: set[str] = {span["span_id"]}
+        nearest: str | None = None
+        parent = self.by_id.get(span["parent_span_id"] or "")
+        while parent is not None:
+            if parent["span_id"] in seen:
+                return None
+            seen.add(parent["span_id"])
+            if nearest is None and not _hidden(parent):
+                nearest = parent["span_id"]
+            parent = self.by_id.get(parent["parent_span_id"] or "")
+        return nearest
 
+    def visible_children(self, span_id: str) -> tuple[Span, ...]:
+        """Children shown under `span_id`; a hidden span's lifted children are its visible descendants."""
+        span: Final = self.by_id[span_id]
+        if not _hidden(span):
+            return self.children.get(span_id, ())
+        return tuple(s for s in self.by_id.values() if self._under(s, span_id) and not _hidden(s))
+
+    def _under(self, span: Span, ancestor_id: str) -> bool:
+        seen: set[str] = set()
+        parent_id = span["parent_span_id"]
+        while parent_id and parent_id not in seen:
+            if parent_id == ancestor_id:
+                return True
+            seen.add(parent_id)
+            parent = self.by_id.get(parent_id)
+            if parent is None or not _hidden(parent):
+                return False
+            parent_id = parent["parent_span_id"]
+        return False
+
+
+def _render(tree: _SpanTree, io: Mapping[str, tuple[str, str]], spans: Sequence[Span], depth: int) -> list[str]:
+    """Depth-first blocks for `spans` and everything under them; each span renders at most once."""
     lines: list[str] = []
+    stack: list[tuple[Span, int]] = [(s, depth) for s in reversed(spans)]
+    rendered: set[str] = set()
+    while stack:
+        span, level = stack.pop()
+        if span["span_id"] in rendered:
+            continue
+        rendered.add(span["span_id"])
+        lines.append(_span_block(span, io.get(span["span_id"], _NO_IO), level))
+        stack.extend((child, level + 1) for child in reversed(tree.children.get(span["span_id"], ())))
+    return lines
 
-    def walk(parent: str | None, depth: int) -> None:
-        for s in children.get(parent, []):
-            lines.append(_span_block(s, io.get(s["span_id"], ("", "")), depth))
-            walk(s["span_id"], depth + 1)
 
+def _header(trace: Trace) -> list[str]:
     summary: Final = trace["summary"]
-    root: Final = by_id.get(span_id) if span_id else next((s for s in spans if s["parent_span_id"] is None), None)
-    header: list[str] = [
+    return [
         f"# Agent trace: {summary['name']}",
         "",
         f"- trace_id: `{summary['trace_id']}` · service: `{summary['service']}` · {summary['start_time']}",
@@ -108,16 +152,47 @@ def trace_to_markdown(trace: Trace, io: dict[str, tuple[str, str]], span_id: str
         f"{summary['error_count']} errors",
         "",
     ]
-    if root is None:
-        return "\n".join([*header, "_no spans_"])
-    root_input, root_output = io.get(root["span_id"], ("", ""))
-    if span_id is None:
-        header += ["## Input", "", _messages(root_input) or "_empty_", "", "## Steps", ""]
-        walk(root["span_id"], 0)
-        footer = ["", "## Output", "", _messages(root_output) or "_empty_"]
-    else:
-        header += [f"## Subtree of `{root['name']}`", ""]
-        lines.append(_span_block(root, (root_input, root_output), 0))
-        walk(root["span_id"], 1)
-        footer = []
-    return "\n".join([*header, *lines, *footer]) + "\n"
+
+
+def trace_to_markdown(trace: Trace, io: Mapping[str, tuple[str, str]], span_id: str | None = None) -> str | None:
+    """The whole trace, or the subtree under `span_id`; None when `span_id` is not in the trace."""
+    tree: Final = _SpanTree(trace["spans"])
+    if span_id is not None:
+        if span_id not in tree.by_id:
+            return None
+        selected: Final = tree.by_id[span_id]
+        subtree: Final = [
+            _span_block(selected, io.get(span_id, _NO_IO), 0),
+            *_render(tree, io, tree.visible_children(span_id), 1),
+        ]
+        return "\n".join([*_header(trace), f"## Subtree of `{selected['name']}`", "", *subtree]) + "\n"
+    roots: Final = tree.children.get(None, ())
+    if not roots:
+        return "\n".join([*_header(trace), "_no spans_"]) + "\n"
+    first_input: Final = io.get(roots[0]["span_id"], _NO_IO)[0]
+    last_output: Final = io.get(roots[-1]["span_id"], _NO_IO)[1]
+    # one root reads as its steps; several (partial or merged traces) each show as their own top-level step
+    steps: Final = (
+        _render(tree, io, tree.children.get(roots[0]["span_id"], ()), 0)
+        if len(roots) == 1
+        else _render(tree, io, roots, 0)
+    )
+    return (
+        "\n".join(
+            [
+                *_header(trace),
+                "## Input",
+                "",
+                _messages(first_input) or "_empty_",
+                "",
+                "## Steps",
+                "",
+                *steps,
+                "",
+                "## Output",
+                "",
+                _messages(last_output) or "_empty_",
+            ]
+        )
+        + "\n"
+    )
