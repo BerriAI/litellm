@@ -1,13 +1,11 @@
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
+use litellm_llms_types::formats::messages::MessagesResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::{
-    anthropic::experimental_pass_through::messages::transformation::resolve_anthropic_api_base,
-    base_llm::chat::transformation::Error,
-};
+use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
 
 const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 
@@ -40,38 +38,16 @@ pub struct AnthropicMessageBatch {
     pub request_counts: AnthropicBatchRequestCounts,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BatchStatus {
-    InProgress,
-    Cancelling,
-    Completed,
+#[derive(Deserialize)]
+struct BatchResultRecord {
+    result: BatchResult,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BatchRequestCounts {
-    pub total: u64,
-    pub completed: u64,
-    pub failed: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LiteLlmMessageBatch {
-    pub id: String,
-    pub object: String,
-    pub endpoint: String,
-    pub input_file_id: String,
-    pub completion_window: String,
-    pub status: BatchStatus,
-    pub output_file_id: String,
-    pub created_at: i64,
-    pub in_progress_at: Option<i64>,
-    pub expires_at: Option<i64>,
-    pub completed_at: Option<i64>,
-    pub expired_at: Option<i64>,
-    pub cancelling_at: Option<i64>,
-    pub cancelled_at: Option<i64>,
-    pub request_counts: BatchRequestCounts,
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BatchResult {
+    Succeeded { message: Box<MessagesResponse> },
+    Errored { error: Value },
 }
 
 pub trait AnthropicBatchesConfig {
@@ -87,7 +63,7 @@ pub trait AnthropicBatchesConfig {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error>;
+    ) -> Result<BatchResponse, Error>;
 
     fn retrieve_batch_url(
         &self,
@@ -102,9 +78,9 @@ pub trait AnthropicBatchesConfig {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> LiteLlmMessageBatch;
+    ) -> BatchResponse;
 
-    fn transform_batch_results(&self, body: &str) -> Result<Vec<AnthropicMessagesResponse>, Error>;
+    fn transform_batch_results(&self, body: &str) -> Result<Vec<MessagesResponse>, Error>;
 }
 
 pub struct AnthropicBatchesTransformation;
@@ -137,8 +113,9 @@ fn batches_base_url(
     } else {
         format!("{api_base}{BATCHES_PATH_SUFFIX}")
     };
-    Url::parse(&complete_url)
-        .map_err(|error| Error::InvalidRequest(format!("invalid Anthropic API base: {error}")))
+    Url::parse(&complete_url).map_err(|error| {
+        Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
+    })
 }
 
 impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
@@ -158,7 +135,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         &self,
         _response: AnthropicMessageBatch,
         _now: i64,
-    ) -> Result<LiteLlmMessageBatch, Error> {
+    ) -> Result<BatchResponse, Error> {
         Err(Error::Unsupported("Anthropic message batch creation"))
     }
 
@@ -186,7 +163,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         &self,
         response: AnthropicMessageBatch,
         now: i64,
-    ) -> LiteLlmMessageBatch {
+    ) -> BatchResponse {
         let created_at = timestamp(response.created_at.as_deref());
         let ended_at = timestamp(response.ended_at.as_deref());
         let expires_at = timestamp(response.expires_at.as_deref());
@@ -207,7 +184,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
             failed: response.request_counts.errored,
         };
 
-        LiteLlmMessageBatch {
+        BatchResponse {
             id: response.id.clone(),
             object: "batch".into(),
             endpoint: "/v1/messages".into(),
@@ -234,14 +211,28 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         }
     }
 
-    fn transform_batch_results(&self, body: &str) -> Result<Vec<AnthropicMessagesResponse>, Error> {
+    fn transform_batch_results(&self, body: &str) -> Result<Vec<MessagesResponse>, Error> {
         body.lines()
             .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-            .map(|record| {
-                serde_json::from_value(record["result"]["message"].clone()).map_err(|error| {
-                    Error::InvalidResponse(format!("invalid Anthropic batch result: {error}"))
-                })
+            .enumerate()
+            .map(|(index, line)| {
+                let record: BatchResultRecord =
+                    serde_json::from_str(line.trim()).map_err(|error| {
+                        Error::InvalidResponse(crate::ErrorDetail::InvalidLine {
+                            subject: "Anthropic batch result",
+                            line: index + 1,
+                            source: crate::ErrorSource::new(error),
+                        })
+                    })?;
+                match record.result {
+                    BatchResult::Succeeded { message } => Ok(*message),
+                    BatchResult::Errored { error } => {
+                        Err(Error::InvalidResponse(crate::ErrorDetail::RemoteFailure {
+                            operation: "Anthropic batch request",
+                            detail: error,
+                        }))
+                    }
+                }
             })
             .collect()
     }
@@ -313,9 +304,8 @@ mod tests {
     }
 
     #[test]
-    fn extracts_message_responses_from_ndjson_and_skips_non_json_lines() {
-        let body = r#"not-json
-{"result":{"message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null}}}
+    fn extracts_successful_message_responses_from_ndjson() {
+        let body = r#"{"result":{"type":"succeeded","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null}}}
 "#;
         let messages = ANTHROPIC_BATCHES_TRANSFORMATION
             .transform_batch_results(body)
@@ -323,6 +313,20 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, "msg_1");
+    }
+
+    #[test]
+    fn reports_malformed_and_unsuccessful_batch_results() {
+        assert!(matches!(
+            ANTHROPIC_BATCHES_TRANSFORMATION.transform_batch_results("not-json"),
+            Err(Error::InvalidResponse(message)) if message.to_string().contains("line 1")
+        ));
+        assert!(matches!(
+            ANTHROPIC_BATCHES_TRANSFORMATION.transform_batch_results(
+                r#"{"result":{"type":"errored","error":{"type":"invalid_request_error"}}}"#
+            ),
+            Err(Error::InvalidResponse(message)) if message.to_string().contains("request failed")
+        ));
     }
 
     #[test]

@@ -20,6 +20,14 @@ from litellm.proxy._types import (
 )
 
 SERVER_ONLY_MARKERS = (
+    "requires_fresh_policy",
+    "mcp_explicit_grants_only",
+    "managed_agent_context",
+    "managed_agent_policy",
+    "invoked_agent_id",
+    "invoked_agent_policy",
+    "agent_invocation_cost",
+    "billing_agent_policy",
     "mcp_admitted_user_subject",
     "mcp_source_team_rpm_limits",
     "mcp_session_resource_server_id",
@@ -377,3 +385,21 @@ def test_change_password_request_passwords_hidden_from_repr():
     for rendered in (repr(request), str(request)):
         assert "hunter2hunter2" not in rendered
         assert "NewP@ssw0rd-2026" not in rendered
+@pytest.mark.parametrize("versions", [[], ["2099-01-01"], ["2026-07-28"]])
+def test_mcp_advertised_versions_reject_unavailable_revisions(versions):
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings(mcp_advertised_versions=versions)
+
+
+@pytest.mark.parametrize("revision", ["2026-07-28", "unknown", None])
+def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
+    from litellm.proxy._types import NewMCPServerRequest, UpdateMCPServerRequest
+
+    payload = {"server_id": "test", "transport": "http", "url": "https://example.com/mcp", "mcp_info": {"protocol_version": revision}}
+    for model in (NewMCPServerRequest, UpdateMCPServerRequest):
+        with pytest.raises(ValidationError):
+            model.model_validate(payload)

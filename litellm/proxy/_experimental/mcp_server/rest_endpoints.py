@@ -36,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.oauth_utils import _redact_mcp_resource_url
+from litellm.proxy._experimental.mcp_server.result_conversion import WireCompat, complete_call_tool_result
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     acting_user_auth,
     build_effective_auth_contexts,
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
+    from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes
@@ -220,6 +222,11 @@ if MCP_AVAILABLE:
         _apply_toolset_scope,
         reject_disallowed_mcp_client,
     )
+    from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
+        apply_description_overrides,
+        scan_tool_descriptions,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
 
     ########################################################
     ############ MCP Server REST API Routes #################
@@ -552,7 +559,7 @@ if MCP_AVAILABLE:
     def _extract_mcp_headers_from_request(
         request: Request,
         mcp_request_handler_cls,
-    ) -> tuple:
+    ) -> tuple[str | None, dict[str, dict[str, str]], dict[str, str]]:
         """
         Extract MCP auth headers from HTTP request.
 
@@ -667,6 +674,26 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers, canonical_server_id
 
+    async def _list_server_tools(
+        server: MCPServer,
+        server_auth_header: dict[str, str] | str | None,
+        raw_headers: dict[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        extra_headers: dict[str, str] | None,
+        client_ip: str | None,
+        proxy_logging_obj: "ProxyLogging | None",
+    ) -> list[MCPTool]:
+        return await global_mcp_server_manager._get_tools_from_server(
+            server=server,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=False,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+            user_api_key_auth=user_api_key_auth,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
     async def _get_tools_for_single_server(
         server,
         server_auth_header,
@@ -683,14 +710,10 @@ if MCP_AVAILABLE:
         permissions. This is the admin-only configuration view; every runtime
         path keeps the default True so callable tools stay filtered.
         """
-        tools = await global_mcp_server_manager._get_tools_from_server(
-            server=server,
-            mcp_auth_header=server_auth_header,
-            extra_headers=extra_headers,
-            add_prefix=False,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-            user_api_key_auth=user_api_key_auth,
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        tools = await _list_server_tools(
+            server, server_auth_header, raw_headers, user_api_key_auth, extra_headers, client_ip, proxy_logging_obj
         )
 
         if not apply_tool_filters:
@@ -714,6 +737,34 @@ if MCP_AVAILABLE:
             )
 
         return _create_tool_response_objects(tools, server)
+
+    async def fetch_pinnable_tool_catalog(
+        server: MCPServer, request: Request, user_api_key_dict: UserAPIKeyAuth
+    ) -> dict[str, PinnedMCPTool]:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        mcp_auth_header, mcp_server_auth_headers, raw_headers = _extract_mcp_headers_from_request(
+            request, MCPRequestHandler
+        )
+        upstream: Final = await _list_server_tools(
+            server.model_copy(update={"pinned_tools": None, "tool_name_to_description": None}),
+            _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header),
+            raw_headers,
+            user_api_key_dict,
+            await _get_user_oauth_extra_headers(server, user_api_key_dict),
+            IPAddressUtils.get_mcp_client_ip(request),
+            None,
+        )
+        scan: Final = await scan_tool_descriptions(
+            apply_description_overrides(upstream, server), server, proxy_logging_obj, user_api_key_dict, raw_headers
+        )
+        pinnable: Final = frozenset(tool.name for tool in scan.served)
+        return {
+            tool.name: PinnedMCPTool(description=tool.description or "", input_schema=tool.input_schema)
+            for tool in upstream
+            if tool.name in pinnable
+        }
 
     async def _resolve_allowed_mcp_servers_for_tool_call(
         user_api_key_dict: UserAPIKeyAuth,
@@ -1197,7 +1248,7 @@ if MCP_AVAILABLE:
 
                 # Call execute_mcp_tool directly (permission checks already done)
                 _tool_start_time: Final = datetime.now()
-                result: Final = await execute_mcp_tool(
+                executed: Final = await execute_mcp_tool(
                     name=tool_name,
                     arguments=tool_arguments,
                     allowed_mcp_servers=allowed_mcp_servers,
@@ -1212,6 +1263,7 @@ if MCP_AVAILABLE:
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
                 )
+                result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
             except Exception as e:
                 request_data: Final = proxy_base_llm_response_processor.data
                 await _safe_fire_mcp_tool_call_failure_logging(
@@ -1373,7 +1425,16 @@ if MCP_AVAILABLE:
             and headers.get(MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY)
             else None
         )
-        return _StagedServerTest(request=request, mcp_auth_header=mcp_auth_header, oauth2_headers=oauth2_headers)
+        preview_request: Final = (
+            request.model_copy(
+                update={"mcp_info": {**(request.mcp_info or {}), "protocol_version": saved_server.protocol_version}}
+            )
+            if saved_server is not None and "protocol_version" not in (request.mcp_info or {})
+            else request
+        )
+        return _StagedServerTest(
+            request=preview_request, mcp_auth_header=mcp_auth_header, oauth2_headers=oauth2_headers
+        )
 
     async def _list_tools_within(client: MCPClient, deadline: float) -> list[MCPTool] | None:
         with anyio.move_on_after(deadline):
@@ -1510,6 +1571,7 @@ if MCP_AVAILABLE:
                     extra_headers=merged_headers,
                     stdio_env=stdio_env,
                     cred_provider=preview_cred_provider,
+                    protocol_version_override=server_model.protocol_version,
                 )
 
                 return await operation(client)

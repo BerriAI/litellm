@@ -3,6 +3,7 @@ import time
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,9 +16,12 @@ from litellm.constants import (
     SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
 )
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
+    attach_user_details,
     fill_missing_api_key_aliases,
+    recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
     recover_key_metadata_from_spend_logs,
+    recover_key_owner_from_daily_spend,
 )
 from litellm.proxy.utils import hash_token
 
@@ -585,6 +589,206 @@ async def test_recover_key_metadata_from_spend_logs_bounds_the_scan_with_a_state
     await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=InMemoryCache())
 
     assert calls == [f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}", "scan"]
+    assert mock_prisma.db.tx.call_args.kwargs["timeout"] == timedelta(
+        milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
+    )
+
+
+@pytest.mark.asyncio
+async def test_recover_cli_session_key_metadata_names_the_owner_only_when_the_suffix_is_a_real_user():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com", teams=[])]
+    )
+    raw_login_token = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
+
+    result = await recover_cli_session_key_metadata(
+        mock_prisma, {"cli-session-alice", raw_login_token, hash_token("sk-other"), "cli-session-", "sk-raw"}
+    )
+
+    assert dict(result) == {"cli-session-alice": {"key_alias": "cli-session-alice", "user_id": "alice"}}
+    assert sorted(mock_prisma.db.litellm_usertable.find_many.call_args.kwargs["where"]["user_id"]["in"]) == [
+        "Qm7xJ2kP9sLw4vT1nR8yAa",
+        "alice",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fill_missing_api_key_aliases_resolves_cli_session_keys_without_a_digest_lookup():
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=AssertionError("no reverse-hash lookup expected"))
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com", teams=["team-a"])]
+    )
+    rows = ({"api_key": "cli-session-alice", "api_key_alias": None, "team_id": None, "user_email": None, "spend": 2.0},)
+
+    filled = await fill_missing_api_key_aliases(mock_prisma, rows)
+
+    assert filled[0]["api_key_alias"] == "cli-session-alice"
+    assert filled[0]["user_email"] == "alice@example.com"
+    assert filled[0]["team_id"] == "team-a"
+    assert filled[0]["spend"] == 2.0
+    assert mock_prisma.db.litellm_usertable.find_many.call_args.kwargs["where"] == {"user_id": {"in": ["alice"]}}
+
+
+@pytest.mark.asyncio
+async def test_attach_user_details_gives_the_login_team_only_to_cli_session_keys():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com", teams=["team-a"])]
+    )
+    personal_key = hash_token("sk-personal")
+
+    attached = await attach_user_details(
+        mock_prisma,
+        {
+            "cli-session-alice": {"key_alias": "cli-session-alice", "user_id": "alice"},
+            personal_key: {"key_alias": "personal", "user_id": "alice"},
+        },
+    )
+
+    assert attached["cli-session-alice"]["team_id"] == "team-a"
+    assert attached["cli-session-alice"]["user_email"] == "alice@example.com"
+    assert "team_id" not in attached[personal_key]
+    assert attached[personal_key]["user_email"] == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_attach_user_details_claims_no_team_for_a_multi_team_user_session_key():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="bob", user_email="bob@example.com", teams=["team-a", "team-b"])]
+    )
+
+    attached = await attach_user_details(
+        mock_prisma, {"cli-session-bob": {"key_alias": "cli-session-bob", "user_id": "bob"}}
+    )
+
+    assert "team_id" not in attached["cli-session-bob"]
+    assert attached["cli-session-bob"]["user_email"] == "bob@example.com"
+
+
+def _user_lookup_by_filter() -> AsyncMock:
+    async def find_many(*, where):
+        return [
+            SimpleNamespace(user_id=user_id, user_email=f"{user_id}@example.com", teams=[])
+            for user_id in where["user_id"]["in"]
+        ]
+
+    return AsyncMock(side_effect=find_many)
+
+
+@pytest.mark.asyncio
+async def test_attach_user_details_chunks_more_than_5000_user_ids_and_merges_every_chunk():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = _user_lookup_by_filter()
+    recovered = {f"key-{n}": {"key_alias": f"alias-{n}", "user_id": f"user-{n}"} for n in range(12_001)}
+
+    attached = await attach_user_details(mock_prisma, recovered)
+
+    sent = [call.kwargs["where"]["user_id"]["in"] for call in mock_prisma.db.litellm_usertable.find_many.call_args_list]
+    assert [len(chunk) for chunk in sent] == [5_000, 5_000, 2_001]
+    assert sorted(user_id for chunk in sent for user_id in chunk) == sorted(f"user-{n}" for n in range(12_001))
+    assert all(attached[f"key-{n}"]["user_email"] == f"user-{n}@example.com" for n in range(12_001))
+
+
+@pytest.mark.asyncio
+async def test_attach_user_details_leaves_metadata_unchanged_when_a_later_chunk_fails():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        side_effect=[[SimpleNamespace(user_id="user-0", user_email="user-0@example.com", teams=[])], PrismaError()]
+    )
+    recovered = {f"key-{n}": {"key_alias": f"alias-{n}", "user_id": f"user-{n}"} for n in range(5_001)}
+
+    attached = await attach_user_details(mock_prisma, recovered)
+
+    assert mock_prisma.db.litellm_usertable.find_many.call_count == 2
+    assert attached == recovered
+
+
+def _daily_spend_owner_row(api_key: str, first_owner: str, last_owner: str) -> dict[str, str]:
+    return {"api_key": api_key, "first_owner": first_owner, "last_owner": last_owner}
+
+
+def _daily_spend_transaction(mock_prisma: MagicMock, query_raw: AsyncMock) -> MagicMock:
+    transaction: Final = MagicMock()
+    transaction.execute_raw = AsyncMock(return_value=0)
+    transaction.query_raw = query_raw
+    mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
+    return transaction
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_keeps_a_unanimous_owner():
+    key: Final = "hashed-jwt-digest-a"
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-a")]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {key: "owner-a"}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_drops_conflicting_owners():
+    key: Final = "hashed-jwt-digest-b"
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-b")]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_skips_empty_input():
+    mock_prisma: Final = MagicMock()
+    transaction: Final = _daily_spend_transaction(mock_prisma, AsyncMock(return_value=[]))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, frozenset())
+
+    assert dict(result) == {}
+    transaction.query_raw.assert_not_awaited()
+    mock_prisma.db.tx.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_returns_empty_on_prisma_error():
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("db down")))
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {"hashed-jwt-digest-c"})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_names_no_owner_when_the_lookup_hits_the_statement_timeout():
+    mock_prisma: Final = MagicMock()
+    _daily_spend_transaction(
+        mock_prisma, AsyncMock(side_effect=PrismaError("canceling statement due to statement timeout"))
+    )
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {"hashed-jwt-digest-d"})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_bounds_the_lookup_with_a_statement_timeout():
+    key: Final = "hashed-jwt-digest-e"
+    mock_prisma: Final = MagicMock()
+    transaction: Final = _daily_spend_transaction(
+        mock_prisma, AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-a")])
+    )
+
+    result: Final = await recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {key: "owner-a"}
+    assert [name for name, _, _ in transaction.mock_calls] == ["execute_raw", "query_raw"]
+    transaction.execute_raw.assert_awaited_once_with(
+        f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
+    )
     assert mock_prisma.db.tx.call_args.kwargs["timeout"] == timedelta(
         milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
     )

@@ -1,5 +1,8 @@
 import asyncio
+import base64
 import json
+import re
+import sys
 import time
 from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
@@ -37,6 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints.auth.agent_access_groups import AgentAccessGroupCeiling, CeilingResolver
 from litellm.types.agents import AgentCaller
 from litellm.proxy.auth.auth_checks import (
+    LITELLM_SESSION_TOKEN_PREFIX,
     ExperimentalUIJWTToken,
     _cache_management_object,
     _can_object_call_model,
@@ -52,6 +56,7 @@ from litellm.proxy.auth.auth_checks import (
     _log_budget_lookup_failure,
     _tag_max_budget_check,
     _team_max_budget_check,
+    _team_member_max_budget_alert_check,
     _virtual_key_max_budget_alert_check,
     _check_agent_caller_model_access,
     _virtual_key_max_budget_check,
@@ -74,7 +79,9 @@ from litellm.constants import (
     TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.auth.user_api_key_auth import check_api_key_for_custom_headers_or_pass_through_endpoints
+from litellm.proxy import proxy_server
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_bearer_token, encrypt_value_helper
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from prisma.errors import DataError
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -147,7 +154,7 @@ def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_v
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     # Check that decrypted_token is not None before using json.loads
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
@@ -173,7 +180,7 @@ def test_get_cli_jwt_auth_token_includes_team_alias(valid_sso_user_defined_value
         team_alias="test-team",
     )
 
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -200,7 +207,7 @@ def test_get_cli_jwt_auth_token_carries_team_grants_not_user_allowlist(
         team_model_aliases={"team-fast": "gpt-4.1-mini"},
     )
 
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -217,7 +224,7 @@ def test_get_cli_jwt_auth_token_keeps_user_allowlist_when_no_team(
     """A session token with no team bound still carries the user's own allowlist."""
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -231,7 +238,7 @@ def test_get_experimental_ui_login_jwt_auth_token_uses_10_min_expiry(
 ):
     """Test that Experimental UI token uses fixed 10-minute expiry (does not use LITELLM_UI_SESSION_DURATION)."""
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
@@ -249,7 +256,7 @@ def test_experimental_ui_token_ignores_litellm_ui_session_duration(
     was incorrectly wired to the experimental flow."""
     # Default LITELLM_UI_SESSION_DURATION is "24h" - token must still expire in ~10 min
     token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
@@ -284,6 +291,51 @@ def test_get_key_object_from_ui_hash_key_valid(valid_sso_user_defined_values, mo
     assert key_object.user_role == LitellmUserRoles.PROXY_ADMIN
     assert key_object.models == ["gpt-3.5-turbo"]
     assert key_object.max_budget == litellm.max_ui_session_budget
+
+
+@pytest.mark.parametrize("encryption_algorithm", ["xsalsa20-poly1305", "aes-256-gcm"])
+def test_get_key_object_from_ui_hash_key_accepts_only_minted_session_tokens(
+    valid_sso_user_defined_values, monkeypatch, encryption_algorithm
+):
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": encryption_algorithm})
+    session_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    stored_value = encrypt_value_helper(json.dumps({"user_role": LitellmUserRoles.PROXY_ADMIN.value}))
+
+    key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(session_token)
+    assert key_object is not None
+    assert key_object.user_role == LitellmUserRoles.PROXY_ADMIN
+    reshaped = LITELLM_SESSION_TOKEN_PREFIX + stored_value.removeprefix("v2:gcm:").rstrip("=")
+    for candidate in (stored_value, reshaped):
+        assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(candidate) is None
+
+
+def test_session_tokens_are_header_safe_and_never_look_like_virtual_keys(valid_sso_user_defined_values):
+    for token in (
+        ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values),
+        ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values),
+    ):
+        assert re.fullmatch(r"litellm_login_[A-Za-z0-9_-]+", token), token
+        assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token) is not None
+
+
+@pytest.mark.asyncio
+async def test_session_token_survives_langfuse_basic_auth_parsing(valid_sso_user_defined_values):
+    session_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    basic_credentials = base64.b64encode(f"{session_token}:sk-lf-secret".encode()).decode()
+    request = MagicMock()
+    request.headers = {}
+
+    api_key = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+        request=request,
+        route="/api/public/ingestion",
+        pass_through_endpoints=[
+            {"path": "/api/public/ingestion", "target": "https://example.com", "custom_auth_parser": "langfuse"}
+        ],
+        api_key=f"Basic {basic_credentials}",
+    )
+
+    assert api_key == session_token
+    assert ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(session_token) is not None
 
 
 def test_get_key_object_from_ui_hash_key_invalid():
@@ -799,7 +851,7 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -839,7 +891,7 @@ def test_get_cli_jwt_auth_token_custom_expiration(valid_sso_user_defined_values,
     token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -857,7 +909,7 @@ def test_get_cli_jwt_auth_token_unique_per_session(valid_sso_user_defined_values
     from litellm.constants import CLI_SESSION_KEY_PREFIX
 
     def _decode(token: str) -> dict:
-        decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+        decrypted = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
         assert decrypted is not None
         return json.loads(decrypted)
 
@@ -877,7 +929,7 @@ def test_get_cli_jwt_auth_token_applies_fallback_budget(valid_sso_user_defined_v
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
         valid_sso_user_defined_values, max_budget=litellm.max_ui_session_budget
     )
-    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted is not None
     assert json.loads(decrypted).get("max_budget") == litellm.max_ui_session_budget
 
@@ -886,7 +938,7 @@ def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
     valid_sso_user_defined_values,
 ):
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values, max_budget=None)
-    decrypted = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted = decrypt_bearer_token(token, prefix=LITELLM_SESSION_TOKEN_PREFIX)
     assert decrypted is not None
     assert json.loads(decrypted).get("max_budget") is None
 
@@ -1781,6 +1833,336 @@ def test_can_object_call_model_access_via_alias_only():
 
     # Should return True because access is granted via the alias
     assert result is True
+
+
+def test_can_object_call_model_key_alias_to_allowed_target_is_allowed():
+    """A key alias whose target is on the key allowlist resolves like a team alias."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    result = _can_object_call_model(
+        model="mistral-7b",
+        llm_router=None,
+        models=["gpt-4o-mini"],
+        key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    assert result is True
+
+
+def test_can_object_call_model_key_alias_to_disallowed_target_is_denied():
+    """A key alias whose target is outside the key allowlist stays denied."""
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            models=["gpt-4o-mini"],
+            key_model_aliases={"mistral-7b": "gpt-4"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc_info.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_honors_key_alias():
+    """A key on a team can call a model through its own alias when the target is on the team allowlist."""
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=["gpt-4o-mini"],
+    )
+
+    assert (
+        await can_team_access_model(
+            model="mistral-7b",
+            team_object=team_object,
+            llm_router=None,
+            key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_team_access_model(
+            model="mistral-7b",
+            team_object=team_object,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_honors_key_alias():
+    """The real key entry point resolves a key alias to its target before the allowlist check."""
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    allowed_token = UserAPIKeyAuth(
+        api_key="sk-test",
+        models=["gpt-4o-mini"],
+        aliases={"mistral-7b": "gpt-4o-mini"},
+    )
+
+    assert (
+        await can_key_call_model(
+            model="mistral-7b",
+            llm_model_list=None,
+            valid_token=allowed_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    denied_token = UserAPIKeyAuth(
+        api_key="sk-test",
+        models=["gpt-4o-mini"],
+        aliases={"mistral-7b": "gpt-4"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="mistral-7b",
+            llm_model_list=None,
+            valid_token=denied_token,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+def test_can_object_call_model_key_alias_applies_before_global_alias(monkeypatch):
+    """The key alias rewrite precedes the global one at dispatch, so the key target is authorized."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+def test_can_object_call_model_key_alias_matches_global_rewritten_name(monkeypatch):
+    """A key alias on the globally rewritten name resolves the same way the request chain does."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_chained_alias_requires_final_target(monkeypatch):
+    """When a key alias fires on the globally rewritten name, only the final target is dispatched."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"foo": "bar"})
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_key_alias_name_alone_is_not_enough():
+    """A key that may call the alias name but not its target cannot call the alias."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="bar",
+            llm_router=None,
+            models=["bar"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+    assert (
+        _can_object_call_model(
+            model="bar",
+            llm_router=None,
+            models=["baz"],
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_team_alias_applies_before_key_alias():
+    """A key alias on the raw name loses to the team alias that rewrites it first at dispatch."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"foo": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+
+def test_can_object_call_model_key_alias_on_team_alias_target():
+    """A key alias on the team-rewritten name resolves like the dispatch chain does."""
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    assert (
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["baz"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model="foo",
+            llm_router=None,
+            models=["bar"],
+            team_model_aliases={"foo": "bar"},
+            key_model_aliases={"bar": "baz"},
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_can_user_call_model_honors_key_alias():
+    """A personal-scope key alias resolves to its target before the user allowlist check."""
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+
+    user_object = LiteLLM_UserTable(user_id="test-user", models=["gpt-4o-mini"])
+
+    assert (
+        await can_user_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            user_object=user_object,
+            key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_user_call_model(
+            model="mistral-7b",
+            llm_router=None,
+            user_object=user_object,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_honors_key_alias():
+    """A key alias resolves against the member allowlist, not just the raw alias name."""
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["gpt-4o-mini"]),
+    )
+
+    await _check_team_member_model_access(
+        model="mistral-7b",
+        team_object=LiteLLM_TeamTable(team_id="team-a"),
+        valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+        llm_router=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+        team_membership=membership,
+        team_membership_loaded=True,
+        key_model_aliases={"mistral-7b": "gpt-4o-mini"},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _check_team_member_model_access(
+            model="mistral-7b",
+            team_object=LiteLLM_TeamTable(team_id="team-a"),
+            valid_token=UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a"),
+            llm_router=None,
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=MagicMock(),
+            team_membership=membership,
+            team_membership_loaded=True,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
 
 
 def test_can_object_call_model_access_via_underlying_model_only():
@@ -3442,6 +3824,141 @@ async def test_virtual_key_max_budget_alert_check_without_user_obj():
     assert alert_triggered is True
     assert captured_call_info is not None
     assert captured_call_info.user_email is None
+
+
+@pytest.mark.parametrize(
+    "spend, team_metadata, expect_alert",
+    [
+        (0.05, {"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}}, True),
+        (0.10, {"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}}, True),
+        (0.049, {"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}}, False),
+        (0.0, {"team_member_max_budget_alert_emails": {"50": []}}, False),
+        (0.10, {"team_member_max_budget_alert_emails": {"abc": []}}, False),
+        (0.05, {"team_member_max_budget_alert_emails": {"0": ["finance@co.com"], "100": []}}, False),
+        (0.10, {"team_member_max_budget_alert_emails": {"101": ["finance@co.com"]}}, False),
+        (0.10, {"team_member_max_budget_alert_emails": "50"}, False),
+        (0.10, {"soft_budget_alerting_emails": ["finance@co.com"]}, False),
+        (0.10, None, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_member_max_budget_alert_check_dispatches_only_at_configured_thresholds(
+    spend, team_metadata, expect_alert
+):
+    captured: list[tuple[str, CallInfo]] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            captured.append((type, user_info))
+
+    _team_member_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata=team_metadata,
+        organization_id="org-1",
+        user_id="user-1",
+        user_email="member@co.com",
+        proxy_logging_obj=RecordingProxyLogging(),
+        spend=spend,
+        max_budget=0.10,
+    )
+    await asyncio.sleep(0)
+
+    if not expect_alert:
+        assert captured == [], captured
+        return
+    assert [type for type, _ in captured] == ["max_budget_alert"], captured
+    call_info = captured[0][1]
+    assert call_info.event_group == Litellm_EntityType.TEAM_MEMBER
+    assert (call_info.spend, call_info.max_budget) == (spend, 0.10)
+    assert (call_info.user_id, call_info.user_email) == ("user-1", "member@co.com")
+    assert (call_info.team_id, call_info.team_alias, call_info.organization_id) == ("team-1", "platform", "org-1")
+    assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
+    assert call_info.token is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_max_budget_alert_check_drops_thresholds_outside_1_to_100():
+    captured: list[CallInfo] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            captured.append(user_info)
+
+    _team_member_max_budget_alert_check(
+        team_id="team-1",
+        team_alias="platform",
+        team_metadata={
+            "team_member_max_budget_alert_emails": {
+                "0": ["a@co.com"],
+                "50": [],
+                "150": ["b@co.com"],
+                "1" * (sys.int_info.default_max_str_digits + 1): ["c@co.com"],
+            }
+        },
+        organization_id="org-1",
+        user_id="user-1",
+        user_email="member@co.com",
+        proxy_logging_obj=RecordingProxyLogging(),
+        spend=0.05,
+        max_budget=0.10,
+    )
+    await asyncio.sleep(0)
+
+    assert [call_info.max_budget_alert_emails for call_info in captured] == [{"50": []}], captured
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_budget_dispatches_the_configured_alert_before_the_hard_cap():
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
+
+    captured: list[tuple[str, CallInfo]] = []
+
+    class RecordingProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            captured.append((type, user_info))
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="platform",
+        metadata={"team_member_max_budget_alert_emails": {"50": [], "100": ["finance@co.com"]}},
+    )
+    user_object = LiteLLM_UserTable(user_id="user-1", user_email="member@co.com")
+    valid_token = UserAPIKeyAuth(token="tok-1", user_id="user-1", team_id="team-1")
+    team_membership = LiteLLM_TeamMembership(
+        user_id="user-1",
+        team_id="team-1",
+        spend=0.10,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+    )
+
+    async def spend_from_fallback(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", spend_from_fallback),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership", new_callable=AsyncMock, return_value=team_membership
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=RecordingProxyLogging(),
+            )
+    await asyncio.sleep(0)
+
+    assert (exc_info.value.entity_type, exc_info.value.entity_id) == ("team_member", "user-1:team-1")
+    assert [type for type, _ in captured] == ["max_budget_alert"], captured
+    call_info = captured[0][1]
+    assert call_info.event_group == Litellm_EntityType.TEAM_MEMBER
+    assert (call_info.spend, call_info.max_budget) == (0.10, 0.10)
+    assert (call_info.user_id, call_info.user_email, call_info.team_id) == ("user-1", "member@co.com", "team-1")
+    assert call_info.max_budget_alert_emails == {"50": [], "100": ["finance@co.com"]}
 
 
 @pytest.mark.parametrize(
@@ -5154,7 +5671,8 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     team_table = LiteLLM_TeamTableCachedObj(**base_team_row)
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
-    cache.delete_cache = MagicMock()
+    cache.async_delete_cache = AsyncMock()
+    cache.async_delete_cache_pre_call = AsyncMock(return_value=None)  # no request pipeline open
     logging_obj = MagicMock()
     logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -5175,9 +5693,9 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     written_value = cache.async_set_cache.await_args.kwargs.get("value") or cache.async_set_cache.await_args.args[1]
     assert written_value is team_table
 
-    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache
-    # and the Redis dual cache (mirrors _delete_cache_key_object pattern).
-    cache.delete_cache.assert_called_once_with(key="team_alias:H-Capacity")
+    # (2) team_alias-keyed entry is deleted in BOTH the in-memory cache and the Redis dual cache, on the
+    # async path: a Redis DEL must never run synchronously on the event loop.
+    cache.async_delete_cache.assert_awaited_once_with(key="team_alias:H-Capacity")
 
     # (4) internal usage cache: team_id entry deleted BEFORE the fresh
     # write, alias entry deleted as before.
@@ -5191,7 +5709,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     aliasless = LiteLLM_TeamTableCachedObj(**{**base_team_row, "team_alias": None})
     cache2 = MagicMock()
     cache2.async_set_cache = AsyncMock()
-    cache2.delete_cache = MagicMock()
+    cache2.async_delete_cache = AsyncMock()
     logging_obj2 = MagicMock()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock()
 
@@ -5202,7 +5720,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
         proxy_logging_obj=logging_obj2,
     )
 
-    cache2.delete_cache.assert_not_called()
+    cache2.async_delete_cache.assert_not_awaited()
     logging_obj2.internal_usage_cache.dual_cache.async_delete_cache.assert_awaited_once_with(
         key="team_id:team-no-alias"
     )
@@ -8153,6 +8671,30 @@ def test_model_has_no_cost_mapping_unpriced_model_is_true():
     assert model_has_no_cost_mapping(model="unpriced-group", llm_router=router) is True
 
 
+def test_model_has_no_cost_mapping_resolves_model_group_alias():
+    """This helper and the zero-cost budget predicate share one explicit-cost check, so the
+    alias resolution it depends on has to keep working for both."""
+    from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "priced-group",
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+            },
+            {
+                "model_name": "unpriced-group",
+                "litellm_params": {"model": UNPRICED_UNDERLYING_MODEL, "api_key": "sk-test"},
+            },
+        ],
+        model_group_alias={"priced-alias": "priced-group", "unpriced-alias": "unpriced-group"},
+    )
+
+    assert model_has_no_cost_mapping(model="priced-alias", llm_router=router) is False
+    assert model_has_no_cost_mapping(model="unpriced-alias", llm_router=router) is True
+
+
 def test_model_has_no_cost_mapping_no_model_or_router_is_false():
     from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
 
@@ -8206,7 +8748,7 @@ def test_model_has_no_cost_mapping_non_token_price_from_litellm_params_is_false(
     assert model_has_no_cost_mapping(model="custom-tts", llm_router=router) is False
 
 
-@pytest.mark.parametrize("cost_field", ["input_cost_per_second", "input_cost_per_token"])
+@pytest.mark.parametrize("cost_field", ["cost_per_second", "input_cost_per_second", "input_cost_per_token"])
 def test_model_has_no_cost_mapping_explicit_zero_price_is_false(cost_field):
     from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
     from litellm.router import Router
@@ -8668,7 +9210,7 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
@@ -8742,7 +9284,7 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
         def __init__(self) -> None:
             self.namespace = None
 
-        def init_async_client(self) -> object:
+        def init_pubsub_client(self) -> object:
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
@@ -9140,6 +9682,50 @@ async def test_agent_access_groups_cap_models_even_when_key_allows_them():
 
 
 @pytest.mark.asyncio
+async def test_agent_access_group_ceiling_admits_the_key_alias_target():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=["gpt-5"])
+    agent_key.aliases = {"fast": "gpt-5"}
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    assert await _check_agent_access_group_model_access("fast", agent_key, None, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_agent_access_group_ceiling_checks_the_team_alias_target():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["gpt-5"])
+    agent_key.team_model_aliases = {"foo": "gpt-5"}
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    assert await _check_agent_access_group_model_access("foo", agent_key, None, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_agent_access_group_ceiling_denies_a_team_alias_outside_the_ceiling():
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["gpt-5"])
+    agent_key.team_model_aliases = {"foo": "claude-sonnet-4-5"}
+    resolve, _ = _agent_model_ceiling_resolver(frozenset({"gpt-5"}))
+
+    with pytest.raises(ModelAccessDeniedProxyException) as exc:
+        await _check_agent_access_group_model_access("foo", agent_key, None, resolve)
+    assert exc.value.type == ProxyErrorTypes.agent_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_agent_access_group_ceiling_keeps_the_name_for_a_deleted_team_deployment():
+    from litellm.router import Router
+
+    agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", team_id="team-1", models=["foo"])
+    agent_key.team_model_aliases = {"foo": "model_name_team-1_deadbeef"}
+    router: Final = Router(model_list=[])
+    resolve, asked = _agent_model_ceiling_resolver(frozenset({"foo"}))
+
+    assert await _check_agent_access_group_model_access("foo", agent_key, router, resolve) is True
+    assert asked == ["agent-1"]
+
+
+@pytest.mark.asyncio
 async def test_agent_access_groups_naming_no_model_deny_every_model():
     agent_key: Final = UserAPIKeyAuth(token="agent-token", agent_id="agent-1", models=[])
     resolve, _ = _agent_model_ceiling_resolver(frozenset())
@@ -9435,6 +10021,18 @@ async def test_agent_key_acting_for_a_teamless_user_is_capped_at_that_users_mode
 
     assert exc_info.value.type == ProxyErrorTypes.user_model_access_denied
     assert asked == ["team:None", "user:alice", "team:None", "user:alice"]
+
+
+@pytest.mark.asyncio
+async def test_agent_key_alias_resolves_against_the_echoed_teams_models():
+    agent_key: Final = _agent_key_acting_for(user_id="alice", team_id="team-a")
+    agent_key.aliases = {"foo": "bar"}
+    load_team, load_user, asked = _caller_loaders(LiteLLM_TeamTable(team_id="team-a", models=["bar"]), None)
+    cache: Final = await _cache_with_membership("alice", "team-a", allowed_models=None)
+
+    await _check_caller_models(agent_key, "foo", load_team, load_user, cache)
+
+    assert asked == ["team:team-a"]
 
 
 @pytest.mark.asyncio

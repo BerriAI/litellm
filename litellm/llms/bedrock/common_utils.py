@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -86,15 +86,6 @@ class BedrockError(BaseLLMException):
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
-_STREAM_CHUNK_SIZE_VALIDATOR: Final[TypeAdapter[int | None]] = TypeAdapter(int | None, config=ConfigDict(strict=True))
-
-
-def stream_chunk_size_from(litellm_params: Mapping[str, object]) -> int | None:
-    raw: Final = litellm_params.get("stream_chunk_size")
-    try:
-        return _STREAM_CHUNK_SIZE_VALIDATOR.validate_python(raw)
-    except ValidationError as e:
-        raise BedrockError(status_code=400, message=f"Invalid stream_chunk_size={raw!r}. Expected int. Error: {e}")
 
 
 def merge_bedrock_aws_request_params(
@@ -1217,6 +1208,8 @@ class BedrockModelInfo(BaseLLMModelInfo):
         base_model: Final = BedrockModelInfo.get_base_model(model)
         alt_model: Final = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
         if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
+            return "converse"
+        if _OPENAI_FAMILY_MODEL_RE.search(base_model):
             return "converse"
         return "invoke"
 

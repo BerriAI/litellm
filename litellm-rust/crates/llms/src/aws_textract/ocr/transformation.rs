@@ -10,10 +10,10 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
-        PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DetectDocumentTextRequest {
@@ -48,9 +48,14 @@ impl BaseOcrConfig for TextractDetectTextConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<TextractEnvironment, Error> {
-        environment(request, TextractOperation::DetectDocumentText).await
+        environment(
+            &client.auth().aws,
+            request,
+            TextractOperation::DetectDocumentText,
+        )
+        .await
     }
 
     fn get_complete_url(
