@@ -1,3 +1,5 @@
+import asyncio
+from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final
 
@@ -6,15 +8,173 @@ import pytest
 from litellm.proxy.engine.analysis import Candidate, Examined, evidence_valid, extract, investigate, partition_content
 from litellm.proxy.engine.models import (
     Claim,
+    Coverage,
     Evidence,
     Execution,
     ExecutionContent,
     ModelRequest,
     ModelResult,
+    Sample,
     TracePart,
 )
 from litellm.proxy.engine.state import queue_job
 from tests.unit.proxy.engine.test_state import NOW, engine, finding
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ("complete", "cancel", "failure"))
+async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str) -> None:
+    from litellm.proxy.engine.analysis import ANALYSIS_CONCURRENCY, analyze_sample
+
+    executions: Final = tuple(
+        Execution(id=str(i), source="traces", trace_id=str(i), team_id="alpha", name="run", start_time="", span_count=6)
+        for i in range(ANALYSIS_CONCURRENCY + 1)
+    )
+    entered: Final = SimpleQueue[str]()
+    exited: Final = SimpleQueue[str]()
+    reads: Final = SimpleQueue[str]()
+    counts: Final = SimpleQueue[int]()
+    saturated: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    stalled: Final = asyncio.Event()
+
+    async def read(execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
+        reads.put(execution_id)
+        execution: Final = next(e for e in executions if e.id == execution_id)
+        return ExecutionContent(
+            execution=execution,
+            parts=tuple(
+                TracePart(execution_id=execution_id, span_id=str(i), name="tool", kind="tool", content="x" * 8000)
+                for i in range(6)
+            ),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        entered.put(request.prompt)
+        first: Final = entered.qsize() == 1
+        assert entered.qsize() - exited.qsize() <= ANALYSIS_CONCURRENCY
+        if entered.qsize() == ANALYSIS_CONCURRENCY:
+            saturated.set()
+        try:
+            await release.wait()
+            if outcome == "failure":
+                if first:
+                    raise ValueError("invalid model response")
+                await stalled.wait()
+            return ModelResult(content='{"observations":[]}', cost=0)
+        finally:
+            exited.put(request.prompt)
+
+    async def progress(stage: str, coverage: Coverage) -> None:
+        if stage == "Reading executions":
+            counts.put(coverage.screened)
+
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    task: Final = asyncio.create_task(
+        analyze_sample(claim, Sample(executions=executions, eligible=len(executions)), read, model, progress)
+    )
+    try:
+        await asyncio.wait_for(saturated.wait(), timeout=2)
+        assert entered.qsize() == ANALYSIS_CONCURRENCY
+        assert reads.qsize() == ANALYSIS_CONCURRENCY
+        if outcome == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert entered.qsize() == exited.qsize() == ANALYSIS_CONCURRENCY
+        elif outcome == "failure":
+            release.set()
+            with pytest.raises(ValueError, match="invalid model response"):
+                await asyncio.wait_for(task, timeout=2)
+            assert entered.qsize() == exited.qsize()
+        else:
+            release.set()
+            result: Final = await task
+            assert result.coverage.screened == len(executions)
+            assert entered.qsize() == exited.qsize() == len(executions) * 2
+            assert tuple(counts.get_nowait() for _ in range(counts.qsize())) == tuple(range(len(executions) + 1))
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_chunk_extraction_is_concurrent_and_preserves_every_observation() -> None:
+    from litellm.proxy.engine.analysis import Extraction, Observation
+
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="trace", team_id="alpha", name="run", start_time="", span_count=6
+    )
+    parts: Final = tuple(
+        TracePart(execution_id="run", span_id=str(i), name="tool", kind="tool", content=str(i) * 8000) for i in range(6)
+    )
+    arrived: Final = SimpleQueue[str]()
+    both: Final = asyncio.Event()
+
+    async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(execution=execution, parts=parts)
+
+    async def model(request: ModelRequest) -> ModelResult:
+        part: Final = parts[0] if parts[0].content in request.prompt else parts[3]
+        arrived.put(part.span_id)
+        if arrived.qsize() == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), timeout=2)
+        return ModelResult(
+            content=Extraction(
+                observations=(
+                    Observation(
+                        check_id="retries",
+                        summary=part.span_id,
+                        evidence=(Evidence(execution_id="run", span_id=part.span_id, quote=part.content[:10]),),
+                    ),
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    result: Final = await extract(claim, execution, read, model)
+    assert frozenset(o.summary for o in result.observations) == frozenset(("0", "3"))
+    assert result.parts == parts
+
+
+@pytest.mark.asyncio
+async def test_independent_investigations_overlap_and_report_completions() -> None:
+    from litellm.proxy.engine.analysis import investigate_candidates
+
+    arrived: Final = SimpleQueue[str]()
+    progress_counts: Final = SimpleQueue[int]()
+    both: Final = asyncio.Event()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        arrived.put(request.prompt)
+        if arrived.qsize() == 2:
+            both.set()
+        await asyncio.wait_for(both.wait(), timeout=2)
+        return ModelResult(content='{"action":"inconclusive"}', cost=0)
+
+    async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
+        pytest.fail("Inconclusive decisions must not fetch evidence")
+
+    async def progress(stage: str, coverage: Coverage) -> None:
+        assert stage == "Checking original evidence"
+        progress_counts.put(coverage.investigated)
+
+    candidates: Final = tuple(
+        Candidate(check_id="retries", title=str(i), hypothesis="Investigate", execution_ids=()) for i in range(2)
+    )
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    results: Final = tuple(
+        [
+            result
+            async for result in investigate_candidates(
+                claim, candidates, (), read, model, progress, Coverage(candidates=2)
+            )
+        ]
+    )
+    assert results == ()
+    assert tuple(progress_counts.get_nowait() for _ in range(progress_counts.qsize())) == (1, 2)
 
 
 def test_quote_must_match_the_claimed_execution_and_span() -> None:

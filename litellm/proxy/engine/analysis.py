@@ -1,5 +1,7 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import aclosing
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
@@ -108,6 +110,27 @@ def evidence_valid(evidence: Evidence, parts: tuple[TracePart, ...]) -> bool:
 
 
 BatchItem = TypeVar("BatchItem")
+BatchResult = TypeVar("BatchResult")
+ANALYSIS_CONCURRENCY: Final = 8
+
+
+async def concurrent_results(
+    items: tuple[BatchItem, ...], operation: Callable[[BatchItem], Awaitable[BatchResult]]
+) -> AsyncIterator[BatchResult]:
+    slots: Final = asyncio.Semaphore(ANALYSIS_CONCURRENCY)
+
+    async def limited(item: BatchItem) -> BatchResult:
+        async with slots:
+            return await operation(item)
+
+    tasks: Final = tuple(asyncio.create_task(limited(item)) for item in items)
+    try:
+        for completed in asyncio.as_completed(tasks):
+            yield await completed
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def partition_items(
@@ -147,14 +170,13 @@ async def extract(
 ) -> Examined:
     page: Final = await read(execution.id, cursor, 0)
     chunks: Final = partition_content(page.parts)
-    outputs: Final = tuple(
-        [
-            await structured_response(
-                ModelRequest(purpose="extract", prompt=extraction_prompt(claim, execution, chunk)), Extraction, model
-            )
-            for chunk in chunks
-        ]
-    )
+
+    async def extract_chunk(chunk: tuple[TracePart, ...]) -> Extraction:
+        return await structured_response(
+            ModelRequest(purpose="extract", prompt=extraction_prompt(claim, execution, chunk)), Extraction, model
+        )
+
+    outputs: Final = tuple([output async for output in concurrent_results(chunks, extract_chunk)])
     observations: Final = tuple(
         o
         for o in chain.from_iterable(result.observations for result in outputs)
@@ -276,7 +298,13 @@ async def analyze_sample(
     base: Final = Coverage(eligible=sample.eligible, selected=len(sample.executions))
     if not sample.executions:
         return Result(coverage=base)
-    examined: Final = tuple([item async for item in examine_executions(claim, sample, read, model, progress)])
+    slots: Final = asyncio.Semaphore(ANALYSIS_CONCURRENCY)
+
+    async def limited_model(request: ModelRequest) -> ModelResult:
+        async with slots:
+            return await model(request)
+
+    examined: Final = tuple([item async for item in examine_executions(claim, sample, read, limited_model, progress)])
     coverage: Final = base.model_copy(
         update=MappingProxyType(
             {
@@ -292,7 +320,7 @@ async def analyze_sample(
         return Result(coverage=coverage)
     batches: Final = observation_batches(observations)
     grouping: Final = coverage.model_copy(update=MappingProxyType({"grouping_batches": len(batches)}))
-    clusters: Final = await cluster_batches(batches, model, progress, grouping)
+    clusters: Final = await cluster_batches(batches, limited_model, progress, grouping)
     candidates: Final = clusters.candidates
     investigating: Final = grouping.model_copy(
         update=MappingProxyType({"grouped_batches": len(batches), "candidates": len(candidates)})
@@ -300,7 +328,9 @@ async def analyze_sample(
     findings: Final = tuple(
         [
             item
-            async for item in investigate_candidates(claim, candidates, examined, read, model, progress, investigating)
+            async for item in investigate_candidates(
+                claim, candidates, examined, read, limited_model, progress, investigating
+            )
         ]
     )
     return Result(
@@ -354,11 +384,18 @@ async def investigate_candidate(
 async def examine_executions(
     claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
 ) -> AsyncIterator[Examined]:
-    for index, execution in enumerate(sample.executions):
-        await progress(
-            "Reading executions", Coverage(eligible=sample.eligible, selected=len(sample.executions), screened=index)
-        )
-        yield await extract(claim, execution, read, model)
+    async def examine(execution: Execution) -> Examined:
+        return await extract(claim, execution, read, model)
+
+    await progress("Reading executions", Coverage(eligible=sample.eligible, selected=len(sample.executions)))
+    completed: Final = iter(range(1, len(sample.executions) + 1))
+    async with aclosing(concurrent_results(sample.executions, examine)) as results:
+        async for item in results:
+            await progress(
+                "Reading executions",
+                Coverage(eligible=sample.eligible, selected=len(sample.executions), screened=next(completed)),
+            )
+            yield item
 
 
 async def investigate_candidates(
@@ -370,12 +407,18 @@ async def investigate_candidates(
     progress: ReportProgress,
     coverage: Coverage,
 ) -> AsyncIterator[FindingDraft]:
-    for index, candidate in enumerate(candidates):
-        await progress(
-            "Checking original evidence", coverage.model_copy(update=MappingProxyType({"investigated": index}))
-        )
-        for finding in await investigate_candidate(claim, candidate, examined, read, model):
-            yield finding
+    async def check(candidate: Candidate) -> tuple[FindingDraft, ...]:
+        return await investigate_candidate(claim, candidate, examined, read, model)
+
+    completed: Final = iter(range(1, len(candidates) + 1))
+    async with aclosing(concurrent_results(candidates, check)) as results:
+        async for findings in results:
+            await progress(
+                "Checking original evidence",
+                coverage.model_copy(update=MappingProxyType({"investigated": next(completed)})),
+            )
+            for finding in findings:
+                yield finding
 
 
 def observation_batches(observations: tuple[Observation, ...]) -> tuple[tuple[Observation, ...], ...]:
