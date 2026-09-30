@@ -31,8 +31,8 @@ const span = (overrides: Partial<Span> & Pick<Span, "span_id">): Span => ({
   ...overrides,
 });
 
-const root = span({ span_id: "root", parent_span_id: null, name: "support_triage_agent", type: "agent" });
-const llm = span({
+const rootFields: SpanFields = { span_id: "root", parent_span_id: null, name: "support_triage_agent", type: "agent" };
+const llmFields: SpanFields = {
   span_id: "llm1",
   name: "ChatOpenAI",
   type: "llm",
@@ -40,15 +40,18 @@ const llm = span({
   input_tokens: 659,
   output_tokens: 60,
   litellm_request_id: "chatcmpl-abc",
-});
-const failedTool = span({
+};
+const failedToolFields: SpanFields = {
   span_id: "tool1",
   name: "get_customer_plan",
   type: "tool",
   status: "error",
   error:
     "ValueError('customer acme-404 not found in billing DB')Traceback (most recent call last):\n  File \"x.py\", line 1",
-});
+};
+const root = span(rootFields);
+const llm = span(llmFields);
+const failedTool = span(failedToolFields);
 
 const trace: Trace = {
   summary: {
@@ -145,16 +148,17 @@ describe("DetailPane", () => {
   });
 
   it("summarizes a ×N group with its failure pattern", () => {
-    const members = Array.from({ length: 12 }, (_, i) =>
-      span({
+    const members = Array.from({ length: 12 }, (_, i) => {
+      const timedOut: SpanFields = {
         span_id: `f${i}`,
         name: "lookup_benchmark",
         type: "tool",
         status: "error",
         error: "TimeoutError('slow')",
-      }),
-    );
-    renderPane({
+      };
+      return span(timedOut);
+    });
+    const groupRow: GroupRowData = {
       kind: "group",
       id: "grp",
       depth: 1,
@@ -166,7 +170,8 @@ describe("DetailPane", () => {
       p50Duration: 640,
       isFailureGroup: true,
       expanded: false,
-    });
+    };
+    renderPane(groupRow);
     const pane = screen.getByRole("complementary", { name: "Group details" });
     expect(pane).toHaveTextContent("lookup_benchmark ×12");
     expect(pane).toHaveTextContent("Invocations12");
