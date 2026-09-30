@@ -5,9 +5,9 @@ import json
 import os
 import struct
 import zlib
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from types import SimpleNamespace
-from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import Mock
 
@@ -15,24 +15,23 @@ import httpx
 import pytest
 
 import litellm
-
-# Ensure the project root is on the import path so `litellm` can be imported when
-# tests are executed from any working directory.
-
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.bedrock.common_utils import (
-    ensure_bedrock_anthropic_messages_tool_names,
-    normalize_custom_field_on_tools,
-    normalize_tool_input_schema_types_for_bedrock_invoke,
-)
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
-from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+
+# Ensure the project root is on the import path so `litellm` can be imported when
+# tests are executed from any working directory.
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import (
     as_system_content_blocks,
+)
+from litellm.llms.bedrock.common_utils import (
+    ensure_bedrock_anthropic_messages_tool_names,
+    normalize_custom_field_on_tools,
+    normalize_tool_input_schema_types_for_bedrock_invoke,
 )
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
@@ -3007,7 +3006,6 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
     forced ``thinking.type='adaptive'`` even with ``supports_adaptive_thinking``
     explicitly set to ``false`` on the entry."""
     import litellm
-
     from litellm.types.router import GenericLiteLLMParams
 
     model = "global.anthropic.claude-opus-4-8"
@@ -3546,7 +3544,20 @@ def test_bedrock_invoke_keeps_supported_extensions_and_sends_their_betas(monkeyp
     assert _EXTENSION_BETAS <= set(result["anthropic_beta"])
 
 
-def test_bedrock_invoke_sends_only_the_betas_of_extensions_left_in_the_body(monkeypatch):
+def test_bedrock_invoke_adds_only_the_betas_of_extensions_left_in_the_body(monkeypatch):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    result = _invoke_request(
+        _MIXED_MODEL,
+        [_HELLO, _HI, _EFFORT_ONLY, _GO, _TERSE_WITH_TOOL],
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+    )
+
+    assert result["messages"] == [_HELLO, _HI, _GO, _TERSE_WITH_TOOL]
+    assert _EXTENSION_BETAS & set(result["anthropic_beta"]) == {Extension.TOOL_CHANGES.beta}
+
+
+def test_bedrock_invoke_forwards_client_betas_for_stripped_extensions(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", False)
 
     result = _invoke_request(
@@ -3557,7 +3568,7 @@ def test_bedrock_invoke_sends_only_the_betas_of_extensions_left_in_the_body(monk
     )
 
     assert result["messages"] == [_HELLO, _HI, _GO, _TERSE_WITH_TOOL]
-    assert _EXTENSION_BETAS & set(result["anthropic_beta"]) == {Extension.TOOL_CHANGES.beta}
+    assert _EXTENSION_BETAS <= set(result["anthropic_beta"])
 
 
 def test_bedrock_invoke_refuses_an_unsupported_param_naming_the_path_model_and_setting(monkeypatch):
@@ -3622,7 +3633,6 @@ def test_bedrock_invoke_strips_extensions_before_relocating_system_messages_for_
         [_HELLO, _HI, _EFFORT_ONLY, _GO, _TERSE_WITH_TOOL],
         thinking=_UPDATES_THINKING,
         litellm_params=GenericLiteLLMParams(drop_params=True),
-        headers={"anthropic-beta": ",".join(sorted(_EXTENSION_BETAS))},
     )
 
     relocated_texts = [block["text"] for block in result["messages"][3]["content"]]
@@ -3632,3 +3642,56 @@ def test_bedrock_invoke_strips_extensions_before_relocating_system_messages_for_
     assert relocated_texts[-1] == "Answer tersely."
     assert result["thinking"] == {"type": "adaptive"}
     assert _EXTENSION_BETAS.isdisjoint(result.get("anthropic_beta", ()))
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("nested_output_config", [False, True])
+@pytest.mark.parametrize("explicit_beta", [False, True])
+@pytest.mark.parametrize("output_config", [{}, {"effort": "high"}, {"format": {"type": "text"}}])
+def test_bedrock_messages_mid_conversation_output_config_beta(
+    nested_output_config: bool, explicit_beta: bool, output_config: dict[str, object]
+) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+
+    messages: Final = [
+        {"role": "user", "content": "Hello"},
+        *([{"role": "system", "content": [], "output_config": output_config}] if nested_output_config else []),
+        {"role": "user", "content": "Reply with OK"},
+    ]
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024, "output_config": {"effort": "high"}},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result.get("anthropic_beta", []).count(beta) == int(nested_output_config or explicit_beta)
+    assert result["messages"] == messages
+    assert result["output_config"] == {"effort": "high"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("explicit_beta", [False, True])
+def test_bedrock_messages_removed_output_config_does_not_add_beta(explicit_beta: bool) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+    from litellm.types.router import GenericLiteLLMParams
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model="global.anthropic.claude-fable-5-1",
+        messages=[
+            {"role": "system", "content": "Answer briefly", "output_config": {"effort": "high"}},
+            {"role": "user", "content": "Reply with OK"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+    )
+
+    assert result["messages"] == [{"role": "user", "content": "Reply with OK"}]
+    assert result.get("anthropic_beta", []).count(beta) == int(explicit_beta)

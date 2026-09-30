@@ -1,0 +1,132 @@
+# Loi sur l'IA (UE) Article 5.1(f) — Reconnaissance des émotions au travail et dans l'éducation
+# Interdit les systèmes d'IA qui infèrent les émotions sur le lieu de travail
+# ou dans les établissements d'enseignement, sauf pour des raisons médicales ou de sécurité.
+# Référence : https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_emotion_recognition_fr"
+description: "Art. 5.1(f) — Bloque la reconnaissance des émotions et l'analyse des sentiments au travail et dans l'éducation"
+default_action: "BLOCK"
+
+identifier_words:
+  # Actions de développement
+  - "construire"
+  - "créer"
+  - "développer"
+  - "concevoir"
+  - "implémenter"
+  - "mettre en place"
+  - "déployer"
+  - "installer"
+
+  # Actions de détection
+  - "reconnaître"
+  - "détecter"
+  - "identifier"
+  - "inférer"
+  - "déduire"
+  - "prédire"
+  - "déterminer"
+  - "analyser"
+  - "mesurer"
+  - "surveiller"
+  - "monitorer"
+  - "évaluer"
+  - "classifier"
+  - "repérer"
+  - "déceler"
+
+additional_block_words:
+  # Émotion des employés
+  - "émotion des employés"
+  - "émotion des salariés"
+  - "humeur des employés"
+  - "humeur des salariés"
+  - "sentiment des employés"
+  - "sentiment des salariés"
+  - "état émotionnel employés"
+  - "état émotionnel salariés"
+  - "ressenti des employés"
+  - "ressenti des salariés"
+
+  # Émotion des travailleurs
+  - "émotion des travailleurs"
+  - "émotion du personnel"
+  - "humeur des travailleurs"
+  - "sentiment des travailleurs"
+  - "état émotionnel travailleurs"
+
+  # Émotion au travail
+  - "émotion au travail"
+  - "émotions au travail"
+  - "humeur au travail"
+  - "sentiment au travail"
+  - "émotion au bureau"
+  - "humeur au bureau"
+
+  # Émotion des étudiants
+  - "émotion des étudiants"
+  - "émotion des élèves"
+  - "humeur des étudiants"
+  - "sentiment des étudiants"
+  - "sentiment des élèves"
+  - "état émotionnel étudiants"
+  - "ressenti des étudiants"
+
+  # Émotion en classe
+  - "émotion en classe"
+  - "émotions en classe"
+  - "humeur en classe"
+  - "sentiment en classe"
+  - "émotion à l'école"
+  - "émotion en cours"
+
+  # Émotion des candidats
+  - "émotion des candidats"
+  - "sentiment des candidats"
+  - "émotion en entretien"
+  - "sentiment en entretien"
+
+always_block_keywords:
+  - keyword: "reconnaissance d'émotions au travail"
+    severity: "high"
+  - keyword: "détection d'émotions des employés"
+    severity: "high"
+  - keyword: "détection d'émotions des salariés"
+    severity: "high"
+  - keyword: "reconnaissance d'émotions en classe"
+    severity: "high"
+  - keyword: "détection d'émotions des étudiants"
+    severity: "high"
+  - keyword: "détection d'émotions des élèves"
+    severity: "high"
+  - keyword: "surveillance des émotions au travail"
+    severity: "high"
+  - keyword: "suivi des émotions des employés"
+    severity: "high"
+  - keyword: "système d'analyse du sentiment des employés"
+    severity: "high"
+  - keyword: "surveillance des émotions en classe"
+    severity: "high"
+
+exceptions:
+  - "recherche sur"
+  - "étude sur"
+  - "académique"
+  - "thèse sur"
+  - "mémoire sur"
+  - "expliquer"
+  - "qu'est-ce que"
+  - "c'est quoi"
+  - "article 5"
+  - "interdit par"
+  - "prohibé par"
+  - "surveillance de conformité"
+  - "contrôle de conformité"
+  - "examen éthique"
+  - "dans un film"
+  - "dans le film"
+  - "jeu vidéo"
+  - "retour client"
+  - "médical"
+  - "raison de sécurité"
+  - "somnolence du conducteur"
+  - "fatigue du pilote"

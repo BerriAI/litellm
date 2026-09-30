@@ -1,0 +1,97 @@
+# Guidelines on Artificial Intelligence Risk Management (MAS) — Model Security
+# Blocks requests related to adversarial attacks, data poisoning,
+# model inversion, and exfiltration targeting financial AI systems.
+# Reference: https://www.mas.gov.sg/publications/consultations/2025/consultation-paper-on-guidelines-on-artificial-intelligence-risk-management
+category_name: "sg_mas_model_security"
+description: "Guidelines on Artificial Intelligence Risk Management (MAS) — Blocks adversarial attacks, model poisoning, inversion, and exfiltration attempts targeting financial AI systems"
+default_action: "BLOCK"
+
+identifier_words:
+  # Financial AI systems
+  - "credit model"
+  - "fraud model"
+  - "trading model"
+  - "risk model"
+  - "underwriting model"
+  - "AML model"
+  - "KYC model"
+  - "scoring model"
+  - "pricing model"
+  - "financial model"
+
+  # AI system references
+  - "production model"
+  - "deployed model"
+  - "live model"
+  - "model endpoint"
+  - "model API"
+
+additional_block_words:
+  # Adversarial attacks
+  - "adversarial attack"
+  - "adversarial example"
+  - "adversarial input"
+  - "evasion attack"
+  - "perturbation"
+
+  # Data poisoning
+  - "data poisoning"
+  - "poison training"
+  - "backdoor"
+  - "trojan"
+  - "corrupt training data"
+
+  # Model theft & inversion
+  - "model inversion"
+  - "model extraction"
+  - "model stealing"
+  - "model theft"
+  - "reverse engineer"
+  - "replicate model"
+
+  # Data exfiltration
+  - "exfiltrate"
+  - "extract training data"
+  - "membership inference"
+  - "data leakage"
+
+  # Prompt attacks
+  - "prompt injection"
+  - "jailbreak"
+  - "bypass guardrail"
+  - "bypass safety"
+
+always_block_keywords:
+  - keyword: "adversarial attack on credit model"
+    severity: "high"
+  - keyword: "poison training data financial"
+    severity: "high"
+  - keyword: "model inversion attack fraud model"
+    severity: "high"
+  - keyword: "steal scoring model weights"
+    severity: "high"
+  - keyword: "extract training data from financial model"
+    severity: "high"
+  - keyword: "jailbreak financial AI"
+    severity: "high"
+  - keyword: "bypass guardrail on trading model"
+    severity: "high"
+  - keyword: "backdoor in AML model"
+    severity: "high"
+
+exceptions:
+  - "red team"
+  - "red-team"
+  - "penetration test"
+  - "security audit"
+  - "vulnerability assessment"
+  - "adversarial testing"
+  - "robustness testing"
+  - "explain"
+  - "what is"
+  - "research"
+  - "academic"
+  - "defend against"
+  - "protect from"
+  - "mitigate"
+  - "detection"

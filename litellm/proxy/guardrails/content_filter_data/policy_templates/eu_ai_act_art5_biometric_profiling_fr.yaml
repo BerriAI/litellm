@@ -1,0 +1,157 @@
+# Loi sur l'IA (UE) Article 5.1(d)(g)(h) — Catégorisation biométrique et profilage prédictif
+# Interdit :
+# - L'identification biométrique à distance en temps réel dans les espaces publics (5.1.d)
+# - La collecte non ciblée d'images faciales pour les bases de données de reconnaissance faciale (5.1.g)
+# - La catégorisation biométrique pour inférer la race, les opinions politiques, la religion,
+#   l'orientation sexuelle (5.1.h)
+# - La police prédictive basée uniquement sur le profilage (5.1.d)
+# Référence : https://artificialintelligenceact.eu/article/5/
+category_name: "eu_ai_act_art5_biometric_profiling_fr"
+description: "Art. 5.1(d)(g)(h) — Bloque la catégorisation biométrique, les bases de reconnaissance faciale et le profilage prédictif"
+default_action: "BLOCK"
+
+identifier_words:
+  # Actions de développement
+  - "construire"
+  - "créer"
+  - "développer"
+  - "concevoir"
+  - "implémenter"
+  - "mettre en place"
+
+  # Actions de notation/évaluation
+  - "noter"
+  - "classer"
+  - "évaluer"
+  - "estimer"
+  - "classifier"
+  - "profiler"
+  - "catégoriser"
+
+  # Actions de détection
+  - "reconnaître"
+  - "détecter"
+  - "identifier"
+  - "inférer"
+  - "déduire"
+  - "prédire"
+  - "déterminer"
+  - "analyser"
+  - "collecter"
+  - "récolter"
+  - "scraper"
+  - "aspirer"
+
+additional_block_words:
+  # Catégorisation biométrique par race/ethnie
+  - "race à partir du visage"
+  - "race à partir de biométrie"
+  - "race à partir du biométrique"
+  - "race à partir de l'image"
+  - "race à partir de la photo"
+  - "ethnie à partir du visage"
+  - "ethnie à partir de biométrie"
+  - "ethnie à partir du biométrique"
+  - "ethnie à partir de l'image"
+  - "classification raciale"
+  - "classification ethnique"
+
+  # Catégorisation par opinions politiques
+  - "opinions politiques à partir"
+  - "vues politiques à partir"
+  - "affiliation politique à partir"
+  - "croyances politiques à partir"
+  - "orientation politique à partir"
+
+  # Catégorisation par orientation sexuelle
+  - "orientation sexuelle à partir"
+  - "préférence sexuelle à partir"
+
+  # Catégorisation par religion
+  - "religion à partir de biométrie"
+  - "religion à partir du biométrique"
+  - "religion à partir du visage"
+  - "croyances religieuses à partir"
+  - "affiliation religieuse à partir"
+
+  # Bases de données de reconnaissance faciale
+  - "base de données de reconnaissance faciale"
+  - "base de données d'images faciales"
+  - "collecte d'images faciales"
+  - "aspiration d'images faciales"
+  - "données d'entraînement reconnaissance faciale"
+  - "base de données biométrique internet"
+  - "base de données biométrique vidéosurveillance"
+
+  # Police prédictive / profilage prédictif
+  - "prédiction de crime"
+  - "prédiction criminelle"
+  - "comportement criminel"
+  - "récidive"
+  - "prédiction de la récidive"
+  - "score de risque criminel"
+  - "évaluation du risque criminel"
+  - "probabilité criminelle"
+  - "profilage criminel"
+
+  # Profilage prédictif en emploi
+  - "prédiction de performance des employés"
+  - "prédiction de performance des salariés"
+  - "prédiction de licenciement"
+  - "prédiction d'attrition"
+
+always_block_keywords:
+  - keyword: "inférer la race à partir du visage"
+    severity: "high"
+  - keyword: "prédire la race à partir du visage"
+    severity: "high"
+  - keyword: "déduire la race à partir du visage"
+    severity: "high"
+  - keyword: "inférer l'ethnie à partir de biométrie"
+    severity: "high"
+  - keyword: "prédire l'ethnie à partir de biométrie"
+    severity: "high"
+  - keyword: "prédire les opinions politiques à partir"
+    severity: "high"
+  - keyword: "inférer les opinions politiques à partir"
+    severity: "high"
+  - keyword: "système de catégorisation biométrique"
+    severity: "high"
+  - keyword: "police prédictive"
+    severity: "high"
+  - keyword: "algorithme de prédiction de crime"
+    severity: "high"
+  - keyword: "algorithme de prédiction criminelle"
+    severity: "high"
+  - keyword: "prédiction de récidive"
+    severity: "high"
+  - keyword: "collecte non ciblée d'images faciales"
+    severity: "high"
+  - keyword: "surveillance biométrique de masse"
+    severity: "high"
+
+exceptions:
+  - "recherche sur"
+  - "étude sur"
+  - "académique"
+  - "thèse sur"
+  - "mémoire sur"
+  - "expliquer"
+  - "qu'est-ce que"
+  - "c'est quoi"
+  - "article 5"
+  - "interdit par"
+  - "prohibé par"
+  - "audit de biais"
+  - "audit des biais"
+  - "détecter la discrimination"
+  - "détection de discrimination"
+  - "surveillance de conformité"
+  - "contrôle de conformité"
+  - "examen éthique"
+  - "test d'équité"
+  - "dans un film"
+  - "jeu vidéo"
+  - "médico-légal"
+  - "personne disparue"
+  - "recherche ciblée"
