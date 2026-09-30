@@ -9013,10 +9013,12 @@ class ProxyConfig:
         combined_list: Final = db_credentials + credential_list
 
         ## DELETE ##
-        idx_to_delete: Final = []
-        for idx, credential in enumerate(litellm.credential_list):
-            if credential.credential_name not in [cred.credential_name for cred in combined_list]:
-                idx_to_delete.append(idx)
+        names_to_keep: Final = {cred.credential_name for cred in combined_list}
+        idx_to_delete: Final = [
+            idx
+            for idx, credential in enumerate(litellm.credential_list)
+            if credential.credential_name not in names_to_keep
+        ]
         for idx in sorted(idx_to_delete, reverse=True):
             litellm.credential_list.pop(idx)
 

@@ -1794,6 +1794,69 @@ def test_ProxyConfig_load_credential_list_invalid_entry_raises():
 
 
 # ---------------------------------------------------------------------------
+# ProxyConfig.delete_credentials
+# ---------------------------------------------------------------------------
+
+
+def _credential_item(name: str) -> "CredentialItem":
+    from litellm.types.utils import CredentialItem
+
+    return CredentialItem(credential_name=name, credential_values={"api_key": f"key-{name}"}, credential_info={})
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_delete_credentials_drops_only_names_missing_from_db_and_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pc = ProxyConfig()
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [_credential_item("db-kept"), _credential_item("stale"), _credential_item("from-config")],
+    )
+
+    async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
+        return {
+            "credential_list": [
+                {"credential_name": "from-config", "credential_values": {"api_key": "cfg"}, "credential_info": {}}
+            ]
+        }
+
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
+
+    await pc.delete_credentials([_credential_item("db-kept")])
+
+    assert [c.credential_name for c in litellm.credential_list] == ["db-kept", "from-config"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_delete_credentials_scales_linearly_with_credential_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Runs on the serving event loop every config reload; 20k credentials took ~40s with the previous
+    # nested scan and blocked every request and health probe for that long.
+    import time
+
+    n = 20_000
+    pc = ProxyConfig()
+    monkeypatch.setattr(litellm, "credential_list", [_credential_item(f"cred-{i}") for i in range(n)])
+
+    async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
+    db_credentials = [_credential_item(f"cred-{i}") for i in range(n) if i != 7]
+
+    started = time.perf_counter()
+    await pc.delete_credentials(db_credentials)
+    elapsed = time.perf_counter() - started
+
+    assert len(litellm.credential_list) == n - 1
+    assert all(c.credential_name != "cred-7" for c in litellm.credential_list)
+    assert elapsed < 2.0, f"delete_credentials over {n} credentials took {elapsed:.1f}s; expected linear-time behaviour"
+
+
+# ---------------------------------------------------------------------------
 # ProxyConfig.parse_search_tools
 # ---------------------------------------------------------------------------
 

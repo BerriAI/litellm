@@ -23,16 +23,17 @@ class CredentialAccessor:
 
     @staticmethod
     def upsert_credentials(credentials: list[CredentialItem]):
-        """Add a credential to the list of credentials."""
+        """Add credentials to the list, replacing any existing entry with the same name in place.
 
-        credential_names: Final = [cred.credential_name for cred in litellm.credential_list]
+        Runs on every config reload with the full DB credential table, so it indexes the
+        current list once instead of rescanning it per credential.
+        """
+        index_by_name: dict[str, int] = {cred.credential_name: i for i, cred in enumerate(litellm.credential_list)}
 
         for credential in credentials:
-            if credential.credential_name in credential_names:
-                # Find and replace the existing credential in the list
-                for i, existing_cred in enumerate(litellm.credential_list):
-                    if existing_cred.credential_name == credential.credential_name:
-                        litellm.credential_list[i] = credential
-                        break
+            existing_index = index_by_name.get(credential.credential_name)
+            if existing_index is not None:
+                litellm.credential_list[existing_index] = credential
             else:
+                index_by_name[credential.credential_name] = len(litellm.credential_list)
                 litellm.credential_list.append(credential)
