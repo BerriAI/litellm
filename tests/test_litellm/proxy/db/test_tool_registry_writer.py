@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from prisma.errors import PrismaError
 
 
 from litellm.proxy.db.tool_registry_writer import (
@@ -54,6 +55,8 @@ def _make_prisma(
     upsert_return=None,
     find_many_rows=None,
     find_unique_row=None,
+    key_rows=(),
+    user_rows=(),
 ):
     """Return a mock prisma_client with litellm_tooltable.upsert, find_many, find_unique."""
     prisma = MagicMock()
@@ -63,6 +66,10 @@ def _make_prisma(
         return_value=find_many_rows if find_many_rows is not None else []
     )
     prisma.db.litellm_tooltable.find_unique = AsyncMock(return_value=find_unique_row)
+    prisma.db.litellm_verificationtoken = MagicMock()
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(key_rows))
+    prisma.db.litellm_usertable = MagicMock()
+    prisma.db.litellm_usertable.find_many = AsyncMock(return_value=list(user_rows))
     return prisma
 
 
@@ -134,6 +141,56 @@ async def test_list_tools_no_filter():
 
 
 @pytest.mark.asyncio
+async def test_list_tools_attaches_the_owner_of_the_discovering_key():
+    owned = _mock_row(tool_id="id1", tool_name="owned_tool", key_hash="hash-owned")
+    orphan = _mock_row(tool_id="id2", tool_name="orphan_tool", key_hash="hash-orphan")
+    unknown_owner = _mock_row(tool_id="id3", tool_name="unknown_owner_tool", key_hash="hash-unknown-owner")
+    keyless = _mock_row(tool_id="id4", tool_name="keyless_tool", key_hash=None)
+    prisma = _make_prisma(
+        find_many_rows=[owned, orphan, unknown_owner, keyless],
+        key_rows=[
+            {"token": "hash-owned", "user_id": "user-1"},
+            {"token": "hash-orphan", "user_id": None},
+            {"token": "hash-unknown-owner", "user_id": "user-gone"},
+        ],
+        user_rows=[{"user_id": "user-1", "user_email": "one@example.com", "user_alias": "One"}],
+    )
+    result = await list_tools(prisma)
+    assert [tool.model_dump(include={"tool_name", "user"}) for tool in result] == [
+        {
+            "tool_name": "owned_tool",
+            "user": {"user_id": "user-1", "user_email": "one@example.com", "user_alias": "One"},
+        },
+        {"tool_name": "orphan_tool", "user": None},
+        {"tool_name": "unknown_owner_tool", "user": None},
+        {"tool_name": "keyless_tool", "user": None},
+    ]
+    key_where = prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert key_where == {"token": {"in": ["hash-orphan", "hash-owned", "hash-unknown-owner"]}}
+    user_where = prisma.db.litellm_usertable.find_many.call_args.kwargs["where"]
+    assert user_where == {"user_id": {"in": ["user-1", "user-gone"]}}
+
+
+@pytest.mark.asyncio
+async def test_list_tools_keeps_tools_without_owners_when_the_owner_lookup_fails():
+    prisma = _make_prisma(find_many_rows=[_mock_row(tool_name="my_tool", key_hash="hash-owned")])
+    prisma.db.litellm_verificationtoken.find_many = AsyncMock(side_effect=PrismaError("verification token table down"))
+    result = await list_tools(prisma)
+    assert [tool.model_dump(include={"tool_name", "user"}) for tool in result] == [
+        {"tool_name": "my_tool", "user": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_tools_skips_owner_lookup_when_no_tool_has_a_key_hash():
+    prisma = _make_prisma(find_many_rows=[_mock_row(key_hash=None)])
+    result = await list_tools(prisma)
+    assert [tool.user for tool in result] == [None]
+    prisma.db.litellm_verificationtoken.find_many.assert_not_awaited()
+    prisma.db.litellm_usertable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_list_tools_with_input_policy_filter():
     row = _mock_row(
         tool_id="id1",
@@ -161,6 +218,24 @@ async def test_get_tool_found():
     prisma.db.litellm_tooltable.find_unique.assert_awaited_once_with(
         where={"tool_name": "my_tool"}
     )
+
+
+@pytest.mark.asyncio
+async def test_get_tool_attaches_the_owner_of_the_discovering_key():
+    row = _mock_row(tool_name="my_tool", key_hash="hash-owned")
+    prisma = _make_prisma(
+        find_unique_row=row,
+        key_rows=[{"token": "hash-owned", "user_id": "user-1"}],
+        user_rows=[{"user_id": "user-1", "user_email": "one@example.com", "user_alias": "One"}],
+    )
+    result = await get_tool(prisma, "my_tool")
+    assert result is not None
+    assert result.model_dump(include={"tool_name", "user"}) == {
+        "tool_name": "my_tool",
+        "user": {"user_id": "user-1", "user_email": "one@example.com", "user_alias": "One"},
+    }
+    key_where = prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert key_where == {"token": {"in": ["hash-owned"]}}
 
 
 @pytest.mark.asyncio

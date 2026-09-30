@@ -7576,6 +7576,11 @@ export interface ToolRow {
   created_by?: string;
   updated_by?: string;
   user_agent?: string;
+  user?: {
+    user_id: string;
+    user_email: string | null;
+    user_alias: string | null;
+  } | null;
   last_used_at?: string;
 }
 

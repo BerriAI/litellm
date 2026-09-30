@@ -50382,6 +50382,16 @@
               ],
               "title": "Updated By"
             },
+            "user": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ToolDiscoveryUser"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "user_agent": {
               "anyOf": [
                 {
@@ -50418,6 +50428,41 @@
             "tool"
           ],
           "title": "ToolDetailResponse",
+          "type": "object"
+        },
+        "ToolDiscoveryUser": {
+          "properties": {
+            "user_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Alias"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "user_id"
+          ],
+          "title": "ToolDiscoveryUser",
           "type": "object"
         },
         "ToolListResponse": {
