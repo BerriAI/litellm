@@ -24,11 +24,13 @@ from _openinference_support import (
     _chat_caller_response,
     _chat_caller_stream,
     _chat_plain_response,
+    _chat_request_marker,
     _chat_response,
     _chat_stream_response,
     _chat_tool_call,
     _json_messages,
     _json_object,
+    _llm_spans_through_marker,
     _matching_marker_span,
     _messages_caller_response,
     _messages_caller_stream,
@@ -43,7 +45,7 @@ from _openinference_support import (
     _responses_stream_response,
     _rig,
 )
-from integration._support.client import Gateway
+from integration._support.client import Gateway, object_value, string_value
 from integration._support.wire import Reply, Request
 from pydantic import JsonValue
 
@@ -844,27 +846,34 @@ def _cache_call(
 @pytest.mark.parametrize("surface", ("chat", "chat-stream", "responses", "messages"))
 def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = f"a-cache-{surface}-" + uuid.uuid4().hex
+    sentinel: Final = f"{marker}-sentinel"
 
     def upstream(request: Request) -> Reply:
         body: Final = _json_object(request.body)
+        request_marker: Final = (
+            _chat_request_marker(request)
+            if surface in ("chat", "chat-stream", "messages")
+            else string_value(object_value(body["metadata"])["trace_marker"])
+        )
+        assert request_marker in (marker, sentinel), request
         if surface in ("chat", "chat-stream"):
             _assert_chat_request(
                 request,
-                messages=[{"role": "user", "content": marker}],
+                messages=[{"role": "user", "content": request_marker}],
                 stream=True if surface == "chat-stream" else None,
                 stream_options={"include_usage": False} if surface == "chat-stream" else None,
             )
             return (
-                _chat_stream_response(marker, (_chat_tool_call(marker),), include_usage=False)
+                _chat_stream_response(request_marker, (_chat_tool_call(request_marker),), include_usage=False)
                 if surface == "chat-stream"
-                else _chat_response(marker)
+                else _chat_response(request_marker)
             )
         if surface == "responses":
-            assert body.get("metadata") == {"trace_marker": marker}, body
-            _assert_responses_request(request, marker=marker, input_value=marker)
-            return _responses_response(marker)
-        _assert_messages_request(request, marker=marker, prompt=marker)
-        return _messages_response(marker)
+            assert body.get("metadata") == {"trace_marker": request_marker}, body
+            _assert_responses_request(request, marker=request_marker, input_value=request_marker)
+            return _responses_response(request_marker)
+        _assert_messages_request(request, marker=request_marker, prompt=request_marker)
+        return _messages_response(request_marker)
 
     with _rig(
         gateway,
@@ -879,7 +888,8 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
         assert first[0] == (f"call_{marker}", "lookup_weather", expected_arguments), first
         assert first[1].startswith("resp_") if surface == "responses" else first[1] == marker, first
         assert not first[2].get("x-litellm-cache-key"), first[2]
-        rig.destination.drain()
+        first_span: Final = _matching_marker_span(rig.destination, marker)
+        _assert_tool_span_for_marker(first_span, marker)
         second: Final = _cache_call(rig, surface, marker, cache_hit=True)
         assert second[0] == first[0], second
         assert second[1].startswith("resp_") if surface == "responses" else second[1] == first[1], second
@@ -891,7 +901,6 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
             assert not second[2].get("x-litellm-cache-key"), second[2]
         else:
             assert second[2].get("x-litellm-cache-key"), second[2]
-        _assert_tool_span_for_marker(_matching_marker_span(rig.destination, marker), marker)
         forwarded_body: Final = _json_object(forwarded[0].body)
         if surface in ("chat", "chat-stream"):
             assert "metadata" not in forwarded_body, forwarded[0]
@@ -899,3 +908,18 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
             assert forwarded_body["metadata"] == {"trace_marker": marker}, forwarded[0]
         else:
             assert forwarded_body["metadata"] == {}, forwarded[0]
+        sentinel_response: Final = _cache_call(rig, surface, sentinel)
+        assert not sentinel_response[2].get("x-litellm-cache-key"), sentinel_response[2]
+        sentinel_forwarded: Final = tuple(
+            request
+            for request in rig.provider.drain()
+            if request.method == "POST" and sentinel.encode() in request.body
+        )
+        assert len(sentinel_forwarded) == 1, sentinel_forwarded
+        spans: Final = _llm_spans_through_marker(rig.destination, sentinel)
+        sentinel_spans: Final = tuple(
+            attributes for attributes in spans if attributes.get("litellm.metadata.trace_marker") == sentinel
+        )
+        assert len(sentinel_spans) == 1, spans
+        _assert_tool_span_for_marker(sentinel_spans[0], sentinel)
+        assert not any(attributes.get("litellm.metadata.trace_marker") == marker for attributes in spans), spans
