@@ -17,8 +17,9 @@ import asyncio
 import base64
 import posixpath
 import re
+import shlex
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from typing import Any, Final, TypeVar
 
 from deepagents.backends.protocol import (
@@ -43,10 +44,13 @@ from deepagents.backends.utils import (
     perform_string_replacement,
     slice_read_response,
 )
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse, ToolCallRequest
+from langchain.agents.middleware.types import ModelCallResult
 from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_core.messages import ToolMessage
 from langchain_core.outputs import LLMResult
+from langchain_core.tools import BaseTool
+from langgraph.types import Command
 
 import litellm
 from litellm._logging import verbose_logger
@@ -56,6 +60,11 @@ from litellm.harness.errors import SandboxError
 from litellm.harness.sandbox.base import CompletedRun, Sandbox
 
 T = TypeVar("T")
+
+# Module alias so ruff recognises `.exception()` as logging the swallowed error (BLE001).
+_logger = verbose_logger
+# Models cost_per_token could not price: logged once, then skipped (always 0.0).
+_UNPRICED_MODELS: set[str] = set()
 
 DEEPAGENTS_EXECUTE_TIMEOUT_SECONDS: Final = 120.0
 DEEPAGENTS_FS_TIMEOUT_SECONDS: Final = 60.0
@@ -72,6 +81,12 @@ _LS_SCRIPT: Final = (
     'if [ -d "$f" ]; then printf "d/%s\\n" "$f"; else printf "f/%s\\n" "$f"; fi; fi; done'
 )
 _DELETE_SCRIPT: Final = '[ -e "$1" ] || [ -L "$1" ] || exit 3; rm -rf -- "$1"'
+# $1 = path. Prints its fully symlink-resolved absolute path (the path itself may not exist
+# yet, e.g. a file about to be written; then its parent directory is resolved).
+_REALPATH_SCRIPT: Final = (
+    'p="$1"; if [ -e "$p" ] || [ -L "$p" ]; then realpath -- "$p"; '
+    'else d=$(realpath -- "$(dirname -- "$p")") && printf "%s/%s\\n" "$d" "$(basename -- "$p")"; fi'
+)
 _GREP_LINE: Final = re.compile(r"^(.+?):(\d+):(.*)$")
 _FILTER_MIDDLEWARE_NAME: Final = "LiteLLMHarnessToolFilter"
 
@@ -94,6 +109,7 @@ class SandboxBackend(SandboxBackendProtocol):
         self._sandbox = sandbox
         self._loop = loop
         self._root = posixpath.normpath(sandbox.workdir)
+        self._real_root: str | None = None
         self._writable = writable
         self._allow_execute = allow_execute
         self._id = f"litellm-harness-{uuid.uuid4().hex[:8]}"
@@ -114,6 +130,28 @@ class SandboxBackend(SandboxBackendProtocol):
         if normalized == "/":
             return self._root
         return self._root + normalized
+
+    async def to_confined(self, path: str) -> str:
+        """to_real, then resolve symlinks inside the sandbox and refuse anything outside workdir.
+
+        A repo can contain `link -> ~/.aws/credentials`; without this, read/grep/glob would
+        follow it and read host secrets even in read-only mode.
+        """
+        real = self.to_real(path)
+        done = await self._run(["sh", "-c", _REALPATH_SCRIPT, "sh", real])
+        resolved = done.stdout.strip()
+        if done.exit_code != 0 or not resolved:
+            raise ValueError(f"path not found: {path}")
+        root = await self._resolved_root()
+        if resolved != root and not resolved.startswith(root + "/"):
+            raise ValueError(f"path resolves outside the workspace: {path}")
+        return real
+
+    async def _resolved_root(self) -> str:
+        if self._real_root is None:
+            done = await self._run(["realpath", "--", self._root])
+            self._real_root = done.stdout.strip() if done.exit_code == 0 and done.stdout.strip() else self._root
+        return self._real_root
 
     def to_virtual(self, real: str) -> str:
         if real == self._root:
@@ -141,7 +179,7 @@ class SandboxBackend(SandboxBackendProtocol):
 
     async def als(self, path: str) -> LsResult:
         try:
-            real = self.to_real(path)
+            real = await self.to_confined(path)
             done = await self._run(["sh", "-c", _LS_SCRIPT, "sh", real])
         except (ValueError, SandboxError) as e:
             return LsResult(error=f"Path '{path}': {e}")
@@ -168,7 +206,7 @@ class SandboxBackend(SandboxBackendProtocol):
     # -- read / write / edit ------------------------------------------------
 
     async def _read_bytes(self, path: str) -> bytes:
-        return await self._sandbox.read(self.to_real(path))
+        return await self._sandbox.read(await self.to_confined(path))
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         try:
@@ -191,7 +229,7 @@ class SandboxBackend(SandboxBackendProtocol):
         if not self._writable:
             return WriteResult(error=_READ_ONLY_ERROR)
         try:
-            await self._sandbox.write(self.to_real(file_path), content.encode("utf-8"))
+            await self._sandbox.write(await self.to_confined(file_path), content.encode("utf-8"))
         except (ValueError, SandboxError) as e:
             return WriteResult(error=f"Error writing file '{file_path}': {e}")
         return WriteResult(path=file_path)
@@ -221,7 +259,7 @@ class SandboxBackend(SandboxBackendProtocol):
             return EditResult(error=replaced)
         new_content, occurrences = replaced
         try:
-            await self._sandbox.write(self.to_real(file_path), new_content.encode("utf-8"))
+            await self._sandbox.write(await self.to_confined(file_path), new_content.encode("utf-8"))
         except SandboxError as e:
             return EditResult(error=f"Error editing file '{file_path}': {e}")
         return EditResult(path=file_path, occurrences=int(occurrences))
@@ -239,7 +277,7 @@ class SandboxBackend(SandboxBackendProtocol):
         if not self._writable:
             return DeleteResult(error=_READ_ONLY_ERROR)
         try:
-            real = self.to_real(file_path)
+            real = await self.to_confined(file_path)
             if real == self._root:
                 return DeleteResult(error="Error: refusing to delete the workspace root")
             done = await self._run(["sh", "-c", _DELETE_SCRIPT, "sh", real])
@@ -260,16 +298,19 @@ class SandboxBackend(SandboxBackendProtocol):
         prune: list[str] = []
         for name in sorted(HARNESS_SNAPSHOT_SKIP_DIRS):
             prune += ["-o", "-name", name] if prune else ["-name", name]
-        return ["find", root, "(", *prune, ")", "-prune", "-o", "-type", "f", "-print"]
+        # -P: never follow symlinks, so a repo link to ~/.aws cannot pull host files in.
+        return ["find", "-P", root, "(", *prune, ")", "-prune", "-o", "-type", "f", "-print"]
 
     def _grep_cmd(self, pattern: str, root: str) -> list[str]:
-        excludes = [f"--exclude-dir={name}" for name in sorted(HARNESS_SNAPSHOT_SKIP_DIRS)]
-        return ["grep", "-rnHFI", *excludes, "-e", pattern, "--", root]
+        # grep only the regular files `find -P -type f` lists: symlinks are never followed,
+        # whatever grep implementation (GNU -R vs BSD -r) the sandbox has.
+        find_cmd = " ".join(shlex.quote(part) for part in self._find_cmd(root))
+        return ["sh", "-c", f'{find_cmd} | tr "\\n" "\\0" | xargs -0 grep -nHFI -e "$1" --', "sh", pattern]
 
     async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
         try:
             matcher = compile_grep_include_glob(pattern)
-            root = self.to_real(path or "/")
+            root = await self.to_confined(path or "/")
             done = await self._run(self._find_cmd(root))
         except (InvalidGlobPatternError, ValueError, SandboxError) as e:
             return GlobResult(error=str(e), matches=None)
@@ -296,7 +337,7 @@ class SandboxBackend(SandboxBackendProtocol):
     ) -> GrepResult:
         try:
             include = compile_grep_include_glob(glob) if glob else None
-            root = self.to_real(path or "/")
+            root = await self.to_confined(path or "/")
             done = await self._run(self._grep_cmd(pattern, root))
         except (InvalidGlobPatternError, ValueError, SandboxError) as e:
             return GrepResult(error=f"Path '{path or '/'}': {e}")
@@ -334,7 +375,7 @@ class SandboxBackend(SandboxBackendProtocol):
                 responses.append(FileUploadResponse(path=path, error="permission_denied"))
                 continue
             try:
-                await self._sandbox.write(self.to_real(path), data)
+                await self._sandbox.write(await self.to_confined(path), data)
                 responses.append(FileUploadResponse(path=path))
             except ValueError:
                 responses.append(FileUploadResponse(path=path, error="invalid_path"))
@@ -381,12 +422,12 @@ class SandboxBackend(SandboxBackendProtocol):
         return self._sync(self.aexecute(command, timeout=timeout))
 
 
-def _tool_name(tool: Any) -> str | None:
-    name = tool.get("name") if isinstance(tool, dict) else getattr(tool, "name", None)
+def _tool_name(tool: BaseTool | Mapping[str, object]) -> str | None:
+    name = tool.get("name") if isinstance(tool, Mapping) else tool.name
     return name if isinstance(name, str) else None
 
 
-def _blocked_message(request: Any, blocked: frozenset[str]) -> ToolMessage | None:
+def _blocked_message(request: ToolCallRequest, blocked: frozenset[str]) -> ToolMessage | None:
     name = request.tool_call["name"]
     if name not in blocked:
         return None
@@ -409,35 +450,43 @@ class ToolFilterMiddleware(AgentMiddleware):
     def name(self) -> str:
         return _FILTER_MIDDLEWARE_NAME
 
-    def _filtered(self, request: Any) -> Any:
+    def _filtered(self, request: ModelRequest) -> ModelRequest:
         return request.override(tools=[t for t in request.tools if _tool_name(t) not in self._blocked])
 
-    def wrap_model_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+    def wrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+    ) -> ModelCallResult:
         return handler(self._filtered(request))
 
-    async def awrap_model_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
+    ) -> ModelCallResult:
         return await handler(self._filtered(request))
 
-    def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+    def wrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command]
+    ) -> ToolMessage | Command:
         return _blocked_message(request, self._blocked) or handler(request)
 
-    async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command]]
+    ) -> ToolMessage | Command:
         return _blocked_message(request, self._blocked) or await handler(request)
 
 
-def _number(value: Any) -> float | None:
+def _number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
 
 
-def message_cost(message: Any, cost_model: str | None, input_tokens: int, output_tokens: int) -> float:
+def message_cost(message: object, cost_model: str | None, input_tokens: int, output_tokens: int) -> float:
     """Cost of one model call: response_cost reported by litellm, else cost_per_token, else 0."""
     metadata = getattr(message, "response_metadata", None) or {}
     reported = _number(metadata.get("response_cost"))
     if reported is not None:
         return reported
-    if not cost_model:
+    if not cost_model or cost_model in _UNPRICED_MODELS:
         return 0.0
     try:
         prompt_cost, completion_cost = litellm.cost_per_token(
@@ -446,8 +495,9 @@ def message_cost(message: Any, cost_model: str | None, input_tokens: int, output
             completion_tokens=output_tokens,
         )
         return float(prompt_cost) + float(completion_cost)
-    except Exception as e:
-        verbose_logger.debug("harness deepagents: no cost for %s: %s", cost_model, e)
+    except Exception:  # litellm raises plain Exception for unmapped models
+        _UNPRICED_MODELS.add(cost_model)
+        _logger.exception("harness deepagents: no cost for %s; counting its calls as 0", cost_model)
         return 0.0
 
 
@@ -464,8 +514,9 @@ def record_llm_usage(ctx: SessionContext, cost_model: str | None, response: LLMR
                 ctx.input_tokens += input_tokens
                 ctx.output_tokens += output_tokens
                 ctx.cost += message_cost(message, cost_model, input_tokens, output_tokens)
-    except Exception as e:
-        verbose_logger.warning("harness deepagents: usage accounting failed: %s", e)
+    except Exception:
+        # Usage accounting must never fail a turn; log with traceback and move on.
+        _logger.exception("harness deepagents: usage accounting failed")
 
 
 class UsageCallback(AsyncCallbackHandler):
@@ -475,5 +526,5 @@ class UsageCallback(AsyncCallbackHandler):
         self._ctx = ctx
         self._cost_model = cost_model
 
-    async def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+    async def on_llm_end(self, response: LLMResult, **kwargs: object) -> None:
         record_llm_usage(self._ctx, self._cost_model, response)
