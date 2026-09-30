@@ -92,13 +92,17 @@ describe("formatting", () => {
 
 describe("buildVisibleTree", () => {
   it("hides framework spans and re-parents their children to the nearest visible ancestor", () => {
-    const spans = [
-      span({ span_id: "root", type: "agent" }),
-      span({ span_id: "mw", parent_span_id: "root", type: "framework", name: "X.wrap_model_call" }),
-      span({ span_id: "model", parent_span_id: "mw", type: "chain", name: "model" }),
-      span({ span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 }),
-      span({ span_id: "step", parent_span_id: "root", type: "chain", name: "planner", start_offset_ms: 1 }),
-    ];
+    const middleware = { span_id: "mw", parent_span_id: "root", type: "framework", name: "X.wrap_model_call" } as const;
+    const model = { span_id: "model", parent_span_id: "mw", type: "chain", name: "model" } as const;
+    const llm = { span_id: "llm", parent_span_id: "model", type: "llm", start_offset_ms: 5 } as const;
+    const step = {
+      span_id: "step",
+      parent_span_id: "root",
+      type: "chain",
+      name: "planner",
+      start_offset_ms: 1,
+    } as const;
+    const spans = [span({ span_id: "root", type: "agent" }), span(middleware), span(model), span(llm), span(step)];
     const compact = buildVisibleTree(spans, false);
     expect(compact.visibleCount).toBe(3);
     expect(compact.children.get(ROOT_KEY)?.map((s) => s.span_id)).toEqual(["root"]);
@@ -153,18 +157,20 @@ describe("groupSiblingAgents", () => {
 
   it("leaves groups of 10 or fewer alone", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = Array.from({ length: 10 }, (_, i) =>
-      span({ span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker" }),
-    );
+    const kids = Array.from({ length: 10 }, (_, i) => {
+      const props = { span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker" } as const;
+      return span(props);
+    });
     const items = groupSiblingAgents("p", kids, subtreeStats([parent, ...kids]));
     expect(items.every((i) => i.kind === "span")).toBe(true);
   });
 
   it("does not show a zero cost when grouped spans have no spend rows", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const children = Array.from({ length: 11 }, (_, index) =>
-      span({ span_id: `child-${index}`, parent_span_id: "p", type: "agent", name: "worker" }),
-    );
+    const children = Array.from({ length: 11 }, (_, index) => {
+      const props = { span_id: `child-${index}`, parent_span_id: "p", type: "agent", name: "worker" } as const;
+      return span(props);
+    });
     const items = groupSiblingAgents("p", children, subtreeStats([parent, ...children]));
     const group = items.find((item) => item.kind === "group");
     if (group?.kind !== "group") throw new Error("expected a group");
@@ -184,9 +190,16 @@ describe("flattenTree + revealSpan", () => {
 
   it("pages group invocations 20 at a time with a 'more' row until all are shown", () => {
     const parent = span({ span_id: "p", type: "agent" });
-    const kids = Array.from({ length: 45 }, (_, i) =>
-      span({ span_id: `k${i}`, parent_span_id: "p", type: "agent", name: "worker", start_offset_ms: i }),
-    );
+    const kids = Array.from({ length: 45 }, (_, i) => {
+      const props = {
+        span_id: `k${i}`,
+        parent_span_id: "p",
+        type: "agent",
+        name: "worker",
+        start_offset_ms: i,
+      } as const;
+      return span(props);
+    });
     const all = [parent, ...kids];
     const tree = buildVisibleTree(all, false).children;
     const key = "p::worker";

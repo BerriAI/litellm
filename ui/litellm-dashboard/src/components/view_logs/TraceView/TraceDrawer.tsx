@@ -302,12 +302,13 @@ export function TraceDrawer({
   onClose,
   onOpenRequestLog,
 }: TraceDrawerProps) {
-  const traceQuery = useQuery({
+  const traceQueryOptions = {
     queryKey: ["agentTrace", traceId, accessToken],
     queryFn: () => agentTraceCall(accessToken, traceId as string),
     enabled: open && traceId !== null,
     staleTime: 30_000,
-  });
+  };
+  const traceQuery = useQuery(traceQueryOptions);
   const trace = traceQuery.data;
 
   return (

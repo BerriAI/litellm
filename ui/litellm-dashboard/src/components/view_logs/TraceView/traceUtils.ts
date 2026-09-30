@@ -33,8 +33,12 @@ export const agentBadgeLabel = (summary: Pick<TraceSummary, "agent_count" | "llm
 };
 
 /** LLM spans are labelled by model group (what the caller asked for); everything else by span name. */
-export const spanLabel = (span: Span): string =>
-  span.type === "llm" ? span.litellm?.model_group || span.model || span.litellm?.model || span.name : span.name;
+export const spanLabel = (span: Span): string => {
+  if (span.type !== "llm") return span.name;
+  if (span.litellm?.model_group) return span.litellm.model_group;
+  if (span.model) return span.model;
+  return span.litellm?.model || span.name;
+};
 
 export const spanSpend = (span: Span): number => span.litellm?.spend ?? 0;
 
