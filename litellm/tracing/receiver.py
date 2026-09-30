@@ -103,12 +103,13 @@ class TraceReceiver:
 
     @classmethod
     def from_env(cls) -> "TraceReceiver":
+        url: Final = os.environ["CLICKHOUSE_URL"]
         return cls(
             store=TraceStore(
                 ClickHouseStorage(
                     database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
-                    url=os.environ["CLICKHOUSE_URL"],
-                    reader_url=os.getenv("CLICKHOUSE_READER_URL", os.environ["CLICKHOUSE_URL"]),
+                    url=url,
+                    reader_url=os.getenv("CLICKHOUSE_READER_URL", url),
                 )
             )
         )
