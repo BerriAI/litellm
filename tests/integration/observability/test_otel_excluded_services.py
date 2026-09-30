@@ -51,6 +51,16 @@ def _config_with(
     return path
 
 
+def _operator_langfuse(audit_sinks: SpanSinks) -> dict[str, str]:
+    return {
+        "LANGFUSE_HOST": audit_sinks.operator,
+        "LANGFUSE_PUBLIC_KEY": "pk-lf-operator",
+        "LANGFUSE_SECRET_KEY": "sk-lf-operator",
+        "OTEL_EXPORTER": "http/json",
+        "OTEL_ENDPOINT": audit_sinks.operator,
+    }
+
+
 def _add_callback(gateway: Gateway, team_id: str, callback_vars: Mapping[str, JsonValue]) -> httpx.Response:
     return gateway.request(
         "POST",
@@ -286,7 +296,7 @@ def test_excluded_services_applies_with_preset_ordered_first(
     config: Final = _config_with(
         tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=preset_first
     )
-    overrides: Final = {"LITELLM_OTEL_V2": "1", "OTEL_EXPORTER": "http/json", "OTEL_ENDPOINT": audit_sinks.operator}
+    overrides: Final = {"LITELLM_OTEL_V2": "1", **_operator_langfuse(audit_sinks)}
     with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
         _assert_tenant_keeps_redis_without_postgres(candidate, audit_sinks, langfuse_vars)
 
@@ -353,8 +363,7 @@ def test_bogus_excluded_services_env_logs_and_drops_without_otel_callback(
     overrides: Final = {
         "LITELLM_OTEL_V2": "1",
         "LITELLM_OTEL_EXCLUDED_SERVICES": "auth,postgres",
-        "OTEL_EXPORTER": "http/json",
-        "OTEL_ENDPOINT": audit_sinks.operator,
+        **_operator_langfuse(audit_sinks),
     }
     with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
         assert "'auth' is not a datastore service; ignored" in owned.log.read_text(), owned.log.read_text()[-3000:]
