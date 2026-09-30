@@ -453,6 +453,29 @@ async def test_update_plugin_without_installation_preference_clears_it():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored_value", ["auto-install", 1, True, None])
+async def test_stored_unknown_installation_preference_is_not_served(stored_value):
+    name = "hand-edited-plugin"
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    await table.create(
+        data={
+            "name": name,
+            "manifest_json": json.dumps(
+                {"name": name, "source": _ARCHIVE_SOURCE, "installation_preference": stored_value}
+            ),
+        }
+    )
+
+    marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
+    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
+
+    assert marketplace["plugins"] == [{"name": name, "source": _ARCHIVE_SOURCE}]
+    assert listed_plugin.installation_preference is None
+    assert plugin["installation_preference"] is None
+
+
+@pytest.mark.asyncio
 async def test_register_plugin_git_subdir_missing_url():
     """git-subdir without url field raises HTTP 400."""
     request = RegisterPluginRequest(

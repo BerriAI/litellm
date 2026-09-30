@@ -21,7 +21,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Annotated, Final, Protocol, TypedDict
+from typing import Annotated, Final, Protocol, TypedDict, get_args
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -75,15 +75,12 @@ class _MarketplaceEntry(TypedDict, total=False):
     installationPreference: ReadOnly[InstallationPreference]
 
 
+_INSTALLATION_PREFERENCES: Final[tuple[InstallationPreference, ...]] = get_args(InstallationPreference)
+
+
 def _get_installation_preference(manifest: Mapping[str, object]) -> InstallationPreference | None:
     value: Final = manifest.get("installation_preference")
-    if not isinstance(value, str):
-        return None
-    match value:
-        case "available" | "auto_install" | "required":
-            return value
-        case _:
-            return None
+    return value if value in _INSTALLATION_PREFERENCES else None
 
 
 async def _get_prisma_client() -> object:
