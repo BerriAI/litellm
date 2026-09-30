@@ -82,11 +82,11 @@ class DatabaseRelay:
 
 
 class HeldStatementRelay:
-    def __init__(self, upstream_host: str, upstream_port: int, fragments: tuple[bytes, ...]) -> None:
+    def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
         self.port: Final = _free_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
-        self._fragments: Final = fragments
+        self._trigger: Final = trigger
         self._loop: Final = asyncio.new_event_loop()
         self._released: Final = asyncio.Event()
         self.held: Final = threading.Event()
@@ -111,18 +111,21 @@ class HeldStatementRelay:
         self._ready.set()
         self._loop.run_forever()
 
-    def _holds(self, chunk: bytes) -> bool:
-        return not self.held.is_set() and all(fragment in chunk for fragment in self._fragments)
+    def _holds(self, window: bytes) -> bool:
+        return not self.held.is_set() and self._trigger in window
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
 
         async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
+            tail = b""  # rebind-ok: carries the previous read's end so a trigger split across reads still matches
             try:
                 while chunk := await reader.read(65536):
-                    if inspect and self._holds(chunk):
+                    window: Final = tail + chunk
+                    if inspect and self._holds(window):
                         self.held.set()
                         await self._released.wait()
+                    tail = window[-(len(self._trigger) - 1) :]
                     writer.write(chunk)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
@@ -155,12 +158,10 @@ def database_relay(database_url: str, trigger: bytes) -> Generator[tuple[Databas
 
 
 @contextmanager
-def held_statement_relay(
-    database_url: str, fragments: tuple[bytes, ...]
-) -> Generator[tuple[HeldStatementRelay, str]]:
+def held_statement_relay(database_url: str, trigger: bytes) -> Generator[tuple[HeldStatementRelay, str]]:
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
-    relay: Final = HeldStatementRelay(parts.hostname, parts.port, fragments)
+    relay: Final = HeldStatementRelay(parts.hostname, parts.port, trigger)
     relay.start()
     try:
         yield relay, _relayed_url(database_url, relay.port)
