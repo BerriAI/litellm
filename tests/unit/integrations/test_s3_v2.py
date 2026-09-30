@@ -2739,6 +2739,29 @@ def test_cold_storage_key_matches_upload_when_env_var_changes_mid_request(monkey
     assert cold_key == uploaded.s3_object_key == f"coldlogs/2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
 
 
+def test_hour_upload_ignores_a_cold_storage_key_owned_by_another_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setattr(
+        litellm, "s3_callback_params", {"s3_bucket_name": "test-bucket", "s3_partition_granularity": "hour"}
+    )
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "gcs_bucket")
+    logger = S3Logger()
+    cold_key = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+        start_time=_PARTITION_START, response_id=_PARTITION_ID
+    )
+    uploaded = logger.create_s3_batch_logging_element(
+        _PARTITION_START,
+        StandardLoggingPayload(id=_PARTITION_ID, metadata={"cold_storage_object_key": cold_key}, messages=[]),
+    )
+
+    assert cold_key == f"2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
+    assert uploaded is not None
+    assert uploaded.s3_object_key == f"2026-09-29/14/time-14-05-09-123456_{_PARTITION_ID}.json"
+
+
 @pytest.mark.parametrize("callback_name", ["s3", "s3_v2"])
 def test_partition_granularity_is_exposed_to_admin_ui(callback_name: str) -> None:
     from litellm.integrations.custom_logger import CustomLogger
