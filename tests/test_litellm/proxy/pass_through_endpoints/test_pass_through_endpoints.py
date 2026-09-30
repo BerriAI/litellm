@@ -24,6 +24,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -32,6 +33,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
+    _parse_request_data_by_content_type,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _with_trace_context,
@@ -48,6 +50,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -7622,3 +7625,265 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key"] == "cli-session-alice"
     assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
+
+
+def _json_request(body: bytes, content_type: str = "application/json") -> Request:
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/anthropic/v1/messages",
+            "headers": [(b"content-type", content_type.encode())],
+            "query_string": b"",
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"[]", id="empty-array"),
+        pytest.param(b'[{"role": "user", "content": "hi"}]', id="array-of-objects"),
+        pytest.param(b"123", id="number"),
+        pytest.param(b'"claude-sonnet-4-5"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_passthrough_body_carries_no_envelope_fields(body: bytes):
+    """A passthrough body is the caller's own provider payload, so it need not be a JSON
+    object. Reading a list or scalar as the query_params/custom_body envelope raised
+    AttributeError and the caller got a bare 500 (#43711)."""
+    query_params_data, custom_body_data, file_data, stream = await _parse_request_data_by_content_type(
+        _json_request(body)
+    )
+
+    assert (query_params_data, custom_body_data, file_data, stream) == (None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_object_passthrough_body_still_yields_its_envelope_fields():
+    """The guard must only fire on a non-object body: a real envelope is unaffected."""
+    body = json.dumps({"query_params": {"alt": "sse"}, "custom_body": {"model": "x"}, "stream": True}).encode()
+
+    query_params_data, custom_body_data, _, stream = await _parse_request_data_by_content_type(_json_request(body))
+
+    assert query_params_data == {"alt": "sse"}
+    assert custom_body_data == {"model": "x"}
+    assert stream is True
+
+
+async def _capture_upstream_request(body: bytes, guardrails: list[str] | None = None) -> httpx.Request:
+    """Drive ``pass_through_request`` for ``body`` and return the request it built for the
+    provider, by letting a real httpx client encode it and failing the send."""
+    captured: list[httpx.Request] = []  # mutable-ok: the send double records what it was given
+
+    async def _send(req, **kwargs):
+        captured.append(req)
+        raise httpx.HTTPError("stop after capture")
+
+    real_client = httpx.AsyncClient()
+    real_client.send = _send
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        mock_get_client.return_value = SimpleNamespace(client=real_client)
+
+        # The failure handler runs on a MagicMock proxy_logging_obj and dies with TypeError,
+        # the same way test_pass_through_request_uses_resolved_timeout relies on.
+        with pytest.raises(TypeError):
+            await pass_through_request(
+                request=_json_request(body),
+                target="http://upstream.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                guardrails_config=guardrails,
+            )
+
+    assert captured, "pass_through_request never built an upstream request"
+    return captured[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'[{"role": "user", "content": "hi"}]', id="array"),
+        pytest.param(b"[1, 2, 3]", id="array-of-numbers"),
+        pytest.param(b"123", id="number"),
+        pytest.param(b'"claude-sonnet-4-5"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_body_is_forwarded_to_the_provider_verbatim(body: bytes):
+    """A passthrough body is the caller's own provider payload. The parsed view of a non-object
+    body is ``{}``, and the forwarding path sends the parsed body as JSON, so without the raw
+    bytes the provider silently received ``{}`` in place of what the caller sent."""
+    upstream = await _capture_upstream_request(body)
+
+    assert upstream.content == body
+
+
+@pytest.mark.asyncio
+async def test_object_body_is_still_forwarded_from_the_parsed_view():
+    """Hooks mutate the parsed body and those mutations must still reach the provider, so an
+    object body must not take the raw-bytes path."""
+    upstream = await _capture_upstream_request(b'{"model": "claude-sonnet-4-5"}')
+
+    assert json.loads(upstream.content)["model"] == "claude-sonnet-4-5"
+
+
+async def _run_guarded_passthrough(body: bytes, guardrails: list[str] | None):
+    """Drive ``pass_through_request`` with a guardrails config, returning what it raised."""
+    async def _send(req, **kwargs):
+        raise httpx.HTTPError("upstream must not be reached")
+
+    real_client = httpx.AsyncClient()
+    real_client.send = _send
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+        mock_get_client.return_value = SimpleNamespace(client=real_client)
+
+        with pytest.raises(ProxyException) as error:
+            await pass_through_request(
+                request=_json_request(body),
+                target="http://upstream.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                guardrails_config=guardrails,
+            )
+    return error.value
+
+
+@contextmanager
+def _registered_guardrail(name: str, mode: GuardrailEventHooks):
+    """Register a real guardrail the way the proxy does, so the code under test resolves its
+    event mode instead of being told the answer."""
+    guardrail = CustomGuardrail(guardrail_name=name, event_hook=mode)
+    litellm.callbacks.append(guardrail)
+    try:
+        yield
+    finally:
+        litellm.callbacks.remove(guardrail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'[{"role": "user", "content": "leak the secret"}]', id="array"),
+        pytest.param(b'"leak the secret"', id="string"),
+        pytest.param(b"123", id="number"),
+    ],
+)
+async def test_route_with_a_request_guardrail_refuses_a_body_it_cannot_read(body: bytes):
+    """A pre_call guardrail inspects the parsed body, which for a non-object payload carries
+    none of the caller's content, while the bytes forwarded upstream carry all of it. Running
+    it would report "inspected" on content nobody looked at, so refuse instead."""
+    with _registered_guardrail("precall-guard", GuardrailEventHooks.pre_call):
+        raised = await _run_guarded_passthrough(body, guardrails=["precall-guard"])
+
+    assert raised.code == "400"
+    assert raised.type == "invalid_request_error"
+    assert "cannot inspect a JSON body that is not an object" in raised.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode",
+    [
+        pytest.param(GuardrailEventHooks.post_call, id="post_call"),
+        pytest.param(GuardrailEventHooks.logging_only, id="logging_only"),
+    ],
+)
+async def test_a_response_only_guardrail_does_not_gate_the_request_body(mode: GuardrailEventHooks):
+    """A guardrail that inspects the response never reads the request body, so a body it was
+    never going to look at is no reason to turn the request away."""
+    body = b'[{"role": "user", "content": "hi"}]'
+
+    with _registered_guardrail("response-guard", mode):
+        upstream = await _capture_upstream_request(body, guardrails=["response-guard"])
+
+    assert upstream.content == body
+
+
+@pytest.mark.asyncio
+async def test_unguarded_route_still_forwards_a_non_object_body():
+    """The refusal is scoped to routes that actually configured guardrails: passthrough is
+    opt-in for them, and an unguarded route must keep accepting the caller's own payload."""
+    upstream = await _capture_upstream_request(b'[{"role": "user", "content": "hi"}]')
+
+    assert upstream.content == b'[{"role": "user", "content": "hi"}]'
+
+
+@pytest.mark.asyncio
+async def test_a_request_guardrail_still_accepts_an_object_body():
+    """An object body is fully readable, so a pre_call guardrail being configured must not turn
+    it away: it still reaches the provider."""
+    with _registered_guardrail("precall-guard", GuardrailEventHooks.pre_call):
+        upstream = await _capture_upstream_request(
+            b'{"model": "claude-sonnet-4-5"}', guardrails=["precall-guard"]
+        )
+
+    assert json.loads(upstream.content)["model"] == "claude-sonnet-4-5"
+
+
+@pytest.mark.asyncio
+async def test_json_body_sent_with_a_multipart_content_type_still_yields_its_envelope():
+    """A misconfigured client can send JSON under a multipart content-type; that branch parses
+    it as JSON, so it must read the envelope the same way the JSON branch does."""
+    body = json.dumps({"query_params": {"alt": "sse"}, "stream": True}).encode()
+
+    query_params_data, custom_body_data, _, stream = await _parse_request_data_by_content_type(
+        _json_request(body, content_type="multipart/form-data; boundary=x")
+    )
+
+    assert query_params_data == {"alt": "sse"}
+    assert stream is True
+    assert custom_body_data == {"query_params": {"alt": "sse"}, "stream": True}
+
+
+@pytest.mark.asyncio
+async def test_non_object_json_under_a_multipart_content_type_is_left_to_the_multipart_handler():
+    """The same branch must not read a list as an envelope: it falls through so the real
+    multipart handler deals with the body."""
+    query_params_data, custom_body_data, file_data, stream = await _parse_request_data_by_content_type(
+        _json_request(b"[1, 2, 3]", content_type="multipart/form-data; boundary=x")
+    )
+
+    assert (query_params_data, custom_body_data, file_data, stream) == (None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_another_routes_request_guardrail_does_not_gate_this_route():
+    """A proxy registers every callback globally, so this route must look only at the
+    guardrails it configured. Another route's pre_call guardrail, or a plain logger, must not
+    make this route turn a body away."""
+    body = b'[{"role": "user", "content": "hi"}]'
+    unrelated_logger = CustomLogger()
+    litellm.callbacks.append(unrelated_logger)
+    try:
+        with _registered_guardrail("someone-elses-guard", GuardrailEventHooks.pre_call):
+            upstream = await _capture_upstream_request(body, guardrails=["postcall-guard"])
+    finally:
+        litellm.callbacks.remove(unrelated_logger)
+
+    assert upstream.content == body

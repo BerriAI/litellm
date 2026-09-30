@@ -13,6 +13,7 @@ from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+    NON_OBJECT_JSON_BODY_SCOPE_KEY,
 )
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
@@ -127,7 +128,14 @@ async def _read_request_body(request: Request | None) -> dict:
     - request: The request object to read the body from
 
     Returns:
-    - dict: Parsed request data as a dictionary or an empty dictionary if parsing fails
+    - dict: Parsed request data as a dictionary. A body that is valid JSON but not an
+      object reads as ``{}``, the same as an empty body: every field a caller can look
+      for is a key, so a non-object body carries none of them. Honouring the annotation
+      matters because auth reads the body before any route does, and both read it with
+      ``.get(...)``, so returning a list here surfaced as AttributeError -> 500 (#43711)
+
+    Raises:
+    - ProxyException: 400, when the body is present but malformed
     """
     try:
         if request is None:
@@ -208,9 +216,15 @@ async def _read_request_body(request: Request | None) -> dict:
                             code=status.HTTP_400_BAD_REQUEST,
                         )
 
-        # Cache the parsed result
-        _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
-        return parsed_body
+        if isinstance(parsed_body, dict):
+            _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
+            return parsed_body
+
+        # Anything that forwards the parsed body upstream would now send an empty object in
+        # place of the caller's payload, so mark the request for ``non_object_raw_body``.
+        _mark_non_object_body(request=request)
+        _safe_set_request_parsed_body(request=request, parsed_body={})
+        return {}
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
@@ -228,6 +242,32 @@ def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
     return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
         media_type.startswith("audio/") or media_type == "multipart/form-data"
     )
+
+
+def _mark_non_object_body(request: Request | None) -> None:
+    try:
+        if request is not None:
+            request.scope[NON_OBJECT_JSON_BODY_SCOPE_KEY] = True
+    except Exception as e:
+        verbose_proxy_logger.debug("Unexpected error marking non-object request body - %s", e)
+
+
+async def non_object_raw_body(request: Request | None) -> bytes | None:
+    """The bytes of a body that is valid JSON but not an object, else ``None``.
+
+    ``_read_request_body`` reads such a body as ``{}`` so every caller that treats it as a
+    mapping is safe, which means forwarding the parsed body would send an empty object in
+    place of the caller's payload. Passthrough sends these bytes instead.
+    """
+    if request is None:
+        return None
+    scope: Final[object] = getattr(request, "scope", None)
+    if not isinstance(scope, Mapping) or scope.get(NON_OBJECT_JSON_BODY_SCOPE_KEY) is not True:
+        return None
+    try:
+        return await request.body()
+    except RuntimeError:
+        return None
 
 
 async def read_raw_json_body(request: Request | None) -> bytes | None:

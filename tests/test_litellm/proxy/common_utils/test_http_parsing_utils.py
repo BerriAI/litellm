@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_tags_from_request_body,
     numeric_form_fields,
     populate_request_with_path_params,
+    non_object_raw_body,
     read_raw_json_body,
 )
 
@@ -502,6 +503,103 @@ def _make_json_request(body: bytes) -> MagicMock:
     mock_request.headers = {"content-type": "application/json"}
     mock_request.scope = {}
     return mock_request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"[]", id="empty-array"),
+        pytest.param(b'[{"model": "gpt-4o"}]', id="array-of-objects"),
+        pytest.param(b"123", id="integer"),
+        pytest.param(b"1.5", id="float"),
+        pytest.param(b'"gpt-4o"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_json_body_reads_as_no_fields(body: bytes):
+    """
+    ``orjson.loads`` returns whatever JSON kind it found, so this ``-> dict`` used to hand
+    back a list/int/str. Auth reads the body before any route does, and both read it with
+    ``.get(...)``, so that surfaced as AttributeError -> 500 (#43711). Every field a caller
+    looks for is a key, so a non-object body carries none of them and reads as ``{}``.
+    """
+    assert await _read_request_body(_make_json_request(body)) == {}
+
+
+@pytest.mark.asyncio
+async def test_non_object_body_is_not_cached_for_later_readers():
+    """The coercion only helps if a second read, or a route reading the cache after auth,
+    cannot pull the list back out and call ``.get()`` on it."""
+    request = _starlette_request(b"[1, 2, 3]", "application/json")
+
+    assert await _read_request_body(request) == {}
+    assert _safe_get_request_parsed_body(request=request) == {}
+    assert await _read_request_body(request) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'[{"role": "user", "content": "hi"}]', id="array"),
+        pytest.param(b"123", id="number"),
+        pytest.param(b'"gpt-4o"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_body_is_recoverable_verbatim_for_forwarding(body: bytes):
+    """Passthrough forwards ``_parsed_body`` as JSON unless it is handed exact bytes, so the
+    coerced ``{}`` would reach the provider in place of the caller's payload. The original
+    bytes must stay recoverable."""
+    request = _starlette_request(body, "application/json")
+
+    assert await _read_request_body(request) == {}
+    assert await non_object_raw_body(request) == body
+    assert await read_raw_json_body(request) == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'{"model": "gpt-4o"}', id="object"),
+        pytest.param(b"{}", id="empty-object"),
+        pytest.param(b"", id="empty-body"),
+    ],
+)
+async def test_object_body_is_not_offered_for_raw_forwarding(body: bytes):
+    """Only a coerced body may bypass ``json=_parsed_body``: an object body must keep going
+    through the parsed path, so hooks that mutate it are still what gets sent."""
+    request = _starlette_request(body, "application/json")
+
+    assert isinstance(await _read_request_body(request), dict)
+    assert await non_object_raw_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_no_raw_forwarding_before_the_body_has_been_read():
+    """Nothing may be marked for raw forwarding until a read has established the body is
+    actually a non-object."""
+    assert await non_object_raw_body(_starlette_request(b"[]", "application/json")) is None
+    assert await non_object_raw_body(None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        pytest.param(b"{}", {}, id="empty-object"),
+        pytest.param(b"", {}, id="empty-body"),
+        pytest.param(b'{"model": "gpt-4o", "n": [1, 2]}', {"model": "gpt-4o", "n": [1, 2]}, id="object"),
+    ],
+)
+async def test_object_bodies_are_untouched(body: bytes, expected: dict):
+    """The coercion must only ever fire on a non-object body: an object's own list values
+    stay exactly as the caller sent them."""
+    assert await _read_request_body(_make_json_request(body)) == expected
 
 
 @pytest.mark.asyncio
@@ -1210,3 +1308,37 @@ class TestCoerceNumericFormFields:
             numeric_fields=self.numeric_fields,
         )
         assert result == {"n": 3, "temperature": None, "image": buffer}
+
+
+@pytest.mark.asyncio
+async def test_a_request_that_cannot_be_marked_still_parses():
+    """Marking is best-effort bookkeeping for passthrough forwarding. A request object that
+    rejects the write (a test double, a frozen scope) must still get its parsed body rather
+    than turning a client's bad body into a 500."""
+
+    class _UnwritableScope(dict):
+        def __setitem__(self, key, value):
+            raise TypeError("scope is read-only")
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"[1, 2, 3]")
+    request.headers = {"content-type": "application/json"}
+    request.scope = _UnwritableScope()
+
+    assert await _read_request_body(request) == {}
+    assert await non_object_raw_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_a_consumed_body_stream_yields_no_bytes_to_forward():
+    """Starlette raises RuntimeError once a body stream has been consumed. Forwarding must
+    fall back to the parsed view rather than propagating that as a 500."""
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"[1, 2, 3]")
+    request.headers = {"content-type": "application/json"}
+    request.scope = {}
+
+    assert await _read_request_body(request) == {}
+
+    request.body = AsyncMock(side_effect=RuntimeError("Stream consumed"))
+    assert await non_object_raw_body(request) is None

@@ -86,6 +86,7 @@ from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_bod
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+    non_object_raw_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -1073,6 +1074,8 @@ async def pass_through_request(
 
     # parsed request body
     _parsed_body: dict | None = None
+    # bytes of a non-object JSON body: forwarded verbatim, but unreadable to guardrails
+    uninspectable_body: bytes | None = None
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: dict | None = None
     logging_obj: Logging | None = None
@@ -1120,6 +1123,11 @@ async def pass_through_request(
             _parsed_body = {}
         else:
             _parsed_body = await _read_request_body(request)
+            if state_raw_body is None:
+                # A non-object JSON body reads as ``{}``, so forwarding the parsed body would
+                # send an empty object in place of the caller's own provider payload.
+                uninspectable_body = await non_object_raw_body(request)
+                state_raw_body = uninspectable_body
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1134,6 +1142,25 @@ async def pass_through_request(
             user_api_key_dict=user_api_key_dict,
             passthrough_guardrails_config=guardrails_config,
         )
+
+        if (
+            guardrails_to_run
+            and uninspectable_body is not None
+            and PassthroughGuardrailHandler.any_inspects_the_request_body(guardrails_to_run)
+        ):
+            # A request-inspecting guardrail reads the parsed body, which for a non-object
+            # payload carries none of the caller's content, while the bytes forwarded upstream
+            # carry all of it. Running it would report "inspected" on content nobody looked at,
+            # so refuse instead. A post_call guardrail reads the response, so it does not gate.
+            raise ProxyException(
+                message=(
+                    "Guardrails are configured for this route and cannot inspect a JSON body "
+                    "that is not an object. Send the payload as a JSON object."
+                ),
+                type="invalid_request_error",
+                param="request_body",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Add guardrails to metadata if any should run
         if guardrails_to_run and len(guardrails_to_run) > 0:
@@ -1914,6 +1941,13 @@ class _PassThroughRequestEnvelope(TypedDict, total=False):
     stream: bool | None
 
 
+def _passthrough_envelope(body: object) -> _PassThroughRequestEnvelope | None:
+    """``request.json()`` returns any JSON kind, and a passthrough body is the caller's own
+    provider payload, so a list or scalar is legitimate here and simply carries no envelope
+    fields. Reading it as one raised AttributeError -> 500 (#43711)."""
+    return body if isinstance(body, dict) else None
+
+
 async def _parse_request_data_by_content_type(
     request: Request,
 ) -> tuple[object, object, None, bool | None]:
@@ -1935,10 +1969,11 @@ async def _parse_request_data_by_content_type(
     if "application/json" in content_type:
         # ✅ Handle JSON
         try:
-            body: _PassThroughRequestEnvelope = await request.json()
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            body: _PassThroughRequestEnvelope | None = _passthrough_envelope(await request.json())
+            if body is not None:
+                query_params_data = body.get("query_params")
+                custom_body_data = body.get("custom_body")
+                stream = body.get("stream")
         except json.JSONDecodeError:
             # Handle requests with no body (e.g., DELETE requests)
             pass
@@ -1946,14 +1981,15 @@ async def _parse_request_data_by_content_type(
         # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
         # If that fails, skip parsing - pass_through_request will handle actual multipart
         try:
-            body = await request.json()
+            body = _passthrough_envelope(await request.json())
             # Successfully parsed as JSON - treat as JSON body
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
-            # If custom_body is not set, use the entire body
-            if custom_body_data is None and body:
-                custom_body_data = body
+            if body is not None:
+                query_params_data = body.get("query_params")
+                custom_body_data = body.get("custom_body")
+                stream = body.get("stream")
+                # If custom_body is not set, use the entire body
+                if custom_body_data is None and body:
+                    custom_body_data = body
         except (json.JSONDecodeError, Exception):
             # Not JSON - this is actual multipart data
             # Skip parsing here to avoid consuming the request body stream
