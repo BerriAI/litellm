@@ -9,7 +9,6 @@ import {
   buildVisibleTree,
   firstErrorSpan,
   flattenTree,
-  fmtCost,
   fmtMs,
   GROUP_PAGE_SIZE,
   groupSiblingAgents,
@@ -21,7 +20,6 @@ import {
   previewText,
   revealSpan,
   ROOT_KEY,
-  sortStepsByCost,
   spanLabel,
   spanRowIds,
   stepsFromSpans,
@@ -47,18 +45,15 @@ const span = (overrides: Partial<Span> & Pick<Span, "span_id">): Span => ({
   model: null,
   input_tokens: 0,
   output_tokens: 0,
-  litellm: null,
+  litellm_request_id: null,
   ...overrides,
 });
 
 describe("formatting", () => {
-  it("formats durations and costs the way the table shows them", () => {
+  it("formats durations the way the table shows them", () => {
     expect(fmtMs(4.25)).toBe("4.3ms");
     expect(fmtMs(950)).toBe("950ms");
     expect(fmtMs(51386)).toBe("51.39s");
-    expect(fmtCost(0.0832806)).toBe("$0.0833");
-    expect(fmtCost(0.0004)).toBe("$0.00040");
-    expect(fmtCost(null)).toBe("—");
   });
 
   it("labels agent rows with agent, LLM and tool counts", () => {
@@ -66,10 +61,8 @@ describe("formatting", () => {
     expect(agentBadgeLabel({ agent_count: 1, llm_calls: 2, tool_calls: 1 })).toBe("◆ Agent · 2 LLM · 1 tool");
   });
 
-  it("headlines LLM spans with the model group, not the deployment", () => {
-    const llm = swarm.spans.find((s) => s.litellm?.model.startsWith("openai/"));
-    expect(llm).toBeDefined();
-    expect(spanLabel(llm as Span)).toBe((llm as Span).litellm?.model_group);
+  it("headlines LLM spans with the OTLP model", () => {
+    expect(spanLabel(span({ span_id: "llm", type: "llm", name: "generation", model: "model-a" }))).toBe("model-a");
   });
 
   it("pulls the user message out of a truncated JSON preview", () => {
@@ -138,14 +131,10 @@ describe("groupSiblingAgents", () => {
     expect(items.some((i) => i.kind === "span" && i.span.name === "critic")).toBe(true);
   });
 
-  it("rolls up subtree spend and counts invocations that contain errors", () => {
+  it("counts grouped invocations that contain errors", () => {
     const items = groupSiblingAgents(root.span_id, children.get(root.span_id) ?? [], stats);
     const group = items.find((i) => i.kind === "group");
     if (group?.kind !== "group") throw new Error("expected a group");
-    const researcherAgent = swarm.agents.find((a) => a.name === "researcher");
-    const factChecker = swarm.agents.find((a) => a.name === "fact_checker");
-    // researcher subtrees include the nested fact_checker invocations
-    expect(group.group.spend).toBeCloseTo((researcherAgent?.spend ?? 0) + (factChecker?.spend ?? 0), 6);
     expect(group.group.errors).toBeGreaterThan(0);
     expect(group.group.p50Ms).toBeGreaterThan(0);
   });
@@ -223,12 +212,6 @@ describe("stepsFromSpans", () => {
     expect(first.toolNames).toEqual(["write_file", "task"]);
   });
 
-  it("sorts by cost without renumbering", () => {
-    const sorted = sortStepsByCost(stepsFromSpans(deepAgent.spans));
-    const spend = sorted.map((s) => s.span.litellm?.spend ?? 0);
-    expect(spend).toEqual([...spend].sort((a, b) => b - a));
-    expect(sorted[0].span.type).toBe("llm");
-  });
 });
 
 describe("trace-level helpers", () => {
@@ -253,7 +236,7 @@ describe("trace-level helpers", () => {
     );
     const researcherNode = layout.nodes.find((n) => n.agent.name === "researcher");
     const criticNode = layout.nodes.find((n) => n.agent.name === "critic");
-    expect(researcherNode?.width).toBeGreaterThan(criticNode?.width ?? Infinity);
+    expect(researcherNode?.width).toBe(criticNode?.width);
     expect(researcherNode?.x).toBeGreaterThan(layout.nodes[0].x);
   });
 

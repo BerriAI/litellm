@@ -8,7 +8,6 @@ import { cn } from "@/lib/cva.config";
 import type { AgentNode, Span } from "./traceTypes";
 import {
   agentsWithErrors,
-  fmtCost,
   fmtMs,
   GRAPH_NODE_HEIGHT,
   invocationsOf,
@@ -92,7 +91,7 @@ function Node({ node, hasError, selected, onClick }: NodeProps) {
         {agent.name}
       </text>
       <text x={node.x + 10} y={node.y + 36} className="fill-muted-foreground text-[11px]">
-        {`${fmtCost(agent.spend)} · ${agent.llm_calls} LLM · ${agent.tool_calls} tool`}
+        {`${agent.llm_calls} LLM · ${agent.tool_calls} tool`}
       </text>
     </g>
   );
@@ -198,7 +197,7 @@ export function AgentGraph({ agents, spans, onOpenInvocation }: AgentGraphProps)
         ))}
       </svg>
       <p className="mt-1 text-[11px] text-muted-foreground">
-        Node width scales with spend. Click an agent to list its invocations.
+        Click an agent to list its invocations.
       </p>
       {selected && (
         <InvocationList key={selected} agentName={selected} spans={spans} onOpenInvocation={onOpenInvocation} />

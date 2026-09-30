@@ -14,12 +14,6 @@ export const fmtMs = (ms: number): string => {
   return `${Math.max(ms, 0).toFixed(ms < 10 ? 1 : 0)}ms`;
 };
 
-export const fmtCost = (cost: number | null | undefined): string => {
-  if (cost == null) return "—";
-  if (cost === 0) return "$0";
-  return cost < 0.001 ? `$${cost.toFixed(5)}` : `$${cost.toFixed(4)}`;
-};
-
 export const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 export const shortId = (id: string, length = 16): string => (id.length > length ? `${id.slice(0, length)}…` : id);
@@ -33,10 +27,7 @@ export const agentBadgeLabel = (summary: Pick<TraceSummary, "agent_count" | "llm
 };
 
 /** LLM spans are labelled by model group (what the caller asked for); everything else by span name. */
-export const spanLabel = (span: Span): string =>
-  span.type === "llm" ? span.litellm?.model_group || span.model || span.litellm?.model || span.name : span.name;
-
-export const spanSpend = (span: Span): number => span.litellm?.spend ?? 0;
+export const spanLabel = (span: Span): string => (span.type === "llm" ? span.model || span.name : span.name);
 
 /* ------------------------------------------------------------------ */
 /*  Visible tree (framework spans hidden + children re-parented)       */
@@ -101,21 +92,19 @@ export function buildVisibleTree(spans: readonly Span[], showFramework: boolean)
 /* ------------------------------------------------------------------ */
 
 export interface SubtreeStats {
-  spend: number;
   errors: number;
 }
 
-/** Spend and error count of every span's full (raw) subtree, keyed by span id. */
+/** Error count of every span's full subtree, keyed by span id. */
 export function subtreeStats(spans: readonly Span[]): Map<string, SubtreeStats> {
   const raw = buildVisibleTree(spans, true).children;
   const stats = new Map<string, SubtreeStats>();
   const visit = (span: Span): SubtreeStats => {
     const cached = stats.get(span.span_id);
     if (cached) return cached;
-    const own: SubtreeStats = { spend: spanSpend(span), errors: span.status === "error" ? 1 : 0 };
+    const own: SubtreeStats = { errors: span.status === "error" ? 1 : 0 };
     for (const child of raw.get(span.span_id) ?? []) {
       const childStats = visit(child);
-      own.spend += childStats.spend;
       own.errors += childStats.errors;
     }
     stats.set(span.span_id, own);
@@ -138,7 +127,6 @@ export interface SpanGroup {
   key: string;
   name: string;
   spans: Span[];
-  spend: number;
   p50Ms: number;
   errors: number;
 }
@@ -158,7 +146,6 @@ const buildGroup = (parentKey: string, name: string, members: Span[], stats: Map
   key: groupKey(parentKey, name),
   name,
   spans: members,
-  spend: members.reduce((sum, s) => sum + (stats.get(s.span_id)?.spend ?? 0), 0),
   p50Ms: median(members.map((s) => s.duration_ms)),
   errors: members.filter((s) => (stats.get(s.span_id)?.errors ?? 0) > 0).length,
 });
@@ -289,7 +276,7 @@ export function revealSpan(
 
 export interface TraceStep {
   span: Span;
-  /** 1-based, in time order (stable when re-sorted by cost). */
+  /** 1-based, in time order. */
   number: number;
   /** Nearest enclosing non-root agent span name, e.g. "researcher". */
   subagent: string | null;
@@ -344,10 +331,6 @@ export function stepsFromSpans(spans: readonly Span[]): TraceStep[] {
   });
 }
 
-/** Most expensive first; ties keep time order. */
-export const sortStepsByCost = (steps: readonly TraceStep[]): TraceStep[] =>
-  [...steps].sort((a, b) => spanSpend(b.span) - spanSpend(a.span) || a.number - b.number);
-
 /* ------------------------------------------------------------------ */
 /*  Trace-level rollups                                                */
 /* ------------------------------------------------------------------ */
@@ -363,9 +346,6 @@ export function firstErrorSpan(spans: readonly Span[]): Span | null {
   const failed = spans.filter((s) => s.status === "error").sort(byStart);
   return failed.find((s) => s.parent_span_id !== null) ?? failed[0] ?? null;
 }
-
-export const totalCacheRead = (spans: readonly Span[]): number =>
-  spans.reduce((sum, s) => sum + (s.litellm?.cache_read_tokens ?? 0), 0);
 
 export const agentsWithErrors = (spans: readonly Span[]): Set<string> =>
   new Set(spans.filter((s) => s.status === "error").map((s) => s.agent));
@@ -426,22 +406,20 @@ function agentDepths(agents: readonly AgentNode[]): Map<string, number> {
   return depths;
 }
 
-/** Left-to-right layered layout: one column per nesting level, node width by spend. */
+/** Left-to-right layered layout: one column per nesting level. */
 export function layoutAgentGraph(agents: readonly AgentNode[]): GraphLayout {
   const depths = agentDepths(agents);
-  const maxSpend = Math.max(0, ...agents.map((a) => a.spend));
   const columnWidth = GRAPH_MAX_NODE_WIDTH + GRAPH_COLUMN_GAP;
   const rowsPerColumn = new Map<number, number>();
   const nodes: GraphNode[] = agents.map((agent) => {
     const depth = depths.get(agent.name) ?? 0;
     const row = rowsPerColumn.get(depth) ?? 0;
     rowsPerColumn.set(depth, row + 1);
-    const share = maxSpend > 0 ? agent.spend / maxSpend : 0;
     return {
       agent,
       x: GRAPH_PADDING + depth * columnWidth,
       y: GRAPH_PADDING + row * (GRAPH_NODE_HEIGHT + GRAPH_ROW_GAP),
-      width: Math.round(GRAPH_MIN_NODE_WIDTH + share * (GRAPH_MAX_NODE_WIDTH - GRAPH_MIN_NODE_WIDTH)),
+      width: GRAPH_MIN_NODE_WIDTH,
     };
   });
   const byName = new Map(nodes.map((n) => [n.agent.name, n]));

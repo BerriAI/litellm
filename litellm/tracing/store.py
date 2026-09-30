@@ -1,9 +1,4 @@
-"""
-ClickHouse-backed trace store: batched span writes + scoped reads.
-
-Reads join agent spans (otel_traces) to LiteLLM requests (spend_logs) on
-`otel_traces.LiteLLMRequestId = spend_logs.response_id`.
-"""
+"""ClickHouse-backed trace store: batched span writes and scoped reads."""
 
 import base64
 import json
@@ -16,11 +11,9 @@ from litellm.integrations.clickhouse.clickhouse_client import ClickHouseClient
 from litellm.integrations.clickhouse.schema import (
     AGENT_TRACES_TABLE,
     OTEL_TRACES_TABLE,
-    SPEND_LOGS_TABLE,
 )
 from litellm.tracing.types import (
     AgentNode,
-    LiteLLMRequest,
     Span,
     SpanDetail,
     SpanRow,
@@ -38,12 +31,7 @@ _SCOPE_OTEL: Final = (
     "(empty({team_ids:Array(String)}) OR TeamId IN {team_ids:Array(String)})"
     " AND ({api_key_hash:String} = '' OR ApiKeyHash = {api_key_hash:String})"
 )
-_SCOPE_SPEND: Final = (
-    "(empty({team_ids:Array(String)}) OR team_id IN {team_ids:Array(String)})"
-    " AND ({api_key_hash:String} = '' OR api_key = {api_key_hash:String})"
-)
-
-# Page of traces from the per-trace MV, then cost from spend logs via ARRAY JOIN on request ids.
+# Page of traces from the per-trace MV.
 # The MV writes one partial row per insert, so root fields come from the partial that saw the root span.
 # agent_traces has no ApiKeyHash, so key-scoped (team-less) reads filter trace ids through otel_traces.
 LIST_TRACES_SQL: Final = f"""
@@ -55,7 +43,7 @@ SELECT t.TraceId AS trace_id, any(t.RootName) AS name, any(t.ServiceName) AS ser
        any(t.AgentCount) AS agent_invocations,
        any(t.LlmCount) AS llm_calls, any(t.ToolCount) AS tool_calls,
        any(t.InputTokens) AS input_tokens, any(t.OutputTokens) AS output_tokens,
-       any(t.Models) AS models, any(t.ErrorCount) AS error_count, sum(s.spend) AS spend
+       any(t.Models) AS models, any(t.ErrorCount) AS error_count
 FROM (
     SELECT TeamId, TraceId, min(StartTs) AS StartTs, max(EndTs) AS EndTs,
            any(ServiceName) AS ServiceName, anyLastIf(a.RootName, a.RootName != '') AS RootName,
@@ -64,7 +52,7 @@ FROM (
            sum(SpanCount) AS SpanCount, sum(AgentCount) AS AgentCount, sum(LlmCount) AS LlmCount,
            sum(ToolCount) AS ToolCount, sum(ErrorCount) AS ErrorCount, sum(InputTokens) AS InputTokens,
            sum(OutputTokens) AS OutputTokens, groupUniqArrayArray(Models) AS Models,
-           groupUniqArrayArray(AgentNames) AS AgentNames, groupArrayArray(RequestIds) AS RequestIds
+           groupUniqArrayArray(AgentNames) AS AgentNames
     FROM {AGENT_TRACES_TABLE} AS a
     WHERE (empty({{team_ids:Array(String)}}) OR TeamId IN {{team_ids:Array(String)}})
       AND ({{api_key_hash:String}} = '' OR TraceId IN (
@@ -77,16 +65,10 @@ FROM (
     ORDER BY StartTs DESC, TraceId DESC
     LIMIT {{limit:UInt32}}
 ) AS t
-LEFT ARRAY JOIN t.RequestIds AS request_id
-LEFT JOIN (
-    SELECT response_id, any(spend) AS spend FROM {SPEND_LOGS_TABLE} FINAL WHERE {_SCOPE_SPEND} GROUP BY response_id
-) AS s ON s.response_id = request_id
 GROUP BY t.TraceId
 ORDER BY start_ms DESC, t.TraceId DESC
 """
 
-# response_id is not unique (an upstream cache can replay the same provider id), so each span keeps
-# the spend-log row closest to it in time; LIMIT 1 BY also drops re-exported duplicate spans.
 TRACE_SPANS_SQL: Final = f"""
 SELECT o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
        o.ObservationType AS type, o.AgentName AS agent, o.StatusCode AS status,
@@ -94,26 +76,10 @@ SELECT o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name
        toUnixTimestamp64Nano(o.Timestamp) AS start_ns, o.Duration AS duration_ns,
        o.ServiceName AS service, o.InputPreview AS input_preview, o.Model AS model,
        o.InputTokens AS input_tokens, o.OutputTokens AS output_tokens,
-       o.LiteLLMRequestId AS litellm_request_id,
-       s.request_id AS s_request_id, s.model AS s_model, s.model_group AS s_model_group,
-       s.custom_llm_provider AS s_provider, s.api_base AS s_api_base, s.key_alias AS s_key_alias,
-       s.team_alias AS s_team_alias, s.spend AS s_spend, s.prompt_tokens AS s_prompt_tokens,
-       s.completion_tokens AS s_completion_tokens, s.cache_read_tokens AS s_cache_read_tokens,
-       s.cache_write_tokens AS s_cache_write_tokens,
-       toUnixTimestamp64Milli(s.start_time) AS s_start_ms, toUnixTimestamp64Milli(s.end_time) AS s_end_ms,
-       if(isNull(s.completion_start_time), 0, toUnixTimestamp64Milli(assumeNotNull(s.completion_start_time)))
-           AS s_ttft_start_ms,
-       s.status AS s_status
+       o.LiteLLMRequestId AS litellm_request_id
 FROM {OTEL_TRACES_TABLE} AS o
-LEFT JOIN (
-    SELECT * FROM {SPEND_LOGS_TABLE} FINAL
-    WHERE response_id IN (
-        SELECT LiteLLMRequestId FROM {OTEL_TRACES_TABLE}
-        WHERE TraceId = {{trace_id:String}} AND LiteLLMRequestId != '' AND {_SCOPE_OTEL})
-      AND {_SCOPE_SPEND}
-) AS s ON s.response_id = o.LiteLLMRequestId
 WHERE o.TraceId = {{trace_id:String}} AND {_SCOPE_OTEL}
-ORDER BY o.Timestamp, abs(toUnixTimestamp64Milli(s.start_time) - toUnixTimestamp64Milli(o.Timestamp))
+ORDER BY o.Timestamp
 LIMIT 1 BY o.SpanId
 """
 
@@ -161,30 +127,7 @@ def trace_summary_from_row(row: dict[str, Any]) -> TraceSummary:
         error_count=int(row.get("error_count") or 0),
         input_tokens=int(row["input_tokens"]),
         output_tokens=int(row["output_tokens"]),
-        spend=float(row["spend"] or 0.0),
         models=list(row["models"]),
-    )
-
-
-def _litellm_request(row: dict[str, Any]) -> LiteLLMRequest | None:
-    if not row.get("s_request_id"):
-        return None
-    ttft_start: Final = int(row["s_ttft_start_ms"] or 0)
-    return LiteLLMRequest(
-        request_id=row["s_request_id"],
-        model=row["s_model"],
-        model_group=row["s_model_group"],
-        provider=row["s_provider"],
-        key_alias=row["s_key_alias"],
-        team_alias=row["s_team_alias"],
-        spend=float(row["s_spend"]),
-        prompt_tokens=int(row["s_prompt_tokens"]),
-        completion_tokens=int(row["s_completion_tokens"]),
-        cache_read_tokens=int(row["s_cache_read_tokens"]),
-        cache_write_tokens=int(row["s_cache_write_tokens"]),
-        latency_ms=int(row["s_end_ms"]) - int(row["s_start_ms"]),
-        ttft_ms=(ttft_start - int(row["s_start_ms"])) if ttft_start else None,
-        status=row["s_status"],
     )
 
 
@@ -203,7 +146,7 @@ def span_from_row(row: dict[str, Any], trace_start_ns: int) -> Span:
         model=row["model"] or None,
         input_tokens=int(row["input_tokens"]),
         output_tokens=int(row["output_tokens"]),
-        litellm=_litellm_request(row),
+        litellm_request_id=row["litellm_request_id"] or None,
     )
 
 
@@ -232,7 +175,6 @@ def agent_nodes(spans: list[Span]) -> list[AgentNode]:
                 invocations=0,
                 llm_calls=0,
                 tool_calls=0,
-                spend=0.0,
                 duration_ms=0.0,
             ),
         )
@@ -244,7 +186,6 @@ def agent_nodes(spans: list[Span]) -> list[AgentNode]:
             continue
         if span["type"] == "llm":
             owner["llm_calls"] += 1
-            owner["spend"] += span["litellm"]["spend"] if span["litellm"] else 0.0
         elif span["type"] == "tool":
             owner["tool_calls"] += 1
     return list(agents.values())
@@ -276,7 +217,6 @@ def trace_from_rows(trace_id: str, rows: list[dict[str, Any]]) -> Trace | None:
             error_count=sum(1 for s in spans if s["status"] == "error"),
             input_tokens=sum(s["input_tokens"] for s in spans),
             output_tokens=sum(s["output_tokens"] for s in spans),
-            spend=sum(s["litellm"]["spend"] for s in llm_spans if s["litellm"]),
             models=sorted({s["model"] for s in llm_spans if s["model"]}),
         ),
         agents=agents,

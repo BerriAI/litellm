@@ -180,7 +180,6 @@ from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
 from ..integrations.athina import AthinaLogger
 from ..integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger
 from ..integrations.azure_storage.azure_storage import AzureBlobStorageLogger
-from ..integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
 from ..integrations.custom_prompt_management import CustomPromptManagement
 from ..integrations.datadog.datadog import DataDogLogger
 from ..integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
@@ -4639,14 +4638,6 @@ def _init_custom_logger_compatible_class(
             _s3_v2_logger: Final = S3V2Logger()
             _in_memory_loggers.append(_s3_v2_logger)
             return _s3_v2_logger
-        elif logging_integration == "clickhouse":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, ClickHouseSpendLogger):
-                    return callback
-
-            _clickhouse_spend_logger: Final = ClickHouseSpendLogger()
-            _in_memory_loggers.append(_clickhouse_spend_logger)
-            return _clickhouse_spend_logger
         elif logging_integration == "pointfive":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PointFiveLogger):
@@ -5382,10 +5373,6 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "s3_v2":
             for callback in _in_memory_loggers:
                 if isinstance(callback, S3V2Logger):
-                    return callback
-        elif logging_integration == "clickhouse":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, ClickHouseSpendLogger):
                     return callback
         elif logging_integration == "pointfive":
             for callback in _in_memory_loggers:
