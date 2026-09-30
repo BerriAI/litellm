@@ -1,4 +1,16 @@
-LiteLLM componentized — release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+{{- if .Values.monolith.enabled }}
+LiteLLM monolith: release {{ .Release.Name }} in namespace {{ .Release.Namespace }}, image {{ include "litellm.image" . }}
+
+One Deployment runs the full proxy (gateway routes, management routes and the Admin UI):
+  - proxy    : Service {{ include "litellm.workload.fullname" . }} on port {{ .Values.gateway.service.port }}
+
+Port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.workload.fullname" . }} {{ .Values.gateway.service.port }}
+
+The monolith takes its configuration from the gateway.* values (config, resources, probes, hpa, pdb, keda,
+metricsServer, collector, volumes, env, scheduling). backend.* and ui.* are ignored while monolith.enabled is true
+{{- else }}
+LiteLLM componentized: release {{ .Release.Name }} in namespace {{ .Release.Namespace }}, image {{ include "litellm.image" . }}
 
 Components:
 {{- if .Values.gateway.enabled }}
@@ -16,39 +28,44 @@ Port-forward examples:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.backend.fullname" . }} {{ .Values.backend.service.port }}
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "litellm.ui.fullname" . }} {{ .Values.ui.service.port }}
 
+Set monolith.enabled=true to run everything as one Deployment instead
+{{- end }}
+
 Reminders:
   - Sensitive values come from Secret references only. Before installing, set:
-      - masterKey.secretName                                   (Secret with the proxy master key)
+      - masterKey.secretName                                   (Secret with the proxy master key, or
+                                                                masterKey.generate: true with secretName "" to let the chart create one)
       - database.writer.{host,port,dbname}                     (writer connection pieces)
       - database.writer.passwordSecret.{name,usernameKey,passwordKey}
                                                                (Secret holding the writer DB username + password)
-      - database.writer.useIAMAuth: true                       (optional — chart sets IAM_TOKEN_DB_AUTH=true and
+      - database.writer.useIAMAuth: true                       (optional: chart sets IAM_TOKEN_DB_AUTH=true and
                                                                 omits DATABASE_PASSWORD / DATABASE_URL so the proxy
                                                                 mints the URL from an IAM token at startup)
-      - database.reader.host                                   (optional — enables read-replica routing; reader
+      - database.reader.host                                   (optional: enables read-replica routing; reader
                                                                 .passwordSecret.name is required when set, unless
                                                                 .useIAMAuth is true)
-      - database.reader.useIAMAuth: true                       (optional, requires database.writer.useIAMAuth: true —
+      - database.reader.useIAMAuth: true                       (optional, requires database.writer.useIAMAuth: true;
                                                                 chart emits DATABASE_*_READ_REPLICA env vars and
                                                                 omits DATABASE_PASSWORD_READ_REPLICA /
                                                                 DATABASE_URL_READ_REPLICA so the proxy mints the
                                                                 reader URL from an IAM token at startup)
-      - redis.passwordSecret.name                              (optional — set when redis.host is provided and the
+      - redis.host                                             (optional: the proxy's coordination Redis)
+      - redis.passwordSecret.name                              (optional: set when redis.host is provided and the
                                                                 cache requires auth)
-      - redis.cluster: true                                    (optional — chart sets REDIS_CLUSTER_NODES from
+      - redis.cluster: true                                    (optional: chart sets REDIS_CLUSTER_NODES from
                                                                 redis.host / redis.port so the proxy's Cache()
                                                                 constructs a RedisClusterCache; the cluster client
                                                                 discovers remaining nodes from CLUSTER SLOTS)
-  - Per-component extras (gateway / backend / ui):
-      - {component}.extraEnv / envConfigMaps / envSecrets      (the latter two are lists of resource names →
-                                                                envFrom configMapRef / secretRef)
+  - Per-component extras (gateway / backend / ui; gateway.* also drives the monolith):
+      - {component}.extraEnv / envConfigMaps / envSecrets      (the latter two are lists of resource names rendered
+                                                                as envFrom configMapRef / secretRef)
       - {component}.logLevel                                   (renders as LITELLM_LOG)
       - gateway.config.proxy_config                            (rendered into a ConfigMap and mounted at
-                                                                /app/config/config.yaml; gateway reads it via
-                                                                CONFIG_FILE_PATH)
+                                                                /app/config/config.yaml; read via CONFIG_FILE_PATH)
       - {component}.pdb.{enabled,minAvailable,maxUnavailable}  (per-component PodDisruptionBudget; disabled by
-                                                                default — with hpa.minReplicas of 1, minAvailable: 1
+                                                                default: with hpa.minReplicas of 1, minAvailable: 1
                                                                 would block node drains)
       - {component}.topologySpreadConstraints                  (standard k8s list, e.g. spread replicas across
                                                                 topology.kubernetes.io/zone)
-  - Enable ingress.enabled=true to dispatch / → ui, gateway data-plane prefixes → gateway, and the catch-all → backend.
+  - Enable ingress.enabled=true to dispatch / to ui, gateway data-plane prefixes to gateway and the catch-all to
+    backend; in monolith mode every path goes to the monolith Service

@@ -31,27 +31,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - component: gateway
+          - component: litellm
             dockerfile: Dockerfile
-            litellm_component: gateway
-          - component: backend
-            dockerfile: Dockerfile
-            litellm_component: backend
-          - component: ui
-            dockerfile: Dockerfile
-            litellm_component: ui
-          - component: migrations
-            dockerfile: Dockerfile
-            litellm_component: migrations
-          - component: monolith
-            dockerfile: Dockerfile
-          - component: gateway
-            dockerfile: gateway/Dockerfile
-            baseline: true
-          - component: backend
-            dockerfile: backend/Dockerfile
-            baseline: true
-          - component: monolith
+          - component: litellm
             dockerfile: Dockerfile
             baseline: true
     env:
@@ -60,7 +42,6 @@ jobs:
       SOURCE_REF: ${{ matrix.baseline && inputs.gateway_baseline_ref || github.sha }}
       IMAGE_TAG: ${{ matrix.baseline && 'v0.0.0-lens-ci-baseline' || 'v0.0.0-lens-ci' }}
       CURRENT_REF: ${{ github.sha }}
-      LITELLM_COMPONENT: ${{ matrix.litellm_component }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -73,15 +54,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_REF"
           if [[ "$IMAGE_TAG" == v0.0.0-lens-ci-baseline ]]; then
             test "$SOURCE_REF" != "$CURRENT_REF"
+            grep -q LITELLM_COMPONENT docker-entrypoint.sh \
+              || { echo "gateway_baseline_ref predates the shared-image entrypoint helm/litellm runs" >&2; exit 1; }
           fi
       - name: Build the matching release image
         run: |
           docker build --build-arg "LITELLM_RELEASE_TAG=$IMAGE_TAG" \
             -f "$DOCKERFILE" -t "lens-ci-$COMPONENT:$IMAGE_TAG" .
-          if [[ -n "$LITELLM_COMPONENT" ]]; then
-            printf 'FROM lens-ci-%s:%s\nENV LITELLM_COMPONENT=%s\n' "$COMPONENT" "$IMAGE_TAG" "$LITELLM_COMPONENT" \
-              | docker build -t "lens-ci-$COMPONENT:$IMAGE_TAG" -
-          fi
       - name: Save the matching release image
         run: |
           docker save "lens-ci-$COMPONENT:$IMAGE_TAG" \
@@ -157,5 +136,5 @@ jobs:
           tar -xzf "$RUNNER_TEMP/helm.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           echo "$RUNNER_TEMP/linux-amd64" >> "$GITHUB_PATH"
-      - name: Install, ingest, upgrade, and restart both charts
+      - name: Install, ingest, upgrade, and restart both chart layouts
         run: bash tests/e2e/migrations/lens_helm_smoke.sh

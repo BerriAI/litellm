@@ -2051,17 +2051,15 @@ class TestProxyInitializationHelpers:
 
 
 class TestQueryEngineReaperWiring:
-    def _invoke_run_server(self, args):
+    def _invoke_run_server(self, args, env: dict[str, str] | None = None):
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("DATABASE_URL", "DIRECT_URL")
-        }
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "NUM_WORKERS")}
+        if env:
+            clean_env.update(env)
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -2106,6 +2104,20 @@ class TestQueryEngineReaperWiring:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         mock_uvicorn_run.assert_called_once()
         mock_start_reaper.assert_not_called()
+
+    def test_num_workers_env_var_sets_uvicorn_workers(self):
+        result, mock_uvicorn_run, _ = self._invoke_run_server(["--local"], env={"NUM_WORKERS": "3"})
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        mock_uvicorn_run.assert_called_once()
+        assert mock_uvicorn_run.call_args.kwargs["workers"] == 3
+
+    def test_num_workers_flag_beats_env_var(self):
+        result, mock_uvicorn_run, _ = self._invoke_run_server(
+            ["--local", "--num_workers", "2"], env={"NUM_WORKERS": "3"}
+        )
+        assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
+        mock_uvicorn_run.assert_called_once()
+        assert mock_uvicorn_run.call_args.kwargs["workers"] == 2
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_arbiter_starts_reaper(self):
