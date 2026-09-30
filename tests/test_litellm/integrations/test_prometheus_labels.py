@@ -716,6 +716,29 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
         _clear_prometheus_registry()
 
 
+@pytest.mark.asyncio
+async def test_failure_hook_labels_a_cli_session_with_the_per_user_alias_not_the_login_token():
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data={"model": "gpt-4o-mini", "metadata": {}},
+            original_exception=Exception("boom"),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+                user_id="alice",
+                key_alias="cli-session-alice",
+                is_session_token=True,
+            ),
+        )
+        hashed_keys = {s.labels.get("hashed_api_key") for s in _collected_samples("litellm_proxy_failed_requests_metric_total")}
+        assert hashed_keys == {"cli-session-alice"}, hashed_keys
+    finally:
+        _clear_prometheus_registry()
+
+
 async def _failed_requests_api_provider_labels(
     request_data: dict[str, object],
     original_exception: Exception,
