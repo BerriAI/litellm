@@ -69,7 +69,7 @@ def test_chat_model_kwargs_gateway_and_sdk(tmp_path: Path) -> None:
 
     sdk = da.chat_model_kwargs(make_ctx(tmp_path, api_key="k", api_base="http://b"))
     assert sdk == {"model": "gpt-4o-mini", "api_key": "k", "api_base": "http://b"}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="needs model="):
         da.chat_model_kwargs(make_ctx(tmp_path, model=None))
 
 
@@ -178,7 +178,7 @@ def test_config_capabilities_and_validation(tmp_path: Path) -> None:
     assert config.capabilities.tool_approval and config.capabilities.history
     assert "ask" in config.capabilities.permission_modes
     config.validate_environment(make_ctx(tmp_path))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="needs model="):
         config.validate_environment(make_ctx(tmp_path, model=None))
     with pytest.raises(OptionsMismatch):
         config.validate_environment(make_ctx(tmp_path, options=CodexOptions()))
