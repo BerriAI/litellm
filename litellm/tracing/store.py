@@ -3,10 +3,10 @@
 import base64
 import binascii
 import json
-from datetime import datetime, timezone
-from typing import Any, Final
-from types import MappingProxyType
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Any, Final
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
 from litellm.integrations.clickhouse.schema import (
@@ -27,7 +27,7 @@ from litellm.tracing.types import (
 )
 
 NANOS_PER_MS: Final = 1_000_000
-_STATUS: Final[Mapping[str, SpanStatus]] = MappingProxyType({"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"})
+_STATUS: Final = MappingProxyType({"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"})
 
 _SCOPE_OTEL: Final = (
     "(empty({team_ids:Array(String)}) OR TeamId IN {team_ids:Array(String)})"
@@ -156,9 +156,9 @@ def span_from_row(row: dict[str, Any], trace_start_ns: int) -> Span:
 
 def _parent_agent_of(span: Span, by_id: Mapping[str, Span]) -> str | None:
     parent_id = span["parent_span_id"]
-    visited: Final = set((span["span_id"],))  # mutable-ok: ancestor traversal tracks visited IDs to stop cycles
-    while parent_id is not None and parent_id in by_id and parent_id not in visited:
-        visited.add(parent_id)
+    for _ in by_id:
+        if parent_id is None or parent_id not in by_id or parent_id == span["span_id"]:
+            return None
         parent = by_id[parent_id]
         if parent["type"] == "agent" and parent["name"] != span["name"]:
             return parent["name"]
@@ -167,21 +167,34 @@ def _parent_agent_of(span: Span, by_id: Mapping[str, Span]) -> str | None:
 
 
 def agent_nodes(spans: Sequence[Span]) -> tuple[AgentNode, ...]:
-    by_id: Final = MappingProxyType({span["span_id"]: span for span in spans})
-    names: Final = tuple(dict.fromkeys(span["name"] for span in spans if span["type"] == "agent"))
-
-    def node(name: str) -> AgentNode:
-        invocations: Final = tuple(span for span in spans if span["type"] == "agent" and span["name"] == name)
-        return AgentNode(
-            name=name,
-            parent_agent=_parent_agent_of(invocations[0], by_id),
-            invocations=len(invocations),
-            duration_ms=sum(span["duration_ms"] for span in invocations),
-            llm_calls=sum(1 for span in spans if span["agent"] == name and span["type"] == "llm"),
-            tool_calls=sum(1 for span in spans if span["agent"] == name and span["type"] == "tool"),
+    """One node per distinct agent name (200 `researcher` invocations = 1 node), with who invoked it."""
+    by_id: Final = MappingProxyType({s["span_id"]: s for s in spans})
+    agents: dict[str, AgentNode] = {}  # mutable-ok: linear-time aggregation updates counters per agent
+    for span in spans:
+        if span["type"] != "agent":
+            continue
+        node = agents.setdefault(
+            span["name"],
+            AgentNode(
+                name=span["name"],
+                parent_agent=_parent_agent_of(span, by_id),
+                invocations=0,
+                llm_calls=0,
+                tool_calls=0,
+                duration_ms=0.0,
+            ),
         )
-
-    return tuple(node(name) for name in names)
+        node["invocations"] += 1
+        node["duration_ms"] += span["duration_ms"]
+    for span in spans:
+        owner = agents.get(span["agent"])
+        if owner is None:
+            continue
+        if span["type"] == "llm":
+            owner["llm_calls"] += 1
+        elif span["type"] == "tool":
+            owner["tool_calls"] += 1
+    return tuple(agents.values())
 
 
 def trace_from_rows(trace_id: str, rows: list[dict[str, Any]], trace_ref: str = "") -> Trace | None:
@@ -225,7 +238,7 @@ class ClickHouseTraceStore:
         self.storage = storage
 
     async def insert_spans(self, rows: Sequence[SpanRow]) -> None:
-        await self.storage.insert_rows(OTEL_TRACES_TABLE, tuple(row for row in rows))
+        await self.storage.insert_rows(OTEL_TRACES_TABLE, tuple(rows))
 
     async def list_traces(
         self,
@@ -269,5 +282,5 @@ class ClickHouseTraceStore:
             span_id=rows[0]["span_id"],
             input=rows[0]["input"],
             output=rows[0]["output"],
-            attributes=MappingProxyType(rows[0]["attributes"]),
+            attributes=rows[0]["attributes"],
         )

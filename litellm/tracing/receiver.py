@@ -14,7 +14,6 @@ The proxy endpoints are thin wrappers: auth -> build tenant/scope -> call one me
 
 import asyncio
 import os
-from types import MappingProxyType
 from typing import Final
 
 from litellm.constants import (
@@ -49,20 +48,15 @@ class Tenant:
         self.org_id = org_id
 
     def stamp(self, row: SpanRow) -> SpanRow:
-        result: Final[SpanRow] = {
-            **row,
-            "TeamId": self.team_id,
-            "ApiKeyHash": self.api_key_hash,
-            "ResourceAttributes": MappingProxyType(
-                {
-                    **row["ResourceAttributes"],
-                    "litellm.team_id": self.team_id,
-                    "litellm.api_key_hash": self.api_key_hash,
-                    "litellm.org_id": self.org_id,
-                }
-            ),
+        row["TeamId"] = self.team_id
+        row["ApiKeyHash"] = self.api_key_hash
+        row["ResourceAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict
+            **row["ResourceAttributes"],
+            "litellm.team_id": self.team_id,
+            "litellm.api_key_hash": self.api_key_hash,
+            "litellm.org_id": self.org_id,
         }
-        return result
+        return row
 
 
 class TraceReceiver:

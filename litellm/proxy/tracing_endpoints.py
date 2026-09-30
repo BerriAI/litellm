@@ -23,7 +23,7 @@ from litellm.tracing import (
 from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
 from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
 
-router = APIRouter(tags=["agent tracing"])
+router = APIRouter(tags=["agent tracing"])  # mutable-ok: FastAPI copies the mutable tags list
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 _ADMIN_ROLES: Final = (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
@@ -51,12 +51,12 @@ def tenant_for(user_api_key_dict: UserAPIKeyAuth) -> Tenant:
 def scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
     """Admins see everything; team members see their team; team-less keys see their own traces."""
     if user_api_key_dict.user_role in _ADMIN_ROLES:
-        return TraceScope(team_ids=[], api_key_hash="")
+        return TraceScope(team_ids=(), api_key_hash="")
     if user_api_key_dict.team_id:
-        return TraceScope(team_ids=[user_api_key_dict.team_id], api_key_hash="")
+        return TraceScope(team_ids=(user_api_key_dict.team_id,), api_key_hash="")
     if not user_api_key_dict.token:
         raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-    return TraceScope(team_ids=[""], api_key_hash=user_api_key_dict.token)
+    return TraceScope(team_ids=("",), api_key_hash=user_api_key_dict.token)
 
 
 async def _read_otlp_body(request: Request) -> bytes:
@@ -89,7 +89,10 @@ async def ingest_otlp_traces(
     except InvalidOTLPPayloadError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError:
-        raise HTTPException(status_code=503, headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)})
+        raise HTTPException(
+            status_code=503,
+            headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)},  # mutable-ok: FastAPI requires dict headers
+        )
     body, media_type = encode_otlp_response(content_type)
     return Response(content=body, media_type=media_type)
 

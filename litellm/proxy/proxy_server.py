@@ -1525,7 +1525,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     asyncio.create_task(_adaptive_router_flusher_loop())
 
     ## [Optional] Initialize agent tracing
-    asyncio.create_task(ProxyStartupEvent._init_tracing(general_settings))
+    asyncio.create_task(ProxyStartupEvent.init_tracing(general_settings))
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
@@ -11317,7 +11317,7 @@ class ProxyStartupEvent:
             return connected_client
 
     @classmethod
-    async def _init_tracing(cls, general_settings: dict) -> None:
+    async def init_tracing(cls, general_settings: dict) -> None:
         """
         Enable agent tracing (`POST/GET /v1/traces`) when configured:
 
@@ -11325,8 +11325,8 @@ class ProxyStartupEvent:
               tracing:
                 store: clickhouse       # CLICKHOUSE_URL / _USER / _PASSWORD / _DATABASE
         """
-        settings = general_settings.get("tracing") or {}
-        if settings.get("store") != "clickhouse":
+        settings: Final = general_settings.get("tracing")
+        if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
             return
         try:
             tracing: Final = TraceReceiver.from_env()

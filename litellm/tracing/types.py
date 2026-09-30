@@ -4,13 +4,12 @@ Agent tracing types.
 A trace is one agent run. It's made of spans (agent / llm / tool / chain / framework).
     Trace
     ├── summary: TraceSummary
-    ├── agents:  Sequence[AgentNode]      one per distinct agent name (for the agent graph)
-    └── spans:   Sequence[Span]           flat, linked by parent_span_id
+    ├── agents:  list[AgentNode]      one per distinct agent name (for the agent graph)
+    └── spans:   list[Span]           flat, linked by parent_span_id
 
 """
 
 from typing import Literal
-from collections.abc import Mapping, Sequence
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -40,10 +39,10 @@ class AgentNode(TypedDict):
 
     name: ReadOnly[str]
     parent_agent: ReadOnly[str | None]
-    invocations: ReadOnly[int]
-    llm_calls: ReadOnly[int]
-    tool_calls: ReadOnly[int]
-    duration_ms: ReadOnly[float]
+    invocations: int
+    llm_calls: int
+    tool_calls: int
+    duration_ms: float
 
 
 class TraceSummary(TypedDict):
@@ -63,17 +62,17 @@ class TraceSummary(TypedDict):
     error_count: ReadOnly[int]  # spans with an error status; > 0 means the run shows as failed
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
-    models: ReadOnly[Sequence[str]]
+    models: ReadOnly[tuple[str, ...]]
 
 
 class Trace(TypedDict):
     summary: ReadOnly[TraceSummary]
-    agents: ReadOnly[Sequence[AgentNode]]
-    spans: ReadOnly[Sequence[Span]]
+    agents: ReadOnly[tuple[AgentNode, ...]]
+    spans: ReadOnly[tuple[Span, ...]]
 
 
 class TracePage(TypedDict):
-    data: ReadOnly[Sequence[TraceSummary]]
+    data: ReadOnly[tuple[TraceSummary, ...]]
     next_cursor: ReadOnly[str | None]
 
 
@@ -81,13 +80,13 @@ class SpanDetail(TypedDict):
     span_id: ReadOnly[str]
     input: ReadOnly[str]
     output: ReadOnly[str]
-    attributes: ReadOnly[Mapping[str, str]]
+    attributes: ReadOnly[dict[str, str]]
 
 
 class TraceScope(TypedDict):
     """Who is asking. Empty team_ids = all teams (admins only)."""
 
-    team_ids: ReadOnly[Sequence[str]]
+    team_ids: ReadOnly[tuple[str, ...]]
     api_key_hash: ReadOnly[str]
 
 
@@ -102,59 +101,20 @@ class SpanRow(TypedDict):
     SpanName: ReadOnly[str]
     SpanKind: ReadOnly[str]
     ServiceName: ReadOnly[str]
-    ResourceAttributes: ReadOnly[Mapping[str, str]]
+    ResourceAttributes: dict[str, str]
     ScopeName: ReadOnly[str]
     ScopeVersion: ReadOnly[str]
-    SpanAttributes: ReadOnly[Mapping[str, str]]
+    SpanAttributes: dict[str, str]
     Duration: ReadOnly[int]  # ns
     StatusCode: ReadOnly[str]
     StatusMessage: ReadOnly[str]
-    TeamId: ReadOnly[str]
-    ApiKeyHash: ReadOnly[str]
-    ObservationType: ReadOnly[SpanType]
-    AgentName: ReadOnly[str]
-    LiteLLMRequestId: ReadOnly[str]
-    Model: ReadOnly[str]
-    InputTokens: ReadOnly[int]
-    OutputTokens: ReadOnly[int]
-    Input: ReadOnly[str]
-    Output: ReadOnly[str]
-
-
-class SpendLogRecord(TypedDict):
-    """One LiteLLM request, as written by the `clickhouse` logging callback."""
-
-    request_id: ReadOnly[str]
-    response_id: ReadOnly[str]
-    call_type: ReadOnly[str]
-    api_key: ReadOnly[str]
-    key_alias: ReadOnly[str]
-    team_id: ReadOnly[str]
-    team_alias: ReadOnly[str]
-    organization_id: ReadOnly[str]
-    user: ReadOnly[str]
-    end_user: ReadOnly[str]
-    model: ReadOnly[str]
-    model_group: ReadOnly[str]
-    model_id: ReadOnly[str]
-    custom_llm_provider: ReadOnly[str]
-    api_base: ReadOnly[str]
-    spend: ReadOnly[float]
-    prompt_tokens: ReadOnly[int]
-    completion_tokens: ReadOnly[int]
-    total_tokens: ReadOnly[int]
-    cache_read_tokens: ReadOnly[int]
-    cache_write_tokens: ReadOnly[int]
-    start_time: ReadOnly[int]  # unix ms
-    end_time: ReadOnly[int]  # unix ms
-    completion_start_time: ReadOnly[int | None]
-    status: ReadOnly[str]
-    error_str: ReadOnly[str]
-    cache_hit: ReadOnly[bool]
-    session_id: ReadOnly[str]
-    trace_id: ReadOnly[str]  # from an incoming W3C traceparent, if any
-    span_id: ReadOnly[str]
-    request_tags: ReadOnly[Sequence[str]]
-    metadata: ReadOnly[str]
-    messages: ReadOnly[str]
-    response: ReadOnly[str]
+    TeamId: str
+    ApiKeyHash: str
+    ObservationType: SpanType
+    AgentName: str
+    LiteLLMRequestId: str
+    Model: str
+    InputTokens: int
+    OutputTokens: int
+    Input: str
+    Output: str

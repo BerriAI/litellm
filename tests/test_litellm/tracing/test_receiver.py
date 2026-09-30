@@ -2,11 +2,8 @@
 Tests for TraceReceiver.ingest (litellm/tracing/receiver.py) with a fake store.
 """
 
-import os
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-
 
 import pytest
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -115,6 +112,6 @@ async def test_empty_export_writes_nothing():
 async def test_reads_delegate_to_store():
     store = _fake_store()
     tracing = TraceReceiver(store)
-    scope: TraceScope = {"team_ids": ["team-research"], "api_key_hash": ""}
+    scope: TraceScope = {"team_ids": ("team-research",), "api_key_hash": ""}
     assert await tracing.get_trace("t1", scope) is None
     store.get_trace.assert_awaited_once_with("t1", scope, "")

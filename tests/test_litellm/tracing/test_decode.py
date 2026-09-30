@@ -7,11 +7,8 @@ deep_research_agent -> task (tool) -> researcher (subagent) -> search_docs (tool
 
 import gzip
 import json
-import os
-import sys
 from pathlib import Path
 from unittest.mock import patch
-
 
 import pytest
 from google.protobuf.json_format import Parse

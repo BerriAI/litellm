@@ -2,11 +2,8 @@
 Tests for the pure read-side helpers in litellm/tracing/store.py (no ClickHouse needed).
 """
 
-import os
-import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
-
 
 import pytest
 
@@ -119,7 +116,7 @@ def test_summary_totals():
     assert summary["tool_calls"] == 2
     assert summary["error_count"] == 0
     assert (summary["input_tokens"], summary["output_tokens"]) == (200, 40)
-    assert tuple(summary["models"]) == ("claude-sonnet-4-5",)
+    assert summary["models"] == ("claude-sonnet-4-5",)
     assert summary["duration_ms"] == 1000
     assert summary["start_time"].startswith("2026-09-30T")
 
@@ -158,7 +155,7 @@ def test_span_from_row_optional_fields():
 def test_agent_nodes_parent_and_per_agent_counts():
     trace = trace_from_rows("t1", _deep_agent_rows())
     assert trace is not None
-    assert list(trace["agents"]) == [
+    assert trace["agents"] == (
         {
             "name": "deep_research_agent",
             "parent_agent": None,
@@ -175,7 +172,7 @@ def test_agent_nodes_parent_and_per_agent_counts():
             "tool_calls": 1,
             "duration_ms": 5,
         },
-    ]
+    )
 
 
 def test_200_subagent_invocations_aggregate_into_one_node():
@@ -217,7 +214,7 @@ def test_parent_agent_stops_at_cyclic_parents():
 
 def test_agent_nodes_ignores_spans_of_unknown_agents():
     spans = [span_from_row(_row("t", "", "tool", "tool", "ghost"), T0)]
-    assert not agent_nodes(spans)
+    assert agent_nodes(spans) == ()
 
 
 # ---------------------------------------------------------------- list helpers
@@ -284,14 +281,14 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     }
     client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "trace_ref": "ref1", "start_ms": 900}])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": ["team-a"], "api_key_hash": ""}
+    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await store.list_traces(scope, 0, 2000, limit=2)
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
     assert page["next_cursor"] is not None
     assert decode_cursor(page["next_cursor"]) == (900, "ref1")
     params = client.query.call_args.args[1]
-    assert params["team_ids"] == ["team-a"] and params["limit"] == 2 and params["cursor_ms"] == 0
+    assert params["team_ids"] == ("team-a",) and params["limit"] == 2 and params["cursor_ms"] == 0
 
     page = await store.list_traces(scope, 0, 2000, cursor=page["next_cursor"], limit=3)
     assert page["next_cursor"] is None
@@ -303,7 +300,7 @@ async def test_get_span_not_found_and_found():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": [], "api_key_hash": ""}
+    scope: TraceScope = {"team_ids": (), "api_key_hash": ""}
     assert await store.get_span("t", "s", scope) is None
     client.query = AsyncMock(return_value=[{"span_id": "s", "input": "i", "output": "o", "attributes": {"k": "v"}}])
     assert await store.get_span("t", "s", scope) == {
