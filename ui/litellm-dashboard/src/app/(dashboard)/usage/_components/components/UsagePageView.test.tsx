@@ -915,7 +915,7 @@ describe("UsagePage", () => {
       expect(screen.getByText("UniqueUser (user-unique)")).toBeInTheDocument();
     });
 
-    it("should pass selected userId to aggregated call", async () => {
+    it("should include the current UTC day in global usage", async () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       await waitFor(() => {
@@ -928,6 +928,7 @@ describe("UsagePage", () => {
         expect.any(Date),
         expect.any(Date),
         null,
+        true,
       );
     });
   });
@@ -1020,6 +1021,7 @@ describe("UsagePage", () => {
           expect.any(Date),
           expect.any(Date),
           "user-123",
+          true,
         );
       });
     });
@@ -1133,10 +1135,24 @@ describe("UsagePage", () => {
       });
 
       // Verify first page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, null);
+      expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.any(Date),
+        expect.any(Date),
+        1,
+        null,
+        true,
+      );
 
       // Verify second page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 2, null);
+      expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.any(Date),
+        expect.any(Date),
+        2,
+        null,
+        true,
+      );
     });
   });
 
