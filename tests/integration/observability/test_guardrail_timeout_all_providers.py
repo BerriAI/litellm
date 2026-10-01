@@ -4,7 +4,7 @@ Each guardrail is configured against an owned sink that records the request and 
 ~20s. With `timeout: 1` the outbound call must abort near the bound, so the chat round trip
 completes in seconds instead of waiting on the sink. A control guardrail without `timeout`
 points at a sink path that sleeps ~3s and must wait for the reply, proving unset keeps the
-handler default.
+handler default. All probes are sent concurrently so their waits overlap.
 """
 
 from __future__ import annotations
@@ -13,15 +13,20 @@ import json
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, cast
 
 import httpx
 import pytest
 import yaml
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
@@ -29,11 +34,14 @@ from integration._support.wire import Reply, Request, wire_server
 SLOW_SECONDS: Final = 20
 FAST_SECONDS: Final = 3
 BOUND_SECONDS: Final = 8
+TOKEN_PATH: Final = "/token"
+TOKEN_REPLY: Final = json.dumps(
+    {"access_token": "synthetic-google-token", "expires_in": 3600, "token_type": "Bearer"}
+).encode()
 
 EXCLUDED: Final = {
-    "model_armor": "requires Google credentials before any HTTP call can be issued",
     "microsoft_purview": "token endpoint is the fixed login.microsoftonline.com and cannot point at a sink",
-    "agent_365": "authenticates against Entra ID before any HTTP call can be issued",
+    "agent_365": "honors its own request_timeout param, not litellm_params.timeout",
     "mcp_jwt_signer": "only runs for pre_mcp_call, which /v1/chat/completions cannot trigger",
     "semantic_guard": "routes through litellm embeddings, not a guardrail provider HTTP client",
     "llm_as_a_judge": "routes through litellm completions, not a guardrail provider HTTP client",
@@ -137,6 +145,14 @@ PROVIDERS: Final = (
     pytest.param("headroom", "headroom", {}, "pre_call", True, id="headroom"),
     pytest.param("onyx", "onyx", {}, "post_call", False, id="onyx"),
     pytest.param("panw", "panw_prisma_airs", {}, "pre_call", False, id="panw-prisma-airs"),
+    pytest.param(
+        "model-armor",
+        "model_armor",
+        {"project_id": "synthetic-project", "location": "us-central1", "template_id": "synthetic-template"},
+        "pre_call",
+        False,
+        id="model-armor",
+    ),
 )
 
 
@@ -171,8 +187,10 @@ class Sink:
                     sink.seen.append(
                         Seen(self.path, {k.lower(): v for k, v in self.headers.items()}, raw.decode(errors="replace"))
                     )
-                time.sleep(SLOW_SECONDS if self.path.startswith("/slow/") else FAST_SECONDS)
-                payload: Final = b"{}"
+                is_token: Final = self.path.startswith(TOKEN_PATH)
+                if not is_token:
+                    time.sleep(SLOW_SECONDS if self.path.startswith("/slow/") else FAST_SECONDS)
+                payload: Final = TOKEN_REPLY if is_token else b"{}"
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(payload)))
@@ -246,13 +264,32 @@ def _guardrail(
             "default_on": False,
             "api_key": f"key-{name}",
             **extra,
-            **_bases(provider, base),
+            **_bases(provider, base, sink),
             **({"timeout": timeout} if timeout is not None else {}),
         },
     }
 
 
-def _bases(provider: str, base: str) -> dict[str, object]:
+def _synthetic_private_key() -> str:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    ).decode()
+
+
+def _bases(provider: str, base: str, sink: str) -> dict[str, object]:
+    if provider == "model_armor":
+        return {
+            "api_endpoint": base.rstrip("/"),
+            "credentials": json.dumps(
+                {
+                    "type": "service_account",
+                    "client_email": "synthetic@synthetic-project.iam.gserviceaccount.com",
+                    "private_key": _synthetic_private_key(),
+                    "token_uri": sink + TOKEN_PATH,
+                }
+            ),
+        }
     if provider == "ibm_guardrails":
         return {"base_url": base}
     if provider == "ovalix":
@@ -321,7 +358,13 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         sink.stop()
 
 
-def _chat(rig: Rig, guardrail_name: str, exchange: bool = False) -> tuple[httpx.Response, float]:
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    response: httpx.Response | httpx.TimeoutException
+    elapsed: float
+
+
+def _chat(rig: Rig, guardrail_name: str, exchange: bool = False) -> Outcome:
     def tool_call(index: int) -> dict[str, object]:
         return {
             "role": "assistant",
@@ -348,30 +391,53 @@ def _chat(rig: Rig, guardrail_name: str, exchange: bool = False) -> tuple[httpx.
         else [{"role": "user", "content": f"guardrail timeout probe {guardrail_name}"}]
     )
     start: Final = time.monotonic()
-    response: Final = rig.proxy.client.post(
-        "/v1/chat/completions",
-        json={"model": rig.chat_model, "messages": messages, "guardrails": [guardrail_name]},
-        headers={"Authorization": f"Bearer {rig.proxy.key}"},
-    )
-    return response, time.monotonic() - start
+    try:
+        response: Final = rig.proxy.client.post(
+            "/v1/chat/completions",
+            json={"model": rig.chat_model, "messages": messages, "guardrails": [guardrail_name]},
+            headers={"Authorization": f"Bearer {rig.proxy.key}"},
+        )
+    except httpx.TimeoutException as error:
+        return Outcome(error, time.monotonic() - start)
+    return Outcome(response, time.monotonic() - start)
+
+
+@pytest.fixture(scope="module")
+def outcomes(rig: Rig) -> Mapping[str, Outcome]:
+    values: Final = tuple(_provider_values())
+    names: Final = (*(value[0] for value in values), "control-generic")
+    exchanges: Final = (*(value[4] for value in values), False)
+    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+        results: Final = tuple(pool.map(partial(_chat, rig), names, exchanges))
+    return MappingProxyType(dict(zip(names, results, strict=True)))
 
 
 @pytest.mark.parametrize("name,provider,extra,mode,exchange", PROVIDERS)
 def test_litellm_params_timeout_bounds_outbound_call(
-    rig: Rig, name: str, provider: str, extra: dict[str, object], mode: str, exchange: bool
+    rig: Rig,
+    outcomes: Mapping[str, Outcome],
+    name: str,
+    provider: str,
+    extra: dict[str, object],
+    mode: str,
+    exchange: bool,
 ) -> None:
-    response, elapsed = _chat(rig, name, exchange)
+    outcome: Final = outcomes[name]
     calls: Final = rig.sink.calls_for(name)
     assert calls, f"{name}: sink saw no request for {provider}"
-    assert elapsed < BOUND_SECONDS, f"{name}: elapsed {elapsed:.2f}s, expected under {BOUND_SECONDS}s with timeout=1"
-    assert response.status_code != 504, response.text
+    assert outcome.elapsed < BOUND_SECONDS, (
+        f"{name}: elapsed {outcome.elapsed:.2f}s, expected under {BOUND_SECONDS}s with timeout=1"
+    )
+    assert isinstance(outcome.response, httpx.Response), f"{name}: client gave up: {outcome.response!r}"
+    assert outcome.response.status_code != 504, outcome.response.text
 
 
-def test_unset_timeout_waits_for_sink_response(rig: Rig) -> None:
-    response, elapsed = _chat(rig, "control-generic")
+def test_unset_timeout_waits_for_sink_response(rig: Rig, outcomes: Mapping[str, Outcome]) -> None:
+    outcome: Final = outcomes["control-generic"]
     calls: Final = rig.sink.calls_for("control-generic")
     assert calls, "control-generic: sink saw no request"
-    assert elapsed >= FAST_SECONDS - 0.5, (
-        f"control-generic: elapsed {elapsed:.2f}s, expected to wait for the {FAST_SECONDS}s sink response"
+    assert outcome.elapsed >= FAST_SECONDS - 0.5, (
+        f"control-generic: elapsed {outcome.elapsed:.2f}s, expected to wait for the {FAST_SECONDS}s sink response"
     )
-    assert response.status_code in (200, 400, 500), response.text
+    assert isinstance(outcome.response, httpx.Response), f"control-generic: client gave up: {outcome.response!r}"
+    assert outcome.response.status_code in (200, 400, 500), outcome.response.text
