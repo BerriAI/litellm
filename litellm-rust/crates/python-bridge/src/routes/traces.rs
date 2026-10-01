@@ -240,7 +240,10 @@ fn spans_to_py<'py>(
             "normalized",
             litellm_host_python::Pythonized(&span.normalized).into_pyobject(py)?,
         )?;
-        row.set_item("consumed_attributes", span.consumed_attributes)?;
+        row.set_item(
+            "consumed_attributes",
+            litellm_host_python::Pythonized(&span.consumed_attributes).into_pyobject(py)?,
+        )?;
         result.append(row)?;
     }
     Ok(result)
