@@ -115,6 +115,30 @@ describe("SystemOneUI integration", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Virtual key rejected");
   });
 
+  it("renders malformed success responses inline", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          model: "jev-1.13.0",
+          answers: {
+            department: {
+              type: "choice",
+              choice: "technical",
+              probabilities: null,
+            },
+          },
+        }),
+    } as Response);
+    render(<SystemOneUI accessToken="session-key" />);
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("System One response has an invalid shape.");
+    expect(screen.queryByText("jev-1.13.0")).not.toBeInTheDocument();
+  });
+
   it("clears a previous answer when the request editor changes", async () => {
     const user = userEvent.setup();
     render(<SystemOneUI accessToken="session-key" />);

@@ -122,6 +122,10 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       if (activeController.current !== controller) {
         return;
       }
+      if (result.type === "error") {
+        setError(result.message);
+        return;
+      }
       setResponse(result.response);
       setLatencyMs(result.latencyMs);
     } catch (requestError: unknown) {
