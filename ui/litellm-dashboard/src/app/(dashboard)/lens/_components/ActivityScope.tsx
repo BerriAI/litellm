@@ -166,7 +166,7 @@ export function ActivityScope({
     return `${preview.data.eligible} matching ${noun}${preview.data.eligible === 1 ? "" : "s"}`;
   };
   return (
-    <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div className={mode === "activity" ? "grid gap-6 sm:grid-cols-2" : "space-y-5"}>
       <div className="space-y-5">
         {mode === "scope" ? (
           <>
@@ -198,9 +198,6 @@ export function ActivityScope({
                 </ComboboxContent>
               </Combobox>
             </label>
-            <p className="text-xs leading-5 text-muted-foreground">
-              Choose a recorded application, or leave blank. You can narrow any activity by its metadata.
-            </p>
             <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)} className="group">
               <summary className="cursor-pointer text-sm font-medium">
                 Advanced filters{filters.length ? ` (${filters.length})` : ""}
@@ -306,35 +303,37 @@ export function ActivityScope({
           </Button>
         )}
       </div>
-      <MatchingActivity
-        offset={offset}
-        onPage={setOffset}
-        onSelect={(runId, checked) =>
-          onChange({
-            ...value,
-            execution_ids: checked
-              ? [...(value.execution_ids ?? []), runId]
-              : (value.execution_ids ?? []).filter((id) => id !== runId),
-          })
-        }
-        manualSelection={manualSelection}
-        selectedIds={value.execution_ids ?? []}
-        selectedCount={
-          manualSelection
-            ? Math.min(
-                Math.ceil(((value.execution_ids?.length ?? 0) * (value.sample_percent ?? 100)) / 100),
-                value.sample_size ?? Infinity,
-              )
-            : preview.data?.selected ?? 0
-        }
-        title={previewTitle()}
-        windowLabel={windowLabel}
-        ready={ready}
-        error={preview.error}
-        data={preview.data}
-        onRetry={refreshPreview}
-        onOpen={(run) => setTrace({ id: run.trace_id, ref: run.trace_ref })}
-      />
+      {mode === "activity" && (
+        <MatchingActivity
+          offset={offset}
+          onPage={setOffset}
+          onSelect={(runId, checked) =>
+            onChange({
+              ...value,
+              execution_ids: checked
+                ? [...(value.execution_ids ?? []), runId]
+                : (value.execution_ids ?? []).filter((id) => id !== runId),
+            })
+          }
+          manualSelection={manualSelection}
+          selectedIds={value.execution_ids ?? []}
+          selectedCount={
+            manualSelection
+              ? Math.min(
+                  Math.ceil(((value.execution_ids?.length ?? 0) * (value.sample_percent ?? 100)) / 100),
+                  value.sample_size ?? Infinity,
+                )
+              : preview.data?.selected ?? 0
+          }
+          title={previewTitle()}
+          windowLabel={windowLabel}
+          ready={ready}
+          error={preview.error}
+          data={preview.data}
+          onRetry={refreshPreview}
+          onOpen={(run) => setTrace({ id: run.trace_id, ref: run.trace_ref })}
+        />
+      )}
       {trace && (
         <TracePanel
           open
@@ -377,6 +376,8 @@ function MatchingActivity({
   onRetry: () => void;
   onOpen: (run: Sample["executions"][number]) => void;
 }) {
+  const paginated = data?.next_offset != null || offset > 0;
+  const showSelection = selectedCount !== data?.eligible || paginated;
   return (
     <section aria-label="Matching activity" className="self-start rounded-lg border">
       <div className="border-b px-4 py-3">
@@ -433,13 +434,19 @@ function MatchingActivity({
             </div>
           ))}
       </div>
-      {ready && data && (
+      {ready && data && showSelection && (
         <div className="border-t px-4 py-3 space-y-2">
           <p className="text-xs text-muted-foreground">
-            {selectedCount} selected for analysis · Showing {offset + (data.executions.length ? 1 : 0)}–
-            {offset + data.executions.length} of {data.eligible}
+            {selectedCount} selected for analysis
+            {paginated && (
+              <>
+                {" "}
+                · Showing {offset + (data.executions.length ? 1 : 0)}–{offset + data.executions.length} of{" "}
+                {data.eligible}
+              </>
+            )}
           </p>
-          {(data.next_offset != null || offset > 0) && (
+          {paginated && (
             <div className="flex justify-between">
               <Button
                 size="sm"

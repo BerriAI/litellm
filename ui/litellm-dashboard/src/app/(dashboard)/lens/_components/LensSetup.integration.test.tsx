@@ -101,9 +101,6 @@ describe("Lens setup", () => {
     await user.click(screen.getByRole("button", { name: "Add condition" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata value 1" }), { target: { value: "research" } });
-    expect(await screen.findByText("1 matching run")).toBeInTheDocument();
-    expect(screen.getByText("Research report")).toBeInTheDocument();
-    expect(screen.getByText(/2026-09-30/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.type(screen.getByRole("textbox", { name: "Check 1" }), "Find incomplete reports");
     await user.click(screen.getByRole("button", { name: "Add check" }));
@@ -114,11 +111,10 @@ describe("Lens setup", () => {
     await user.click(screen.getByRole("button", { name: "Remove check 3" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
-    expect(screen.getByText(/swarm: research/)).toBeInTheDocument();
-    expect(screen.getByText("Research follow-up")).toBeVisible();
-    expect(screen.getByText(/no count limit/)).toBeVisible();
+    expect(screen.getByText("1 matching run")).toBeInTheDocument();
+    expect(screen.getByText("Research report")).toBeInTheDocument();
+    expect(screen.getByText(/2026-09-30/)).toBeInTheDocument();
     expect(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" })).not.toBeVisible();
-    expect(screen.getByText(/analysis · Runs once/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Run investigation" }));
     const expected = {
       name: "Research follow-up",
@@ -126,6 +122,8 @@ describe("Lens setup", () => {
       filters: [{ key: "swarm", value: "research" }],
       enabled: false,
       sample_size: null,
+      model: "analysis",
+      monthly_budget: 100,
       checks: [
         expect.objectContaining({ instruction: "Find incomplete reports" }),
         expect.objectContaining({ instruction: "Find repeated searches\nInclude retries that add no information" }),
@@ -229,12 +227,11 @@ it("shows optional budget and repeat controls only under advanced options and sa
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
-  expect(screen.getByText(/Runs once/)).toBeVisible();
   await user.click(screen.getByText("Advanced options"));
+  expect(screen.getByRole("checkbox", { name: "Repeat this investigation" })).not.toBeChecked();
   fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" }), { target: { value: "8" } });
   await user.click(screen.getByRole("checkbox", { name: "Repeat this investigation" }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Repeat every" }), { target: { value: "120" } });
-  expect(screen.getByText(/Repeats every 2 hours/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Run and monitor" }));
   expect(save).toHaveBeenCalledWith(
     expect.objectContaining({ enabled: true, interval_minutes: 120, monthly_budget: 8 }),
@@ -294,8 +291,7 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
         },
       ],
     });
-    await user.click(screen.getByRole("button", { name: "Refresh matching activity" }));
-    expect(await screen.findByText("1 matching run")).toBeVisible();
+    await vi.advanceTimersByTimeAsync(15000);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
     expect(await screen.findByRole("option", { name: "support-agent" })).toBeVisible();
   } finally {

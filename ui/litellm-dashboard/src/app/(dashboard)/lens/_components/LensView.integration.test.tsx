@@ -242,7 +242,7 @@ it("guides a first-time administrator into worker connection and lens setup", as
     expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
   );
   await user.click(guide.getByRole("button", { name: "Connect worker" }));
-  const connection = within(await screen.findByRole("dialog", { name: "Enable investigations" }));
+  const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));
   expect(connection.getByRole("button", { name: "Get install command" })).toBeVisible();
   await user.click(connection.getByRole("button", { name: "Close" }));
   expect(guide.getByRole("button", { name: "New investigation" })).toBeDisabled();

@@ -72,7 +72,7 @@ describe("Worker setup", () => {
       />,
     );
     expect(screen.getByText("Billing key required")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Change virtual key" }));
+    await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
     await user.click(screen.getByRole("button", { name: "Save analysis access" }));

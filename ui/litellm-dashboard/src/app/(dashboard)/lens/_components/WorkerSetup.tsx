@@ -78,8 +78,8 @@ export function WorkerSetup({
     ? workers.some((w) => w.id === created.worker.id && workerConnected(w, now))
     : workers.some((w) => workerConnected(w, now));
   const formVisible = !workers.some((w) => !w.revoked) || !!editingWorker;
-  const createdTitle = connected ? "Analysis is ready" : "Install the analysis service";
-  const formTitle = editingWorker ? "Analysis access" : "Enable investigations";
+  const createdTitle = connected ? "Worker connected" : "Run the worker";
+  const formTitle = editingWorker ? "Analysis access" : "Connect a worker";
   const validAccess = useExisting
     ? !!analysisKey
     : !!access.model && Number.isFinite(Number(access.budget)) && Number(access.budget) > 0;
@@ -132,9 +132,11 @@ export function WorkerSetup({
       setBusy(false);
     }
   };
-  const setupDescription = formVisible
-    ? "Lens needs a small service on your server to run investigations."
-    : "Worker status and model access";
+  const setupDescription = created
+    ? "Run this command on a server with Docker."
+    : "Deploy the worker on your server to run investigations.";
+  const awaitingConnection = !editingWorker && !connected;
+  const describeSetup = awaitingConnection && (formVisible || !!created);
   return (
     <Dialog
       open
@@ -144,9 +146,12 @@ export function WorkerSetup({
     >
       <DialogContent className="sm:max-w-xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-xl">{dialogTitle}</DialogTitle>
-          <DialogDescription>
-            {created && connected ? "You can now run investigations." : setupDescription}
+          <DialogTitle className="flex items-center gap-2 text-xl">
+            {created && connected && <CheckCircle2 className="size-5 text-emerald-700 dark:text-emerald-400" />}
+            {dialogTitle}
+          </DialogTitle>
+          <DialogDescription className={describeSetup ? undefined : "sr-only"}>
+            {describeSetup ? setupDescription : "Worker status and model access"}
           </DialogDescription>
         </DialogHeader>
         {formVisible && !created && (
@@ -164,7 +169,7 @@ export function WorkerSetup({
               />
             )}
             <details className="text-sm" open={editingWorker ? true : undefined}>
-              <summary className="cursor-pointer text-muted-foreground">Advanced options</summary>
+              <summary className="cursor-pointer font-medium">Advanced options</summary>
               <div className="mt-4 space-y-5">
                 <label className="flex items-center justify-between gap-4">
                   Use an existing virtual key
@@ -187,7 +192,6 @@ export function WorkerSetup({
           <div className="space-y-3">
             {!connected && (
               <>
-                <p className="text-sm leading-6">Run this command once on your server. Docker must be installed.</p>
                 <Button
                   variant="default"
                   onClick={async () => {
@@ -201,9 +205,9 @@ export function WorkerSetup({
                 >
                   {copied ? "Copied" : "Copy Docker command"}
                 </Button>
-                <p className="text-xs text-muted-foreground">The command contains a private worker token.</p>
                 <details className="text-sm">
                   <summary className="cursor-pointer text-muted-foreground">View command</summary>
+                  <p className="mt-3 text-xs text-muted-foreground">Contains a private worker token.</p>
                   <pre
                     aria-label="Docker command preview"
                     className="mt-3 max-h-48 overflow-auto rounded-md bg-muted/40 p-3 text-xs leading-5"
@@ -213,13 +217,11 @@ export function WorkerSetup({
                 </details>
               </>
             )}
-            <div
-              role="status"
-              className={`flex items-center gap-2 text-sm ${connected ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}
-            >
-              {connected ? <CheckCircle2 className="size-5" /> : <Loader2 className="size-4 animate-spin" />}
-              {connected ? "Worker connected" : "Waiting for your worker to connect…"}
-            </div>
+            {!connected && (
+              <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" /> Waiting for your worker to connect…
+              </div>
+            )}
             {!connected && (
               <details className="text-sm">
                 <summary className="cursor-pointer">Not connecting?</summary>
@@ -230,7 +232,9 @@ export function WorkerSetup({
               </details>
             )}
             {connected && (
-              <Button onClick={onReady ?? onClose}>{onReady ? "Continue to investigation" : "Done"}</Button>
+              <DialogFooter>
+                <Button onClick={onReady ?? onClose}>{onReady ? "New investigation" : "Done"}</Button>
+              </DialogFooter>
             )}
           </div>
         ) : null}
@@ -249,9 +253,9 @@ export function WorkerSetup({
           workers
             .filter((w) => !w.revoked)
             .map((worker) => (
-              <section key={worker.id} className="space-y-5 border-b pb-5 text-sm">
+              <section key={worker.id} className="space-y-5 text-sm">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="font-medium">{worker.name}</h3>
+                  {workers.filter((w) => !w.revoked).length > 1 && <h3 className="font-medium">{worker.name}</h3>}
                   <span
                     className={`flex items-center gap-2 ${workerConnected(worker, now) ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}
                   >
@@ -264,7 +268,7 @@ export function WorkerSetup({
                 )}
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>
-                    Change virtual key
+                    Settings
                   </Button>
                   <Button
                     variant="ghost"

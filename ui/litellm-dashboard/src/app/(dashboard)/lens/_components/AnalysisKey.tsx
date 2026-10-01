@@ -156,7 +156,7 @@ export function AnalysisAccessFields({
           value={value.budget}
           onChange={(e) => onChange({ ...value, budget: e.target.value })}
         />
-        <p className="text-xs text-muted-foreground">Shared across investigations. Resets each calendar month.</p>
+        <p className="text-xs text-muted-foreground">Shared across all investigations.</p>
       </div>
       {models.error && (
         <p role="alert" className="text-sm text-destructive">

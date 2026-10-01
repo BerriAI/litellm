@@ -79,7 +79,6 @@ export function LensWelcome({
           <Step number={3} complete={false} active={workerReady} />
           <div>
             <h3 className="text-sm font-medium">Run an investigation</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Choose activity and what to look for.</p>
           </div>
           <Button
             className="col-start-2 w-fit sm:col-start-auto"

@@ -16,14 +16,7 @@ import {
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DurationInput } from "./DurationInput";
 import { ActivityScope, type ActivitySelection } from "./ActivityScope";
-import {
-  analysisModelOptions,
-  durationLabel,
-  normalizeFilters,
-  scopeLabel,
-  type AnalysisModelInfo,
-  type Settings,
-} from "./lensData";
+import { analysisModelOptions, normalizeFilters, type AnalysisModelInfo, type Settings } from "./lensData";
 
 function validateSample(selection: ActivitySelection) {
   const hours = selection.lookback_hours ?? 24;
@@ -168,10 +161,12 @@ export function LensSetup({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogContent className="flex max-h-[90dvh] flex-col gap-6 overflow-hidden sm:max-w-3xl">
+      <DialogContent
+        className={`flex max-h-[90dvh] flex-col gap-6 overflow-hidden ${step === 2 ? "sm:max-w-3xl" : "sm:max-w-xl"}`}
+      >
         <DialogHeader>
           <DialogTitle className="text-xl">{headings[step]}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             {
               [
                 "Start with an agent, or use filters to investigate any recorded activity.",
@@ -288,18 +283,6 @@ export function LensSetup({
           )}
           {step === 2 && (
             <>
-              <div className="space-y-1 border-t pt-4 text-sm">
-                <p className="font-medium">{title}</p>
-                <p className="text-xs text-muted-foreground">
-                  {scopeLabel(selection)} · {selection.sample_percent ?? 100}% sample
-                  {selection.sample_size ? `, up to ${selection.sample_size} runs` : ", no count limit"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {model && `${model} · `}
-                  {repeat ? `Repeats every ${durationLabel(interval, "minutes")}` : "Runs once"} · ${budget} monthly
-                  limit
-                </p>
-              </div>
               <details open={!model || undefined}>
                 <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
                 <div className="mt-4 space-y-5">

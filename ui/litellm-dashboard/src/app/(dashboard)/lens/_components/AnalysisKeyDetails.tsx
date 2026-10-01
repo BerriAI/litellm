@@ -68,8 +68,13 @@ export function AnalysisKeyDetails({
   const info = key.data;
   return (
     <div className="space-y-2 text-sm">
-      {showName && <p className="font-medium">{info.key_alias || "Assigned virtual key"}</p>}
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2">
+        {showName && (
+          <>
+            <dt className="text-muted-foreground">Billing key</dt>
+            <dd className="break-words">{info.key_alias || "Assigned virtual key"}</dd>
+          </>
+        )}
         <dt className="text-muted-foreground">Models</dt>
         <dd className="break-words">{info.models.length ? info.models.join(", ") : "All models"}</dd>
         <dt className="text-muted-foreground">Key limit</dt>
