@@ -5971,18 +5971,9 @@ class ProxyConfig:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
-            # default_redis_ttl is a DualCache/global setting, not a redis-py
-            # Redis() constructor kwarg. Promote it to the global and filter it
-            # out when constructing Cache (do NOT pop the caller's dict: the
-            # caller snapshots cache_params to detect DB reloads and a mutation
-            # here would force a cache rebuild on every poll).
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        # Copy first: the caller snapshots cache_params to detect DB reloads, so
-        # mutating it here would force a cache rebuild on every poll.
-        cache_kwargs = dict(cache_params)  # mutable-ok: local filter; caller's dict is left untouched
-        cache_kwargs.pop("default_redis_ttl", None)
-        litellm.cache = Cache(**cache_kwargs)
+        litellm.cache = Cache(**cache_params)
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None

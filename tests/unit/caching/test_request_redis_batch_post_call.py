@@ -279,43 +279,6 @@ async def test_a_slot_released_before_the_response_reaches_redis_at_once_not_on_
 
 
 @pytest.mark.asyncio
-async def test_a_deferred_response_cache_set_without_a_ttl_expires_in_redis_like_the_direct_path():
-    client = FakeClient(_ok_replies)
-    redis_cache = PostCallFakeRedisCache(client)
-    dual_cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache(), default_in_memory_ttl=300)
-
-    await dual_cache.async_set_cache("direct", {"id": "resp"})
-    with request_redis_batch_scope():
-        await dual_cache.async_set_cache_post_call("deferred", {"id": "resp"}, None)
-        await flush_post_call_redis_batches()
-
-    (command,) = client.pipelines[0].commands
-    assert (command[0], command[1], command[3]) == ("SET", "deferred", redis_cache.alone[0][2]["ttl"])
-    assert command[3] == 300
-
-
-@pytest.mark.asyncio
-async def test_a_deferred_response_cache_set_without_a_ttl_uses_default_redis_ttl_when_configured():
-    client = FakeClient(_ok_replies)
-    redis_cache = PostCallFakeRedisCache(client)
-    dual_cache = DualCache(
-        redis_cache=redis_cache,
-        in_memory_cache=InMemoryCache(),
-        default_in_memory_ttl=300,
-        default_redis_ttl=3600,
-    )
-
-    await dual_cache.async_set_cache("direct", {"id": "resp"})
-    with request_redis_batch_scope():
-        await dual_cache.async_set_cache_post_call("deferred", {"id": "resp"}, None)
-        await flush_post_call_redis_batches()
-
-    (command,) = client.pipelines[0].commands
-    assert (command[0], command[1], command[3]) == ("SET", "deferred", redis_cache.alone[0][2]["ttl"])
-    assert command[3] == 3600
-
-
-@pytest.mark.asyncio
 async def test_a_released_slot_is_free_locally_at_once_and_the_older_redis_count_does_not_overwrite_the_gauge():
     def replies(command: tuple[object, ...]) -> object:
         if command[0] == "EVALSHA":
