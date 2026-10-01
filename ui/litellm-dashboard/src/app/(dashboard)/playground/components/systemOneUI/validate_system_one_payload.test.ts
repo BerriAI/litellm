@@ -70,12 +70,36 @@ describe("validateSystemOnePayload", () => {
     );
   });
 
+  it("requires instructions to be a string", () => {
+    const result = validateSystemOnePayload(
+      requestWith({
+        questions: { category: { type: "choice", instructions: { text: "Route" }, criteria: { support: "Help" } } },
+      }),
+    );
+    expect(result.isValid).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ path: "questions.category.instructions", severity: "error" }),
+    );
+  });
+
   it.each([undefined, null, [], "criteria"])("requires choice criteria as an object: %s", (criteria) => {
     expect(
       validateSystemOnePayload(
         requestWith({ questions: { category: { type: "choice", instructions: "Route", criteria } } }),
       ).issues,
     ).toContainEqual(expect.objectContaining({ path: "questions.category.criteria", severity: "error" }));
+  });
+
+  it("requires choice descriptions to be strings", () => {
+    const result = validateSystemOnePayload(
+      requestWith({
+        questions: { category: { type: "choice", instructions: "Route", criteria: { support: { text: "Help" } } } },
+      }),
+    );
+    expect(result.isValid).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ path: "questions.category.criteria", severity: "error" }),
+    );
   });
 
   it.each([{}, Object.fromEntries(Array.from({ length: 256 }, (_, index) => [`option-${index}`, "Description"]))])(
@@ -124,6 +148,20 @@ describe("validateSystemOnePayload", () => {
     ).toContainEqual(expect.objectContaining({ path: "questions.urgency.criteria", severity: "error" }));
   });
 
+  it("requires score levels to be strings", () => {
+    const result = validateSystemOnePayload(
+      requestWith({
+        questions: {
+          urgency: { type: "score", instructions: "Rate urgency", criteria: ["Low", { level: "High" }] },
+        },
+      }),
+    );
+    expect(result.isValid).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ path: "questions.urgency.criteria", severity: "error" }),
+    );
+  });
+
   it("warns about more than ten score levels without invalidating the request", () => {
     const result = validateSystemOnePayload(
       requestWith({
@@ -165,6 +203,27 @@ describe("validateSystemOnePayload", () => {
       validateSystemOnePayload(requestWith({ questions: { escalation: { type: "noul", instructions: "Escalate?" } } }))
         .isValid,
     ).toBe(true);
+  });
+
+  it("requires noul criteria definitions to be strings", () => {
+    const result = validateSystemOnePayload(
+      requestWith({
+        questions: {
+          escalation: {
+            type: "noul",
+            instructions: "Escalate?",
+            criteria: { true: { meaning: "yes" }, false: 1 },
+          },
+        },
+      }),
+    );
+    expect(result.isValid).toBe(false);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "questions.escalation.criteria.true", severity: "error" }),
+        expect.objectContaining({ path: "questions.escalation.criteria.false", severity: "error" }),
+      ]),
+    );
   });
 
   it.each(SYSTEM_ONE_PRESETS)("validates the $name preset", ({ payload }) => {

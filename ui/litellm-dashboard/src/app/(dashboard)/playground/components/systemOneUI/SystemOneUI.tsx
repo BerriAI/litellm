@@ -23,12 +23,13 @@ type ApiKeySource = "session" | "custom";
 
 const INITIAL_PRESET = SYSTEM_ONE_PRESETS[0];
 
+function getCustomProxyBaseUrl(): string | undefined {
+  return typeof window === "undefined" ? undefined : window.sessionStorage.getItem("customProxyBaseUrl") || undefined;
+}
+
 export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation = false }: SystemOneUIProps) {
   const [apiKeySource, setApiKeySource] = useState<ApiKeySource>(disabledPersonalKeyCreation ? "custom" : "session");
   const [customApiKey, setCustomApiKey] = useState("");
-  const [customProxyBaseUrl] = useState<string>(() =>
-    typeof window === "undefined" ? "" : window.sessionStorage.getItem("customProxyBaseUrl") || "",
-  );
   const [selectedPresetId, setSelectedPresetId] = useState(INITIAL_PRESET.id);
   const [rawPayload, setRawPayload] = useState(() => JSON.stringify(INITIAL_PRESET.payload, null, 2));
   const [response, setResponse] = useState<SystemOneResponse>();
@@ -38,7 +39,21 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const activeController = useRef<AbortController | null>(null);
   const validation = useMemo(() => validateSystemOnePayload(rawPayload), [rawPayload]);
   const effectiveApiKey = apiKeySource === "session" ? accessToken || "" : customApiKey.trim();
+  const effectiveApiKeyRef = useRef(effectiveApiKey);
   const hasSyntaxError = validation.issues.some((issue) => issue.path === "syntax");
+
+  useEffect(() => {
+    if (effectiveApiKeyRef.current === effectiveApiKey) {
+      return;
+    }
+    effectiveApiKeyRef.current = effectiveApiKey;
+    activeController.current?.abort();
+    activeController.current = null;
+    setResponse(undefined);
+    setLatencyMs(undefined);
+    setError(undefined);
+    setIsLoading(false);
+  }, [effectiveApiKey]);
 
   useEffect(
     () => () => {
@@ -48,13 +63,29 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     [],
   );
 
+  function clearRequestState() {
+    activeController.current?.abort();
+    activeController.current = null;
+    setResponse(undefined);
+    setLatencyMs(undefined);
+    setError(undefined);
+    setIsLoading(false);
+  }
+
+  function handlePayloadChange(value: string) {
+    if (value !== rawPayload) {
+      clearRequestState();
+      setRawPayload(value);
+    }
+  }
+
   function handlePresetChange(value: string | null) {
     const preset = SYSTEM_ONE_PRESETS.find((entry) => entry.id === value);
     if (!preset) {
       return;
     }
+    handlePayloadChange(JSON.stringify(preset.payload, null, 2));
     setSelectedPresetId(preset.id);
-    setRawPayload(JSON.stringify(preset.payload, null, 2));
   }
 
   function handleFormatJson() {
@@ -64,14 +95,12 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     const parsed: unknown = JSON.parse(rawPayload);
     const formatted = JSON.stringify(parsed, null, 2);
     if (formatted) {
-      setRawPayload(formatted);
+      handlePayloadChange(formatted);
     }
   }
 
   function handleAbort() {
-    activeController.current?.abort();
-    activeController.current = null;
-    setIsLoading(false);
+    clearRequestState();
   }
 
   async function handleSend() {
@@ -89,12 +118,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     setIsLoading(true);
 
     try {
-      const result = await makeSystemOneRequest(
-        payload,
-        effectiveApiKey,
-        customProxyBaseUrl || undefined,
-        controller.signal,
-      );
+      const result = await makeSystemOneRequest(payload, effectiveApiKey, getCustomProxyBaseUrl(), controller.signal);
       if (activeController.current !== controller) {
         return;
       }
@@ -121,7 +145,12 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             <span className="text-sm font-medium text-muted-foreground">Virtual Key Source</span>
             <Select
               value={apiKeySource}
-              onValueChange={(value) => setApiKeySource(value as ApiKeySource)}
+              onValueChange={(value) => {
+                if (value === "session" || value === "custom") {
+                  clearRequestState();
+                  setApiKeySource(value);
+                }
+              }}
               disabled={disabledPersonalKeyCreation}
             >
               <SelectTrigger className="w-48" aria-label="Virtual Key Source">
@@ -139,7 +168,10 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 type="password"
                 aria-label="Virtual Key"
                 value={customApiKey}
-                onChange={(event) => setCustomApiKey(event.target.value)}
+                onChange={(event) => {
+                  clearRequestState();
+                  setCustomApiKey(event.target.value);
+                }}
                 placeholder="Enter Virtual Key"
                 className="w-56"
               />
@@ -187,7 +219,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <Textarea
             aria-label="System One JSON payload"
             value={rawPayload}
-            onChange={(event) => setRawPayload(event.target.value)}
+            onChange={(event) => handlePayloadChange(event.target.value)}
             className="min-h-80 flex-1 resize-y font-mono text-xs"
             spellCheck={false}
           />

@@ -63,8 +63,9 @@ describe("SystemOneUI integration", () => {
 
   it("posts the request with the session key and renders calibrated answers", async () => {
     const user = userEvent.setup();
-    sessionStorage.setItem("customProxyBaseUrl", "https://tenant.example.com/");
+    sessionStorage.setItem("customProxyBaseUrl", "https://stale.example.com/");
     render(<SystemOneUI accessToken="session-key" />);
+    sessionStorage.setItem("customProxyBaseUrl", "https://tenant.example.com/");
 
     await user.click(screen.getByRole("button", { name: "Send" }));
 
@@ -81,6 +82,29 @@ describe("SystemOneUI integration", () => {
     });
   });
 
+  it("keeps the preview usable when question values have invalid types", () => {
+    render(<SystemOneUI accessToken="session-key" />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+      target: {
+        value: JSON.stringify({
+          state: "A new support request",
+          questions: {
+            category: {
+              type: "choice",
+              instructions: { text: "Route the message" },
+              criteria: { support: { text: "Help" } },
+            },
+          },
+        }),
+      },
+    });
+
+    expect(screen.getByText("Instructions must be a string.")).toBeInTheDocument();
+    expect(screen.getByText("Choice descriptions must be strings.")).toBeInTheDocument();
+    expect(screen.getByText("Enter a valid request to preview its state and questions.")).toBeInTheDocument();
+  });
+
   it("renders upstream errors inline", async () => {
     const user = userEvent.setup();
     mockFetch.mockResolvedValueOnce(createResponse(responseBody, 401, "Virtual key rejected"));
@@ -89,6 +113,32 @@ describe("SystemOneUI integration", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Virtual key rejected");
+  });
+
+  it("clears a previous answer when the request editor changes", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+      target: {
+        value: JSON.stringify({
+          state: "A different support request",
+          questions: {
+            department: {
+              type: "choice",
+              instructions: "Where should this go?",
+              criteria: { billing: "Billing questions" },
+            },
+          },
+        }),
+      },
+    });
+
+    expect(screen.queryByText("Selected choice")).not.toBeInTheDocument();
+    expect(screen.queryByText("jev-1.13.0")).not.toBeInTheDocument();
   });
 
   it("aborts an in-flight request when cancelled", async () => {

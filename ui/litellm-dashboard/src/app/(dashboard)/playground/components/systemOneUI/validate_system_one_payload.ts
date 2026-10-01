@@ -28,6 +28,9 @@ function validateChoiceCriteria(criteria: unknown, path: string): SystemOnePaylo
   if (Object.keys(criteria).length < 1 || Object.keys(criteria).length > 255) {
     return [questionIssue(path, "Choice criteria must contain between 1 and 255 options.")];
   }
+  if (Object.values(criteria).some((description) => typeof description !== "string")) {
+    return [questionIssue(path, "Choice descriptions must be strings.")];
+  }
   return [];
 }
 
@@ -38,9 +41,22 @@ function validateScoreCriteria(criteria: unknown, path: string): SystemOnePayloa
   if (criteria.length < 2) {
     return [questionIssue(path, "Score criteria must contain at least 2 levels.")];
   }
-  return criteria.length > 10
-    ? [questionIssue(path, "More than 10 score levels may reduce result quality.", "warning")]
+  const issues = criteria.some((level) => typeof level !== "string")
+    ? [questionIssue(path, "Score levels must be strings.")]
     : [];
+  return criteria.length > 10
+    ? [...issues, questionIssue(path, "More than 10 score levels may reduce result quality.", "warning")]
+    : issues;
+}
+
+function validateInstructions(value: Record<string, unknown>, path: string): SystemOnePayloadIssue[] {
+  if (!("instructions" in value)) {
+    return [questionIssue(`${path}.instructions`, "Required property 'instructions' is missing.")];
+  }
+  if (typeof value.instructions !== "string") {
+    return [questionIssue(`${path}.instructions`, "Instructions must be a string.")];
+  }
+  return [];
 }
 
 function validateQuestion(id: string, value: unknown): SystemOnePayloadIssue[] {
@@ -52,10 +68,7 @@ function validateQuestion(id: string, value: unknown): SystemOnePayloadIssue[] {
     return [questionIssue(`${path}.type`, "Question type must be choice, noul, or score.")];
   }
 
-  const instructionIssues =
-    "instructions" in value
-      ? []
-      : [questionIssue(`${path}.instructions`, "Required property 'instructions' is missing.")];
+  const instructionIssues = validateInstructions(value, path);
 
   if (value.type === "choice") {
     return [...instructionIssues, ...validateChoiceCriteria(value.criteria, `${path}.criteria`)];
@@ -63,10 +76,21 @@ function validateQuestion(id: string, value: unknown): SystemOnePayloadIssue[] {
   if (value.type === "score") {
     return [...instructionIssues, ...validateScoreCriteria(value.criteria, `${path}.criteria`)];
   }
-  if ("criteria" in value && !isRecord(value.criteria)) {
+  if ("criteria" in value) {
+    if (!isRecord(value.criteria)) {
+      return [
+        ...instructionIssues,
+        questionIssue(`${path}.criteria`, "Noul criteria, when provided, must be an object."),
+      ];
+    }
     return [
       ...instructionIssues,
-      questionIssue(`${path}.criteria`, "Noul criteria, when provided, must be an object."),
+      ...("true" in value.criteria && typeof value.criteria.true !== "string"
+        ? [questionIssue(`${path}.criteria.true`, "Noul true criteria must be a string.")]
+        : []),
+      ...("false" in value.criteria && typeof value.criteria.false !== "string"
+        ? [questionIssue(`${path}.criteria.false`, "Noul false criteria must be a string.")]
+        : []),
     ];
   }
   return instructionIssues;
