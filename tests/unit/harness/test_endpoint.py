@@ -68,7 +68,7 @@ def gateway_endpoint(recorder: Recorder, **kwargs: Any) -> ModelEndpoint:
         Harness.CLAUDE_CODE,
         kwargs.pop("model", "claude-sonnet"),
         GATEWAY,
-        transport=httpx.MockTransport(recorder),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(recorder)),
         **kwargs,
     )
 
