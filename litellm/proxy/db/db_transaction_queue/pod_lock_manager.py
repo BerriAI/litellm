@@ -121,8 +121,8 @@ end
         Release the lock if the current pod holds it.
         Uses an atomic Lua compare-and-delete to prevent TOCTOU races where a
         stale owner could delete a newly reacquired lock.
-        Falls back to GET + DEL for cache implementations that don't support
-        script registration.
+        Without Lua compare-and-delete, leaves the lock to expire rather than
+        risking deletion of a replacement owner's lock.
         """
         if self.redis_cache is None:
             verbose_proxy_logger.debug("redis_cache is None, skipping release_lock")
@@ -158,8 +158,7 @@ end
         """
         Atomically delete lock key only if current pod owns it.
 
-        Falls back to get/delete for non-RedisCache implementations that do not
-        expose Lua script registration.
+        If scripting is unavailable, leave the lock in place until its TTL expires.
         """
         script_register: Final = getattr(self.redis_cache, "async_register_script", None)
         if callable(script_register):
@@ -171,23 +170,20 @@ end
                 # the Lua equality check matches and the lock is released
                 result = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
                 return int(result or 0)
-            except Exception:
-                # Lua execution failed (e.g. Redis restart cleared loaded scripts,
-                # or scripting is disabled). Reset cached script handle and fall
-                # through to the GET + DEL fallback so the lock is still released.
+            except Exception as exc:
                 self._release_lock_script = None
                 verbose_proxy_logger.warning(
-                    "Lua compare-and-delete failed for lock_key=%s, falling back to GET+DEL",
+                    "Lua compare-and-delete failed for lock_key=%s; leaving lock to expire: %s",
                     lock_key,
+                    exc,
                 )
+                return 0
 
-        current_value = await self.redis_cache.async_get_cache(lock_key)
-        if isinstance(current_value, bytes):
-            current_value = current_value.decode("utf-8")
-        if current_value != self.pod_id:
-            return 0
-        result = await self.redis_cache.async_delete_cache(lock_key)
-        return int(result or 0)
+        verbose_proxy_logger.warning(
+            "Lua compare-and-delete unavailable for lock_key=%s; leaving lock to expire",
+            lock_key,
+        )
+        return 0
 
     @staticmethod
     def _emit_acquired_lock_event(cronjob_id: str, pod_id: str):

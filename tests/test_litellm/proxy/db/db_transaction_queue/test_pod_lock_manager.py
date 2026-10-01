@@ -112,62 +112,41 @@ async def test_acquire_lock_expired(pod_lock_manager, mock_redis):
 
 
 @pytest.mark.asyncio
-async def test_release_lock_success(pod_lock_manager, mock_redis):
-    """
-    Test that the release lock works when the current pod holds the lock
-    """
-    # Mock get_cache to return this pod's ID
+async def test_release_lock_without_script_leaves_own_lock_to_expire(pod_lock_manager, mock_redis):
     mock_redis.async_get_cache.return_value = pod_lock_manager.pod_id
-    # Mock successful deletion
-    mock_redis.async_delete_cache.return_value = 1
 
-    await pod_lock_manager.release_lock(
-        cronjob_id="test_job",
-    )
+    await pod_lock_manager.release_lock(cronjob_id="test_job")
 
-    # Verify get_cache was called
-    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
-    mock_redis.async_get_cache.assert_called_once_with(lock_key)
-    # Verify delete_cache was called
-    mock_redis.async_delete_cache.assert_called_once_with(lock_key)
-
-
-@pytest.mark.asyncio
-async def test_release_lock_different_pod(pod_lock_manager, mock_redis):
-    """
-    Test that the release lock doesn't delete when a different pod holds the lock
-    """
-    # Mock get_cache to return a different pod's ID
-    mock_redis.async_get_cache.return_value = "different_pod_id"
-
-    await pod_lock_manager.release_lock(
-        cronjob_id="test_job",
-    )
-
-    # Verify get_cache was called
-    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
-    mock_redis.async_get_cache.assert_called_once_with(lock_key)
-    # Verify delete_cache was NOT called
+    mock_redis.async_get_cache.assert_not_called()
     mock_redis.async_delete_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_release_lock_no_lock(pod_lock_manager, mock_redis):
-    """
-    Test release lock behavior when no lock exists
-    """
-    # Mock get_cache to return None (no lock)
-    mock_redis.async_get_cache.return_value = None
+async def test_release_lock_without_script_preserves_new_owner(pod_lock_manager, mock_redis):
+    class ReplacedLockCache:
+        def __init__(self):
+            self.owner = pod_lock_manager.pod_id
+            self.reads = 0
+            self.deletes = 0
 
-    await pod_lock_manager.release_lock(
-        cronjob_id="test_job",
-    )
+        async def async_get_cache(self, key):
+            self.reads += 1
+            old_owner = self.owner
+            self.owner = "new-pod"
+            return old_owner
 
-    # Verify get_cache was called
-    lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
-    mock_redis.async_get_cache.assert_called_once_with(lock_key)
-    # Verify delete_cache was NOT called
-    mock_redis.async_delete_cache.assert_not_called()
+        async def async_delete_cache(self, key):
+            self.deletes += 1
+            self.owner = None
+            return 1
+
+    cache = ReplacedLockCache()
+    pod_lock_manager.redis_cache = cache
+    await pod_lock_manager.release_lock(cronjob_id="test_job")
+
+    assert cache.owner == pod_lock_manager.pod_id
+    assert cache.reads == 0
+    assert cache.deletes == 0
 
 
 @pytest.mark.asyncio
@@ -248,14 +227,11 @@ async def test_bytes_handling(pod_lock_manager, mock_redis):
     )
     assert result == True
 
-    # Reset for release test
-    mock_redis.async_get_cache.return_value = pod_lock_manager.pod_id.encode("utf-8")
-    mock_redis.async_delete_cache.return_value = 1
-
-    await pod_lock_manager.release_lock(
-        cronjob_id="test_job",
-    )
-    mock_redis.async_delete_cache.assert_called_once()
+    # Release without Lua cannot safely use decoded bytes and a plain delete.
+    mock_redis.async_get_cache.reset_mock()
+    await pod_lock_manager.release_lock(cronjob_id="test_job")
+    mock_redis.async_get_cache.assert_not_called()
+    mock_redis.async_delete_cache.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -442,23 +418,17 @@ async def test_release_lock_preserves_lock_held_by_other_pod():
 
 
 @pytest.mark.asyncio
-async def test_release_lock_falls_back_to_get_del_when_lua_execution_fails(pod_lock_manager, mock_redis):
-    """
-    Test that release_lock falls back to GET+DEL when Lua script execution
-    raises (e.g. Redis restart cleared loaded scripts).
-    """
+async def test_release_lock_lua_failure_leaves_lock_to_expire(pod_lock_manager, mock_redis):
     script_callable = AsyncMock(side_effect=Exception("NOSCRIPT"))
     mock_redis.async_register_script = MagicMock(return_value=script_callable)
     mock_redis.async_get_cache.return_value = pod_lock_manager.pod_id
-    mock_redis.async_delete_cache.return_value = 1
 
     await pod_lock_manager.release_lock(cronjob_id="test_job")
 
-    # Lua failed — should have fallen back to GET+DEL
     lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
-    mock_redis.async_get_cache.assert_called_once_with(lock_key)
-    mock_redis.async_delete_cache.assert_called_once_with(lock_key)
-    # Cached script handle should be reset so next call re-registers
+    script_callable.assert_awaited_once_with(keys=[lock_key], args=[json.dumps(pod_lock_manager.pod_id)])
+    mock_redis.async_get_cache.assert_not_called()
+    mock_redis.async_delete_cache.assert_not_called()
     assert pod_lock_manager._release_lock_script is None
 
 
