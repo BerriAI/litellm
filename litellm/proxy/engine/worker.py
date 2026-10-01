@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import sqlite3
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from types import MappingProxyType
 from typing import Final
@@ -14,11 +16,31 @@ logger: Final = logging.getLogger("litellm.engine.worker")
 
 
 class EngineWorker:
-    def __init__(self, client: httpx.AsyncClient) -> None:
+    def __init__(self, client: httpx.AsyncClient, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.client: Final = client
+        self.sleep: Final = sleep
+
+    async def model_request(self, path: str, body: ModelRequest, attempt: int = 0) -> ModelResult:
+        try:
+            result: Final = await self.client.post(path, json=body.model_dump())
+            result.raise_for_status()
+            return ModelResult.model_validate(result.json())
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            retryable: Final = not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code in (
+                429,
+                502,
+                503,
+                504,
+            )
+            if not retryable or attempt >= 2:
+                raise
+            await self.sleep(2**attempt)
+            return await self.model_request(path, body, attempt + 1)
 
     async def run_once(self) -> bool:
-        response: Final = await self.client.post("/engine/worker/claim")
+        response: Final = await self.client.post(
+            "/engine/worker/claim", params=MappingProxyType({"protocol_version": 2})
+        )
         response.raise_for_status()
         if response.json() is None:
             return False
@@ -26,9 +48,7 @@ class EngineWorker:
         prefix: Final = f"/engine/worker/{claim.engine_id}/{claim.job.id}"
 
         async def model(body: ModelRequest) -> ModelResult:
-            result: Final = await self.client.post(prefix + "/model", json=body.model_dump())
-            result.raise_for_status()
-            return ModelResult.model_validate(result.json())
+            return await self.model_request(prefix + "/model", body)
 
         async def read(execution_id: str, cursor: str, offset: int) -> ExecutionContent:
             result: Final = await self.client.get(
@@ -63,10 +83,12 @@ class EngineWorker:
             result: Final = await analyze_sample(claim, sample, read, model, progress)
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, ValueError, OSError, sqlite3.Error) as exc:
             status: Final = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
             message: Final = (
-                "Monthly budget reached"
+                "Worker temporary storage failed. Increase its capacity or reduce analysis parallelism."
+                if isinstance(exc, (OSError, sqlite3.Error))
+                else "Monthly budget reached"
                 if status == 402
                 else "Analysis interrupted. Check worker connectivity, model configuration, and trace storage."
             )
