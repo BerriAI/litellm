@@ -33707,6 +33707,18 @@
         "Worker": {
           "additionalProperties": false,
           "properties": {
+            "analysis_key_id": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Analysis Key Id"
+            },
             "id": {
               "title": "Id",
               "type": "string"
@@ -33758,6 +33770,11 @@
         },
         "WorkerName": {
           "properties": {
+            "analysis_key_id": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Analysis Key Id",
+              "type": "string"
+            },
             "name": {
               "default": "Lens worker",
               "maxLength": 100,
@@ -33766,6 +33783,9 @@
               "type": "string"
             }
           },
+          "required": [
+            "analysis_key_id"
+          ],
           "title": "WorkerName",
           "type": "object"
         }
