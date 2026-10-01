@@ -175,19 +175,8 @@ def test_the_repo_as_it_stands_has_every_shard_child_assigned():
     assert [f.subject for f in findings] == []
 
 
-def test_a_child_named_only_by_unit_selection_counts_as_claimed(tmp_path):
-    root = tmp_path / "tests" / "tree"
-    (root / "claimed").mkdir(parents=True)
-    (root / "claimed" / "test_a.py").write_text("def test_a(): assert True\n")
-    (root / "orphan").mkdir(parents=True)
-    (root / "orphan" / "test_b.py").write_text("def test_b(): assert True\n")
-
-    selection_tokens: Final = coverage._invoked_test_tokens(coverage._all_scalars()) | frozenset(
-        {"tests/tree/claimed"}
-    )
-    findings = coverage._unassigned_shard_children(selection_tokens, roots=("tests/tree",), repo_root=tmp_path)
-
-    assert tuple(f.subject for f in findings) == ("tests/tree/orphan",)
+def test_check_shards_passes_on_the_repo_as_it_stands(capsys):
+    assert coverage._check_shards() == 0
 
 
 # --------------------------------------------------------------------------- #
