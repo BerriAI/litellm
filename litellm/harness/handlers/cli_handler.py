@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
@@ -46,7 +46,7 @@ async def iter_stream_lines(stream: asyncio.StreamReader) -> AsyncIterator[bytes
         yield buffer
 
 
-async def drain_stderr(stream: asyncio.StreamReader, tail: deque[str]) -> None:
+async def drain_stderr(stream: asyncio.StreamReader, tail: deque[str]) -> None:  # mutable-ok: stderr ring
     async for line in iter_stream_lines(stream):
         tail.append(line.decode("utf-8", errors="replace"))
 
@@ -72,14 +72,16 @@ def sandbox_path(private_dir: str, path: str) -> str:
 
 
 async def persist_dir(sandbox: Sandbox, link_path: str, cache_subpath: str) -> None:
-    run = await sandbox.run(["sh", "-c", PERSIST_DIR_SCRIPT, "sh", link_path, cache_subpath])
+    script_args: Final = ("-c", PERSIST_DIR_SCRIPT, "sh", link_path, cache_subpath)
+    cmd: Final = ["sh", *script_args]  # mutable-ok: Sandbox.run takes list[str]
+    run = await sandbox.run(cmd)
     if run.exit_code != 0:
         verbose_logger.debug(
             "harness: could not persist %s, resume across sessions disabled: %s", cache_subpath, run.stderr.strip()
         )
 
 
-async def copy_skills(sandbox: Sandbox, skills: list[str], skills_root: str) -> None:
+async def copy_skills(sandbox: Sandbox, skills: Sequence[str], skills_root: str) -> None:
     for skill in skills:
         name = os.path.basename(os.path.realpath(os.fspath(skill)))
         for rel, data in await asyncio.to_thread(read_skill_files, skill):
@@ -110,7 +112,7 @@ class CLIHarnessHandler(BaseHarnessHandler):
         for rel_path, data in setup.files.items():
             await ctx.sandbox.write(sandbox_path(private_dir, rel_path), data)
         if ctx.skills and setup.skills_dir:
-            await copy_skills(ctx.sandbox, list(ctx.skills), sandbox_path(private_dir, setup.skills_dir))
+            await copy_skills(ctx.sandbox, tuple(ctx.skills), sandbox_path(private_dir, setup.skills_dir))
         self._private_dir = private_dir
         self._setup = setup
 
@@ -118,9 +120,10 @@ class CLIHarnessHandler(BaseHarnessHandler):
         if self._setup is None or self._private_dir is None:
             raise RuntimeError("CLIHarnessHandler.turn() called before start()")
         request = self.config.transform_turn_request(ctx, self._setup, self._private_dir, prompt, self._native_id)
-        proc = await ctx.sandbox.exec(list(request.argv), env=request.env, cwd=request.cwd)
+        argv: Final = list(request.argv)  # mutable-ok: Sandbox.exec takes list[str]
+        proc = await ctx.sandbox.exec(argv, env=request.env, cwd=request.cwd)
         self._proc = proc
-        tail: deque[str] = deque(maxlen=HARNESS_STDERR_TAIL_LINES)
+        tail: Final[deque[str]] = deque(maxlen=HARNESS_STDERR_TAIL_LINES)  # mutable-ok: bounded stderr ring buffer
         stderr_task = asyncio.ensure_future(drain_stderr(proc.stderr, tail))
         state: Any = self.config.create_stream_state()
         exit_code: int | None = None
@@ -142,7 +145,7 @@ class CLIHarnessHandler(BaseHarnessHandler):
                 await proc.kill()
             if not stderr_task.done():
                 stderr_task.cancel()
-        response = self.config.transform_turn_response(ctx, state, exit_code, list(tail))
+        response = self.config.transform_turn_response(ctx, state, exit_code, tuple(tail))
         ctx.final_text = response.final_text
         ctx.output_json = response.output_json
 
