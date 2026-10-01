@@ -4,7 +4,9 @@ behind ``custom_llm_provider="mistral"`` on /v1/batches.
 
 Locks the request shape Mistral's ``POST /v1/batch/jobs`` accepts (input_files list,
 model set on the job, endpoint passed through untouched so ``/v1/ocr`` batches work),
-the Mistral -> OpenAI status mapping, request-count and file-id mapping, and auth.
+the Mistral -> OpenAI status mapping, request-count and file-id mapping, auth, the
+page-number pagination of ``GET /v1/batch/jobs`` behind OpenAI's ``after``/``limit``,
+and ``POST /v1/batch/jobs/{id}/cancel``.
 Everything runs for real against canned httpx responses; only the API key env var is
 set.
 """
@@ -58,6 +60,14 @@ def _response(payload: dict, status_code: int = 200) -> httpx.Response:
         status_code=status_code,
         content=json.dumps(payload).encode(),
         request=httpx.Request("GET", "https://api.mistral.ai/v1/batch/jobs/x"),
+    )
+
+
+def _list_response(jobs: list[dict], total: int, page: int, page_size: int) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        content=json.dumps({"object": "list", "total": total, "data": jobs}).encode(),
+        request=httpx.Request("GET", f"https://api.mistral.ai/v1/batch/jobs?page={page}&page_size={page_size}"),
     )
 
 
@@ -256,3 +266,110 @@ def test_get_error_class(config):
     assert isinstance(err, MistralError)
     assert err.status_code == 401
     assert err.message == "nope"
+
+
+def test_list_request_maps_after_and_limit_onto_page_query(config, api_key):
+    req = config.transform_list_batches_request(after="2", limit=5, litellm_params={})
+    assert req["method"] == "GET"
+    assert req["url"] == "https://api.mistral.ai/v1/batch/jobs?page=2&page_size=5"
+    assert req["headers"] == {"Authorization": f"Bearer {api_key}"}
+
+
+def test_list_request_defaults_to_first_page_of_twenty(config, api_key):
+    req = config.transform_list_batches_request(after=None, limit=None, litellm_params={})
+    assert req["url"] == "https://api.mistral.ai/v1/batch/jobs?page=0&page_size=20"
+
+
+def test_list_request_prefers_litellm_params_credentials(config, api_key):
+    req = config.transform_list_batches_request(
+        after=None, limit=3, litellm_params={"api_key": "sk-from-deployment", "api_base": "https://mistral.local/v1"}
+    )
+    assert req["url"] == "https://mistral.local/v1/batch/jobs?page=0&page_size=3"
+    assert req["headers"]["Authorization"] == "Bearer sk-from-deployment"
+
+
+@pytest.mark.parametrize("after", ["batch_abc", "-1", "1.5", ""])
+def test_list_request_rejects_non_page_number_cursor(config, api_key, after):
+    with pytest.raises(MistralError) as excinfo:
+        config.transform_list_batches_request(after=after, limit=None, litellm_params={})
+    assert excinfo.value.status_code == 400
+    assert "next_page_token" in excinfo.value.message
+
+
+def test_list_response_maps_jobs_and_signals_more_pages(config):
+    jobs = [_job(id="job-a", status="RUNNING"), _job(id="job-b")]
+    page = config.transform_list_batches_response(
+        model=None, raw_response=_list_response(jobs, total=5, page=1, page_size=2), logging_obj=None, litellm_params={}
+    )
+    assert page.object == "list"
+    assert [b.id for b in page.data] == ["job-a", "job-b"]
+    assert all(isinstance(b, LiteLLMBatch) for b in page.data)
+    assert page.data[0].status == "in_progress"
+    assert page.first_id == "job-a"
+    assert page.last_id == "job-b"
+    assert page.has_more is True
+    assert page.next_page_token == "2"
+
+
+def test_list_response_last_page_has_no_more(config):
+    page = config.transform_list_batches_response(
+        model=None,
+        raw_response=_list_response([_job(id="job-e")], total=5, page=2, page_size=2),
+        logging_obj=None,
+        litellm_params={},
+    )
+    assert [b.id for b in page.data] == ["job-e"]
+    assert page.has_more is False
+    assert page.next_page_token is None
+
+
+def test_list_response_exactly_filled_last_page_has_no_more(config):
+    page = config.transform_list_batches_response(
+        model=None,
+        raw_response=_list_response([_job(id="job-c"), _job(id="job-d")], total=4, page=1, page_size=2),
+        logging_obj=None,
+        litellm_params={},
+    )
+    assert page.has_more is False
+    assert page.next_page_token is None
+
+
+def test_list_response_empty_page(config):
+    page = config.transform_list_batches_response(
+        model=None, raw_response=_list_response([], total=0, page=0, page_size=20), logging_obj=None, litellm_params={}
+    )
+    assert page.data == ()
+    assert page.first_id is None
+    assert page.last_id is None
+    assert page.has_more is False
+
+
+def test_cancel_request_posts_to_cancel_with_auth(config, api_key):
+    req = config.transform_cancel_batch_request(batch_id="job/with slash", litellm_params={})
+    assert req["method"] == "POST"
+    assert req["url"] == "https://api.mistral.ai/v1/batch/jobs/job%2Fwith%20slash/cancel"
+    assert req["headers"] == {"Authorization": f"Bearer {api_key}"}
+
+
+def test_cancel_request_prefers_litellm_params_credentials(config, api_key):
+    req = config.transform_cancel_batch_request(
+        batch_id="job-1", litellm_params={"api_key": "sk-from-deployment", "api_base": "https://mistral.local"}
+    )
+    assert req["url"] == "https://mistral.local/v1/batch/jobs/job-1/cancel"
+    assert req["headers"]["Authorization"] == "Bearer sk-from-deployment"
+
+
+@pytest.mark.parametrize(
+    "mistral_status,openai_status", [("CANCELLATION_REQUESTED", "cancelling"), ("CANCELLED", "cancelled")]
+)
+def test_cancel_response_maps_job_onto_openai_batch(config, mistral_status, openai_status):
+    batch = config.transform_cancel_batch_response(
+        model=None,
+        raw_response=_response(_job(status=mistral_status, completed_at=1_757_400_600)),
+        logging_obj=None,
+        litellm_params={},
+    )
+    assert isinstance(batch, LiteLLMBatch)
+    assert batch.id == "8ff5e0d1-6bc2-4c3a-9f7d-0d1c2e3f4a5b"
+    assert batch.status == openai_status
+    assert batch.cancelled_at == (1_757_400_600 if openai_status == "cancelled" else None)

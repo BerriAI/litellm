@@ -5,11 +5,15 @@ Mistral runs one model per job (set on the job, not per input line) and accepts
 ``/v1/ocr`` as a batch endpoint, which is how OCR gets its 50% batch discount.
 Output and error files are OpenAI-shaped JSONL (``{custom_id, response: {status_code, body}}``),
 so the shared batch cost accounting reads them without a provider branch.
+
+Job lists are paged by a 0-based ``page`` number rather than an id cursor, so ``after`` carries
+the page number the previous response handed back as ``next_page_token``.
 """
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
+from urllib.parse import urlencode
 
 import httpx
 from openai.types.batch import BatchRequestCounts
@@ -19,10 +23,14 @@ from pydantic import BaseModel, ConfigDict
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
-from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
+from litellm.llms.base_llm.batches.transformation import (
+    BaseBatchesCancelConfig,
+    BaseBatchesListConfig,
+    BatchHttpRequest,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import LiteLLMBatch, LlmProviders, OpenAIBatchListResponse
 
 from ..common_utils import get_mistral_api_base, get_mistral_auth_headers, mistral_error
 
@@ -33,6 +41,7 @@ OpenAIBatchStatus: TypeAlias = Literal[
     "validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"
 ]
 
+OPENAI_LIST_DEFAULT_LIMIT: Final = 20
 _NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 _STATUS_MAP: Final[MappingProxyType[MistralBatchStatus, OpenAIBatchStatus]] = MappingProxyType(
     {
@@ -56,12 +65,11 @@ class MistralCreateBatchJobRequest(TypedDict):
     metadata: NotRequired[ReadOnly[Mapping[str, str]]]
 
 
-class MistralPresignedRequest(TypedDict):
-    """A fully-formed request the shared HTTP handler sends as-is (its ``method`` branch)."""
+class MistralListBatchJobsQuery(TypedDict):
+    """Query of ``GET /v1/batch/jobs``."""
 
-    method: ReadOnly[Literal["GET"]]
-    url: ReadOnly[str]
-    headers: ReadOnly[Mapping[str, str]]
+    page: ReadOnly[int]
+    page_size: ReadOnly[int]
 
 
 class MistralBatchError(BaseModel):
@@ -90,6 +98,13 @@ class MistralBatchJob(BaseModel):
     error_file: str | None = None
     errors: tuple[MistralBatchError, ...] = ()
     metadata: dict[str, str] | None = None  # mutable-ok: LiteLLMBatch.metadata is typed as dict
+
+
+class MistralBatchJobList(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    total: int
+    data: tuple[MistralBatchJob, ...] = ()
 
 
 def _to_batch_errors(errors: Sequence[MistralBatchError]) -> BatchErrors | None:
@@ -131,7 +146,31 @@ def _to_litellm_batch(job: MistralBatchJob) -> LiteLLMBatch:
     )
 
 
-class MistralBatchesConfig(BaseBatchesConfig):
+def _page_number(after: str | None) -> int:
+    if after is None:
+        return 0
+    if not after.isdecimal():
+        raise mistral_error(
+            f"Mistral pages batch jobs by number: pass the previous page's next_page_token as 'after', got {after!r}",
+            400,
+            _NO_HEADERS,
+        )
+    return int(after)
+
+
+def _batch_http_request(
+    method: Literal["GET", "POST"], path: str, litellm_params: Mapping[str, object]
+) -> BatchHttpRequest:
+    api_base: Final = litellm_params.get("api_base")
+    api_key: Final = litellm_params.get("api_key")
+    return BatchHttpRequest(
+        method=method,
+        url=f"{get_mistral_api_base(api_base if isinstance(api_base, str) else None)}{path}",
+        headers=get_mistral_auth_headers(_NO_HEADERS, api_key if isinstance(api_key, str) else None),
+    )
+
+
+class MistralBatchesConfig(BaseBatchesListConfig, BaseBatchesCancelConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.MISTRAL
@@ -196,16 +235,60 @@ class MistralBatchesConfig(BaseBatchesConfig):
         litellm_params: Mapping[str, object],
     ) -> dict[str, object]:  # mutable-ok: BaseBatchesConfig signature
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
-        api_base: Final = litellm_params.get("api_base")
-        api_key: Final = litellm_params.get("api_key")
-        request: Final = MistralPresignedRequest(
-            method="GET",
-            url=f"{get_mistral_api_base(api_base if isinstance(api_base, str) else None)}/v1/batch/jobs/{encoded_batch_id}",
-            headers=get_mistral_auth_headers(_NO_HEADERS, api_key if isinstance(api_key, str) else None),
-        )
+        request: Final = _batch_http_request("GET", f"/v1/batch/jobs/{encoded_batch_id}", litellm_params)
         return dict(request)  # mutable-ok: BaseBatchesConfig signature
 
     def transform_retrieve_batch_response(
+        self,
+        model: str | None,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        litellm_params: Mapping[str, object],
+    ) -> LiteLLMBatch:
+        return _to_litellm_batch(MistralBatchJob.model_validate(raw_response.json()))
+
+    def transform_list_batches_request(
+        self,
+        after: str | None,
+        limit: int | None,
+        litellm_params: Mapping[str, object],
+    ) -> BatchHttpRequest:
+        query: Final = MistralListBatchJobsQuery(
+            page=_page_number(after),
+            page_size=limit if limit is not None else OPENAI_LIST_DEFAULT_LIMIT,
+        )
+        return _batch_http_request("GET", f"/v1/batch/jobs?{urlencode(query)}", litellm_params)
+
+    def transform_list_batches_response(
+        self,
+        model: str | None,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        litellm_params: Mapping[str, object],
+    ) -> OpenAIBatchListResponse:
+        page: Final = MistralBatchJobList.model_validate(raw_response.json())
+        sent_query: Final = raw_response.request.url.params
+        page_number: Final = int(sent_query["page"])
+        page_size: Final = int(sent_query["page_size"])
+        data: Final = tuple(_to_litellm_batch(job) for job in page.data)
+        has_more: Final = (page_number + 1) * page_size < page.total
+        return OpenAIBatchListResponse(
+            data=data,
+            first_id=data[0].id if data else None,
+            last_id=data[-1].id if data else None,
+            has_more=has_more,
+            next_page_token=str(page_number + 1) if has_more else None,
+        )
+
+    def transform_cancel_batch_request(
+        self,
+        batch_id: str,
+        litellm_params: Mapping[str, object],
+    ) -> BatchHttpRequest:
+        encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
+        return _batch_http_request("POST", f"/v1/batch/jobs/{encoded_batch_id}/cancel", litellm_params)
+
+    def transform_cancel_batch_response(
         self,
         model: str | None,
         raw_response: httpx.Response,

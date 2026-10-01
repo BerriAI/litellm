@@ -6527,8 +6527,14 @@ class Router:
 
         async def try_retrieve_batch(model: DeploymentTypedDict):
             try:
-                # Update kwargs with the current model name or any other model-specific adjustments
-                return await litellm.alist_batches(**{**model["litellm_params"], **kwargs})
+                litellm_params: Final = model["litellm_params"]
+                _, custom_llm_provider, _, _ = get_llm_provider(
+                    model=litellm_params["model"],
+                    custom_llm_provider=litellm_params.get("custom_llm_provider"),
+                )
+                return await litellm.alist_batches(
+                    **{**litellm_params, "custom_llm_provider": custom_llm_provider, **kwargs}
+                )
             except Exception:
                 return None
 
@@ -6541,6 +6547,7 @@ class Router:
             "first_id": None,
             "last_id": None,
             "has_more": False,
+            "next_page_token": None,
         }
 
         for result in results:
@@ -6550,6 +6557,9 @@ class Router:
                     final_results["first_id"] = getattr(result, "first_id")
                 final_results["last_id"] = getattr(result, "last_id")
                 final_results["data"].extend(result.data)
+                page_token = getattr(result, "next_page_token", None)
+                if page_token is not None:
+                    final_results["next_page_token"] = page_token
 
                 ## check 'has_more'
                 if getattr(result, "has_more", False) is True:

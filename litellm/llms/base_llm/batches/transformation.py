@@ -1,15 +1,17 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from httpx import Headers
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateBatchRequest,
 )
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import LiteLLMBatch, LlmProviders, OpenAIBatchListResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -206,3 +208,58 @@ class BaseBatchesConfig(ABC):
         Returns:
             Provider-specific exception class
         """
+
+
+class BatchHttpRequest(TypedDict):
+    """A fully-formed request the shared HTTP handler sends as-is: the provider config
+    resolves the base URL, path, query, and auth headers itself."""
+
+    method: ReadOnly[Literal["GET", "POST"]]
+    url: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, str]]
+
+
+class BaseBatchesListConfig(BaseBatchesConfig):
+    """Opt-in list capability: ``litellm.list_batches`` routes a provider here when its
+    batches config implements it, so a provider without a list endpoint carries no stub."""
+
+    @abstractmethod
+    def transform_list_batches_request(
+        self,
+        after: str | None,
+        limit: int | None,
+        litellm_params: Mapping[str, object],
+    ) -> BatchHttpRequest:
+        """Build the provider's list-jobs request from the OpenAI ``after``/``limit`` page params."""
+
+    @abstractmethod
+    def transform_list_batches_response(
+        self,
+        model: str | None,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+    ) -> OpenAIBatchListResponse:
+        """Map the provider's job page onto the OpenAI batch list shape."""
+
+
+class BaseBatchesCancelConfig(BaseBatchesConfig):
+    """Opt-in cancel capability, the same way as :class:`BaseBatchesListConfig`."""
+
+    @abstractmethod
+    def transform_cancel_batch_request(
+        self,
+        batch_id: str,
+        litellm_params: Mapping[str, object],
+    ) -> BatchHttpRequest:
+        """Build the provider's cancel-job request for ``batch_id``."""
+
+    @abstractmethod
+    def transform_cancel_batch_response(
+        self,
+        model: str | None,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+    ) -> LiteLLMBatch:
+        """Map the provider's cancel response onto a LiteLLM batch."""

@@ -24,7 +24,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import CreateBatchRequest
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.utils import LiteLLMBatch, OpenAIBatchListResponse
 
 OpenAIBatchStatus: TypeAlias = Literal[
     "validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"
@@ -200,17 +200,6 @@ def to_litellm_batch(batch: XAIBatch, endpoint: str = DEFAULT_BATCH_ENDPOINT) ->
         ),
         metadata={"name": batch.name} if batch.name else None,  # mutable-ok: LiteLLMBatch.metadata is a dict
     )
-
-
-class OpenAIBatchListResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    object: Literal["list"] = "list"
-    data: tuple[LiteLLMBatch, ...]
-    first_id: str | None
-    last_id: str | None
-    has_more: bool
-    next_page_token: str | None = None
 
 
 def to_openai_batch_list(page: XAIBatchList) -> OpenAIBatchListResponse:

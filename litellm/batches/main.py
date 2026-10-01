@@ -13,7 +13,8 @@ https://platform.openai.com/docs/api-reference/batch
 import asyncio
 import contextvars
 import os
-from collections.abc import Coroutine
+import uuid
+from collections.abc import Coroutine, Mapping
 from functools import partial
 from typing import Any, Final, Literal, cast
 
@@ -26,6 +27,11 @@ from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_cred
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
+from litellm.llms.base_llm.batches.transformation import (
+    BaseBatchesCancelConfig,
+    BaseBatchesConfig,
+    BaseBatchesListConfig,
+)
 from litellm.llms.bedrock.batches.handler import BedrockBatchesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -62,6 +68,51 @@ vertex_ai_batches_instance: Final = VertexAIBatchPrediction(gcs_bucket_name="")
 anthropic_batches_instance: Final = AnthropicBatchesHandler()
 xai_batches_instance: Final = XAIBatchesHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
+
+
+def _provider_batches_config(custom_llm_provider: str) -> BaseBatchesConfig | None:
+    provider: Final = next((p for p in LlmProviders if p.value == custom_llm_provider), None)
+    if provider is None:
+        return None
+    return ProviderConfigManager.get_provider_batches_config(model=None, provider=provider)
+
+
+def _batch_logging_obj(
+    kwargs: dict[str, object],
+    model: str | None,
+    custom_llm_provider: str,
+    call_type: str,
+    call_id: str,
+    optional_params: GenericLiteLLMParams,
+    litellm_params: dict[str, object],
+) -> LiteLLMLoggingObj:
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            model=model,
+            user=None,
+            optional_params=optional_params.model_dump(),
+            litellm_params=litellm_params,
+            custom_llm_provider=custom_llm_provider,
+        )
+        return logging_obj
+    return LiteLLMLoggingObj(
+        model=model or f"{custom_llm_provider}/unknown",
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=None,
+        litellm_call_id=call_id,
+        function_id=call_type,
+    )
+
+
+def _batch_http_client(kwargs: Mapping[str, object]) -> HTTPHandler | AsyncHTTPHandler | None:
+    client: Final = kwargs.get("client")
+    return client if isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None
+
+
 #################################################
 
 
@@ -783,6 +834,29 @@ def list_batches(
             timeout = 600.0
 
         _is_async: Final = kwargs.pop("alist_batches", False) is True
+        model: Final = kwargs.get("model")
+        model_name: Final = model if isinstance(model, str) else None
+        provider_config: Final = _provider_batches_config(custom_llm_provider)
+        if isinstance(provider_config, BaseBatchesListConfig):
+            return base_llm_http_handler.list_batches(
+                after=after,
+                limit=limit,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                logging_obj=_batch_logging_obj(
+                    kwargs,
+                    model=model_name,
+                    custom_llm_provider=custom_llm_provider,
+                    call_type="batch_list",
+                    call_id=f"batch_list_{uuid.uuid4()}",
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                ),
+                _is_async=_is_async,
+                client=_batch_http_client(kwargs),
+                timeout=timeout,
+                model=model_name,
+            )
         if custom_llm_provider == LlmProviders.XAI.value:
             return xai_batches_instance.list_batches(
                 _is_async=_is_async,
@@ -888,7 +962,9 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai", "mistral"
+    ] = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -934,7 +1010,8 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: str | None = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai"] | str = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "litellm_proxy", "xai", "mistral"]
+    | str = "openai",
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
@@ -984,6 +1061,26 @@ def cancel_batch(
         )
 
         _is_async: Final = kwargs.pop("acancel_batch", False) is True
+        provider_config: Final = _provider_batches_config(custom_llm_provider)
+        if isinstance(provider_config, BaseBatchesCancelConfig):
+            return base_llm_http_handler.cancel_batch(
+                batch_id=batch_id,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                logging_obj=_batch_logging_obj(
+                    kwargs,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    call_type="batch_cancel",
+                    call_id="batch_cancel_" + batch_id,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                ),
+                _is_async=_is_async,
+                client=_batch_http_client(kwargs),
+                timeout=timeout,
+                model=model,
+            )
         if custom_llm_provider == LlmProviders.XAI.value:
             return xai_batches_instance.cancel_batch(
                 _is_async=_is_async,
@@ -1070,7 +1167,7 @@ def cancel_batch(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', and 'bedrock' are supported.",
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', 'bedrock', 'xai', and 'mistral' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
