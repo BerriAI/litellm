@@ -2066,7 +2066,11 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         except Exception:  # noqa: BLE001  # pricing helpers raise plain Exception
             return False
-        return pricing is not None and is_free_usage(usage, pricing[1])
+        if pricing is None:
+            return False
+        pricing_model: Final = pricing[0]
+        has_explicit_pricing: Final = pricing_model in litellm.model_cost or self._custom_pricing_for(result)
+        return has_explicit_pricing and is_free_usage(usage, pricing[1])
 
     def _custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)
