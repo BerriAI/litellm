@@ -1468,9 +1468,6 @@ async def test_list_and_info_show_the_loaded_tool_when_db_params_do_not_decrypt(
             "api_key": "pplx-loaded-key",
             "api_base": "https://api.perplexity.ai",
         },
-        "search_tool_info": {},
-        "created_at": "2026-09-01T00:00:00",
-        "updated_at": "2026-09-01T00:00:00",
     }
     fake_router = MagicMock()
     fake_router.search_tools = [loaded_tool]
@@ -1497,3 +1494,4 @@ async def test_list_and_info_show_the_loaded_tool_when_db_params_do_not_decrypt(
     assert info.json()["litellm_params"]["search_provider"] == "perplexity"
     assert info.json()["litellm_params"]["api_base"] == listed_params[0]["api_base"] != rewritten_params["api_base"]
     assert "pplx-loaded-key" not in listed.text + info.text
+    assert info.json()["created_at"] == listed.json()["search_tools"][0]["created_at"] == "2026-09-01T00:00:00"
