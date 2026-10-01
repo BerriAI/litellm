@@ -151,9 +151,11 @@ export function WorkerSetup({
         <DialogHeader>
           <DialogTitle className="text-xl">{dialogTitle}</DialogTitle>
           <DialogDescription>
-            {formVisible
-              ? "Lens needs a small service on your server to run investigations."
-              : "Worker status and model access"}
+            {created && connected
+              ? "You can now run investigations."
+              : formVisible
+                ? "Lens needs a small service on your server to run investigations."
+                : "Worker status and model access"}
           </DialogDescription>
         </DialogHeader>
         {formVisible && !created && (
@@ -192,40 +194,40 @@ export function WorkerSetup({
         )}
         {created ? (
           <div className="space-y-3">
-            <p className="text-sm leading-6">
-              {connected
-                ? "You can now run investigations."
-                : "Run this command once on your server. Docker must be installed."}
-            </p>
-            <Button
-              variant={connected ? "outline" : "default"}
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(workerSetupCommand(address, created.token));
-                  setCopied(true);
-                } catch {
-                  setError("Clipboard access failed. Allow clipboard access and try again.");
-                }
-              }}
-            >
-              {copied ? "Copied" : "Copy Docker command"}
-            </Button>
-            <p className="text-xs text-muted-foreground">The command contains a private worker token.</p>
-            <details className="text-sm">
-              <summary className="cursor-pointer text-muted-foreground">View command</summary>
-              <pre
-                aria-label="Docker command preview"
-                className="mt-3 max-h-48 overflow-auto rounded-md bg-muted/40 p-3 text-xs leading-5"
-              >
-                {workerSetupCommand(address, created.token)}
-              </pre>
-            </details>
+            {!connected && (
+              <>
+                <p className="text-sm leading-6">Run this command once on your server. Docker must be installed.</p>
+                <Button
+                  variant="default"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(workerSetupCommand(address, created.token));
+                      setCopied(true);
+                    } catch {
+                      setError("Clipboard access failed. Allow clipboard access and try again.");
+                    }
+                  }}
+                >
+                  {copied ? "Copied" : "Copy Docker command"}
+                </Button>
+                <p className="text-xs text-muted-foreground">The command contains a private worker token.</p>
+                <details className="text-sm">
+                  <summary className="cursor-pointer text-muted-foreground">View command</summary>
+                  <pre
+                    aria-label="Docker command preview"
+                    className="mt-3 max-h-48 overflow-auto rounded-md bg-muted/40 p-3 text-xs leading-5"
+                  >
+                    {workerSetupCommand(address, created.token)}
+                  </pre>
+                </details>
+              </>
+            )}
             <div
               role="status"
               className={`flex items-center gap-2 text-sm ${connected ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}`}
             >
               {connected ? <CheckCircle2 className="size-5" /> : <Loader2 className="size-4 animate-spin" />}
-              {connected ? "Connected and ready to investigate" : "Waiting for your worker to connect…"}
+              {connected ? "Worker connected" : "Waiting for your worker to connect…"}
             </div>
             {!connected && (
               <details className="text-sm">
