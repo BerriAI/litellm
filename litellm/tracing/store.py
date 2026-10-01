@@ -45,7 +45,18 @@ class _SpendRow(BaseModel):
     start_ms: int
 
 
+class _TraceIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    trace_ref: str
+
+
 _SPEND_ROWS: Final = TypeAdapter(tuple[_SpendRow, ...])
+_TRACE_IDENTITIES: Final = TypeAdapter(tuple[_TraceIdentity, ...])
+
+
+class AmbiguousTraceError(ValueError):
+    pass
 
 
 def _spend_for(request_id: str, team_id: str, api_key_hash: str, rows: Sequence[_SpendRow]) -> float | None:
@@ -267,6 +278,14 @@ class ClickHouseTraceStore:
     async def insert_spans(self, rows: Sequence[SpanRow]) -> None:
         await self.storage.insert_rows(OTEL_TRACES_TABLE, tuple(rows))
 
+    async def _unique_ref_for_id(self, trace_id: str, scope: TraceScope) -> str | None:
+        identities: Final = _TRACE_IDENTITIES.validate_python(
+            await self.storage.query("trace_identity", MappingProxyType({**scope, "trace_id": trace_id}))
+        )
+        if len(identities) > 1:
+            raise AmbiguousTraceError("Multiple traces have this ID; provide trace_ref")
+        return identities[0].trace_ref if identities else None
+
     async def _spend_rows(
         self, scope: TraceScope, request_ids: Sequence[str], start_ms: int, end_ms: int
     ) -> tuple[_SpendRow, ...]:
@@ -322,8 +341,11 @@ class ClickHouseTraceStore:
         return TracePage(data=tuple(trace_summary_from_row(r, spend_rows) for r in rows), next_cursor=next_cursor)
 
     async def get_trace(self, trace_id: str, scope: TraceScope, trace_ref: str = "") -> Trace | None:
+        resolved_ref: Final = trace_ref or await self._unique_ref_for_id(trace_id, scope)
+        if resolved_ref is None:
+            return None
         rows = await self.storage.query(
-            "trace_spans", MappingProxyType({**scope, "trace_id": trace_id, "trace_ref": trace_ref})
+            "trace_spans", MappingProxyType({**scope, "trace_id": trace_id, "trace_ref": resolved_ref})
         )
         spend_rows: Final = await self._spend_rows(
             scope,
@@ -331,12 +353,15 @@ class ClickHouseTraceStore:
             min((int(row["start_ns"]) // NANOS_PER_MS for row in rows), default=0),
             max(((int(row["start_ns"]) + int(row["duration_ns"])) // NANOS_PER_MS for row in rows), default=0),
         )
-        return trace_from_rows(trace_id, rows, trace_ref, spend_rows)
+        return trace_from_rows(trace_id, rows, resolved_ref, spend_rows)
 
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
+        resolved_ref: Final = trace_ref or await self._unique_ref_for_id(trace_id, scope)
+        if resolved_ref is None:
+            return None
         rows = await self.storage.query(
             "span_detail",
-            MappingProxyType({**scope, "trace_id": trace_id, "span_id": span_id, "trace_ref": trace_ref}),
+            MappingProxyType({**scope, "trace_id": trace_id, "span_id": span_id, "trace_ref": resolved_ref}),
         )
         if not rows:
             return None

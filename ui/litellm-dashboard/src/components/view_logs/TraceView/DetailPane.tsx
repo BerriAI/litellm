@@ -177,7 +177,11 @@ function GroupPane({ trace, row, onClose }: { trace: Trace; row: GroupRowData; o
       </div>
       <PaneFooter>
         <CopyButton
-          value={agentHandoffText(trace.summary.trace_id, (firstFailure ?? row.members[0]).span_id)}
+          value={agentHandoffText(
+            trace.summary.trace_id,
+            (firstFailure ?? row.members[0]).span_id,
+            trace.summary.trace_ref,
+          )}
           label="Copy group sample"
         />
       </PaneFooter>

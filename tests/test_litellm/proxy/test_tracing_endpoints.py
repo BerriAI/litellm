@@ -12,6 +12,7 @@ from litellm.proxy import tracing_endpoints
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.tracing import TracingPayloadTooLargeError
+from litellm.tracing.store import AmbiguousTraceError
 
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
@@ -27,8 +28,37 @@ def test_scope_for_admin_sees_everything():
         assert tracing_endpoints.scope_for(auth) == {"team_ids": (), "api_key_hash": ""}
 
 
-def test_scope_for_team_key_sees_its_team():
-    assert tracing_endpoints.scope_for(TEAM_KEY) == {"team_ids": ("team-research",), "api_key_hash": ""}
+def test_scope_for_team_key_sees_only_its_key():
+    assert tracing_endpoints.scope_for(TEAM_KEY) == {"team_ids": ("team-research",), "api_key_hash": "hashed-key"}
+
+
+@pytest.mark.parametrize(
+    ("team_id", "token"),
+    (("team-research", "second-key"), ("other-team", "third-key")),
+)
+def test_scope_for_other_keys_keeps_team_and_key_distinct(team_id, token):
+    auth = UserAPIKeyAuth(token=token, team_id=team_id, user_role=LitellmUserRoles.INTERNAL_USER)
+    assert tracing_endpoints.scope_for(auth) == {"team_ids": (team_id,), "api_key_hash": token}
+
+
+def test_scope_for_privileged_team_reader_sees_its_team():
+    assert tracing_endpoints.scope_for(TEAM_KEY, team_wide=True) == {"team_ids": ("team-research",), "api_key_hash": ""}
+
+
+@pytest.mark.asyncio
+async def test_read_scope_uses_existing_team_spend_permission(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking import spend_management_endpoints
+
+    allowed = AsyncMock(return_value=True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(spend_management_endpoints, "can_team_member_view_log", allowed)
+    auth = UserAPIKeyAuth(token="key-a", team_id="team-a", user_id="reader")
+
+    assert await tracing_endpoints.read_scope_for(auth) == {"team_ids": ("team-a",), "api_key_hash": ""}
+    allowed.assert_awaited_once()
+    allowed.return_value = False
+    assert await tracing_endpoints.read_scope_for(auth) == {"team_ids": ("team-a",), "api_key_hash": "key-a"}
 
 
 def test_scope_for_teamless_key_sees_only_its_own_traces():
@@ -118,7 +148,7 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
     assert response.status_code == 200
     assert response.json() == {"data": [], "next_cursor": None}
     receiver.list_traces.assert_awaited_once_with(
-        scope={"team_ids": ("team-research",), "api_key_hash": ""}, start_ms=1, end_ms=2, cursor="abc"
+        scope={"team_ids": ("team-research",), "api_key_hash": "hashed-key"}, start_ms=1, end_ms=2, cursor="abc"
     )
 
 
@@ -136,7 +166,7 @@ def test_get_trace_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
     assert response.json() == trace
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
+    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": "hashed-key"}, "")
 
 
 def test_get_span_404_and_200(client, receiver):
@@ -145,13 +175,24 @@ def test_get_span_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1/spans/s1")
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
-    receiver.get_span.assert_awaited_with("t1", "s1", {"team_ids": ("team-research",), "api_key_hash": ""}, "")
+    receiver.get_span.assert_awaited_with(
+        "t1", "s1", {"team_ids": ("team-research",), "api_key_hash": "hashed-key"}, ""
+    )
 
 
 def test_trace_detail_passes_scoped_reference(client, receiver):
     receiver.get_trace.return_value = {"summary": {"trace_id": "t1"}, "agents": [], "spans": []}
     assert client.get("/v1/traces/t1?trace_ref=run-one").status_code == 200
-    receiver.get_trace.assert_awaited_with("t1", {"team_ids": ("team-research",), "api_key_hash": ""}, "run-one")
+    receiver.get_trace.assert_awaited_with(
+        "t1", {"team_ids": ("team-research",), "api_key_hash": "hashed-key"}, "run-one"
+    )
+
+
+def test_ambiguous_trace_and_span_require_reference(client, receiver):
+    receiver.get_trace.side_effect = AmbiguousTraceError("Multiple traces have this ID; provide trace_ref")
+    receiver.get_span.side_effect = AmbiguousTraceError("Multiple traces have this ID; provide trace_ref")
+    assert client.get("/v1/traces/reused").status_code == 409
+    assert client.get("/v1/traces/reused/spans/span").status_code == 409
 
 
 def test_invalid_export_and_cursor_are_client_errors(client, receiver):

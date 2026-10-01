@@ -56,6 +56,7 @@ const failedTool = span(failedToolFields);
 const trace: Trace = {
   summary: {
     trace_id: "t1",
+    trace_ref: "ref-a",
     name: "support_triage_agent",
     service: "research-agent",
     input_preview: '[{"role": "user", "content": "Customer acme-404 says billing is wrong."}]',
@@ -125,7 +126,7 @@ describe("DetailPane", () => {
     expect(screen.getByRole("tab", { name: "Attributes" })).toBeInTheDocument();
     expect(await screen.findByText("You are a LiteLLM support agent.")).toBeInTheDocument();
     expect(screen.getByText("get_customer_plan")).toBeInTheDocument();
-    expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1", undefined);
+    expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1", "ref-a");
   });
 
   it("shows a tool failure as 'Tool · <reason>' with the exception line and no traceback", async () => {
@@ -147,7 +148,10 @@ describe("DetailPane", () => {
     expect(screen.getByRole("button", { name: /Open request log/ })).toBeInTheDocument();
   });
 
-  it("summarizes a ×N group with its failure pattern", () => {
+  it("summarizes a ×N group and copies a scoped sample", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     const members = Array.from({ length: 12 }, (_, i) => {
       const timedOut: SpanFields = {
         span_id: `f${i}`,
@@ -177,15 +181,18 @@ describe("DetailPane", () => {
     expect(pane).toHaveTextContent("Invocations12");
     expect(pane).toHaveTextContent("Failed12");
     expect(pane).toHaveTextContent("TimeoutError('slow')");
+    await user.click(screen.getByRole("button", { name: "Copy group sample" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1/spans/f0?trace_ref=ref-a");
   });
 
-  it("'Copy step' copies a curl for just this span as Markdown", async () => {
+  it("'Copy step' copies the scoped span route", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     renderPane(spanRow(llm));
     await user.click(screen.getByRole("button", { name: "Copy step" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
-    expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1?format=md&span_id=llm1");
+    expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1/spans/llm1?trace_ref=ref-a");
   });
 });

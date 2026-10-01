@@ -115,8 +115,22 @@ describe("RunView", () => {
 
     await user.click(await screen.findByRole("button", { name: /copy for agent/i }));
     expect(copyToClipboard).toHaveBeenCalledWith(agentHandoffText(research.summary.trace_id), "Command copied");
-    expect(agentHandoffText("t1")).toContain('"http://proxy.test/v1/traces/t1?format=md"');
-    expect(agentHandoffText("t1", "s1")).toContain("&span_id=s1");
+    expect(agentHandoffText("t1")).toContain('"http://proxy.test/v1/traces/t1"');
+    expect(agentHandoffText("t1", "s1", "ref-a")).toContain(
+      '"http://proxy.test/v1/traces/t1/spans/s1?trace_ref=ref-a"',
+    );
+  });
+
+  it("copies the selected run reference", async () => {
+    const user = userEvent.setup();
+    const selected = { ...research, summary: { ...research.summary, trace_ref: "ref-a" } };
+    renderRun(selected);
+
+    await user.click(await screen.findByRole("button", { name: /copy for agent/i }));
+    expect(copyToClipboard).toHaveBeenCalledWith(
+      agentHandoffText(selected.summary.trace_id, null, "ref-a"),
+      "Command copied",
+    );
   });
 });
 

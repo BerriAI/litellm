@@ -21,6 +21,7 @@ from litellm.tracing import (
     TracingPayloadTooLargeError,
 )
 from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
+from litellm.tracing.store import AmbiguousTraceError
 from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
 
 router = APIRouter(tags=["agent tracing"])  # mutable-ok: FastAPI copies the mutable tags list
@@ -48,15 +49,26 @@ def tenant_for(user_api_key_dict: UserAPIKeyAuth) -> Tenant:
     )
 
 
-def scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
-    """Admins see everything; team members see their team; team-less keys see their own traces."""
+def scope_for(user_api_key_dict: UserAPIKeyAuth, team_wide: bool = False) -> TraceScope:
     if user_api_key_dict.user_role in _ADMIN_ROLES:
         return TraceScope(team_ids=(), api_key_hash="")
-    if user_api_key_dict.team_id:
+    if team_wide and user_api_key_dict.team_id:
         return TraceScope(team_ids=(user_api_key_dict.team_id,), api_key_hash="")
     if not user_api_key_dict.token:
         raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-    return TraceScope(team_ids=("",), api_key_hash=user_api_key_dict.token)
+    return TraceScope(team_ids=(user_api_key_dict.team_id or "",), api_key_hash=user_api_key_dict.token)
+
+
+async def read_scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
+    if user_api_key_dict.user_role in _ADMIN_ROLES or not user_api_key_dict.team_id or not user_api_key_dict.user_id:
+        return scope_for(user_api_key_dict)
+    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.spend_tracking.spend_management_endpoints import can_team_member_view_log
+
+    team_wide: Final = prisma_client is not None and await can_team_member_view_log(
+        prisma_client, user_api_key_dict, user_api_key_dict.team_id
+    )
+    return scope_for(user_api_key_dict, team_wide=team_wide)
 
 
 async def _read_otlp_body(request: Request) -> bytes:
@@ -107,7 +119,7 @@ async def list_agent_traces(
     now_ms: Final = int(time.time() * 1000)
     try:
         return await get_receiver().list_traces(
-            scope=scope_for(user_api_key_dict),
+            scope=await read_scope_for(user_api_key_dict),
             start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
             end_ms=end_ms if end_ms is not None else now_ms,
             cursor=cursor,
@@ -122,7 +134,10 @@ async def get_agent_trace(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     trace_ref: Annotated[str, Query()] = "",
 ) -> Trace:
-    trace: Final = await get_receiver().get_trace(trace_id, scope_for(user_api_key_dict), trace_ref)
+    try:
+        trace: Final = await get_receiver().get_trace(trace_id, await read_scope_for(user_api_key_dict), trace_ref)
+    except AmbiguousTraceError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     if trace is None:
         raise HTTPException(status_code=404, detail=f"Trace {trace_id} not found")
     return trace
@@ -135,7 +150,12 @@ async def get_agent_trace_span(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     trace_ref: Annotated[str, Query()] = "",
 ) -> SpanDetail:
-    span: Final = await get_receiver().get_span(trace_id, span_id, scope_for(user_api_key_dict), trace_ref)
+    try:
+        span: Final = await get_receiver().get_span(
+            trace_id, span_id, await read_scope_for(user_api_key_dict), trace_ref
+        )
+    except AmbiguousTraceError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")
     return span

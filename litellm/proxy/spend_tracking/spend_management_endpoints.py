@@ -4879,6 +4879,9 @@ async def _can_team_member_view_log(
     )
 
 
+can_team_member_view_log: Final = _can_team_member_view_log
+
+
 def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """
     Check if the requesting user can view their own spend logs.

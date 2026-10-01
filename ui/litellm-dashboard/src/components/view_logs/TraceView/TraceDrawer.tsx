@@ -26,9 +26,9 @@ import {
   traceDisplayName,
 } from "./traceUtils";
 
-/** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
 export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
+  const path = `/v1/traces/${encodeURIComponent(traceId)}${spanId ? `/spans/${encodeURIComponent(spanId)}` : ""}`;
+  const url = `${getProxyBaseUrl().replace(/\/$/, "")}${path}${traceRef ? `?trace_ref=${encodeURIComponent(traceRef)}` : ""}`;
   const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
   return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
 };
