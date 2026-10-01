@@ -8,29 +8,30 @@ from fastapi import HTTPException
 
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.engine import endpoints
-from litellm.proxy.engine.endpoints import Preview, claim, user_scope, validate_selection
-from litellm.proxy.engine.models import Check, Engine, EngineSettings, Job, Scope
-from litellm.proxy.engine.sources import SourceReader, execution_id
+from litellm.proxy.lens import endpoints
+from litellm.proxy.lens.endpoints import Preview, claim, user_scope, validate_selection
+from litellm.proxy.lens.models import Check, Job, Lens, LensSettings, Scope
+from litellm.proxy.lens.sources import SourceReader, execution_id
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.proxy.spend_tracking.log_visibility import LogVisibility
-from tests.unit.proxy.engine.test_state import engine as sample_engine, worker
+from tests.unit.proxy.lens.test_state import lens as sample_lens
+from tests.unit.proxy.lens.test_state import worker
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
 
-class EngineRepositoryStub:
-    def __init__(self, engine: Engine | None, job: Job | None = None) -> None:
-        self.engine = engine
+class LensRepositoryStub:
+    def __init__(self, lens: Lens | None, job: Job | None = None) -> None:
+        self.lens = lens
         self.run = job
 
-    async def get(self, engine_id: str) -> Engine | None:
-        return self.engine if self.engine is not None and self.engine.id == engine_id else None
+    async def get(self, lens_id: str) -> Lens | None:
+        return self.lens if self.lens is not None and self.lens.id == lens_id else None
 
-    async def jobs(self, engine_id: str, offset: int = 0) -> tuple[Job, ...]:
+    async def jobs(self, lens_id: str, offset: int = 0) -> tuple[Job, ...]:
         return (self.run,) if self.run is not None else ()
 
-    async def job(self, engine_id: str, job_id: str) -> Job | None:
+    async def job(self, lens_id: str, job_id: str) -> Job | None:
         return self.run if self.run is not None and self.run.id == job_id else None
 
 
@@ -57,11 +58,11 @@ class EvidenceStorageStub:
         raise AssertionError("Evidence reads do not verify evidence")
 
 
-def _engine(engine_scope: Scope) -> Engine:
-    return Engine(
+def _lens(lens_scope: Scope) -> Lens:
+    return Lens(
         id="lens-1",
-        scope=engine_scope,
-        settings=EngineSettings(
+        scope=lens_scope,
+        settings=LensSettings(
             name="Research",
             model="analysis",
             checks=(Check(id="retries", instruction="Find unrecovered retries"),),
@@ -72,14 +73,14 @@ def _engine(engine_scope: Scope) -> Engine:
     )
 
 
-def _job(engine: Engine) -> Job:
+def _job(lens: Lens) -> Job:
     return Job(
         id="run-1",
         created_at=NOW,
         start=NOW,
         end=NOW,
-        settings=engine.settings,
-        revision=engine.revision,
+        settings=lens.settings,
+        revision=lens.revision,
     )
 
 
@@ -121,43 +122,43 @@ def test_only_proxy_admin_gets_write_scope() -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_engine_requires_permitted_team_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine: Final = _engine(Scope(team_id="team-a"))
+async def test_read_lens_requires_permitted_team_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    lens: Final = _lens(Scope(team_id="team-a"))
     auth: Final = _team_member()
-    monkeypatch.setattr(endpoints, "repository", lambda: EngineRepositoryStub(engine))
+    monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens))
     _set_permitted_teams(monkeypatch, ())
 
     with pytest.raises(HTTPException) as error:
-        await endpoints.read_engine("lens-1", auth)
+        await endpoints.read_lens("lens-1", auth)
     assert (error.value.status_code, error.value.detail) == (404, "Lens not found")
 
     _set_permitted_teams(monkeypatch, ("team-a",))
-    assert await endpoints.read_engine("lens-1", auth) is engine
+    assert await endpoints.read_lens("lens-1", auth) is lens
 
 
 @pytest.mark.asyncio
 async def test_list_runs_requires_permitted_team_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine: Final = _engine(Scope(team_id="team-a"))
-    job: Final = _job(engine)
+    lens: Final = _lens(Scope(team_id="team-a"))
+    job: Final = _job(lens)
     auth: Final = _team_member()
-    monkeypatch.setattr(endpoints, "repository", lambda: EngineRepositoryStub(engine, job))
+    monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens, job))
     _set_permitted_teams(monkeypatch, ())
 
     with pytest.raises(HTTPException) as error:
-        await endpoints.list_runs("lens-1", auth)
+        await endpoints.list_runs("lens-1", auth, offset=0)
     assert (error.value.status_code, error.value.detail) == (404, "Lens not found")
 
     _set_permitted_teams(monkeypatch, ("team-a",))
-    runs: Final = await endpoints.list_runs("lens-1", auth)
+    runs: Final = await endpoints.list_runs("lens-1", auth, offset=0)
     assert tuple(run.id for run in runs) == ("run-1",)
 
 
 @pytest.mark.asyncio
 async def test_read_run_requires_permitted_team_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine: Final = _engine(Scope(team_id="team-a"))
-    job: Final = _job(engine)
+    lens: Final = _lens(Scope(team_id="team-a"))
+    job: Final = _job(lens)
     auth: Final = _team_member()
-    monkeypatch.setattr(endpoints, "repository", lambda: EngineRepositoryStub(engine, job))
+    monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens, job))
     _set_permitted_teams(monkeypatch, ())
 
     with pytest.raises(HTTPException) as error:
@@ -170,11 +171,11 @@ async def test_read_run_requires_permitted_team_visibility(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_evidence_content_requires_permitted_team_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine: Final = _engine(Scope(team_id="team-a"))
+    lens: Final = _lens(Scope(team_id="team-a"))
     auth: Final = _team_member()
     identity: Final = execution_id("traces", "team-a", "trace-a", "trace-ref")
     reader: Final = SourceReader(EvidenceStorageStub())
-    monkeypatch.setattr(endpoints, "repository", lambda: EngineRepositoryStub(engine))
+    monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens))
     _set_permitted_teams(monkeypatch, ())
 
     with pytest.raises(HTTPException) as error:
@@ -188,24 +189,24 @@ async def test_evidence_content_requires_permitted_team_visibility(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_key_scoped_engine_is_visible_to_matching_key_only_viewer(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine: Final = _engine(Scope(api_key_hash="key-a"))
-    monkeypatch.setattr(endpoints, "repository", lambda: EngineRepositoryStub(engine))
+async def test_key_scoped_lens_is_visible_to_matching_key_only_viewer(monkeypatch: pytest.MonkeyPatch) -> None:
+    lens: Final = _lens(Scope(api_key_hash="key-a"))
+    monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens))
 
-    visible: Final = await endpoints.get_visible_engine("lens-1", LogVisibility(api_key_hash="key-a"))
+    visible: Final = await endpoints.get_visible_lens("lens-1", LogVisibility(api_key_hash="key-a"))
 
-    assert visible is engine
+    assert visible is lens
 
 
 @pytest.mark.asyncio
-async def test_all_team_engine_is_visible_only_to_admin_viewers(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine: Final = _engine(Scope(all_teams=True))
-    monkeypatch.setattr(endpoints, "repository", lambda: EngineRepositoryStub(engine))
+async def test_all_team_lens_is_visible_only_to_admin_viewers(monkeypatch: pytest.MonkeyPatch) -> None:
+    lens: Final = _lens(Scope(all_teams=True))
+    monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens))
 
     with pytest.raises(HTTPException) as error:
-        await endpoints.get_visible_engine("lens-1", LogVisibility(user_id="reader"))
+        await endpoints.get_visible_lens("lens-1", LogVisibility(user_id="reader"))
     assert (error.value.status_code, error.value.detail) == (404, "Lens not found")
-    assert await endpoints.get_visible_engine("lens-1", LogVisibility(all_teams=True)) is engine
+    assert await endpoints.get_visible_lens("lens-1", LogVisibility(all_teams=True)) is lens
 
 
 @pytest.mark.asyncio
@@ -213,7 +214,7 @@ async def test_preview_sample_is_admin_only() -> None:
     with pytest.raises(HTTPException) as error:
         await endpoints.preview_sample(
             Preview(
-                settings=EngineSettings(
+                settings=LensSettings(
                     name="Research",
                     model="analysis",
                     checks=(Check(id="retries", instruction="Find unrecovered retries"),),
@@ -227,7 +228,7 @@ async def test_preview_sample_is_admin_only() -> None:
 
 @pytest.mark.parametrize("identity", ("not-an-execution", "W10=", "WyJvdGhlciIsICIiLCAiaWQiXQ=="))
 def test_invalid_explicit_execution_ids_are_rejected(identity: str) -> None:
-    settings: Final = sample_engine().settings.model_copy(update={"execution_ids": (identity,)})
+    settings: Final = sample_lens().settings.model_copy(update={"execution_ids": (identity,)})
     with pytest.raises(HTTPException) as error:
         validate_selection(settings)
     assert error.value.status_code == 422

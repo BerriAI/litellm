@@ -7,7 +7,7 @@ import {
   sortedFindings,
   type Finding,
   type Job,
-} from "./engineData";
+} from "./lensData";
 
 const coverage: Job["coverage"] = {
   eligible: 0,

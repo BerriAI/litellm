@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final
 
-from litellm.proxy.engine.models import Engine, EngineSettings, Finding, FindingDraft, Job, Scope, Worker
+from litellm.proxy.lens.models import Finding, FindingDraft, Job, Lens, LensSettings, Scope, Worker
 from litellm.proxy.spend_tracking.log_visibility import LogVisibility
 
 
@@ -26,46 +26,46 @@ def can_view(viewer: LogVisibility, target: Scope) -> bool:
     )
 
 
-def current_job(engine: Engine) -> Job | None:
-    return next((job for job in engine.jobs if job.status in ("queued", "running")), None)
+def current_job(lens: Lens) -> Job | None:
+    return next((job for job in lens.jobs if job.status in ("queued", "running")), None)
 
 
-def replace_job(engine: Engine, job: Job) -> Engine:
-    return engine.model_copy(
-        update=MappingProxyType({"jobs": tuple(job if old.id == job.id else old for old in engine.jobs)})
+def replace_job(lens: Lens, job: Job) -> Lens:
+    return lens.model_copy(
+        update=MappingProxyType({"jobs": tuple(job if old.id == job.id else old for old in lens.jobs)})
     )
 
 
 def queue_job(
-    engine: Engine,
+    lens: Lens,
     now: datetime,
     job_id: str,
     lookback_hours: int | None = None,
-    settings: EngineSettings | None = None,
-) -> Engine:
-    if current_job(engine):
-        return engine
-    selected: Final = settings or engine.settings
+    settings: LensSettings | None = None,
+) -> Lens:
+    if current_job(lens):
+        return lens
+    selected: Final = settings or lens.settings
     job: Final = Job(
         id=job_id,
         created_at=now,
         start=now - timedelta(hours=lookback_hours if lookback_hours is not None else selected.lookback_hours),
         end=now - timedelta(minutes=2),
         settings=selected,
-        revision=engine.revision,
+        revision=lens.revision,
     )
-    return engine.model_copy(update=MappingProxyType({"jobs": (job,)}))
+    return lens.model_copy(update=MappingProxyType({"jobs": (job,)}))
 
 
-def claim_job(engine: Engine, worker: Worker, now: datetime) -> Engine:
-    job: Final = current_job(engine)
-    if job is None or not can_access(worker.scope, engine.scope):
-        return engine
+def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
+    job: Final = current_job(lens)
+    if job is None or not can_access(worker.scope, lens.scope):
+        return lens
     if job.status == "running" and job.lease_until is not None and job.lease_until > now:
-        return engine
+        return lens
     if job.attempts >= 3:
         return replace_job(
-            engine,
+            lens,
             job.model_copy(
                 update=MappingProxyType(
                     {
@@ -76,11 +76,9 @@ def claim_job(engine: Engine, worker: Worker, now: datetime) -> Engine:
                     }
                 )
             ),
-        ).model_copy(
-            update=MappingProxyType({"next_run_at": now + timedelta(minutes=engine.settings.interval_minutes)})
-        )
+        ).model_copy(update=MappingProxyType({"next_run_at": now + timedelta(minutes=lens.settings.interval_minutes)}))
     return replace_job(
-        engine,
+        lens,
         job.model_copy(
             update=MappingProxyType(
                 {
@@ -95,23 +93,23 @@ def claim_job(engine: Engine, worker: Worker, now: datetime) -> Engine:
     )
 
 
-def renew_budget(engine: Engine, now: datetime) -> Engine:
+def renew_budget(lens: Lens, now: datetime) -> Lens:
     month: Final = now.strftime("%Y-%m")
-    if engine.budget_month == month:
-        return engine
-    return engine.model_copy(update=MappingProxyType({"budget_month": month, "spent": 0}))
+    if lens.budget_month == month:
+        return lens
+    return lens.model_copy(update=MappingProxyType({"budget_month": month, "spent": 0}))
 
 
-def merge_finding(engine: Engine, draft: FindingDraft, revision: int, now: datetime) -> Finding:
-    legacy_identity: Final = hashlib.sha256(f"{engine.id}:{draft.check_id}:{draft.title.lower()}".encode()).hexdigest()[
+def merge_finding(lens: Lens, draft: FindingDraft, revision: int, now: datetime) -> Finding:
+    legacy_identity: Final = hashlib.sha256(f"{lens.id}:{draft.check_id}:{draft.title.lower()}".encode()).hexdigest()[
         :24
     ]
     identity: Final = hashlib.sha256(
-        f"{engine.id}:{draft.check_id}:{draft.kind}:{draft.title.lower()}".encode()
+        f"{lens.id}:{draft.check_id}:{draft.kind}:{draft.title.lower()}".encode()
     ).hexdigest()[:24]
     identities: Final = (draft.existing_finding_id, identity, legacy_identity)
     previous: Final = next(
-        (f for f in engine.findings if f.id in identities and f.kind == draft.kind and f.check_id == draft.check_id),
+        (f for f in lens.findings if f.id in identities and f.kind == draft.kind and f.check_id == draft.check_id),
         None,
     )
     occurrences: Final = tuple(sorted(frozenset(e.execution_id for e in draft.evidence if e.role == "support")))
@@ -149,8 +147,8 @@ def merge_finding(engine: Engine, draft: FindingDraft, revision: int, now: datet
     )
 
 
-def snapshot_finding(engine: Engine, draft: FindingDraft, revision: int, now: datetime) -> Finding:
-    merged: Final = merge_finding(engine, draft, revision, now)
+def snapshot_finding(lens: Lens, draft: FindingDraft, revision: int, now: datetime) -> Finding:
+    merged: Final = merge_finding(lens, draft, revision, now)
     return Finding.model_validate(
         MappingProxyType(
             {

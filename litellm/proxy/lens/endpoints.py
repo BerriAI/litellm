@@ -13,17 +13,17 @@ from pydantic import AwareDatetime, BaseModel, Field, TypeAdapter
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
-from litellm.proxy.engine.billing import validate_key
-from litellm.proxy.engine.models import (
+from litellm.proxy.lens.billing import validate_key
+from litellm.proxy.lens.models import (
     Claim,
-    Engine,
-    EngineList,
-    EngineSettings,
     Execution,
     ExecutionContent,
     FindingDraft,
     FindingUpdate,
     Job,
+    Lens,
+    LensList,
+    LensSettings,
     ModelRequest,
     ModelResult,
     Progress,
@@ -34,9 +34,9 @@ from litellm.proxy.engine.models import (
     Worker,
     WorkerCreated,
 )
-from litellm.proxy.engine.repository import EngineRepository, WriterDatabase
-from litellm.proxy.engine.sources import SourceReader, parse_execution
-from litellm.proxy.engine.state import (
+from litellm.proxy.lens.repository import LensRepository, WriterDatabase
+from litellm.proxy.lens.sources import SourceReader, parse_execution
+from litellm.proxy.lens.state import (
     can_access,
     can_view,
     claim_job,
@@ -48,17 +48,17 @@ from litellm.proxy.engine.state import (
 )
 from litellm.proxy.spend_tracking.log_visibility import LogVisibility, log_visibility
 
-router: Final = APIRouter(prefix="/engine", tags=["Lens"])  # mutable-ok: FastAPI requires list
+router: Final = APIRouter(prefix="/lens", tags=["Lens"])  # mutable-ok: FastAPI requires list
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 
 
-def repository() -> EngineRepository:
+def repository() -> LensRepository:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
         raise HTTPException(503, "Lens needs a connected Postgres database")
-    return EngineRepository(WriterDatabase(writer_wrapper(prisma_client.db)))
+    return LensRepository(WriterDatabase(writer_wrapper(prisma_client.db)))
 
 
 def source_reader() -> SourceReader:
@@ -73,18 +73,18 @@ def user_scope(auth: UserAPIKeyAuth) -> Scope:
     return Scope(all_teams=True)
 
 
-async def get_engine(engine_id: str, scope: Scope) -> Engine:
-    engine: Final = await repository().get(engine_id)
-    if engine is None or not can_access(scope, engine.scope):
+async def get_lens(lens_id: str, scope: Scope) -> Lens:
+    lens: Final = await repository().get(lens_id)
+    if lens is None or not can_access(scope, lens.scope):
         raise HTTPException(404, "Lens not found")
-    return engine
+    return lens
 
 
-async def get_visible_engine(engine_id: str, viewer: LogVisibility) -> Engine:
-    engine: Final = await repository().get(engine_id)
-    if engine is None or not can_view(viewer, engine.scope):
+async def get_visible_lens(lens_id: str, viewer: LogVisibility) -> Lens:
+    lens: Final = await repository().get(lens_id)
+    if lens is None or not can_view(viewer, lens.scope):
         raise HTTPException(404, "Lens not found")
-    return engine
+    return lens
 
 
 async def worker_auth(credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer)]) -> Worker:
@@ -97,9 +97,9 @@ async def worker_auth(credentials: Annotated[HTTPAuthorizationCredentials, Depen
 WorkerAuth: TypeAlias = Annotated[Worker, Depends(worker_auth)]
 
 
-async def assigned(engine_id: str, job_id: str, worker: Worker) -> tuple[Engine, Job]:
-    engine: Final = await get_engine(engine_id, worker.scope)
-    job: Final = current_job(engine)
+async def assigned(lens_id: str, job_id: str, worker: Worker) -> tuple[Lens, Job]:
+    lens: Final = await get_lens(lens_id, worker.scope)
+    job: Final = current_job(lens)
     if (
         job is None
         or job.id != job_id
@@ -109,16 +109,16 @@ async def assigned(engine_id: str, job_id: str, worker: Worker) -> tuple[Engine,
         or job.lease_until <= datetime.now(timezone.utc)
     ):
         raise HTTPException(409, "This worker no longer owns the job")
-    return engine, job
+    return lens, job
 
 
-def required(engine: Engine | None) -> Engine:
-    if engine is None:
+def required(lens: Lens | None) -> Lens:
+    if lens is None:
         raise HTTPException(409, "Lens changed concurrently; retry the operation")
-    return engine
+    return lens
 
 
-def validate_selection(settings: EngineSettings) -> None:
+def validate_selection(settings: LensSettings) -> None:
     for identity in settings.execution_ids:
         try:
             source, _, _, _ = parse_execution(identity)
@@ -128,7 +128,7 @@ def validate_selection(settings: EngineSettings) -> None:
             raise HTTPException(422, "Choose execution IDs returned by the activity preview")
 
 
-def validate_model(settings: EngineSettings, auth: UserAPIKeyAuth) -> None:
+def validate_model(settings: LensSettings, auth: UserAPIKeyAuth) -> None:
     from litellm.proxy.proxy_server import llm_router
 
     validate_selection(settings)
@@ -144,24 +144,24 @@ def validate_model(settings: EngineSettings, auth: UserAPIKeyAuth) -> None:
         raise HTTPException(403, "This key does not have access to the analysis model")
 
 
-@router.get("", response_model=EngineList)
-async def list_engines(auth: Auth) -> EngineList:
+@router.get("", response_model=LensList)
+async def list_lenses(auth: Auth) -> LensList:
     from litellm.proxy import tracing_endpoints
 
     viewer: Final = await log_visibility(auth)
-    return EngineList(
-        engines=tuple(e for e in await repository().engines() if can_view(viewer, e.scope)),
+    return LensList(
+        lenses=tuple(e for e in await repository().lenses() if can_view(viewer, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_view(viewer, w.scope)),
         tracing_enabled=tracing_endpoints.receiver is not None,
     )
 
 
-@router.post("", response_model=Engine)
-async def create_engine(settings: EngineSettings, auth: Auth) -> Engine:
+@router.post("", response_model=Lens)
+async def create_lens(settings: LensSettings, auth: Auth) -> Lens:
     scope: Final = user_scope(auth)
     validate_model(settings, auth)
     now: Final = datetime.now(timezone.utc)
-    engine: Final = Engine(
+    lens: Final = Lens(
         id=str(uuid4()),
         scope=scope,
         settings=settings,
@@ -169,16 +169,16 @@ async def create_engine(settings: EngineSettings, auth: Auth) -> Engine:
         next_run_at=now,
         budget_month=now.strftime("%Y-%m"),
     )
-    return await repository().create(queue_job(engine, now, str(uuid4())))
+    return await repository().create(queue_job(lens, now, str(uuid4())))
 
 
-@router.put("/{engine_id}", response_model=Engine)
-async def update_engine(engine_id: str, settings: EngineSettings, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth))
+@router.put("/{lens_id}", response_model=Lens)
+async def update_lens(lens_id: str, settings: LensSettings, auth: Auth) -> Lens:
+    await get_lens(lens_id, user_scope(auth))
     validate_model(settings, auth)
     return required(
         await repository().update(
-            engine_id,
+            lens_id,
             lambda e: e.model_copy(
                 update=MappingProxyType(
                     {
@@ -191,50 +191,50 @@ async def update_engine(engine_id: str, settings: EngineSettings, auth: Auth) ->
     )
 
 
-@router.post("/{engine_id}/runs", response_model=Engine)
-async def run_engine(engine_id: str, body: RunRequest, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth))
+@router.post("/{lens_id}/runs", response_model=Lens)
+async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
+    await get_lens(lens_id, user_scope(auth))
     if body.settings is not None:
         validate_model(body.settings, auth)
     now: Final = datetime.now(timezone.utc)
     job_id: Final = str(uuid4())
     return required(
-        await repository().update(engine_id, lambda e: queue_job(e, now, job_id, body.lookback_hours, body.settings))
+        await repository().update(lens_id, lambda e: queue_job(e, now, job_id, body.lookback_hours, body.settings))
     )
 
 
-@router.get("/{engine_id}", response_model=Engine)
-async def read_engine(engine_id: str, auth: Auth) -> Engine:
+@router.get("/{lens_id}", response_model=Lens)
+async def read_lens(lens_id: str, auth: Auth) -> Lens:
     viewer: Final = await log_visibility(auth)
-    return await get_visible_engine(engine_id, viewer)
+    return await get_visible_lens(lens_id, viewer)
 
 
-@router.get("/{engine_id}/runs", response_model=tuple[Job, ...])
-async def list_runs(engine_id: str, auth: Auth, offset: int = Query(default=0, ge=0)) -> tuple[Job, ...]:
+@router.get("/{lens_id}/runs", response_model=tuple[Job, ...])
+async def list_runs(lens_id: str, auth: Auth, offset: int = Query(default=0, ge=0)) -> tuple[Job, ...]:
     viewer: Final = await log_visibility(auth)
-    await get_visible_engine(engine_id, viewer)
+    await get_visible_lens(lens_id, viewer)
     return tuple(
         j.model_copy(update=MappingProxyType({"sample": None, "findings": None, "assessments": ()}))
-        for j in await repository().jobs(engine_id, offset)
+        for j in await repository().jobs(lens_id, offset)
     )
 
 
-@router.get("/{engine_id}/runs/{job_id}", response_model=Job)
-async def read_run(engine_id: str, job_id: str, auth: Auth) -> Job:
+@router.get("/{lens_id}/runs/{job_id}", response_model=Job)
+async def read_run(lens_id: str, job_id: str, auth: Auth) -> Job:
     viewer: Final = await log_visibility(auth)
-    await get_visible_engine(engine_id, viewer)
-    job: Final = await repository().job(engine_id, job_id)
+    await get_visible_lens(lens_id, viewer)
+    job: Final = await repository().job(lens_id, job_id)
     if job is None:
         raise HTTPException(404, "Investigation not found")
     return job
 
 
-@router.post("/{engine_id}/cancel", response_model=Engine)
-async def cancel_engine(engine_id: str, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth))
+@router.post("/{lens_id}/cancel", response_model=Lens)
+async def cancel_lens(lens_id: str, auth: Auth) -> Lens:
+    await get_lens(lens_id, user_scope(auth))
     now: Final = datetime.now(timezone.utc)
 
-    def cancel(e: Engine) -> Engine:
+    def cancel(e: Lens) -> Lens:
         job: Final = current_job(e)
         if job is None:
             return e
@@ -245,15 +245,15 @@ async def cancel_engine(engine_id: str, auth: Auth) -> Engine:
             update=MappingProxyType({"next_run_at": now + timedelta(minutes=e.settings.interval_minutes)})
         )
 
-    return required(await repository().update(engine_id, cancel))
+    return required(await repository().update(lens_id, cancel))
 
 
-@router.patch("/{engine_id}/findings/{finding_id}", response_model=Engine)
-async def update_finding(engine_id: str, finding_id: str, body: FindingUpdate, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth))
+@router.patch("/{lens_id}/findings/{finding_id}", response_model=Lens)
+async def update_finding(lens_id: str, finding_id: str, body: FindingUpdate, auth: Auth) -> Lens:
+    await get_lens(lens_id, user_scope(auth))
     return required(
         await repository().update(
-            engine_id,
+            lens_id,
             lambda e: e.model_copy(
                 update=MappingProxyType(
                     {
@@ -270,7 +270,7 @@ async def update_finding(engine_id: str, finding_id: str, body: FindingUpdate, a
 class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
-    settings: EngineSettings
+    settings: LensSettings
     lookback_hours: int = Field(default=24, ge=1, le=720)
 
 
@@ -346,7 +346,7 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
         raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)
     await repository().heartbeat(worker.id, now.isoformat())
-    for candidate in await repository().engines():
+    for candidate in await repository().lenses():
         if not can_access(worker.scope, candidate.scope):
             continue
         if claimed := await claim_candidate(candidate, worker, now):
@@ -354,12 +354,12 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
     return None
 
 
-@router.post("/worker/{engine_id}/{job_id}/progress", response_model=bool)
-async def progress(engine_id: str, job_id: str, body: Progress, worker: WorkerAuth) -> bool:
-    await assigned(engine_id, job_id, worker)
+@router.post("/worker/{lens_id}/{job_id}/progress", response_model=bool)
+async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth) -> bool:
+    await assigned(lens_id, job_id, worker)
     now: Final = datetime.now(timezone.utc)
 
-    def renew(e: Engine) -> Engine:
+    def renew(e: Lens) -> Lens:
         job: Final = current_job(e)
         if job is None or job.id != job_id or job.worker_id != worker.id:
             return e
@@ -372,21 +372,21 @@ async def progress(engine_id: str, job_id: str, body: Progress, worker: WorkerAu
             ),
         )
 
-    required(await repository().update(engine_id, renew))
+    required(await repository().update(lens_id, renew))
     await repository().heartbeat(worker.id, now.isoformat())
     return True
 
 
-@router.get("/worker/{engine_id}/{job_id}/sample", response_model=Sample)
-async def sample(engine_id: str, job_id: str, worker: WorkerAuth) -> Sample:
-    engine, job = await assigned(engine_id, job_id, worker)
+@router.get("/worker/{lens_id}/{job_id}/sample", response_model=Sample)
+async def sample(lens_id: str, job_id: str, worker: WorkerAuth) -> Sample:
+    lens, job = await assigned(lens_id, job_id, worker)
     if job.sample is not None:
         return job.sample
     pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
     cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
     while True:
         page = await source_reader().sample(
-            engine.scope,
+            lens.scope,
             job.settings,
             int(job.start.timestamp() * 1000),
             int(job.end.timestamp() * 1000),
@@ -401,7 +401,7 @@ async def sample(engine_id: str, job_id: str, worker: WorkerAuth) -> Sample:
     )  # comprehension-ok: flatten query pages
     selected: Final = Sample(executions=executions, eligible=pages[0].eligible, selected=len(executions))
 
-    def freeze(e: Engine) -> Engine:
+    def freeze(e: Lens) -> Lens:
         active: Final = current_job(e)
         if active is None or active.id != job_id or active.worker_id != worker.id:
             raise HTTPException(409, "Job was cancelled or reassigned")
@@ -411,45 +411,45 @@ async def sample(engine_id: str, job_id: str, worker: WorkerAuth) -> Sample:
             else e
         )
 
-    updated: Final = required(await repository().update(engine_id, freeze))
+    updated: Final = required(await repository().update(lens_id, freeze))
     frozen: Final = next(j for j in updated.jobs if j.id == job_id).sample
     if frozen is None:
         raise HTTPException(409, "Could not freeze the sample")
     return frozen
 
 
-@router.get("/worker/{engine_id}/{job_id}/content", response_model=ExecutionContent)
+@router.get("/worker/{lens_id}/{job_id}/content", response_model=ExecutionContent)
 async def content(
-    engine_id: str,
+    lens_id: str,
     job_id: str,
     execution_id: str,
     worker: WorkerAuth,
     cursor: str = "",
     offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
-    engine, job = await assigned(engine_id, job_id, worker)
+    lens, job = await assigned(lens_id, job_id, worker)
     selected: Final = job.sample or Sample(executions=(), eligible=0)
     execution: Final = next((e for e in selected.executions if e.id == execution_id), None)
     if execution is None:
         raise HTTPException(404, "Execution is outside this job's sample")
-    return await source_reader().content(engine.scope, execution, cursor, offset)
+    return await source_reader().content(lens.scope, execution, cursor, offset)
 
 
-@router.post("/worker/{engine_id}/{job_id}/model", response_model=ModelResult)
-async def model(engine_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request) -> ModelResult:
-    from litellm.proxy.engine.inference import analyze
+@router.post("/worker/{lens_id}/{job_id}/model", response_model=ModelResult)
+async def model(lens_id: str, job_id: str, body: ModelRequest, worker: WorkerAuth, request: Request) -> ModelResult:
+    from litellm.proxy.lens.inference import analyze
 
-    engine, job = await assigned(engine_id, job_id, worker)
-    return await analyze(repository(), engine, job, worker, body, request)
+    lens, job = await assigned(lens_id, job_id, worker)
+    return await analyze(repository(), lens, job, worker, body, request)
 
 
-@router.post("/worker/{engine_id}/{job_id}/result", response_model=Engine)
-async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) -> Engine:
-    engine: Final = await get_engine(engine_id, worker.scope)
-    old: Final = next((j for j in engine.jobs if j.id == job_id), None)
+@router.post("/worker/{lens_id}/{job_id}/result", response_model=Lens)
+async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth) -> Lens:
+    lens: Final = await get_lens(lens_id, worker.scope)
+    old: Final = next((j for j in lens.jobs if j.id == job_id), None)
     if old and old.status in ("completed", "failed") and old.worker_id == worker.id:
-        return engine
-    _, job = await assigned(engine_id, job_id, worker)
+        return lens
+    _, job = await assigned(lens_id, job_id, worker)
     now: Final = datetime.now(timezone.utc)
     selected: Final = job.sample or Sample(executions=(), eligible=0)
     allowed: Final = frozenset(e.id for e in selected.executions)
@@ -466,9 +466,9 @@ async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) 
         raise HTTPException(422, "Finding references evidence outside the job")
 
     for finding in body.findings:
-        await validate_finding(engine, selected, finding)
+        await validate_finding(lens, selected, finding)
 
-    def finish(e: Engine) -> Engine:
+    def finish(e: Lens) -> Lens:
         active: Final = current_job(e)
         if active is None or active.id != job_id or active.worker_id != worker.id:
             return e
@@ -499,29 +499,29 @@ async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) 
             )
         )
 
-    return required(await repository().update(engine_id, finish))
+    return required(await repository().update(lens_id, finish))
 
 
-def merge_results(engine: Engine, result: Result, revision: int, now: datetime) -> Engine:
-    def merge_one(current: Engine, draft: FindingDraft) -> Engine:
+def merge_results(lens: Lens, result: Result, revision: int, now: datetime) -> Lens:
+    def merge_one(current: Lens, draft: FindingDraft) -> Lens:
         finding: Final = merge_finding(current, draft, revision, now)
         return current.model_copy(
             update=MappingProxyType({"findings": (finding, *(f for f in current.findings if f.id != finding.id))})
         )
 
-    return reduce(merge_one, result.findings, engine)
+    return reduce(merge_one, result.findings, lens)
 
 
-@router.post("/worker/{engine_id}/{job_id}/heartbeat", response_model=bool)
-async def heartbeat(engine_id: str, job_id: str, worker: WorkerAuth) -> bool:
-    _, job = await assigned(engine_id, job_id, worker)
-    return await progress(engine_id, job_id, Progress(stage=job.stage, coverage=job.coverage), worker)
+@router.post("/worker/{lens_id}/{job_id}/heartbeat", response_model=bool)
+async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
+    _, job = await assigned(lens_id, job_id, worker)
+    return await progress(lens_id, job_id, Progress(stage=job.stage, coverage=job.coverage), worker)
 
 
-async def claim_candidate(candidate: Engine, worker: Worker, now: datetime) -> Claim | None:
+async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Claim | None:
     job_id: Final = str(uuid4())
 
-    def schedule(e: Engine) -> Engine:
+    def schedule(e: Lens) -> Lens:
         scheduled: Final = queue_job(e, now, job_id) if e.settings.enabled and e.next_run_at <= now else e
         return claim_job(scheduled, worker, now)
 
@@ -530,24 +530,24 @@ async def claim_candidate(candidate: Engine, worker: Worker, now: datetime) -> C
         return None
     job: Final = current_job(updated)
     if job and job.worker_id == worker.id and job.status == "running" and job != current_job(candidate):
-        return Claim(engine_id=updated.id, job=job, findings=updated.findings)
+        return Claim(lens_id=updated.id, job=job, findings=updated.findings)
     return None
 
 
-async def validate_finding(engine: Engine, selected: Sample, finding: FindingDraft) -> None:
-    previous: Final = next((f for f in engine.findings if f.id == finding.existing_finding_id), None)
+async def validate_finding(lens: Lens, selected: Sample, finding: FindingDraft) -> None:
+    previous: Final = next((f for f in lens.findings if f.id == finding.existing_finding_id), None)
     if finding.existing_finding_id and (previous is None or previous.check_id != finding.check_id):
         raise HTTPException(422, "Existing finding must belong to the same check")
     for evidence in finding.evidence:
         if not await source_reader().verify_evidence(
-            engine.scope, next(e for e in selected.executions if e.id == evidence.execution_id), evidence
+            lens.scope, next(e for e in selected.executions if e.id == evidence.execution_id), evidence
         ):
             raise HTTPException(422, "Evidence quote does not match stored content")
 
 
-@router.get("/{engine_id}/executions/{execution_id}", response_model=ExecutionContent)
+@router.get("/{lens_id}/executions/{execution_id}", response_model=ExecutionContent)
 async def evidence_content(
-    engine_id: str,
+    lens_id: str,
     execution_id: str,
     auth: Auth,
     reader: Annotated[SourceReader, Depends(source_reader)],
@@ -555,12 +555,12 @@ async def evidence_content(
     offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
     viewer: Final = await log_visibility(auth)
-    engine: Final = await get_visible_engine(engine_id, viewer)
+    lens: Final = await get_visible_lens(lens_id, viewer)
     try:
         source, team, trace_id, trace_ref = parse_execution(execution_id)
     except ValueError:
         raise HTTPException(404, "Execution not found")
-    if source not in ("traces", "requests") or (not engine.scope.all_teams and team != engine.scope.team_id):
+    if source not in ("traces", "requests") or (not lens.scope.all_teams and team != lens.scope.team_id):
         raise HTTPException(404, "Execution not found")
     execution: Final = Execution(
         id=execution_id,
@@ -573,4 +573,4 @@ async def evidence_content(
         span_count=1,
         root_seen=source == "requests",
     )
-    return await reader.content(engine.scope, execution, cursor, offset)
+    return await reader.content(lens.scope, execution, cursor, offset)

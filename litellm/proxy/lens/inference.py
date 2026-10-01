@@ -8,10 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 import litellm
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
-from litellm.proxy.engine.billing import complete, validate_key
-from litellm.proxy.engine.models import Engine, Job, ModelRequest, ModelResult, Worker
-from litellm.proxy.engine.repository import EngineRepository
-from litellm.proxy.engine.state import current_job, renew_budget, replace_job
+from litellm.proxy.lens.billing import complete, validate_key
+from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Worker
+from litellm.proxy.lens.repository import LensRepository
+from litellm.proxy.lens.state import current_job, renew_budget, replace_job
 from litellm.types.utils import CostPerToken, ModelResponse
 
 
@@ -87,7 +87,7 @@ def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
 
 
 async def analyze(
-    repo: EngineRepository, engine: Engine, job: Job, worker: Worker, body: ModelRequest, request: Request
+    repo: LensRepository, lens: Lens, job: Job, worker: Worker, body: ModelRequest, request: Request
 ) -> ModelResult:
     from litellm.proxy.proxy_server import llm_router
 
@@ -106,7 +106,7 @@ async def analyze(
     estimate: Final = quote(deployments, body.prompt)
     now: Final = datetime.now(timezone.utc)
 
-    def reserve(e: Engine) -> Engine:
+    def reserve(e: Lens) -> Lens:
         current: Final = renew_budget(e, now)
         active: Final = current_job(current)
         if (
@@ -124,7 +124,7 @@ async def analyze(
         ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
 
     async def reserve_budget() -> None:
-        if await repo.update(engine.id, reserve) is None:
+        if await repo.update(lens.id, reserve) is None:
             raise HTTPException(409, "Could not reserve analysis budget")
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
@@ -140,8 +140,8 @@ async def analyze(
         "disable_fallbacks": True,
         "response_format": {"type": "json_object"},  # mutable-ok: provider response-format JSON
         "metadata": {  # mutable-ok: request processing enriches metadata
-            "tags": ["litellm-engine"],  # mutable-ok: logging callbacks require a list
-            "lens_id": engine.id,
+            "tags": ["litellm-lens"],  # mutable-ok: logging callbacks require a list
+            "lens_id": lens.id,
             "lens_run_id": job.id,
             "lens_worker_id": worker.id,
             "user_api_key_team_id": team_id,
@@ -153,7 +153,7 @@ async def analyze(
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
 
-    def settle(e: Engine) -> Engine:
+    def settle(e: Lens) -> Lens:
         charged: Final = next((j for j in e.jobs if j.id == job.id), None)
         adjusted: Final = (
             e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
@@ -168,7 +168,7 @@ async def analyze(
             else adjusted
         )
 
-    await repo.update(engine.id, settle)
+    await repo.update(lens.id, settle)
     return ModelResult(content=parsed.choices[0].message.content or "{}", cost=cost)
 
 

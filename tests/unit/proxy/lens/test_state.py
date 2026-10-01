@@ -3,8 +3,8 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.engine.models import Check, Engine, EngineSettings, Evidence, FindingDraft, Scope, Worker
-from litellm.proxy.engine.state import (
+from litellm.proxy.lens.models import Check, Evidence, FindingDraft, Lens, LensSettings, Scope, Worker
+from litellm.proxy.lens.state import (
     can_access,
     can_view,
     claim_job,
@@ -18,11 +18,11 @@ from litellm.proxy.spend_tracking.log_visibility import LogVisibility
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
 
-def engine() -> Engine:
-    return Engine(
-        id="engine",
+def lens() -> Lens:
+    return Lens(
+        id="lens",
         scope=Scope(team_id="alpha"),
-        settings=EngineSettings(
+        settings=LensSettings(
             name="Research", model="analysis", checks=(Check(id="retries", instruction="Find unrecovered retries"),)
         ),
         created_at=NOW,
@@ -70,14 +70,12 @@ def test_scope_never_crosses_another_team_or_key(viewer: Scope, target: Scope, a
         (LogVisibility(all_teams=True), Scope(team_id="alpha"), True),
     ),
 )
-def test_log_visibility_matches_engine_scope(
-    viewer: LogVisibility, target: Scope, allowed: bool
-) -> None:
+def test_log_visibility_matches_lens_scope(viewer: LogVisibility, target: Scope, allowed: bool) -> None:
     assert can_view(viewer, target) is allowed
 
 
 def test_queue_is_idempotent_and_settings_are_frozen() -> None:
-    original: Final = engine()
+    original: Final = lens()
     queued: Final = queue_job(original, NOW, "job")
     edited: Final = queued.model_copy(
         update={"settings": original.settings.model_copy(update={"model": "replacement"})}
@@ -92,7 +90,7 @@ def test_queue_is_idempotent_and_settings_are_frozen() -> None:
 
 
 def test_one_off_overrides_do_not_change_saved_monitoring_settings() -> None:
-    original: Final = engine()
+    original: Final = lens()
     override: Final = original.settings.model_copy(
         update={"sample_percent": 10, "sample_size": None, "concurrency": 3, "lookback_hours": 72}
     )
@@ -106,7 +104,7 @@ def test_one_off_overrides_do_not_change_saved_monitoring_settings() -> None:
 
 
 def test_behavior_description_is_sufficient_without_separate_checks() -> None:
-    settings: Final = EngineSettings(name="Behavior", model="analysis", context="Answer using cited sources")
+    settings: Final = LensSettings(name="Behavior", model="analysis", context="Answer using cited sources")
     assert tuple(c.id for c in settings.analysis_checks) == ("expected_behavior",)
     assert settings.sample_size is None
     assert settings.sample_percent == 100
@@ -119,11 +117,11 @@ def test_invalid_selection_and_parallelism_are_rejected(field: str, value: int) 
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        EngineSettings.model_validate({**engine().settings.model_dump(), field: value})
+        LensSettings.model_validate({**lens().settings.model_dump(), field: value})
 
 
 def test_lease_prevents_double_claim_and_expires_with_bounded_retries() -> None:
-    queued: Final = queue_job(engine(), NOW, "job")
+    queued: Final = queue_job(lens(), NOW, "job")
     first: Final = claim_job(queued, worker(), NOW)
     assert claim_job(first, worker(identity="second"), NOW) is first
     assert claim_job(first, worker(team="beta"), NOW + timedelta(minutes=6)) is first
@@ -137,9 +135,9 @@ def test_lease_prevents_double_claim_and_expires_with_bounded_retries() -> None:
 
 
 def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
-    from litellm.proxy.engine.state import snapshot_finding
+    from litellm.proxy.lens.state import snapshot_finding
 
-    original: Final = engine()
+    original: Final = lens()
     resolved: Final = merge_finding(original, finding("run1"), 1, NOW).model_copy(update={"status": "resolved"})
     reviewed: Final = original.model_copy(update={"findings": (resolved,)})
     assert merge_finding(reviewed, finding("run1"), 1, NOW).status == "resolved"
@@ -165,7 +163,7 @@ def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
 
 
 def test_monthly_budget_renews_without_erasing_job_costs() -> None:
-    spent: Final = queue_job(engine(), NOW, "job").model_copy(update={"spent": 12})
+    spent: Final = queue_job(lens(), NOW, "job").model_copy(update={"spent": 12})
     renewed: Final = renew_budget(spent, datetime(2026, 2, 1, tzinfo=timezone.utc))
     assert renewed.spent == 0
     assert renewed.jobs == spent.jobs
@@ -174,7 +172,7 @@ def test_monthly_budget_renews_without_erasing_job_costs() -> None:
 
 @pytest.mark.parametrize("hours", (24, 168, 720))
 def test_every_scan_uses_the_configured_lookback_window(hours: int) -> None:
-    original: Final = engine()
+    original: Final = lens()
     configured: Final = original.model_copy(
         update={"settings": original.settings.model_copy(update={"lookback_hours": hours})}
     )
@@ -186,15 +184,15 @@ def test_every_scan_uses_the_configured_lookback_window(hours: int) -> None:
 
 def test_finding_keeps_uncertainty_separate_from_the_main_summary() -> None:
     draft: Final = finding("run1").model_copy(update={"limitation": "The final response was not recorded."})
-    saved: Final = merge_finding(engine(), draft, 1, NOW)
+    saved: Final = merge_finding(lens(), draft, 1, NOW)
     assert saved.limitation == draft.limitation
     assert saved.description == draft.description
 
 
 @pytest.mark.parametrize("interval", (1, 2, 37, 90, 10080))
 def test_custom_schedule_does_not_overlap_an_active_scan(interval: int) -> None:
-    original: Final = engine()
-    settings: Final = EngineSettings.model_validate({**original.settings.model_dump(), "interval_minutes": interval})
+    original: Final = lens()
+    settings: Final = LensSettings.model_validate({**original.settings.model_dump(), "interval_minutes": interval})
     configured: Final = original.model_copy(update={"settings": settings})
     running: Final = claim_job(queue_job(configured, NOW, "first"), worker(), NOW)
     assert queue_job(running, NOW + timedelta(minutes=interval), "second") is running
@@ -205,13 +203,13 @@ def test_invalid_schedule_is_rejected(interval: float) -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        EngineSettings.model_validate({**engine().settings.model_dump(), "interval_minutes": interval})
+        LensSettings.model_validate({**lens().settings.model_dump(), "interval_minutes": interval})
 
 
 def test_batch_snapshot_keeps_feedback_identity_and_only_current_evidence() -> None:
-    from litellm.proxy.engine.state import snapshot_finding
+    from litellm.proxy.lens.state import snapshot_finding
 
-    original: Final = engine()
+    original: Final = lens()
     dismissed: Final = merge_finding(original, finding("old-run"), 1, NOW).model_copy(
         update={"status": "dismissed", "reason": "Expected recovery"}
     )
@@ -231,9 +229,9 @@ def test_batch_snapshot_keeps_feedback_identity_and_only_current_evidence() -> N
 
 @pytest.mark.parametrize("explicit_reference", (False, True))
 def test_issue_and_pattern_with_same_title_keep_independent_feedback(explicit_reference: bool) -> None:
-    from litellm.proxy.engine.state import snapshot_finding
+    from litellm.proxy.lens.state import snapshot_finding
 
-    original: Final = engine()
+    original: Final = lens()
     issue: Final = merge_finding(original, finding("old"), 1, NOW).model_copy(
         update={"status": "dismissed", "reason": "Expected retry"}
     )
@@ -255,7 +253,7 @@ def test_issue_and_pattern_with_same_title_keep_independent_feedback(explicit_re
 def test_legacy_finding_identity_preserves_feedback_only_for_same_kind_and_check() -> None:
     import hashlib
 
-    original: Final = engine()
+    original: Final = lens()
     draft: Final = finding("old")
     legacy_id: Final = hashlib.sha256(f"{original.id}:{draft.check_id}:{draft.title.lower()}".encode()).hexdigest()[:24]
     legacy: Final = merge_finding(original, draft, 1, NOW).model_copy(
