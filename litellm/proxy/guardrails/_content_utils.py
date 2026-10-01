@@ -311,13 +311,8 @@ def _apply_redacted_tool_search_tools(item: dict[str, object], redacted_iter: It
     item["tools"] = rewritten_tools
 
 
-def _apply_redacted_string_input(data: dict[str, Any], redacted_messages: Sequence[object]) -> None:
-    text_parts: Final[list[str]] = []
-    for msg in redacted_messages:
-        if not isinstance(msg, dict):
-            continue
-        text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
-    data["input"] = "\n".join(text_parts)
+def _apply_redacted_string_input(data: dict[str, Any], redacted_text: str) -> None:
+    data["input"] = redacted_text
 
 
 def _apply_redacted_string_batch_input(data: dict[str, Any], redacted_messages: Sequence[object]) -> bool:
@@ -348,6 +343,10 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
     (``/embeddings`` ``input`` list) is rewritten element-wise: the n-th
     redacted message replaces the n-th non-empty element, because
     :func:`build_inspection_messages` emits one message per non-empty string.
+    When both ``messages`` and structured ``input`` are present, their
+    redactions are grouped by source field. A single redaction can update both
+    fields only when it is the sole response and their inspected inputs match
+    one-to-one.
     Responses-API ``tool_search_output`` tool descriptions are rewritten in
     place, preserving the surrounding item and non-text fields. The
     ``tool_search_output`` fallback ``output`` field is rewritten the same way.
@@ -358,18 +357,76 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
     """
     if is_string_batch_input(data):
         return _apply_redacted_string_batch_input(data, redacted_messages)
-    if "messages" in data:
-        data["messages"] = redacted_messages
     input_value: Final = data.get("input")
-    if isinstance(input_value, str):
-        _apply_redacted_string_input(data, redacted_messages)
-    elif isinstance(input_value, list) and not is_string_batch_input(data):
-        response_texts: Final[tuple[str, ...]] = tuple(
-            text for msg in redacted_messages if isinstance(text := _text_of_message(msg), str)
-        )
-        if len(response_texts) != len(build_inspection_messages(data)):
+
+    if "messages" not in data:
+        return _apply_redacted_input_without_messages(data, input_value, redacted_messages)
+
+    message_count: Final[int] = _inspection_count("messages", data["messages"])
+    input_count: Final[int] = _inspection_count("input", input_value) if isinstance(input_value, (str, list)) else 0
+    if message_count > len(redacted_messages):
+        return False
+    if len(redacted_messages) == message_count:
+        original_messages: Final = build_inspection_messages(data)
+        if (
+            message_count == 1
+            and input_count == 1
+            and original_messages[0]["content"] == original_messages[1]["content"]
+        ):
+            matched_redacted_input_text: Final = _text_of_message(redacted_messages[0])
+            if isinstance(matched_redacted_input_text, str):
+                if isinstance(input_value, str):
+                    _apply_redacted_string_input(data, matched_redacted_input_text)
+                elif isinstance(input_value, list):
+                    _structured_redactions_apply(input_value, ({"content": matched_redacted_input_text},))
+        elif input_count:
             return False
-        _apply_redacted_input_texts(input_value, response_texts)
+        data["messages"] = redacted_messages
+        return True
+    input_redactions: Final = redacted_messages[message_count:]
+    if input_count != len(input_redactions):
+        return False
+    if isinstance(input_value, str):
+        redacted_input_text: Final = _text_of_message(input_redactions[0])
+        if not isinstance(redacted_input_text, str):
+            return False
+        _apply_redacted_string_input(data, redacted_input_text)
+    else:
+        if not isinstance(input_value, list) or not _structured_redactions_apply(input_value, input_redactions):
+            return False
+    data["messages"] = redacted_messages[:message_count]
+    return True
+
+
+def _inspection_count(field: str, value: object) -> int:
+    return len(build_inspection_messages({field: value}))
+
+
+def _apply_redacted_input_without_messages(
+    data: dict[str, Any], input_value: object, redacted_messages: Sequence[object]
+) -> bool:
+    if isinstance(input_value, str):
+        if len(redacted_messages) != 1:
+            return False
+        input_text: Final = _text_of_message(redacted_messages[0])
+        if not isinstance(input_text, str):
+            return False
+        _apply_redacted_string_input(data, input_text)
+    elif isinstance(input_value, list):
+        if not _structured_redactions_apply(input_value, redacted_messages):
+            return False
+    return True
+
+
+def _redacted_texts(messages: Sequence[object]) -> tuple[str, ...]:
+    return tuple(text for msg in messages if isinstance(text := _text_of_message(msg), str))
+
+
+def _structured_redactions_apply(input_value: list[object], redactions: Sequence[object]) -> bool:
+    input_texts: Final = _redacted_texts(redactions)
+    if len(input_texts) != _inspection_count("input", input_value):
+        return False
+    _apply_redacted_input_texts(input_value, input_texts)
     return True
 
 

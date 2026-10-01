@@ -608,9 +608,175 @@ def test_apply_redacted_messages_back_both_fields():
         "messages": [{"role": "user", "content": "old"}],
         "input": "old",
     }
-    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
+    apply_redacted_messages_back(
+        data,
+        [
+            {"role": "user", "content": "message-[REDACTED]"},
+            {"role": "user", "content": "input-[REDACTED]"},
+        ],
+    )
+    assert data["messages"] == [{"role": "user", "content": "message-[REDACTED]"}]
+    assert data["input"] == "input-[REDACTED]"
+
+
+def test_apply_redacted_messages_back_reuses_one_matching_redaction_for_both_fields():
+    data = {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": "old",
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is True
     assert data["messages"] == [{"role": "user", "content": "[REDACTED]"}]
     assert data["input"] == "[REDACTED]"
+
+
+def test_apply_redacted_messages_back_reuses_one_matching_structured_redaction_for_both_fields():
+    data = {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": [{"type": "message", "role": "user", "content": "old"}],
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is True
+    assert data["messages"] == [{"role": "user", "content": "[REDACTED]"}]
+    assert data["input"] == [{"type": "message", "role": "user", "content": "[REDACTED]"}]
+
+
+def test_apply_redacted_messages_back_rejects_extra_string_input_redactions():
+    data = {"input": "secret"}
+    redacted = [
+        {"role": "user", "content": "[REDACTED]"},
+        {"role": "user", "content": "spurious"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {"input": "secret"}
+
+
+def test_apply_redacted_messages_back_rejects_non_string_string_input_redaction():
+    data = {"input": "secret"}
+
+    assert apply_redacted_messages_back(data, [{"role": "user"}]) is False
+    assert data == {"input": "secret"}
+
+
+def test_apply_redacted_messages_back_rejects_non_mapping_redaction_for_structured_input():
+    data = {"input": [{"type": "message", "role": "assistant", "content": "input-secret"}]}
+
+    assert apply_redacted_messages_back(data, ["not-a-message"]) is False
+    assert data == {"input": [{"type": "message", "role": "assistant", "content": "input-secret"}]}
+
+
+def test_apply_redacted_messages_back_rejects_fewer_message_redactions():
+    data = {
+        "messages": [
+            {"role": "user", "content": "first-secret"},
+            {"role": "user", "content": "second-secret"},
+        ]
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}]) is False
+    assert data == {
+        "messages": [
+            {"role": "user", "content": "first-secret"},
+            {"role": "user", "content": "second-secret"},
+        ]
+    }
+
+
+def test_apply_redacted_messages_back_rejects_non_string_redaction_for_string_input_with_messages():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": "input-secret",
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "user"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": "input-secret",
+    }
+
+
+def test_apply_redacted_messages_back_rejects_mismatched_structured_input_redactions():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [
+            {"type": "message", "role": "assistant", "content": "first-input-secret"},
+            {"type": "message", "role": "assistant", "content": "second-input-secret"},
+        ],
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "assistant", "content": "first-input-[REDACTED]"},
+        {"role": "assistant"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [
+            {"type": "message", "role": "assistant", "content": "first-input-secret"},
+            {"type": "message", "role": "assistant", "content": "second-input-secret"},
+        ],
+    }
+
+
+def test_apply_redacted_messages_back_rejects_extra_structured_input_redactions():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "assistant", "content": "input-[REDACTED]"},
+        {"role": "assistant", "content": "spurious"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
+
+
+def test_apply_redacted_messages_back_separates_message_and_input_redactions():
+    """Responses bridge can carry chat history in ``messages`` and request
+    history in ``input``. Their redactions must stay aligned with the field
+    that produced them instead of shifting message edits onto input items."""
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "input_text", "text": "input-secret"}],
+            }
+        ],
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "assistant", "content": "input-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["messages"] == [{"role": "user", "content": "message-[REDACTED]"}]
+    assert data["input"] == [{"type": "message", "role": "assistant", "content": "input-[REDACTED]"}]
+
+
+def test_apply_redacted_messages_back_rejects_missing_input_redaction_without_mutation():
+    data = {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
+
+    assert apply_redacted_messages_back(data, [{"role": "user", "content": "message-[REDACTED]"}]) is False
+    assert data == {
+        "messages": [{"role": "user", "content": "message-secret"}],
+        "input": [{"type": "message", "role": "assistant", "content": "input-secret"}],
+    }
 
 
 def test_apply_redacted_messages_back_rewrites_text_only_responses_list_input():
