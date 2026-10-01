@@ -11,7 +11,12 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, MaskedHTTPStatusError
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    HTTPResponseLimitError,
+    MaskedHTTPStatusError,
+)
 from litellm.types.utils import ModelResponse
 
 HEADERS: Final = (("x-request-id", "upstream-probe"), ("x-probe", "first"), ("x-probe", "second"))
@@ -195,6 +200,38 @@ def test_capture_redacts_bounds_and_snapshots_do_not_alias() -> None:
     assert len(capture.snapshot()) == 8
     assert capture.snapshot()[-1]["attempt_id"] == "19"
     assert all(item["truncated"] for item in capture.snapshot())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("connect_failure", (False, True), ids=("size-limit", "redirect-connect-failure"))
+async def test_bounded_get_keeps_received_headers_when_redirect_target_fails(connect_failure: bool) -> None:
+    logging: Final = make_logging()
+    body: Final = ProbeBody(logging.upstream_response_capture)
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/next", "x-request-id": "redirect"})
+        assert request.url.path == "/next"
+        if connect_failure:
+            raise httpx.ConnectError("upstream unavailable", request=request)
+        return httpx.Response(200, headers=HEADERS, stream=body)
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    try:
+        with pytest.raises(
+            httpx.ConnectError if connect_failure else HTTPResponseLimitError,
+            match="upstream unavailable" if connect_failure else "size limit",
+        ):
+            await handler.get("https://upstream.invalid/start", max_response_bytes=1, logging_obj=logging)
+        captured: Final = logging.upstream_response_capture.snapshot()
+        assert tuple(item["status_code"] for item in captured) == ((302,) if connect_failure else (302, 200))
+        assert captured[0]["headers"] == (("location", "/next"), ("x-request-id", "redirect"))
+        if not connect_failure:
+            assert captured[1]["headers"] == HEADERS
+            assert body.closed
+        assert not handler.client.is_closed
+    finally:
+        await handler.close()
 
 
 @pytest.mark.asyncio

@@ -719,27 +719,48 @@ class AsyncHTTPHandler:
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
         max_response_bytes: int | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
+        request_params: Final = httpx.QueryParams(params)
+        request_headers: Final = httpx.Headers(headers)
 
         if max_response_bytes is not None:
             return await self._get_with_response_limit(
                 url,
-                params=httpx.QueryParams(params),
-                headers=httpx.Headers(headers),
+                params=request_params,
+                headers=request_headers,
                 max_bytes=max_response_bytes,
                 follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
                 timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
+                logging_obj=logging_obj,
+            )
+
+        if logging_obj is not None:
+            request: Final = self.client.build_request(
+                "GET",
+                url,
+                params=request_params,
+                headers=request_headers,
+                timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
+            )
+            return await async_send_with_capture(
+                self.client,
+                request,
+                logging_obj.upstream_response_capture,
+                logging_obj.litellm_call_id,
+                False,
+                follow_redirects=_follow_redirects,
             )
 
         response: Final = await self.client.get(
             url,
-            params=params,
-            headers=headers,
+            params=request_params,
+            headers=request_headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
@@ -754,6 +775,7 @@ class AsyncHTTPHandler:
         timeout: httpx.Timeout,
         max_bytes: int,
         follow_redirects: bool,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ) -> httpx.Response:
         request: Final = self.client.build_request(
             "GET",
@@ -762,22 +784,50 @@ class AsyncHTTPHandler:
             params=params,
             timeout=timeout,
         )
-        response: Final = await self.client.send(request, stream=True, follow_redirects=False)
-        return await self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
+        response: Final = await async_send_with_capture(
+            self.client,
+            request,
+            logging_obj.upstream_response_capture if logging_obj is not None else None,
+            logging_obj.litellm_call_id if logging_obj is not None else "",
+            True,
+            follow_redirects=False,
+        )
+        return await self._read_with_response_limit(
+            response,
+            max_bytes=max_bytes,
+            follow_redirects=follow_redirects,
+            logging_obj=logging_obj,
+        )
 
     async def _read_with_response_limit(
-        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool, redirects_remaining: int = 10
+        self,
+        response: httpx.Response,
+        *,
+        max_bytes: int,
+        follow_redirects: bool,
+        redirects_remaining: int = 10,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ) -> httpx.Response:
         try:
             if response.next_request is not None and follow_redirects:
                 if redirects_remaining == 0:
                     raise ValueError("Too many redirects")
                 await response.aclose()
-                following: Final = await self.client.send(
-                    response.next_request, auth=None, stream=True, follow_redirects=False
+                following: Final = await async_send_with_capture(
+                    self.client,
+                    response.next_request,
+                    logging_obj.upstream_response_capture if logging_obj is not None else None,
+                    logging_obj.litellm_call_id if logging_obj is not None else "",
+                    True,
+                    auth=None,
+                    follow_redirects=False,
                 )
                 return await self._read_with_response_limit(
-                    following, max_bytes=max_bytes, follow_redirects=True, redirects_remaining=redirects_remaining - 1
+                    following,
+                    max_bytes=max_bytes,
+                    follow_redirects=True,
+                    redirects_remaining=redirects_remaining - 1,
+                    logging_obj=logging_obj,
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
@@ -1454,16 +1504,36 @@ class HTTPHandler:
         headers: dict | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         params = params or {}
         params.update(self.extract_query_params(url))
+        request_params: Final = httpx.QueryParams(params)
+        request_headers: Final = httpx.Headers(headers)
+
+        if logging_obj is not None:
+            request: Final = self.client.build_request(
+                "GET",
+                url,
+                params=request_params,
+                headers=request_headers,
+                timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
+            )
+            return send_with_capture(
+                self.client,
+                request,
+                logging_obj.upstream_response_capture,
+                logging_obj.litellm_call_id,
+                False,
+                follow_redirects=_follow_redirects,
+            )
 
         response: Final = self.client.get(
             url,
-            params=params,
-            headers=headers,
+            params=request_params,
+            headers=request_headers,
             follow_redirects=_follow_redirects,
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
