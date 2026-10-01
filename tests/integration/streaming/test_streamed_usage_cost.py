@@ -1,9 +1,11 @@
 import asyncio
+import copy
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Final
 
+import litellm
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
@@ -92,7 +94,7 @@ def _cost_field(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     ("deployment_model", "rates", "expected_cost_field"),
     (
         pytest.param("openai/gpt-4o-mini", FREE, {"cost": 0.0}, id="free-model-reports-zero"),
-        pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(11 * 0.001 + 4 * 0.002)}, id="priced-model"),
+        pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(0.019)}, id="priced-model"),
         pytest.param("openai/Qwen/Qwen3-8B", UNPRICED, {}, id="unpriced-model-omits-cost"),
     ),
 )
@@ -133,7 +135,7 @@ def test_chat_completions_stream_final_usage_reports_the_computed_cost(
     ("deployment_model", "rates", "expected_cost_field"),
     (
         pytest.param("openai/gpt-4o-mini", FREE, {"cost": 0.0}, id="free-model-reports-zero"),
-        pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(11 * 0.001 + 4 * 0.002)}, id="priced-model"),
+        pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(0.019)}, id="priced-model"),
         pytest.param("openai/Qwen/Qwen3-8B", UNPRICED, {}, id="unpriced-model-omits-cost"),
     ),
 )
@@ -167,19 +169,26 @@ def test_responses_stream_completed_usage_reports_the_computed_cost(
     assert _cost_field(usage) == expected_cost_field, text
 
 
+@pytest.fixture
+def restore_model_cost_after_sdk_call() -> Iterator[None]:
+    original: Final = copy.deepcopy(litellm.model_cost)
+    yield
+    litellm.model_cost.clear()
+    litellm.model_cost.update(original)
+
+
+@pytest.mark.usefixtures("restore_model_cost_after_sdk_call")
 @pytest.mark.parametrize(
     ("model", "rates", "expected_cost_field"),
     (
         pytest.param("openai/gpt-4o-mini", FREE, {"cost": 0.0}, id="free-model-reports-zero"),
-        pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(11 * 0.001 + 4 * 0.002)}, id="priced-model"),
+        pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(0.019)}, id="priced-model"),
         pytest.param("openai/Qwen/Qwen3-8B", UNPRICED, {}, id="unpriced-model-omits-cost"),
     ),
 )
 def test_sdk_completion_stream_final_usage_reports_the_computed_cost(
     model: str, rates: Mapping[str, float], expected_cost_field: dict[str, JsonValue]
 ) -> None:
-    import litellm
-
     identity: Final = "sdk-usage-cost-" + uuid.uuid4().hex
     upstream_model: Final = model.removeprefix("openai/")
     with wire_server(
