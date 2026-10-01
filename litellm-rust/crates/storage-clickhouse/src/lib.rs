@@ -3,7 +3,7 @@ mod insert;
 mod read;
 
 pub use error::Error;
-pub use insert::insert_encoded_rows;
+pub use insert::{insert_compressed_rows, insert_encoded_rows};
 pub use read::{Parameter, execute_read};
 use url::Url;
 

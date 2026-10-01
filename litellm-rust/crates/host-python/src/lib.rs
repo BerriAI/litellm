@@ -5,6 +5,7 @@
 
 mod argument;
 mod binding;
+mod conversion_cache;
 mod driver;
 mod error;
 mod file_reader;
@@ -20,6 +21,7 @@ mod services;
 
 pub use argument::lookup;
 pub use binding::PythonBinding;
+pub use conversion_cache::{FromPythonCache, ToPythonCache};
 pub use driver::{CallOptions, run_call};
 pub use error::{InvokeError, missing_state};
 pub use file_reader::{FileContent, PythonFileReader, py_bytes};

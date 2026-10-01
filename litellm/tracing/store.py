@@ -9,7 +9,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
@@ -21,6 +21,7 @@ from litellm.tracing.types import (
     AgentNode,
     Span,
     SpanDetail,
+    SpanErrorPage,
     SpanRow,
     SpanStatus,
     Trace,
@@ -33,6 +34,20 @@ from litellm.tracing.ui_format import to_ui_content
 NANOS_PER_MS: Final = 1_000_000
 SPEND_WINDOW_MS: Final = 30 * 60 * 1000
 _STATUS: Final = MappingProxyType({"STATUS_CODE_OK": "ok", "STATUS_CODE_ERROR": "error"})
+
+
+class _ErrorCursor(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    offset: int = Field(ge=0, le=(1 << 63) - 1)
+    version: str = Field(pattern=r"^[A-F0-9]{64}$")
+
+
+class _ErrorRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    span_id: str
+    message: str
+    total_chars: int
+    version: str
 
 
 class _SpendRow(BaseModel):
@@ -134,6 +149,7 @@ def span_from_row(row: dict[str, Any], trace_start_ns: int, spend_rows: Sequence
         duration_ms=int(row["duration_ns"]) / NANOS_PER_MS,
         status=_status(row["status"]),
         error=row.get("status_message") or None,
+        error_truncated=bool(row.get("error_truncated", False)),
         input_preview=row["input_preview"],
         model=row["model"] or None,
         input_tokens=int(row["input_tokens"]),
@@ -348,4 +364,42 @@ class TraceStore:
             input_ui=to_ui_content(rows[0]["input"]),
             output_ui=to_ui_content(rows[0]["output"]),
             attributes=rows[0]["attributes"],
+        )
+
+    async def get_span_error(
+        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
+    ) -> SpanErrorPage | None:
+        try:
+            position: Final = (
+                _ErrorCursor.model_validate_json(base64.b64decode(cursor, altchars=b"-_", validate=True))
+                if cursor
+                else None
+            )
+        except (ValueError, binascii.Error) as error:
+            raise ValueError("Invalid diagnostic cursor") from error
+        rows: Final = await self.storage.query(
+            "span_error",
+            MappingProxyType(
+                {
+                    **scope,
+                    "trace_id": trace_id,
+                    "span_id": span_id,
+                    "trace_ref": trace_ref,
+                    "error_offset": position.offset if position else 0,
+                    "error_version": position.version if position else "",
+                }
+            ),
+        )
+        if not rows:
+            return None
+        row: Final = _ErrorRow.model_validate(rows[0])
+        offset: Final = (position.offset if position else 0) + len(row.message)
+        continuation: Final = _ErrorCursor(offset=offset, version=row.version) if offset < row.total_chars else None
+        return SpanErrorPage(
+            span_id=row.span_id,
+            message=row.message,
+            total_chars=row.total_chars,
+            next_cursor=base64.urlsafe_b64encode(continuation.model_dump_json().encode()).decode()
+            if continuation
+            else None,
         )

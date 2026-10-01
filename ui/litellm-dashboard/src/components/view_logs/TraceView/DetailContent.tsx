@@ -1,15 +1,17 @@
 "use client";
 
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 
-import { agentTraceSpanCall } from "../../networking";
+import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../networking";
 import { type KeyValue, KeyValueRows, objectEntries } from "./KeyValueRows";
 import { Card, MessageCard, Section, ToolResultCard } from "./MessageCard";
 import type { ErrorSource } from "./traceTree";
-import type { Span, SpanDetail, TraceMessage, UIContent, UIMessage } from "./traceTypes";
+import type { Span, SpanDetail, SpanErrorPage, TraceMessage, UIContent, UIMessage } from "./traceTypes";
 import { errorSource, parseJson, parseMessages, prettyPayload } from "./traceUtils";
 
 const ERROR_SOURCE_LABEL: Record<ErrorSource, string> = { tool: "Tool", model: "Model", litellm: "LiteLLM" };
@@ -143,6 +145,58 @@ interface DetailContentProps {
   span: Span;
 }
 
+function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
+  const [opened, setOpened] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const queryOptions: UseQueryOptions<SpanErrorPage, Error> = {
+    queryKey: ["agentTraceSpanError", traceId, traceRef, span.span_id, accessToken, cursor],
+    queryFn: () => agentTraceSpanErrorCall(accessToken, traceId, span.span_id, { traceRef, cursor }),
+    enabled: opened,
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  };
+  const query = useQuery(queryOptions);
+  return (
+    <section aria-label="Stored diagnostic" className="mx-5 mb-2 space-y-2">
+      {span.error_truncated && <p className="text-xs text-muted-foreground">Error preview truncated</p>}
+      {!opened && (
+        <Button variant="outline" size="sm" onClick={() => setOpened(true)}>
+          View stored diagnostic
+        </Button>
+      )}
+      {opened && query.isPending && <p role="status">Loading diagnostic…</p>}
+      {opened && query.isError && (
+        <div role="alert">
+          Could not load diagnostic: {query.error.message}
+          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {opened && query.data && (
+        <>
+          <TextCard text={query.data.message} />
+          <p className="text-xs text-muted-foreground">
+            {cursor ? "Continuation" : "Beginning"} of stored diagnostic ({query.data.total_chars.toLocaleString()}{" "}
+            characters)
+          </p>
+          {query.data.next_cursor && (
+            <Button variant="outline" size="sm" onClick={() => setCursor(query.data.next_cursor)}>
+              Next section
+            </Button>
+          )}
+          {cursor && (
+            <Button variant="outline" size="sm" onClick={() => setCursor(null)}>
+              Back to beginning
+            </Button>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 /** Content tab: the error first (if any), then collapsible Input and Output rendered as chat cards. */
 export function DetailContent({ accessToken, traceId, traceRef, span }: DetailContentProps) {
   const detailQuery = useSpanDetail(accessToken, traceId, span.span_id, traceRef);
@@ -152,6 +206,15 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
   return (
     <div className="flex flex-col px-2 pt-1 pb-4">
       <ErrorBlock span={span} />
+      {span.error && (
+        <DiagnosticContent
+          key={`${traceId}:${traceRef}:${span.span_id}`}
+          accessToken={accessToken}
+          traceId={traceId}
+          traceRef={traceRef}
+          span={span}
+        />
+      )}
       {detailQuery.isLoading && <div className={STATUS_TEXT}>Loading span…</div>}
       {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
       {detail?.input ? (

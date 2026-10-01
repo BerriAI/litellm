@@ -8,6 +8,7 @@ pub enum ReadQuery {
     ListTraces,
     TraceSpans,
     SpanDetail,
+    SpanError,
     SpendByResponseIds,
 }
 
@@ -17,6 +18,7 @@ impl ReadQuery {
             "list_traces" => Ok(Self::ListTraces),
             "trace_spans" => Ok(Self::TraceSpans),
             "span_detail" => Ok(Self::SpanDetail),
+            "span_error" => Ok(Self::SpanError),
             "spend_by_response_ids" => Ok(Self::SpendByResponseIds),
             _ => Err(Error::InvalidQuery),
         }
@@ -27,6 +29,7 @@ impl ReadQuery {
             Self::ListTraces => include_str!("../query/list_traces.sql"),
             Self::TraceSpans => include_str!("../query/trace_spans.sql"),
             Self::SpanDetail => include_str!("../query/span_detail.sql"),
+            Self::SpanError => include_str!("../query/span_error.sql"),
             Self::SpendByResponseIds => include_str!("../query/spend_by_response_ids.sql"),
         }
     }

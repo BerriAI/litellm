@@ -30,4 +30,4 @@ futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true
 tower = { version = "0.5.3", features = ["util"] }
-wiremock = "0.6.5"
+wiremock.workspace = true

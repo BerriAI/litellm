@@ -8,18 +8,25 @@ repository.workspace = true
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
-opentelemetry-proto = { version = "0.33.0", default-features = false, features = ["gen-tonic-messages", "trace", "with-serde"] }
-prost = "0.14.4"
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
+prost.workspace = true
 time = { workspace = true, features = ["formatting"] }
 litellm-http.workspace = true
 litellm-storage-clickhouse.workspace = true
 sha2.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
+strum.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
 tokio.workspace = true
+wiremock.workspace = true
+
+[[bench]]
+name = "resource-fanout"
+harness = false

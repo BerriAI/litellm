@@ -5,13 +5,14 @@ The fixture is a trimmed real export from a Deep Agents run (LangSmith OTEL mode
 deep_research_agent -> task (tool) -> researcher (subagent) -> search_docs (tool).
 """
 
+import base64
 import gzip
 import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from google.protobuf.json_format import Parse
+from google.protobuf.json_format import ParseDict
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
 from opentelemetry.proto.trace.v1.trace_pb2 import ResourceSpans, ScopeSpans, Span, Status
@@ -31,7 +32,14 @@ def _fixture_json() -> bytes:
 
 def _fixture_protobuf() -> bytes:
     request = ExportTraceServiceRequest()
-    Parse(_fixture_json().decode(), request)
+    payload = json.loads(_fixture_json())
+    for resource in payload["resourceSpans"]:
+        for scope in resource["scopeSpans"]:
+            for span in scope["spans"]:
+                for field in ("traceId", "spanId", "parentSpanId"):
+                    if field in span:
+                        span[field] = base64.b64encode(bytes.fromhex(span[field])).decode()
+    ParseDict(payload, request)
     return request.SerializeToString()
 
 
@@ -191,7 +199,7 @@ def test_plain_tool_input_output(rows_by_name):
 
 def test_heavy_attributes_are_lifted_out_of_span_attributes(rows_by_name):
     for row in rows_by_name.values():
-        assert not set(row["SpanAttributes"]) & decode._HEAVY_ATTRIBUTES
+        assert not set(row["SpanAttributes"]) & {"gen_ai.prompt", "gen_ai.completion"}
     assert rows_by_name["ChatOpenAI"]["SpanAttributes"]["langsmith.span.kind"] == "llm"
 
 
@@ -217,10 +225,38 @@ def test_content_type_defaults_to_protobuf():
     assert len(decode_otlp(_fixture_protobuf(), None)) == 6
 
 
-@pytest.mark.parametrize("content_encoding", ["gzip", None])
-def test_gzip_body_by_header_or_magic_bytes(content_encoding):
-    rows = decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf", content_encoding)
+def test_gzip_body_by_header():
+    rows = decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf", "gzip")
     assert len(rows) == 6
+
+
+def test_gzip_requires_content_encoding_header():
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(gzip.compress(_fixture_protobuf()), "application/x-protobuf")
+
+
+def test_invalid_gzip_body_is_rejected():
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(b"not gzip", "application/x-protobuf", "gzip")
+
+
+def test_gzip_expansion_respects_body_limit():
+    with patch.object(decode, "OTLP_MAX_BODY_BYTES", 1024):
+        with pytest.raises(decode.OTLPPayloadTooLargeError):
+            decode_otlp(gzip.compress(b" " * 16384), "application/json", "gzip")
+
+
+def test_concatenated_gzip_members_are_decoded():
+    body = _fixture_json()
+    midpoint = len(body) // 2
+    compressed = gzip.compress(body[:midpoint]) + gzip.compress(body[midpoint:])
+    assert len(decode_otlp(compressed, "application/json", "gzip")) == 6
+
+
+@pytest.mark.parametrize("encoding", ["br", "gzip, identity"])
+def test_unsupported_content_encoding_is_rejected(encoding):
+    with pytest.raises(decode.InvalidOTLPPayloadError):
+        decode_otlp(_fixture_protobuf(), "application/x-protobuf", encoding)
 
 
 def test_long_values_are_truncated_with_marker():
@@ -402,7 +438,7 @@ def test_non_string_attribute_values_are_stringified():
     assert row["SpanAttributes"]["flag"] == "true"
     assert row["SpanAttributes"]["ratio"] == "0.5"
     assert row["SpanAttributes"]["raw"] == "abc"
-    assert json.loads(row["SpanAttributes"]["list"]) == ["a", "1"]
+    assert json.loads(row["SpanAttributes"]["list"]) == ["a", 1]
 
 
 # ---------------------------------------------------------------- helpers
@@ -412,3 +448,53 @@ def test_encode_otlp_response_matches_request_encoding():
     assert encode_otlp_response("application/json") == (b"{}", "application/json")
     assert encode_otlp_response("application/x-protobuf") == (b"", "application/x-protobuf")
     assert encode_otlp_response(None) == (b"", "application/x-protobuf")
+    body, media_type = encode_otlp_response("application/x-protobuf", "invalid trace")
+    assert media_type == "application/x-protobuf"
+    from google.rpc.status_pb2 import Status
+
+    assert Status.FromString(body).message == "invalid trace"
+
+
+@pytest.mark.parametrize(
+    "attributes, expected",
+    [
+        ({"langsmith__span__kind": "llm"}, "llm"),
+        ({"langsmith__span__kind": "tool"}, "tool"),
+        ({"gen_ai__operation__name": "chat"}, "llm"),
+        ({"gen_ai__operation__name": "execute_tool"}, "tool"),
+        ({"openinference__span__kind": "LLM"}, "llm"),
+    ],
+)
+def test_explicit_root_span_semantics_and_response_id_are_preserved(attributes, expected):
+    exported = _span("root", b"\x01" * 8, gen_ai__response__id="response-123", **attributes)
+    (row,) = decode_otlp(_export(exported))
+    assert (row["ObservationType"], row["LiteLLMRequestId"]) == (expected, "response-123")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"messages": 7}',
+        '{"messages": {"0": "wrong"}}',
+        '{"messages": [{"kwargs": []}]}',
+        '{"messages": [{"role": "assistant", "tool_calls": [1]}]}',
+    ],
+)
+def test_malformed_framework_messages_preserve_raw_content_without_rejecting_the_batch(payload):
+    exported = _span("agent", b"\x01" * 8, langsmith__span__kind="chain", gen_ai__prompt=payload)
+    (row,) = decode_otlp(_export(exported))
+    assert row["Input"] == payload
+
+
+def test_unrecognized_heavy_attributes_are_retained():
+    exported = _span("root", b"\x01" * 8, gen_ai__prompt="unknown convention", gen_ai__tool__definitions="tools")
+    (row,) = decode_otlp(_export(exported))
+    assert row["SpanAttributes"]["gen_ai.prompt"] == "unknown convention"
+    assert row["SpanAttributes"]["gen_ai.tool.definitions"] == "tools"
+
+
+@pytest.mark.parametrize("count", [-1, 1 << 32])
+def test_token_counts_outside_storage_range_are_rejected(count):
+    exported = _span("root", b"\x01" * 8, gen_ai__usage__input_tokens=count)
+    with pytest.raises(decode.InvalidOTLPPayloadError, match="storage range"):
+        decode_otlp(_export(exported))

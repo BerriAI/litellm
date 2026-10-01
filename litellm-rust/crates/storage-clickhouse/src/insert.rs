@@ -26,6 +26,23 @@ pub async fn insert_encoded_rows(
         .write_all(encoded.as_bytes())
         .map_err(|_| Error::InvalidRow)?;
     let body = encoder.finish().map_err(|_| Error::InvalidRow)?;
+    insert_compressed_rows(client, connection, database, table, token, body).await
+}
+
+pub async fn insert_compressed_rows(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    table: &str,
+    token: &str,
+    body: Vec<u8>,
+) -> Result<(), Error> {
+    if !valid_identifier(database) {
+        return Err(Error::InvalidSchema);
+    }
+    if !valid_identifier(table) {
+        return Err(Error::InvalidTable);
+    }
     let mut url = connection.url().clone();
     let existing_pairs: Vec<(String, String)> = url
         .query_pairs()
