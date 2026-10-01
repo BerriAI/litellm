@@ -12,6 +12,7 @@ interface AlertingSetting {
   field_description: string;
   field_type: string;
   field_value: any;
+  field_default_value: any;
   stored_in_db: boolean | null;
   premium_field: boolean;
 }
@@ -24,7 +25,7 @@ interface DynamicFormProps {
   premiumUser: boolean;
 }
 
-type AlertingFormValues = Record<string, string | boolean>;
+type AlertingFormValues = Record<string, string | number | boolean | null>;
 
 const DynamicForm: React.FC<DynamicFormProps> = ({
   alertingSettings,
@@ -60,6 +61,12 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   const handleToggle = (setting: AlertingSetting, checked: boolean) => {
     form.setValue(setting.field_name, checked);
     handleInputChange(setting.field_name, checked);
+  };
+
+
+  const handleReset = (setting: AlertingSetting, index: number) => {
+    form.setValue(setting.field_name, setting.field_default_value ?? "");
+    handleResetField(setting.field_name, index);
   };
 
   const renderControl = (setting: AlertingSetting) => {
@@ -122,7 +129,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
               variant="ghost"
               size="icon-sm"
               aria-label={`Reset ${value.field_name}`}
-              onClick={() => handleResetField(value.field_name, index)}
+              onClick={() => handleReset(value, index)}
               className="text-destructive"
             >
               <Trash2 className="size-5" />
