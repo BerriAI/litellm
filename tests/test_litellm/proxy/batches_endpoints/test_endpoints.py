@@ -1034,6 +1034,7 @@ def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
     request.url.__str__.return_value = "http://localhost/v1/batches"
     request.url.path = "/v1/batches"
     request.method = "POST"
+    request.scope = {"type": "http", "method": "POST", "path": "/v1/batches"}
     request.query_params = {}
     request.headers = {"Content-Type": "application/json"}
     request.client = MagicMock()
