@@ -263,6 +263,8 @@ class VertexAIPartnerModels(VertexBase):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
+        tools: list[dict[str, object]] | None = None,
+        system: object | None = None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -296,6 +298,8 @@ class VertexAIPartnerModels(VertexBase):
             request_data: Final = {
                 "model": model,
                 "messages": messages,
+                **({"system": system} if system is not None else {}),
+                **({"tools": tools} if tools is not None else {}),
             }
 
             # Prepare litellm_params with credentials

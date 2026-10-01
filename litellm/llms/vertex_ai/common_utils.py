@@ -1276,6 +1276,8 @@ class VertexAITokenCounter(BaseTokenCounter):
                 vertex_project=vertex_project,
                 vertex_location=vertex_location,
                 vertex_credentials=vertex_credentials,
+                system=system,
+                tools=tools,
             )
 
             if result is not None:
