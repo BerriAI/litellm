@@ -9,6 +9,7 @@ from typing import (
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+import litellm
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
@@ -22,7 +23,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
-from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
+from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse, LiteLLM_ManagedVectorStoreIndex
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
@@ -604,6 +605,11 @@ async def index_create(
         data=cast(  # cast-ok: jsonify_object deep-copies a model_dump, so keys are str and values plain objects
             "dict[str, object]", jsonify_object(index_data)
         )
+    )
+    if litellm.vector_store_index_registry is None:
+        litellm.vector_store_index_registry = VectorStoreIndexRegistry()
+    litellm.vector_store_index_registry.upsert_vector_store_index(
+        vector_store_index=LiteLLM_ManagedVectorStoreIndex(**new_index.model_dump())
     )
 
     return new_index.model_dump()
