@@ -49,6 +49,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -1689,7 +1690,7 @@ async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
     cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data)
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
     mock_proxy_logging.get_proxy_hook = MagicMock(return_value=MagicMock())
@@ -2591,7 +2592,9 @@ async def _run_pass_through_and_capture_wire_url(
     mock_request.body = AsyncMock(return_value=b"")
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, endpoint_type=None: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
     mock_proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files_hook)
@@ -4889,7 +4892,9 @@ async def test_pass_through_request_mid_stream_upstream_drop_fires_failure_hook(
     cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, endpoint_type=None: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
     mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
@@ -7093,7 +7098,9 @@ async def _drive_passthrough_request_and_capture_logging(
 
     captured_data: dict = {}  # mutable-ok: the pre-call hook records the request data into it
 
-    async def capture_pre_call_hook(user_api_key_dict, data, call_type):
+    async def capture_pre_call_hook(
+        user_api_key_dict, data, call_type, endpoint_type: EndpointType = EndpointType.GENERIC
+    ):
         captured_data.update(data)
         if on_pre_call is not None:
             on_pre_call(data.get("litellm_logging_obj"))

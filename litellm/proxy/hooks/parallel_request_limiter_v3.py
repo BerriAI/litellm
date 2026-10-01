@@ -75,6 +75,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
+from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import (
     CallTypes,
     EmbeddingResponse,
@@ -978,6 +979,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         min_configured_limit: int | None,
         call_type: str | None,
         configured_output_tokens: int | None = None,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ) -> None:
         """Hard-cap generation length when the request has no explicit cap.
 
@@ -1006,6 +1008,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             capped_floor >= baseline_floor
             or _PROXY_MaxParallelRequestsHandler_v3._has_explicit_output_cap(data, call_type)
             or is_embedding
+            or endpoint_type == EndpointType.DECISIONS
         ):
             return
         effective_cap: Final = max(capped_floor, configured_output_tokens or 0)
@@ -3757,6 +3760,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         tpm_reservation_scopes: Sequence[tuple[str, str]],
         tpm_reservation_amount: int,
         call_type: str | None = None,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ) -> None:
         """
         Reserve project-scoped ITPM/OTPM tokens (Bedrock Mantle-style
@@ -3810,6 +3814,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data=data,
             min_configured_limit=min_configured_otpm_limit,
             call_type=call_type,
+            endpoint_type=endpoint_type,
         )
 
         io_response, itpm_reserved, otpm_reserved = await self.reserve_io_tokens(
@@ -3984,6 +3989,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
+        endpoint_type: EndpointType = EndpointType.GENERIC,
     ):
         """
         Pre-call hook to check rate limits before making the API call.
@@ -4115,6 +4121,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     min_configured_limit=min_configured_tpm_limit,
                     call_type=call_type,
                     configured_output_tokens=configured_output_tokens,
+                    endpoint_type=endpoint_type,
                 )
 
                 # Floor at 1 token so contentless requests (/responses,
@@ -4201,6 +4208,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 tpm_reservation_scopes=tpm_reservation_scopes,
                 tpm_reservation_amount=tpm_reservation_amount,
                 call_type=call_type,
+                endpoint_type=endpoint_type,
             )
 
     def _create_pipeline_operations(
