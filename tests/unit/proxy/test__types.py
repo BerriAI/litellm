@@ -1,4 +1,6 @@
+import hashlib
 import json
+from typing import Final
 
 import pytest
 from pydantic import ValidationError
@@ -71,6 +73,16 @@ def test_a_bearer_prefixed_key_hashes_the_same_as_the_bare_key():
     raw_key = "sk-1234567890abcdefghij"
 
     assert UserAPIKeyAuth(api_key=f"Bearer {raw_key}").token == UserAPIKeyAuth(api_key=raw_key).token
+
+
+@pytest.mark.parametrize("prefix", ["llm_hosted_", "llm_hrefresh_"])
+def test_hosted_bearers_are_hashed_before_auth_failure_logging(prefix: str) -> None:
+    token: Final = prefix + "secret"
+    identity: Final = UserAPIKeyAuth(api_key="Bearer " + token)
+    expected: Final = hashlib.sha256(token.encode()).hexdigest()
+    assert identity.api_key == expected
+    assert identity.token == expected
+    assert token not in identity.model_dump_json()
 
 
 def test_an_absent_api_key_leaves_the_token_unset():

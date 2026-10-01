@@ -1974,6 +1974,7 @@ async def authorize(
                 response_type=response_type,
                 session_user_id=_session_cookie_user_id(request),
                 lookup_consent_teams=lookup_consent_teams,
+                scope=scope,
             )
         return aggregate_authorize(
             request=request,

@@ -50,11 +50,28 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
+from litellm.proxy._experimental.mcp_server.bridge_token_flow import load_active_user_by_id
+from litellm.proxy._experimental.mcp_server.hosted_proxy_auth import (
+    HOSTED_ACCESS_PREFIX,
+    HOSTED_ACCESS_TTL,
+    HOSTED_ADMIN_SCOPE,
+    HOSTED_GRANT_TTL,
+    HOSTED_REFRESH_PREFIX,
+    HOSTED_SCOPE,
+    HostedFailure,
+    HostedProxyAuth,
+    HostedScope,
+    HostedTokens,
+    hosted_proxy_auth,
+    hosted_redirect_is_allowed,
+    hosted_scope_allows_role,
+    hosted_supported_scopes,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     canonical_resource_uri,
@@ -302,6 +319,7 @@ class _ConnectFlow(BaseModel):
     exp: int
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
+    hosted_scope: HostedScope | None = None
 
 
 class _GatewayAuthCode(BaseModel):
@@ -321,6 +339,7 @@ class _GatewayAuthCode(BaseModel):
     resource_server_id: str | None = None
     audience: SessionAudience | None = None
     team_id: str | None = None
+    hosted_scope: HostedScope | None = None
 
 
 def is_gateway_dcr_client_id(client_id: str | None) -> bool:
@@ -401,13 +420,15 @@ async def register_aggregate_client(
             "invalid_redirect_uri",
             f"redirect_uris must be a list of 1 to {MAX_REDIRECT_URIS} URIs",
         )
-    if not all(isinstance(uri, str) and len(uri) <= MAX_REDIRECT_URI_LENGTH for uri in raw_uris):
+    candidates: Final = TypeAdapter(tuple[object, ...]).validate_python(raw_uris)
+    if not all(isinstance(uri, str) and len(uri) <= MAX_REDIRECT_URI_LENGTH for uri in candidates):
         return _oauth_error(
             400,
             "invalid_redirect_uri",
             f"each redirect URI must be a string of at most {MAX_REDIRECT_URI_LENGTH} characters",
         )
-    for uri in raw_uris:
+    redirect_uris: Final = tuple(uri for uri in candidates if isinstance(uri, str))
+    for uri in redirect_uris:
         parsed = urlparse(uri)
         try:
             if validate_redirect_uri_shape(parsed):
@@ -425,7 +446,7 @@ async def register_aggregate_client(
         )
     now: Final = datetime.now(timezone.utc)
     client_id: Final = _seal(
-        GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient(redirect_uris=tuple(raw_uris), iat=int(now.timestamp()))
+        GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient(redirect_uris=redirect_uris, iat=int(now.timestamp()))
     )
     if len(client_id) > MAX_CLIENT_ID_LENGTH:
         return _oauth_error(400, "invalid_client_metadata", "registered metadata is too large")
@@ -434,9 +455,11 @@ async def register_aggregate_client(
         content={
             "client_id": client_id,
             "client_id_issued_at": int(now.timestamp()),
-            "redirect_uris": list(raw_uris),
+            "redirect_uris": redirect_uris,
             "token_endpoint_auth_method": "none",
-            "grant_types": list(supported_grant_types(token_exchange_available)),
+            "grant_types": supported_grant_types(
+                token_exchange_available and all(is_loopback_redirect_host(urlparse(uri)) for uri in redirect_uris)
+            ),
             "response_types": ["code"],
         },
     )
@@ -553,6 +576,16 @@ def aggregate_authorize(
     return response
 
 
+def _proxy_redirect_is_allowed(
+    audience: SessionAudience | None, redirect_uri: str, hosted_scope: HostedScope | None = None
+) -> bool:
+    return (
+        audience != PROXY_API_AUDIENCE
+        or is_loopback_redirect_host(urlparse(redirect_uri))
+        or hosted_redirect_is_allowed(redirect_uri, hosted_scope or HOSTED_SCOPE)
+    )
+
+
 async def native_client_authorize(
     request: Request,
     client_id: str,
@@ -563,24 +596,39 @@ async def native_client_authorize(
     response_type: str | None,
     session_user_id: str | None,
     lookup_consent_teams: LookupConsentTeams,
+    scope: str | None = None,
 ) -> Response:
-    """The authorize verb for a native client that named the proxy API itself as its
-    RFC 8707 ``resource``: the same client, redirect, PKCE, and sign-in checks as the
-    aggregate verb plus a loopback-only redirect (the credential this grant mints is the
-    user's personal proxy key, which belongs on their own machine and never behind a hosted
-    callback), then the consent page rendered right here (no connect-page interlude, since
-    there is no per-server vaulting to do) with the flow sealed into the per-flow cookie
-    and its handle carried only in the form, never in a URL."""
+    """Authorize a proxy-API credential for a native or explicitly trusted hosted client.
+
+    Hosted callbacks require an exact operator-configured HTTPS URI in addition to
+    client registration, S256 PKCE, SSO, and the user's deliberate consent.
+    """
     rejected: Final = _rejected_authorize_request(
         client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
     )
     if rejected is not None:
         return rejected
-    if not is_loopback_redirect_host(urlparse(redirect_uri)):
-        return _oauth_error(400, "invalid_request", "a proxy-API grant may only redirect to a loopback address")
+    is_hosted: Final = not is_loopback_redirect_host(urlparse(redirect_uri))
+    if is_hosted and scope not in (None, HOSTED_SCOPE, HOSTED_ADMIN_SCOPE):
+        return _oauth_error(400, "invalid_scope", "the requested hosted application scope is not supported")
+    hosted_scope: Final[HostedScope | None] = (
+        (HOSTED_ADMIN_SCOPE if scope == HOSTED_ADMIN_SCOPE else HOSTED_SCOPE) if is_hosted else None
+    )
+    if is_hosted and not hosted_redirect_is_allowed(redirect_uri, hosted_scope or HOSTED_SCOPE):
+        return _oauth_error(
+            400,
+            "invalid_request",
+            "a proxy-API grant may only redirect to a loopback address or an explicitly allowed HTTPS callback",
+        )
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
+    if hosted_scope == HOSTED_ADMIN_SCOPE:
+        user: Final = await load_active_user_by_id(session_user_id, source="database")
+        if isinstance(user, str):
+            return _consent_lookup_failure_response(user)
+        if not hosted_scope_allows_role(hosted_scope, user.user_role):
+            return _oauth_error(403, "access_denied", "application administration requires a current proxy admin")
     teams: Final = await lookup_consent_teams(session_user_id)
     if not isinstance(teams, tuple):
         return _consent_lookup_failure_response(teams)
@@ -593,6 +641,7 @@ async def native_client_authorize(
         code_challenge=code_challenge or "",
         resource_server_id=None,
         audience=PROXY_API_AUDIENCE,
+        hosted_scope=hosted_scope,
     )
     page: Final = render_native_client_consent_page(
         client_origin=_origin_only(redirect_uri),
@@ -600,6 +649,8 @@ async def native_client_authorize(
         teams=tuple((team.team_id, team.team_alias or team.team_id) for team in teams),
         flow_handle=handle,
         complete_url=f"{base_url}/authorize/complete",
+        hosted=is_hosted,
+        hosted_admin=hosted_scope == HOSTED_ADMIN_SCOPE,
     )
     response: Final = HTMLResponse(page, headers=_CONSENT_PAGE_HEADERS)
     _set_flow_cookie(response, request, handle, flow)
@@ -619,6 +670,12 @@ NATIVE_CLIENT_AUTH_CONTRACT_VERSION: Final = 1
 Bump it only when an existing field changes meaning or goes away; adding fields is free."""
 
 
+class HostedAppAuthContract(TypedDict):
+    scopes_supported: ReadOnly[tuple[HostedScope, ...]]
+    access_token_ttl: ReadOnly[int]
+    refresh_token_ttl: ReadOnly[int]
+
+
 class NativeClientAuthContract(TypedDict):
     contract_version: ReadOnly[int]
     issuer: ReadOnly[str]
@@ -632,6 +689,7 @@ class NativeClientAuthContract(TypedDict):
     code_challenge_methods_supported: ReadOnly[tuple[str, ...]]
     token_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
     revocation_endpoint_auth_methods_supported: ReadOnly[tuple[str, ...]]
+    hosted_app: ReadOnly[HostedAppAuthContract]
 
 
 def native_client_auth_contract(request: Request, token_exchange_available: bool) -> NativeClientAuthContract:
@@ -653,6 +711,11 @@ def native_client_auth_contract(request: Request, token_exchange_available: bool
         "code_challenge_methods_supported": ("S256",),
         "token_endpoint_auth_methods_supported": ("none",),
         "revocation_endpoint_auth_methods_supported": ("none",),
+        "hosted_app": {
+            "scopes_supported": hosted_supported_scopes(),
+            "access_token_ttl": HOSTED_ACCESS_TTL,
+            "refresh_token_ttl": HOSTED_GRANT_TTL,
+        },
     }
     return contract
 
@@ -705,6 +768,7 @@ def _new_connect_flow(
     code_challenge: str,
     resource_server_id: str | None,
     audience: SessionAudience | None,
+    hosted_scope: HostedScope | None = None,
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
     return _ConnectFlow(
@@ -717,6 +781,7 @@ def _new_connect_flow(
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
         resource_server_id=resource_server_id,
         audience=audience,
+        hosted_scope=hosted_scope,
     )
 
 
@@ -876,6 +941,8 @@ async def complete_connect_flow(
     opened: Final = _open_flow_for(request, flow_handle, session_user_id, now)
     if isinstance(opened, Response):
         return opened
+    if not _proxy_redirect_is_allowed(opened.audience, opened.redirect_uri, opened.hosted_scope):
+        return _oauth_error(400, "invalid_request", "the application's callback is no longer trusted")
     if decision != "deny":
         described: Final = await _describe_opened_flow(opened, lookup_vendor_credential, lookup_server_reachability)
         if isinstance(described, Response):
@@ -927,6 +994,7 @@ def _approved_flow_response(flow: _ConnectFlow, delivery: str | None, team_id: s
             resource_server_id=flow.resource_server_id,
             audience=flow.audience,
             team_id=(team_id or None) if flow.audience == PROXY_API_AUDIENCE else None,
+            hosted_scope=flow.hosted_scope,
         ),
     )
     callback_url: Final = _append_query_params(flow.redirect_uri, (("code", code), *_state_param(flow)))
@@ -1193,6 +1261,7 @@ async def aggregate_token(
     subject_token_type: str | None = None,
     requested_token_type: str | None = None,
     exchange_subject_token: ExchangeSubjectToken = _refuse_subject_token,
+    hosted_auth: HostedProxyAuth | None = None,
 ) -> Response:
     """The aggregate token verb: authorization_code and refresh_token grants for the
     identity-only session pair, or for the proxy-API credential when the grant was issued
@@ -1215,6 +1284,7 @@ async def aggregate_token(
         reload_user=reload_user,
         mint_proxy_credential=mint_proxy_credential,
         guard=_SingleUseGuard(cache),
+        hosted_auth=hosted_auth,
     )
     if grant_type == "authorization_code":
         return await _authorization_code_grant(
@@ -1236,6 +1306,7 @@ async def aggregate_token(
             keys=keys,
             now=now,
             issue=issue,
+            hosted_auth=hosted_auth,
         )
     if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
         return await _token_exchange_grant(
@@ -1268,6 +1339,7 @@ class _GrantIssuer:
         reload_user: ReloadUser,
         mint_proxy_credential: MintProxyCredential,
         guard: _SingleUseGuard,
+        hosted_auth: HostedProxyAuth | None = None,
     ) -> None:
         self._request: Final = request
         self._resource: Final = resource
@@ -1276,6 +1348,7 @@ class _GrantIssuer:
         self._reload_user: Final = reload_user
         self._mint_proxy_credential: Final = mint_proxy_credential
         self._guard: Final = guard
+        self._hosted_auth: Final = hosted_auth
 
     async def __call__(
         self, principal: SessionPrincipal, claim_key: str, claim_ttl_seconds: int, replayed: str
@@ -1313,12 +1386,38 @@ class _GrantIssuer:
             return refusal
         return _proxy_credential_response(minted, principal, self._keys, self._now)
 
+    async def issue_hosted(self, code: _GatewayAuthCode) -> Response:
+        if code.hosted_scope is None:
+            return _oauth_error(400, "invalid_grant", "restart application sign-in to grant an explicit scope")
+        target_refusal: Final = self._proxy_api_target_refusal()
+        if target_refusal is not None:
+            return target_refusal
+        service: Final = self._hosted_auth or hosted_proxy_auth()
+        if isinstance(service, HostedFailure):
+            return _hosted_token_response(service)
+        return _hosted_token_response(
+            await service.issue(
+                code.user_id,
+                code.team_id,
+                code.client_id,
+                code.redirect_uri,
+                get_request_base_url(self._request),
+                code.jti,
+                code.hosted_scope,
+            )
+        )
+
     async def exchange(
         self, subject_token: str, client_id: str, exchange_subject_token: ExchangeSubjectToken
     ) -> Response:
         """The RFC 8693 tail: prove the IdP token, then mint. No single-use marker, because
         the subject token stays a valid proof for as long as the IdP says it is and every
         exchange mints a fresh credential and refresh token of its own."""
+        client: Final = open_gateway_dcr_client(client_id)
+        if client is None or any(not is_loopback_redirect_host(urlparse(uri)) for uri in client.redirect_uris):
+            return _oauth_error(
+                400, "unauthorized_client", "hosted applications must use the consented authorization-code flow"
+            )
         target_refusal: Final = self._proxy_api_target_refusal()
         if target_refusal is not None:
             return target_refusal
@@ -1371,6 +1470,10 @@ async def _authorization_code_grant(
         return _oauth_error(400, "invalid_target", "resource does not match the scope this code was issued for")
     if not _pkce_verifier_matches(code_verifier, parsed.code_challenge):
         return _oauth_error(400, "invalid_grant", "PKCE verification failed")
+    if not _proxy_redirect_is_allowed(parsed.audience, parsed.redirect_uri, parsed.hosted_scope):
+        return _oauth_error(400, "invalid_grant", "the application's callback is no longer trusted")
+    if parsed.audience == PROXY_API_AUDIENCE and not is_loopback_redirect_host(urlparse(parsed.redirect_uri)):
+        return await issue.issue_hosted(parsed)
     # The marker's TTL derives from the code's own remaining lifetime so it outlives
     # whichever lifetime the code was minted with.
     return await issue(
@@ -1395,12 +1498,31 @@ async def _refresh_token_grant(
     keys: SessionSigningKeys,
     now: datetime,
     issue: _GrantIssuer,
+    hosted_auth: HostedProxyAuth | None = None,
 ) -> Response:
     if not refresh_token:
         return _oauth_error(400, "invalid_request", "refresh_token is required")
+    if refresh_token.startswith(HOSTED_REFRESH_PREFIX):
+        if resource is not None and not is_proxy_api_resource(request, resource):
+            return _oauth_error(400, "invalid_target", "resource does not match the hosted grant")
+        service: Final = hosted_auth or hosted_proxy_auth()
+        return _hosted_token_response(
+            service
+            if isinstance(service, HostedFailure)
+            else await service.refresh(
+                refresh_token,
+                client_id,
+                get_request_base_url(request),
+            )
+        )
     opened: Final = open_session_refresh_bearer(refresh_token, keys, now, expected_client_id=client_id)
     if not isinstance(opened, SessionRefreshOpened):
         return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
+    client: Final = open_gateway_dcr_client(client_id)
+    if opened.principal.audience == PROXY_API_AUDIENCE and (
+        client is None or any(not is_loopback_redirect_host(urlparse(uri)) for uri in client.redirect_uris)
+    ):
+        return _oauth_error(400, "invalid_grant", "this application must sign in again for a restricted grant")
     if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
         return _oauth_error(400, "invalid_target", "resource does not match the scope this token was issued for")
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is
@@ -1440,7 +1562,19 @@ async def _token_exchange_grant(
     return await issue.exchange(subject_token, client_id, exchange_subject_token)
 
 
-async def revoke_refresh_token(token: str, client_id: str, master_key: str | None, cache: DualCache) -> Response:
+def _hosted_token_response(result: HostedTokens | HostedFailure) -> Response:
+    if isinstance(result, HostedFailure):
+        return _oauth_error(503 if result.error == "temporarily_unavailable" else 400, result.error, result.description)
+    return JSONResponse(content=result.model_dump(), headers=TOKEN_NO_CACHE_HEADERS)
+
+
+async def revoke_refresh_token(
+    token: str,
+    client_id: str,
+    master_key: str | None,
+    cache: DualCache,
+    hosted_auth: HostedProxyAuth | None = None,
+) -> Response:
     """RFC 7009 revocation for the gateway's refresh tokens: burn the presented token's
     ``jti`` so neither the holder nor a thief can rotate it again. Access tokens are
     stateless and expire on their own (the proxy-API credential within
@@ -1451,6 +1585,12 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     never happened."""
     if not is_gateway_dcr_client_id(client_id) or open_gateway_dcr_client(client_id) is None:
         return _oauth_error(401, "invalid_client", "unknown or malformed client_id")
+    if token.startswith((HOSTED_ACCESS_PREFIX, HOSTED_REFRESH_PREFIX)):
+        service: Final = hosted_auth or hosted_proxy_auth()
+        result: Final = service if isinstance(service, HostedFailure) else await service.revoke(token, client_id)
+        if isinstance(result, HostedFailure):
+            return _hosted_token_response(result)
+        return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr revoke rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")

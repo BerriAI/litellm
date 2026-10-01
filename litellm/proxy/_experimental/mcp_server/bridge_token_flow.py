@@ -344,10 +344,10 @@ async def load_active_user_by_id(
         return "no_active_key"
     if user_object is None:
         return "no_active_key"
-    return _active_user_record(user_object)
+    return active_user_record(user_object)
 
 
-def _active_user_record(user_object: "LiteLLM_UserTable") -> "LiteLLM_UserTable | Literal['no_active_key']":
+def active_user_record(user_object: "LiteLLM_UserTable") -> "LiteLLM_UserTable | Literal['no_active_key']":
     if isinstance(user_object.metadata, dict) and user_object.metadata.get("scim_active") is False:
         return "no_active_key"
     return user_object
@@ -514,7 +514,7 @@ async def _resolve_jwt_auth(
                 parent_otel_span=None,
                 proxy_logging_obj=proxy_logging_obj,
             )
-            if identity.user_object is not None and isinstance(_active_user_record(identity.user_object), str):
+            if identity.user_object is not None and isinstance(active_user_record(identity.user_object), str):
                 return None
             return identity
         authorized: Final = await JWTAuthManager.authorize_jwt(
@@ -531,7 +531,7 @@ async def _resolve_jwt_auth(
             request_method=request.method,
         )
         resolved_user: Final = authorized["user_object"]
-        if resolved_user is not None and isinstance(_active_user_record(resolved_user), str):
+        if resolved_user is not None and isinstance(active_user_record(resolved_user), str):
             return None
         return JWTAuthManager.user_api_key_auth_from_result(authorized)
     except Exception as exc:  # noqa: BLE001  # public OAuth exchange stays available; unvalidated identities never write credentials

@@ -2344,9 +2344,13 @@ async def _fetch_team_membership_from_db(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    *,
+    use_writer: bool = False,
 ) -> LiteLLM_TeamMembership | None:
     _ = parent_otel_span, proxy_logging_obj
-    response: Final = await _dictable_table(TeamMembershipRepository(prisma_client), "team_membership").find_unique(
+    response: Final = await _dictable_table(
+        TeamMembershipRepository(prisma_client, use_writer=use_writer), "team_membership"
+    ).find_unique(
         where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
         include={"litellm_budget_table": True},
     )
@@ -2398,6 +2402,7 @@ async def get_team_membership(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    check_db_only: bool = False,
 ) -> Optional["LiteLLM_TeamMembership"]:
     """
     Returns team membership object if user is member of team.
@@ -2406,6 +2411,18 @@ async def get_team_membership(
     """
     if user_id is None or team_id is None:
         return None
+    if check_db_only:
+        if prisma_client is None:
+            raise RuntimeError("No db connected")
+        return await _fetch_team_membership_from_db(
+            user_id=user_id,
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+            use_writer=True,
+        )
 
     _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
@@ -3181,7 +3198,7 @@ async def _get_team_object_from_user_api_key_cache(
     use_writer: bool = False,
 ) -> LiteLLM_TeamTableCachedObj:
     db_access_time_key: Final = key
-    should_check_db: Final = _should_check_db(
+    should_check_db: Final = use_writer or _should_check_db(
         key=db_access_time_key,
         last_db_access_time=last_db_access_time,
         db_cache_expiry=db_cache_expiry,

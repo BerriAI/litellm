@@ -1545,6 +1545,15 @@ async def _user_api_key_auth_builder(
             parent_otel_span = getattr(request.state, "parent_otel_span", None)
 
         ### USER-DEFINED AUTH FUNCTION ###
+        from litellm.proxy._experimental.mcp_server.hosted_proxy_auth import (  # noqa: PLC0415  # hosted OAuth depends on proxy startup
+            HOSTED_ACCESS_PREFIX,
+            HOSTED_REFRESH_PREFIX,
+            authenticate_hosted_request,
+        )
+
+        if api_key and api_key.startswith((HOSTED_ACCESS_PREFIX, HOSTED_REFRESH_PREFIX)):
+            return await authenticate_hosted_request(request, api_key, route)
+
         if enterprise_custom_auth is not None:
             with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
                 response = await enterprise_custom_auth(

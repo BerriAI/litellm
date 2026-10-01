@@ -1,4 +1,4 @@
-
+from typing import Final
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.proxy.common_utils.html_forms.native_client_consent import render_native_client_consent_page
@@ -65,3 +65,24 @@ def test_consent_page_promises_only_what_logout_can_deliver():
     assert f"expires within {CLI_JWT_EXPIRATION_HOURS} hours" in page
     assert "<code>lite logout</code> stops it from being renewed" in page
     assert "revoked" not in page
+
+
+def test_hosted_consent_names_the_web_application_without_terminal_instructions():
+    page = _render(hosted=True, client_origin="https://admin.example")
+    assert "Authorize application access" in page
+    assert "A web application at <code>https://admin.example</code>" in page
+    assert "lite logout" not in page
+    assert 'name="decision" value="approve"' in page
+    assert 'name="decision" value="deny"' in page
+
+
+def test_hosted_admin_consent_names_write_authority_and_billing_without_changing_read_only_consent() -> None:
+    admin: Final = _render(hosted=True, hosted_admin=True, client_origin="https://admin.example")
+    reports: Final = _render(hosted=True, client_origin="https://admin.example")
+    assert "manage keys, users, teams and models" in admin
+    assert "current administrator permissions" in admin
+    assert "Model calls can incur charges" in admin
+    assert "Disconnecting the application revokes access immediately" in admin
+    assert "read-only model listings and aggregate usage reports" in reports
+    assert "It does not permit changes, credential access, request contents, or LLM calls" in reports
+    assert "manage keys" not in reports
