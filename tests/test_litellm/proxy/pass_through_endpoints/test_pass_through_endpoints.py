@@ -1603,7 +1603,7 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
 async def test_pass_through_request_preserves_caller_streaming_request_field(body_stream):
     captured_hook_data: dict[str, object] = {}
 
-    async def capture_pre_call(user_api_key_dict, data, call_type):
+    async def capture_pre_call(user_api_key_dict, data, call_type, endpoint_type: EndpointType):
         captured_hook_data.update(data)
         return data
 
@@ -1684,6 +1684,7 @@ async def test_passthrough_guardrails_follow_effective_relay_stream_decision(
         user_api_key_dict: UserAPIKeyAuth,
         data: dict[str, object],
         call_type: str,
+        endpoint_type: EndpointType,
     ) -> dict[str, object]:
         return dict(data)
 
