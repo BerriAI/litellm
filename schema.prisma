@@ -1901,6 +1901,15 @@ model LiteLLM_Engine {
   data    Json
 }
 
+model LiteLLM_EngineRun {
+  id         String @id
+  engine_id  String
+  created_at DateTime
+  data       Json
+
+  @@index([engine_id, created_at])
+}
+
 model LiteLLM_EngineWorker {
   id         String @id
   token_hash String @unique

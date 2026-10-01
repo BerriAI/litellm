@@ -19,6 +19,10 @@ const settings: Settings = {
   interval_minutes: 15,
   monthly_budget: 20,
   sample_size: 100,
+  sample_percent: 100,
+  concurrency: 8,
+  team_id: "",
+  execution_ids: [],
   service: "",
   checks: [
     { id: "first", instruction: "Find repeated searches", enabled: false },
@@ -37,24 +41,25 @@ describe("Engine setup", () => {
     renderWithProviders(
       <EngineSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
     );
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Questions & checks" }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "Specific checks (optional)" }), {
       target: { value: "Find incomplete reports\nFind repeated searches" },
     });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ checks: [settings.checks[1], settings.checks[0]] }));
   });
 
-  it("rejects invalid metadata before moving to the questions step", async () => {
+  it("rejects invalid metadata before reviewing the selection", async () => {
     const user = userEvent.setup();
     renderWithProviders(<EngineSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Research" } });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Add condition" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Choose a key and value for every condition, or remove it");
-    expect(screen.queryByRole("textbox", { name: "Questions & checks" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Specific checks (optional)" })).not.toBeInTheDocument();
   });
   it("previews identifiable matching runs and saves the same filter selection", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
@@ -79,13 +84,13 @@ describe("Engine setup", () => {
     });
     renderWithProviders(<EngineSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Research" } });
+    await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Add condition" }));
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata value 1" }), { target: { value: "research" } });
     expect(await screen.findByText("1 matching runs")).toBeInTheDocument();
     expect(screen.getByText("Research report")).toBeInTheDocument();
     expect(screen.getByText("request-42")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByText("swarm is research")).toBeInTheDocument();
     await user.click(screen.getByRole("combobox", { name: "Analysis model" }));
@@ -113,9 +118,9 @@ it("searches providers and saves custom history and schedule values", async () =
       onSave={save}
     />,
   );
+  await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "Review the last unit" }), "1");
   fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
-  await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.clear(screen.getByRole("combobox", { name: "Analysis model" }));
   await user.type(screen.getByRole("combobox", { name: "Analysis model" }), "OpenAI");
