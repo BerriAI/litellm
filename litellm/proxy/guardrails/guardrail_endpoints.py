@@ -869,9 +869,7 @@ def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissi
 
     guardrail_info: Final = _parse_json_field(row.guardrail_info) or {}
     team_guardrail: Final = row.team_id is not None
-    raw_params: Final = decrypt_guardrail_litellm_params(
-        _parse_json_field(row.litellm_params) or {}  # mutable-ok: masked for the response
-    )
+    raw_params: Final = decrypt_guardrail_litellm_params(_parse_json_field(row.litellm_params) or {})
     masked_params: Final = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
     return GuardrailSubmissionItem(
         guardrail_id=row.guardrail_id,

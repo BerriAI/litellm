@@ -116,14 +116,10 @@ def _encrypted_param(key: str, value: object, new_encryption_key: str | None, de
         return value
     json_object: Final = _as_json_object(value)
     if json_object is not None:
-        return {  # mutable-ok: stored params are JSON objects
-            k: _encrypted_param(k, v, new_encryption_key, depth + 1) for k, v in json_object.items()
-        }
+        return {k: _encrypted_param(k, v, new_encryption_key, depth + 1) for k, v in json_object.items()}
     json_array: Final = _as_json_array(value)
     if json_array is not None:
-        return [  # mutable-ok: stored params are JSON arrays
-            _encrypted_param(key, item, new_encryption_key, depth + 1) for item in json_array
-        ]
+        return [_encrypted_param(key, item, new_encryption_key, depth + 1) for item in json_array]
     if not (
         isinstance(value, str)
         and value
@@ -142,12 +138,10 @@ def _decrypted_param(key: str, value: object, depth: int = 0) -> object:
         return value
     json_object: Final = _as_json_object(value)
     if json_object is not None:
-        return {  # mutable-ok: guardrails read dicts
-            k: _decrypted_param(k, v, depth + 1) for k, v in json_object.items()
-        }
+        return {k: _decrypted_param(k, v, depth + 1) for k, v in json_object.items()}
     json_array: Final = _as_json_array(value)
     if json_array is not None:
-        return [_decrypted_param(key, item, depth + 1) for item in json_array]  # mutable-ok: guardrails read lists
+        return [_decrypted_param(key, item, depth + 1) for item in json_array]
     if not (isinstance(value, str) and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)):
         return value
     decrypted: Final = decrypt_value_helper(
@@ -163,27 +157,21 @@ def encrypt_guardrail_litellm_params(
     litellm_params: Mapping[str, object], new_encryption_key: str | None = None
 ) -> dict[str, object]:
     """Encrypt every string stored under a sensitive key (at any dict depth) for the guardrails table."""
-    return {  # mutable-ok: safe_dumps and Prisma take a dict
-        key: _encrypted_param(key, value, new_encryption_key) for key, value in litellm_params.items()
-    }
+    return {key: _encrypted_param(key, value, new_encryption_key) for key, value in litellm_params.items()}
 
 
 def decrypt_guardrail_litellm_params(litellm_params: Mapping[str, object]) -> dict[str, object]:
     """Decrypt values written by encrypt_guardrail_litellm_params; plaintext values pass through unchanged."""
-    return {  # mutable-ok: Guardrail.litellm_params is a dict
-        key: _decrypted_param(key, value) for key, value in litellm_params.items()
-    }
+    return {key: _decrypted_param(key, value) for key, value in litellm_params.items()}
 
 
 def guardrail_from_db_row(row: Iterable[tuple[str, object]]) -> Guardrail:
     """Build a Guardrail from a guardrails table row with its litellm_params decrypted."""
-    fields: Final = dict(row)  # mutable-ok: row fields re-spread into Guardrail
+    fields: Final = dict(row)
     stored_params: Final = _as_json_object(fields.get("litellm_params"))
     if stored_params is None:
         return Guardrail(**fields)
-    return Guardrail(
-        **{**fields, "litellm_params": decrypt_guardrail_litellm_params(stored_params)}  # mutable-ok: Guardrail kwargs
-    )
+    return Guardrail(**{**fields, "litellm_params": decrypt_guardrail_litellm_params(stored_params)})
 
 
 async def _rotate_guardrail_row(
@@ -202,8 +190,8 @@ async def _rotate_guardrail_row(
     if rotated_params == row.litellm_params:
         return 0
     if await _guardrail_table(prisma_client).update_many(
-        where={"guardrail_id": row.guardrail_id, "updated_at": row.updated_at},  # mutable-ok: Prisma where
-        data={"litellm_params": safe_dumps(rotated_params)},  # mutable-ok: Prisma data
+        where={"guardrail_id": row.guardrail_id, "updated_at": row.updated_at},
+        data={"litellm_params": safe_dumps(rotated_params)},
     ):
         return 1
     if attempts_left <= 1:
@@ -212,9 +200,7 @@ async def _rotate_guardrail_row(
             row.guardrail_id,
         )
         return 0
-    latest_row: Final = await _guardrail_table(prisma_client).find_unique(
-        where={"guardrail_id": row.guardrail_id}  # mutable-ok: Prisma where
-    )
+    latest_row: Final = await _guardrail_table(prisma_client).find_unique(where={"guardrail_id": row.guardrail_id})
     return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
@@ -498,7 +484,7 @@ class GuardrailRegistry:
             if updated_guardrail is None:
                 raise ValueError(f"Guardrail not found, passed guardrail_id={guardrail_id}")
 
-            return dict(guardrail_from_db_row(updated_guardrail))  # mutable-ok: callers expect a dict
+            return dict(guardrail_from_db_row(updated_guardrail))
         except Exception as e:
             raise Exception(f"Error updating guardrail in DB: {e}")
 
@@ -561,9 +547,7 @@ class GuardrailRegistry:
         salt_key: Final = os.environ.get(SALT_KEY_ENV_VAR)
         encryption_key: Final = new_master_key if salt_key is None else salt_key
         rows: Final = await _guardrail_table(prisma_client).find_many()
-        rotated = [  # mutable-ok: awaits in order
-            await _rotate_guardrail_row(prisma_client, row, encryption_key) for row in rows
-        ]
+        rotated = [await _rotate_guardrail_row(prisma_client, row, encryption_key) for row in rows]
         return sum(rotated)
 
 
@@ -1030,9 +1014,9 @@ class InMemoryGuardrailHandler:
         ):
             return existing
         return Guardrail(
-            **{  # mutable-ok: TypedDict construction
+            **{
                 **guardrail,
-                "litellm_params": {  # mutable-ok: guardrails read dicts
+                "litellm_params": {
                     key: loaded_params.get(key) if contains_encrypted_marker(value) else value
                     for key, value in db_params.items()
                 },
