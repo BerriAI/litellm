@@ -9114,7 +9114,7 @@ class TestMCPServerResolutionRegressions:
                 "config_server": {
                     "server_id": server_id,
                     "alias": "Config_server",
-                    "url": "https://93.184.216.34/mcp",
+                    "url": "https://config.example.com/mcp",
                     "transport": "http",
                     "auth_type": MCPAuth.oauth2,
                     "oauth2_flow": "authorization_code",
