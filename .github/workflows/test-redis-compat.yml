@@ -98,8 +98,9 @@ jobs:
 
       - name: Upload Redis coverage
         if: matrix.redis-version == '5.3.1'
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
+          version: v11.3.1
           use_oidc: true
           files: coverage-redis.xml
           flags: redis-compat

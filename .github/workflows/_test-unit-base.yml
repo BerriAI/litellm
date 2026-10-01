@@ -274,8 +274,9 @@ jobs:
       - name: Upload to Codecov
         id: codecov-upload
         continue-on-error: true
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
+          version: v11.3.1
           use_oidc: true
           directory: coverage-reports
           root_dir: ${{ github.workspace }}
@@ -285,8 +286,9 @@ jobs:
       - name: Upload to Codecov (retry)
         if: steps.codecov-upload.outcome == 'failure'
         continue-on-error: true
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
+          version: v11.3.1
           use_oidc: true
           directory: coverage-reports
           root_dir: ${{ github.workspace }}
