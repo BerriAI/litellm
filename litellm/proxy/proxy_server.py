@@ -16725,24 +16725,25 @@ async def alerting_settings(
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
             field_default: JsonValue = _get_field_default(field_info)
-            field_source = _nested_setting_source(
+            field_source: Final = _nested_setting_source(
                 settings,
                 alerting_args_dict,
                 "alerting_args",
                 field_name,
                 field_default,
             )
+            field_value: Final[JsonValue | None]
             if field_source == "config":
                 field_value = config_alerting_args.get(field_name)
             elif field_source == "db":
                 field_value = alerting_args_dict.get(field_name)
             else:
                 field_value = None
-            _stored_in_db: bool | None = (
+            _stored_in_db: Final[bool | None] = (
                 True if field_source == "db" else False if field_source == "config" else None
             )
 
-            _response_obj = ConfigList(
+            _response_obj: Final = ConfigList(
                 field_name=field_name,
                 field_type=allowed_args[field_name],
                 field_description=field_info.description or "",
