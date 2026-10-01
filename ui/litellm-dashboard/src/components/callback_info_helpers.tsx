@@ -10,6 +10,7 @@ import newrelicLogo from "../../public/assets/logos/newrelic.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 import pointfiveLogo from "../../public/assets/logos/pointfive.png";
+import signozLogo from "../../public/assets/logos/signoz.svg";
 import databricksLogo from "../../public/assets/logos/databricks.svg";
 
 interface CallbackConfig {
@@ -208,6 +209,17 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       aws_region: "text",
     },
     description: "S3 Bucket (AWS) Logging Integration",
+  },
+  {
+    id: "signoz",
+    displayName: "SigNoz",
+    logo: signozLogo.src,
+    supports_key_team_logging: true,
+    dynamic_params: {
+      signoz_ingestion_endpoint: "text",
+      signoz_ingestion_key: "password",
+    },
+    description: "SigNoz Logging Integration. Setup: https://signoz.io/docs/litellm-observability/",
   },
   {
     id: "SQS",

@@ -85,11 +85,11 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
+from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
-    _is_user_org_admin_for_team,
-    _is_user_team_admin,
     _set_object_metadata_field,
     _team_member_has_permission,
     _user_has_admin_view,
@@ -2442,11 +2442,13 @@ async def _update_key_row_with_soft_budget(
             existing_key_row=existing_key_row,
             changed_by=changed_by,
         )
+        include_object_permission: Final[prisma.types.LiteLLM_VerificationTokenInclude] = {"object_permission": True}
         updated_row: Final = await tx.litellm_verificationtoken.update(
             where=key_where,
             data=with_settings_updated_at(
                 prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
             ),
+            include=include_object_permission,
         )
     updated_data: Final[Mapping[str, object]] = (
         updated_row.model_dump() if updated_row is not None else MappingProxyType({})
@@ -3051,7 +3053,7 @@ async def _acting_as_team_admin_for_key_update(
         user_api_key_cache=user_api_key_cache,
         check_db_only=True,
     )
-    if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_for_grant):
+    if not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_for_grant):
         return False
     team_admin_key_request_or_raise(
         team_admin_key_edit_verdict(
@@ -4054,17 +4056,11 @@ async def validate_key_team_change(
             )
 
     # Check if the person initiating the change is a Proxy Admin or Team Admin
-    if (
-        change_initiated_by.user_role == LitellmUserRoles.PROXY_ADMIN.value
-        or _is_user_team_admin(
-            user_api_key_dict=change_initiated_by,
-            team_obj=team,
-        )
-        or TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
-            team_member_role=None if member_object is None else member_object.role,
-            team_table=team_table,
-            route=KeyManagementRoutes.KEY_UPDATE.value,
-        )
+    initiator_is_admin: Final = await get_team_access().allows(change_initiated_by, team, TEAM_ADMIN_ONLY)
+    if initiator_is_admin or TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+        team_member_role=None if member_object is None else member_object.role,
+        team_table=team_table,
+        route=KeyManagementRoutes.KEY_UPDATE.value,
     ):
         return
     else:
@@ -4950,7 +4946,7 @@ async def can_modify_verification_token(
             return False
 
         # Check if user is team admin
-        if _is_user_team_admin(
+        if is_team_admin(
             user_api_key_dict=user_api_key_dict,
             team_obj=team_table,
         ):
@@ -6011,7 +6007,7 @@ async def _check_proxy_or_team_admin_for_key(
             check_db_only=True,
         )
         if team_table is not None:
-            if _is_user_team_admin(
+            if is_team_admin(
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_table,
             ):
@@ -6407,9 +6403,7 @@ def _get_admin_team_ids_from_objects(
     team_objects: list[LiteLLM_TeamTable],
 ) -> list[str]:
     """Filter team objects to those where the user is an admin."""
-    return [
-        team.team_id for team in team_objects if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-    ]
+    return [team.team_id for team in team_objects if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)]
 
 
 def _get_team_ids_with_key_list_permission_from_objects(
@@ -6423,7 +6417,7 @@ def _get_team_ids_with_key_list_permission_from_objects(
     return [
         team.team_id
         for team in team_objects
-        if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+        if not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
         and _team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team,
@@ -7283,11 +7277,8 @@ async def _check_key_admin_access(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-        if team_obj is not None:
-            if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-                return
-            if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-                return
+        if team_obj is not None and await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
+            return
 
     raise HTTPException(
         status_code=403,

@@ -1263,8 +1263,8 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads session rollups folded once per request at spend-write time, so this endpoint
-         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+         *     Reads session rollups folded once per request at spend-write time, with bounded
+         *     retained-log recovery for historical comparisons. A user filter selects only turns attributed to that
          *     internal user when written; older key-only history remains outside user views. A session
          *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
@@ -4790,6 +4790,298 @@ export interface paths {
          *     ```
          */
         post: operations["update_end_user_end_user_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Engines */
+        get: operations["list_engines_engine_get"];
+        put?: never;
+        /** Create Engine */
+        post: operations["create_engine_engine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/preview/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Sample */
+        post: operations["preview_sample_engine_preview_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim */
+        post: operations["claim_engine_worker_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Content */
+        get: operations["content_engine_worker__engine_id___job_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Heartbeat */
+        post: operations["heartbeat_engine_worker__engine_id___job_id__heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model */
+        post: operations["model_engine_worker__engine_id___job_id__model_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Progress */
+        post: operations["progress_engine_worker__engine_id___job_id__progress_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Result */
+        post: operations["result_engine_worker__engine_id___job_id__result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/worker/{engine_id}/{job_id}/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sample */
+        get: operations["sample_engine_worker__engine_id___job_id__sample_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/workers/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Worker */
+        post: operations["register_worker_engine_workers_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/workers/{worker_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Worker */
+        delete: operations["revoke_worker_engine_workers__worker_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Engine */
+        get: operations["read_engine_engine__engine_id__get"];
+        /** Update Engine */
+        put: operations["update_engine_engine__engine_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Engine */
+        post: operations["cancel_engine_engine__engine_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/executions/{execution_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evidence Content */
+        get: operations["evidence_content_engine__engine_id__executions__execution_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Finding */
+        patch: operations["update_finding_engine__engine_id__findings__finding_id__patch"];
+        trace?: never;
+    };
+    "/engine/{engine_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_engine__engine_id__runs_get"];
+        put?: never;
+        /** Run Engine */
+        post: operations["run_engine_engine__engine_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/engine/{engine_id}/runs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Run */
+        get: operations["read_run_engine__engine_id__runs__job_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9189,6 +9481,40 @@ export interface paths {
         patch: operations["mistral_proxy_route_mistral__endpoint__patch"];
         trace?: never;
     };
+    "/model-insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insights */
+        get: operations["get_model_insights_model_insights_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-insights/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Model Insight Tasks */
+        get: operations["get_model_insight_tasks_model_insights_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/block": {
         parameters: {
             query?: never;
@@ -13506,6 +13832,128 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/roi-calculator/connections/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Roi Calculator Connections */
+        post: operations["test_roi_calculator_connections_roi_calculator_connections_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/identity-map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Roi Calculator Identity Map */
+        put: operations["update_roi_calculator_identity_map_roi_calculator_identity_map_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Report */
+        get: operations["get_roi_calculator_report_roi_calculator_report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Repositories */
+        get: operations["get_roi_calculator_repositories_roi_calculator_repositories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Settings */
+        get: operations["get_roi_calculator_settings_roi_calculator_settings_get"];
+        /** Update Roi Calculator Settings */
+        put: operations["update_roi_calculator_settings_roi_calculator_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/setup/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reset Roi Calculator Setup */
+        post: operations["reset_roi_calculator_setup_roi_calculator_setup_reset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/roi-calculator/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Roi Calculator Sync Status */
+        get: operations["get_roi_calculator_sync_status_roi_calculator_sync_get"];
+        put?: never;
+        /** Start Roi Calculator Sync */
+        post: operations["start_roi_calculator_sync_roi_calculator_sync_post"];
+        /** Cancel Roi Calculator Sync */
+        delete: operations["cancel_roi_calculator_sync_roi_calculator_sync_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/router/fields": {
         parameters: {
             query?: never;
@@ -15673,53 +16121,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/team/daily/activity/aggregated/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search Team Daily Activity Keys
-         * @description Aggregated daily team activity for the keys matching `search`, across every key the caller may
-         *     see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
-         */
-        get: operations["search_team_daily_activity_keys_team_daily_activity_aggregated_search_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/team/daily/activity/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Team Daily Activity Export
-         * @description Server-side Team Usage export, not subject to USAGE_TOP_API_KEYS_LIMIT.
-         *
-         *     Same scoping as /team/daily/activity/aggregated, answered by one unbounded
-         *     rollup query, returned as CSV or JSON. For daily_with_keys,
-         *     daily_with_users and daily_with_models the PTU sentinel flat-cost rows are
-         *     excluded, so metadata totals under those export types cover request spend
-         *     only; the plain daily export includes them.
-         */
-        get: operations["get_team_daily_activity_export_team_daily_activity_export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -17401,29 +17802,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/user/daily/activity/aggregated/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search User Daily Activity Keys
-         * @description Search verification tokens by exact token hash or by a case-insensitive substring of
-         *     the key alias or owning user ID, then return the aggregated daily activity for the
-         *     matches. Lets the Usage page surface keys that fell outside the top-spend subset
-         *     the aggregated endpoint loads.
-         */
-        get: operations["search_user_daily_activity_keys_user_daily_activity_aggregated_search_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/user/delete": {
         parameters: {
             query?: never;
@@ -18071,6 +18449,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agents/identity/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Identity Providers */
+        get: operations["get_agent_identity_providers_v1_agents_identity_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents/make_public": {
         parameters: {
             query?: never;
@@ -18218,6 +18613,23 @@ export interface paths {
          *     ```
          */
         patch: operations["patch_agent_v1_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Identity Status */
+        get: operations["get_agent_identity_status_v1_agents__agent_id__identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/agents/{agent_id}/kill_switch": {
@@ -19622,6 +20034,30 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/server/{server_id}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin Mcp Server Tools
+         * @description Pin the server's current upstream tool list, descriptions and input schemas (admin only). tools/list serves the pinned catalog from now on and an upstream change raises an mcp_pinned_tools_changed alert.
+         */
+        post: operations["pin_mcp_server_tools_v1_mcp_server__server_id__pin_post"];
+        /**
+         * Unpin Mcp Server Tools
+         * @description Unpin the server's tool list (admin only); tools/list serves the live upstream catalog again.
+         */
+        delete: operations["unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -21269,6 +21705,58 @@ export interface paths {
          *     (exactly one required).
          */
         delete: operations["delete_tool_policy_override_v1_tool__tool_name__overrides_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agent Traces */
+        get: operations["list_agent_traces_v1_traces_get"];
+        put?: never;
+        /** Ingest Otlp Traces */
+        post: operations["ingest_otlp_traces_v1_traces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/{trace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace */
+        get: operations["get_agent_trace_v1_traces__trace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/{trace_id}/spans/{span_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Span */
+        get: operations["get_agent_trace_span_v1_traces__trace_id__spans__span_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -24206,11 +24694,19 @@ export interface components {
         AgentConfig: {
             /** Access Group Ids */
             access_group_ids?: string[] | null;
-            agent_card_params: components["schemas"]["AgentCard"];
+            agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name: string;
+            /** Enabled */
+            enabled?: boolean;
+            /**
+             * Execution Mode
+             * @enum {string}
+             */
+            execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["EntraIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
@@ -24296,6 +24792,45 @@ export interface components {
             required?: boolean | null;
             /** Uri */
             uri?: string;
+        };
+        /** AgentIdentityBinding */
+        AgentIdentityBinding: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Agent Id */
+            agent_id: string;
+            /** Client Id */
+            client_id: string;
+            /** Issuer */
+            issuer: string;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Required Roles
+             * @default []
+             */
+            required_roles: string[];
+            /**
+             * Required Scopes
+             * @default [
+             *       "user_impersonation"
+             *     ]
+             */
+            required_scopes: string[];
+            /** Revision */
+            revision: string;
+            /** Service Principal Id */
+            service_principal_id?: string | null;
+            /** Tenant Id */
+            tenant_id: string;
         };
         /**
          * AgentInterface
@@ -24452,8 +24987,30 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Mode
+             * @default autonomous
+             * @enum {string}
+             */
+            execution_mode: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["AgentIdentityBinding"] | null;
+            /**
+             * Identity Managed
+             * @default false
+             */
+            identity_managed: boolean;
+            /**
+             * Jwt Auth Configured
+             * @default false
+             */
+            jwt_auth_configured: boolean;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
@@ -24541,7 +25098,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted" | "mcp_tool_description_blocked" | "mcp_pinned_tools_changed";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -24911,17 +25468,17 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description Covered savings over covered baseline spend, as a percentage
+             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
              */
             saved_pct: number | null;
             /**
              * Saved Per Session
-             * @description Average session savings; unavailable unless every turn is covered
+             * @description Recorded savings per session, including historical estimates
              */
             saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed savings for covered turns only; null when traffic has no current estimates
+             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
              */
             saved_spend: number | null;
             /**
@@ -24930,8 +25487,13 @@ export interface components {
              */
             savings_estimated_actual_spend: number;
             /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
+            /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -24975,17 +25537,17 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description Covered savings over covered baseline spend, as a percentage
+             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
              */
             saved_pct: number | null;
             /**
              * Saved Per Session
-             * @description Average session savings; unavailable unless every turn is covered
+             * @description Recorded savings per session, including historical estimates
              */
             saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed savings for covered turns only; null when traffic has no current estimates
+             * @description Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates
              */
             saved_spend: number | null;
             /**
@@ -24994,8 +25556,13 @@ export interface components {
              */
             savings_estimated_actual_spend: number;
             /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
+            /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25272,12 +25839,12 @@ export interface components {
         AutoRouterSessionResponse: {
             /**
              * Baseline Model
-             * @description The savings baseline most covered turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             * @description The savings baseline recorded by most session turns, including historical turns, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
              */
             baseline_model: string | null;
             /**
              * Baseline Models
-             * @description Covered turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             * @description Session turns recording each baseline model; more than one entry means the router's baseline changed mid-session; these counts do not imply savings coverage
              */
             baseline_models: {
                 [key: string]: number;
@@ -25304,7 +25871,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Estimated savings for covered turns only, net of classifier cost
+             * @description Recorded historical savings plus newer estimates, net of classifier cost
              */
             saved_spend: number | null;
             /**
@@ -25319,7 +25886,7 @@ export interface components {
             savings_estimated_baseline_spend: number | null;
             /**
              * Savings Estimated Turns
-             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             * @description Requests with a matching savings comparison, including historical recorded estimates
              */
             savings_estimated_turns: number;
             /** Session Id */
@@ -27358,6 +27925,18 @@ export interface components {
              */
             role: "user" | "assistant";
         };
+        /** Check */
+        Check: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Instruction */
+            instruction: string;
+        };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
             /** Content */
@@ -27468,6 +28047,14 @@ export interface components {
         CitationsObject: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** Claim */
+        Claim: {
+            /** Engine Id */
+            engine_id: string;
+            /** Findings */
+            findings: components["schemas"]["Finding"][];
+            job: components["schemas"]["Job"];
         };
         /**
          * ClassificationRubric
@@ -29273,6 +29860,59 @@ export interface components {
              */
             reasoning_tokens: number;
         };
+        /** Coverage */
+        Coverage: {
+            /**
+             * Candidates
+             * @default 0
+             */
+            candidates: number;
+            /**
+             * Eligible
+             * @default 0
+             */
+            eligible: number;
+            /**
+             * Grouped Batches
+             * @default 0
+             */
+            grouped_batches: number;
+            /**
+             * Grouping Batches
+             * @default 0
+             */
+            grouping_batches: number;
+            /**
+             * Inconclusive
+             * @default 0
+             */
+            inconclusive: number;
+            /**
+             * Investigated
+             * @default 0
+             */
+            investigated: number;
+            /**
+             * Partial
+             * @default 0
+             */
+            partial: number;
+            /**
+             * Screened
+             * @default 0
+             */
+            screened: number;
+            /**
+             * Selected
+             * @default 0
+             */
+            selected: number;
+            /**
+             * Unassessable
+             * @default 0
+             */
+            unassessable: number;
+        };
         /** CreateCredentialItem */
         CreateCredentialItem: {
             /** Credential Info */
@@ -29509,11 +30149,6 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
-             * Api Key Limit
-             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
-             */
-            api_key_limit?: number | null;
-            /**
              * Has More
              * @default false
              */
@@ -29523,11 +30158,6 @@ export interface components {
              * @default 1
              */
             page: number;
-            /**
-             * Total Api Keys
-             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
-             */
-            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
@@ -30116,6 +30746,136 @@ export interface components {
             /** Slug */
             slug: string;
         };
+        /** Engine */
+        Engine: {
+            /** Budget Month */
+            budget_month: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Findings
+             * @default []
+             */
+            findings: components["schemas"]["Finding"][];
+            /** Id */
+            id: string;
+            /**
+             * Jobs
+             * @default []
+             */
+            jobs: components["schemas"]["Job"][];
+            /** Last Scan At */
+            last_scan_at?: string | null;
+            /**
+             * Next Run At
+             * Format: date-time
+             */
+            next_run_at: string;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            scope: components["schemas"]["Scope"];
+            settings: components["schemas"]["EngineSettings"];
+            /**
+             * Spent
+             * @default 0
+             */
+            spent: number;
+            /**
+             * Version
+             * @default 0
+             */
+            version: number;
+        };
+        /** EngineList */
+        EngineList: {
+            /** Engines */
+            engines: components["schemas"]["Engine"][];
+            /** Tracing Enabled */
+            tracing_enabled: boolean;
+            /** Workers */
+            workers: components["schemas"]["Worker"][];
+        };
+        /** EngineSettings */
+        EngineSettings: {
+            /**
+             * Checks
+             * @default []
+             */
+            checks: components["schemas"]["Check"][];
+            /**
+             * Concurrency
+             * @default 8
+             */
+            concurrency: number;
+            /**
+             * Context
+             * @default
+             */
+            context: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Filters
+             * @default []
+             */
+            filters: components["schemas"]["MetadataFilter"][];
+            /**
+             * Interval Minutes
+             * @default 15
+             */
+            interval_minutes: number;
+            /**
+             * Lookback Hours
+             * @default 24
+             */
+            lookback_hours: number;
+            /** Model */
+            model: string;
+            /**
+             * Monthly Budget
+             * @default 20
+             */
+            monthly_budget: number;
+            /** Name */
+            name: string;
+            /**
+             * Sample Percent
+             * @default 100
+             */
+            sample_percent: number;
+            /** Sample Size */
+            sample_size?: number | null;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @default traces
+             * @enum {string}
+             */
+            source: "traces" | "requests" | "both";
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+        };
         /** EnrichTemplateRequest */
         EnrichTemplateRequest: {
             /**
@@ -30136,6 +30896,33 @@ export interface components {
             };
             /** Template Id */
             template_id: string;
+        };
+        /** EntraIdentityConfig */
+        EntraIdentityConfig: {
+            /** Client Id */
+            client_id: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Required Roles
+             * @default []
+             */
+            required_roles: string[];
+            /**
+             * Required Scopes
+             * @description Required delegated scopes. An empty list accepts any nonempty scope granted for this gateway.
+             * @default [
+             *       "user_impersonation"
+             *     ]
+             */
+            required_scopes: string[];
+            /** Service Principal Id */
+            service_principal_id?: string | null;
+            /** Tenant Id */
+            tenant_id: string;
         };
         /** EnvironmentReport */
         EnvironmentReport: {
@@ -30200,6 +30987,74 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /** Evidence */
+        Evidence: {
+            /** Execution Id */
+            execution_id: string;
+            /** Quote */
+            quote: string;
+            /**
+             * Role
+             * @default support
+             * @enum {string}
+             */
+            role: "support" | "counterexample";
+            /** Span Id */
+            span_id: string;
+        };
+        /** Execution */
+        Execution: {
+            /** Id */
+            id: string;
+            /**
+             * Metadata
+             * @default []
+             */
+            metadata: components["schemas"]["MetadataFilter"][];
+            /** Name */
+            name: string;
+            /**
+             * Root Seen
+             * @default false
+             */
+            root_seen: boolean;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "traces" | "requests";
+            /** Span Count */
+            span_count: number;
+            /** Start Time */
+            start_time: string;
+            /** Team Id */
+            team_id: string;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** ExecutionContent */
+        ExecutionContent: {
+            execution: components["schemas"]["Execution"];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /** Parts */
+            parts: components["schemas"]["TracePart"][];
         };
         /**
          * FacetListResponse
@@ -30380,6 +31235,119 @@ export interface components {
             allowed_domains?: string[] | null;
         } & {
             [key: string]: unknown;
+        };
+        /** Finding */
+        Finding: {
+            /** Check Id */
+            check_id: string;
+            /** Description */
+            description: string;
+            /** Evidence */
+            evidence: components["schemas"]["Evidence"][];
+            /** Existing Finding Id */
+            existing_finding_id?: string | null;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /**
+             * Limitation
+             * @default
+             */
+            limitation: string;
+            /**
+             * Occurrences
+             * @default []
+             */
+            occurrences: string[];
+            /**
+             * Priority
+             * @default medium
+             * @enum {string}
+             */
+            priority: "high" | "medium" | "low";
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Status
+             * @default open
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
+            /**
+             * Suggestion
+             * @default
+             */
+            suggestion: string;
+            /** Title */
+            title: string;
+        };
+        /** FindingDraft */
+        FindingDraft: {
+            /** Check Id */
+            check_id: string;
+            /** Description */
+            description: string;
+            /** Evidence */
+            evidence: components["schemas"]["Evidence"][];
+            /** Existing Finding Id */
+            existing_finding_id?: string | null;
+            /**
+             * Kind
+             * @default issue
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /**
+             * Limitation
+             * @default
+             */
+            limitation: string;
+            /**
+             * Priority
+             * @default medium
+             * @enum {string}
+             */
+            priority: "high" | "medium" | "low";
+            /**
+             * Suggestion
+             * @default
+             */
+            suggestion: string;
+            /** Title */
+            title: string;
+        };
+        /** FindingUpdate */
+        FindingUpdate: {
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "open" | "resolved" | "dismissed";
         };
         /** FunctionCall */
         FunctionCall: {
@@ -31596,6 +32564,84 @@ export interface components {
              */
             timeout_ms: number;
         };
+        /** Job */
+        Job: {
+            /**
+             * Assessments
+             * @default []
+             */
+            assessments: components["schemas"]["RunAssessment"][];
+            /**
+             * Attempts
+             * @default 0
+             */
+            attempts: number;
+            /**
+             * Cost
+             * @default 0
+             */
+            cost: number;
+            /**
+             * @default {
+             *       "candidates": 0,
+             *       "eligible": 0,
+             *       "grouped_batches": 0,
+             *       "grouping_batches": 0,
+             *       "inconclusive": 0,
+             *       "investigated": 0,
+             *       "partial": 0,
+             *       "screened": 0,
+             *       "selected": 0,
+             *       "unassessable": 0
+             *     }
+             */
+            coverage: components["schemas"]["Coverage"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /** Findings */
+            findings?: components["schemas"]["Finding"][] | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Id */
+            id: string;
+            /** Lease Until */
+            lease_until?: string | null;
+            /** Revision */
+            revision: number;
+            sample?: components["schemas"]["Sample"] | null;
+            settings: components["schemas"]["EngineSettings"];
+            /**
+             * Stage
+             * @default Queued
+             */
+            stage: string;
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * Status
+             * @default queued
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /** Worker Id */
+            worker_id?: string | null;
+        };
         JsonValue: unknown;
         /** KeyHealthResponse */
         KeyHealthResponse: {
@@ -31622,7 +32668,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -32484,6 +33530,10 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /** Pinned Tools */
+            pinned_tools?: {
+                [key: string]: components["schemas"]["PinnedMCPTool"];
+            } | null;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -32977,6 +34027,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -33005,6 +34057,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -33031,6 +34085,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Per Second */
+            cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
@@ -33087,6 +34143,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -33214,6 +34272,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -34031,11 +35091,6 @@ export interface components {
              */
             advisory_system_message?: string | null;
             /**
-             * Agent Id
-             * @description Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.
-             */
-            agent_id?: string | null;
-            /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
              */
@@ -34372,6 +35427,11 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Gateway Name
+             * @description noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans
+             */
+            gateway_name?: string | null;
+            /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.
              */
@@ -34684,11 +35744,6 @@ export interface components {
              * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
              */
             realtime_violation_message?: string | null;
-            /**
-             * Resource App Id
-             * @description Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.
-             */
-            resource_app_id?: string | null;
             /**
              * Rules
              * @description Ordered allow/deny rules. Patterns use regex for tool names/types and optional regex constraints on tool arguments.
@@ -35544,6 +36599,28 @@ export interface components {
             /** Mcp Server Ids */
             mcp_server_ids: string[];
         };
+        /** ManagedAgentIdentityStatus */
+        ManagedAgentIdentityStatus: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Mode
+             * @default autonomous
+             * @enum {string}
+             */
+            execution_mode: "autonomous" | "delegated" | "both";
+            identity?: components["schemas"]["AgentIdentityBinding"] | null;
+            /**
+             * Identity Managed
+             * @default false
+             */
+            identity_managed: boolean;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+        };
         /**
          * Mcp
          * @description Give the model access to additional tools via remote Model Context Protocol
@@ -35838,6 +36915,13 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** MetadataFilter */
+        MetadataFilter: {
+            /** Key */
+            key: string;
+            /** Value */
+            value: string;
+        };
         /** MetricWithMetadata */
         MetricWithMetadata: {
             /** Api Key Breakdown */
@@ -36036,6 +37120,87 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** ModelInsightDailyMetric */
+        ModelInsightDailyMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightMetric */
+        ModelInsightMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightTaskSummary */
+        ModelInsightTaskSummary: {
+            /** Category */
+            category: string;
+            /** Label */
+            label: string;
+            /** Leader */
+            leader: string;
+            /** Provider */
+            provider: string;
+            /** Share */
+            share: number;
+            /** Task Type */
+            task_type: string;
+            /** Value */
+            value: number;
+        };
+        /** ModelInsightTasksResponse */
+        ModelInsightTasksResponse: {
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Tasks */
+            tasks: components["schemas"]["ModelInsightTaskSummary"][];
+        };
+        /** ModelInsightsResponse */
+        ModelInsightsResponse: {
+            /** Daily */
+            daily: components["schemas"]["ModelInsightDailyMetric"][];
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Top Models */
+            top_models: components["schemas"]["ModelInsightMetric"][];
+        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -36045,6 +37210,16 @@ export interface components {
             model_info: components["schemas"]["litellm__proxy___types__ModelInfo"];
             /** Model Name */
             model_name: string;
+        };
+        /** ModelRequest */
+        ModelRequest: {
+            /** Prompt */
+            prompt: string;
+            /**
+             * Purpose
+             * @enum {string}
+             */
+            purpose: "extract" | "cluster" | "investigate";
         };
         /** ModelResponse */
         ModelResponse: {
@@ -36062,6 +37237,13 @@ export interface components {
             system_fingerprint?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /** ModelResult */
+        ModelResult: {
+            /** Content */
+            content: string;
+            /** Cost */
+            cost: number;
         };
         /**
          * Move
@@ -37618,8 +38800,16 @@ export interface components {
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name?: string;
+            /** Enabled */
+            enabled?: boolean;
+            /**
+             * Execution Mode
+             * @enum {string}
+             */
+            execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["EntraIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
@@ -37851,6 +39041,21 @@ export interface components {
          * @enum {string}
          */
         PiiEntityType: "CREDIT_CARD" | "CRYPTO" | "DATE_TIME" | "EMAIL_ADDRESS" | "IBAN_CODE" | "IP_ADDRESS" | "NRP" | "LOCATION" | "PERSON" | "PHONE_NUMBER" | "MEDICAL_LICENSE" | "URL" | "MAC_ADDRESS" | "UUID" | "US_BANK_NUMBER" | "US_DRIVER_LICENSE" | "US_ITIN" | "US_PASSPORT" | "US_SSN" | "US_MBI" | "US_NPI" | "UK_NHS" | "UK_NINO" | "UK_PASSPORT" | "UK_POSTCODE" | "UK_VEHICLE_REGISTRATION" | "UK_DRIVING_LICENCE" | "ES_NIF" | "ES_NIE" | "ES_PASSPORT" | "IT_FISCAL_CODE" | "IT_DRIVER_LICENSE" | "IT_VAT_CODE" | "IT_PASSPORT" | "IT_IDENTITY_CARD" | "PL_PESEL" | "SG_NRIC_FIN" | "SG_UEN" | "AU_ABN" | "AU_ACN" | "AU_TFN" | "AU_MEDICARE" | "IN_PAN" | "IN_AADHAAR" | "IN_VEHICLE_REGISTRATION" | "IN_VOTER" | "IN_PASSPORT" | "IN_GSTIN" | "FI_PERSONAL_IDENTITY_CODE" | "DE_TAX_ID" | "DE_TAX_NUMBER" | "DE_VAT_ID" | "DE_PASSPORT" | "DE_ID_CARD" | "DE_FUEHRERSCHEIN" | "DE_SOCIAL_SECURITY" | "DE_HEALTH_INSURANCE" | "DE_LANR" | "DE_BSNR" | "DE_KFZ" | "DE_HANDELSREGISTER" | "DE_PLZ" | "KR_RRN" | "KR_FRN" | "KR_PASSPORT" | "KR_DRIVER_LICENSE" | "KR_BRN" | "CA_SIN" | "SE_PERSONNUMMER" | "SE_ORGANISATIONSNUMMER" | "TH_TNIN" | "TR_NATIONAL_ID" | "TR_LICENSE_PLATE" | "NG_NIN" | "NG_VEHICLE_REGISTRATION" | "PH_TIN" | "PH_UMID" | "PH_PASSPORT" | "ZA_ID_NUMBER";
+        /**
+         * PinnedMCPTool
+         * @description One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving.
+         */
+        PinnedMCPTool: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Input Schema */
+            input_schema?: {
+                [key: string]: unknown;
+            };
+        };
         /**
          * PipelineTestRequest
          * @description Request body for testing a guardrail pipeline with sample messages.
@@ -38652,6 +39857,42 @@ export interface components {
              */
             version_status: string;
         };
+        /** Preview */
+        Preview: {
+            /** As Of */
+            as_of?: string | null;
+            /**
+             * Lookback Hours
+             * @default 24
+             */
+            lookback_hours: number;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+            settings: components["schemas"]["EngineSettings"];
+        };
+        /** Progress */
+        Progress: {
+            /**
+             * @default {
+             *       "candidates": 0,
+             *       "eligible": 0,
+             *       "grouped_batches": 0,
+             *       "grouping_batches": 0,
+             *       "inconclusive": 0,
+             *       "investigated": 0,
+             *       "partial": 0,
+             *       "screened": 0,
+             *       "selected": 0,
+             *       "unassessable": 0
+             *     }
+             */
+            coverage: components["schemas"]["Coverage"];
+            /** Stage */
+            stage: string;
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -39069,6 +40310,286 @@ export interface components {
                 };
             } | null;
         };
+        /** ROIEstimateResponse */
+        ROIEstimateResponse: {
+            /**
+             * Cached
+             * @default false
+             */
+            cached: boolean;
+            /** Effort Basis */
+            effort_basis?: string | null;
+            /** Evidence Source */
+            evidence_source?: string | null;
+            /** Hours */
+            hours: number | null;
+            /** Model */
+            model?: string | null;
+            /** Reasoning */
+            reasoning: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "estimated" | "needs_review" | "error";
+        };
+        /** ROIIdentityMapResponse */
+        ROIIdentityMapResponse: {
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            report: components["schemas"]["ROISummaryResponse"] | null;
+        };
+        /** ROIIdentityMapUpdate */
+        ROIIdentityMapUpdate: {
+            /** Email */
+            email: string | null;
+            /** Github Login */
+            github_login: string;
+        };
+        /** ROIMetricsResponse */
+        ROIMetricsResponse: {
+            /** Cohort People */
+            cohort_people: number;
+            /** Cost Per Hour */
+            cost_per_hour: number | null;
+            /** Estimated Prs */
+            estimated_prs: number;
+            /** Excluded Spend */
+            excluded_spend: number;
+            /** Hours Per Dollar */
+            hours_per_dollar: number | null;
+            /** Matched Prs */
+            matched_prs: number;
+            /** Matched Spend */
+            matched_spend: number;
+            /** Merged Prs */
+            merged_prs: number;
+            /** Output Hours */
+            output_hours: number;
+            /** Pending Prs */
+            pending_prs: number;
+            /** People With Prs */
+            people_with_prs: number;
+            /** Total Output Hours */
+            total_output_hours: number;
+            /** Total Spend */
+            total_spend: number;
+        };
+        /** ROIPersonResponse */
+        ROIPersonResponse: {
+            /** Cost Per Hour */
+            cost_per_hour: number | null;
+            /** Eligible */
+            eligible: boolean;
+            /** Email */
+            email: string;
+            /** Estimated Prs */
+            estimated_prs: number;
+            /** Hours */
+            hours: number;
+            /** Id */
+            id: string;
+            /** Logins */
+            logins: string[];
+            /** Match Methods */
+            match_methods: string[];
+            /** Pending Prs */
+            pending_prs: number;
+            /** Prs */
+            prs: number;
+            /** Spend */
+            spend: number | null;
+        };
+        /** ROIPullResponse */
+        ROIPullResponse: {
+            /** Additions */
+            additions: number;
+            /** Cache Key */
+            cache_key?: string | null;
+            /** Changed Files */
+            changed_files: number;
+            /** Commit Count */
+            commit_count: number;
+            /** Deletions */
+            deletions: number;
+            /** Email */
+            email: string;
+            /** Emails */
+            emails: string[];
+            estimate: components["schemas"]["ROIEstimateResponse"];
+            /** Head Sha */
+            head_sha: string;
+            /** Incomplete Metadata */
+            incomplete_metadata: boolean;
+            /** Login */
+            login: string;
+            /** Match Method */
+            match_method: string;
+            /** Matched */
+            matched: boolean;
+            /** Merged At */
+            merged_at: string;
+            /** Number */
+            number: number;
+            /** Profile Email */
+            profile_email: string;
+            /** Repo */
+            repo: string;
+            /** Title */
+            title: string;
+            /** Url */
+            url: string;
+        };
+        /** ROIReportResponse */
+        ROIReportResponse: {
+            report: components["schemas"]["ROISummaryResponse"] | null;
+        };
+        /** ROIRepositoriesResponse */
+        ROIRepositoriesResponse: {
+            /** Has More */
+            has_more: boolean;
+            /** Page */
+            page: number;
+            /** Repositories */
+            repositories: components["schemas"]["ROIRepository"][];
+        };
+        /** ROIRepository */
+        ROIRepository: {
+            /** Archived */
+            archived: boolean;
+            /** Name */
+            name: string;
+            /** Visibility */
+            visibility: string;
+        };
+        /** ROISettingsResponse */
+        ROISettingsResponse: {
+            /** Available Models */
+            available_models: string[];
+            /** Backfill Days */
+            backfill_days: number;
+            /** Default Prompt */
+            default_prompt: string;
+            /** Estimator Model */
+            estimator_model: string;
+            /** Estimator Prompt */
+            estimator_prompt: string;
+            /** Github Api Url */
+            github_api_url: string;
+            /** Has Estimator Key */
+            has_estimator_key: boolean;
+            /** Has Github Token */
+            has_github_token: boolean;
+            /** Identity Map */
+            identity_map: {
+                [key: string]: string;
+            };
+            /** Ready */
+            ready: boolean;
+            /** Repos */
+            repos: string[];
+            /** Update Interval Minutes */
+            update_interval_minutes: number;
+        };
+        /** ROISettingsUpdate */
+        ROISettingsUpdate: {
+            /** Backfill Days */
+            backfill_days?: number | null;
+            /** Estimator Key */
+            estimator_key?: string | null;
+            /** Estimator Model */
+            estimator_model?: string | null;
+            /** Estimator Prompt */
+            estimator_prompt?: string | null;
+            /** Github Api Url */
+            github_api_url?: string | null;
+            /** Github Token */
+            github_token?: string | null;
+            /** Repos */
+            repos?: string[] | null;
+            /** Update Interval Minutes */
+            update_interval_minutes?: number | null;
+        };
+        /** ROISummaryResponse */
+        ROISummaryResponse: {
+            /** Effort Basis */
+            effort_basis: string | null;
+            /** End */
+            end: string;
+            /** Estimator Model */
+            estimator_model: string;
+            /** Estimator Prompt */
+            estimator_prompt: string;
+            /** Id */
+            id: string | null;
+            metrics: components["schemas"]["ROIMetricsResponse"];
+            /** Mode */
+            mode: string;
+            /** People */
+            people: components["schemas"]["ROIPersonResponse"][];
+            /** Pulls */
+            pulls: components["schemas"]["ROIPullResponse"][];
+            /** Repos */
+            repos: string[];
+            /** Start */
+            start: string;
+            /** Synced At */
+            synced_at: string;
+            /** Trend */
+            trend: components["schemas"]["ROITrendResponse"][];
+            /** Warnings */
+            warnings: string[];
+        };
+        /** ROISyncStatus */
+        ROISyncStatus: {
+            /** Done */
+            done: number;
+            /**
+             * Elapsed Seconds
+             * @default 0
+             */
+            elapsed_seconds: number;
+            /** Error */
+            error: string | null;
+            /** Estimated */
+            estimated: number;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Needs Attention */
+            needs_attention: number;
+            /** Next Update */
+            next_update?: string | null;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "idle" | "spend" | "repositories" | "estimates" | "complete" | "cancelled" | "error";
+            /** Remaining Seconds */
+            remaining_seconds?: number | null;
+            /** Reused */
+            reused: number;
+            /** Running */
+            running: boolean;
+            /** Stage */
+            stage: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Total */
+            total: number;
+        };
+        /** ROITrendResponse */
+        ROITrendResponse: {
+            /** Date */
+            date: string;
+            /** Hours */
+            hours: number;
+            /** Prs */
+            prs: number;
+            /** Spend */
+            spend: number;
+        };
         /**
          * RankingOptions
          * @description Ranking options for search.
@@ -39483,6 +41004,24 @@ export interface components {
             adaptive_eligible: "all" | "classified_tier";
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
+            /**
+             * Cache Aware Routing
+             * @description Opt in to comparing prompt-cache costs after classification. On supported native Anthropic proxy requests, an already warm model in the same or a higher tier may replace the classified model when its estimated input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing.
+             * @default false
+             */
+            cache_aware_routing: boolean;
+            /**
+             * Cache Aware Routing Output Tokens
+             * @description Expected output tokens used in cache-aware cost comparisons; capped by each model's effective output limit.
+             * @default 1024
+             */
+            cache_aware_routing_output_tokens: number;
+            /**
+             * Cache Aware Routing Timeout Ms
+             * @description Total time budget for cache-aware predictions; expiry preserves the original routing decision.
+             * @default 2000
+             */
+            cache_aware_routing_timeout_ms: number;
             /** @description Probability threshold policy required when classifier_type is 'capability'. The classifier forecasts p_solve for efficient_tier, adjusts base_threshold using the capability-card boundary, and otherwise routes to capable_tier */
             capability_classifier_config?: components["schemas"]["CapabilityClassifierConfig"] | null;
             /**
@@ -40239,7 +41778,7 @@ export interface components {
             /** Queries */
             queries: string[];
             /** Results */
-            results?: components["schemas"]["Result"][] | null;
+            results?: components["schemas"]["Result-Output"][] | null;
             /**
              * Status
              * @enum {string}
@@ -41300,6 +42839,40 @@ export interface components {
                 [key: string]: string | number | boolean;
             } | null;
             /** File Id */
+            file_id?: string;
+            /** Filename */
+            filename?: string;
+            /** Score */
+            score?: number;
+            /** Text */
+            text?: string;
+        };
+        /** Result */
+        "Result-Input": {
+            /**
+             * Assessments
+             * @default []
+             */
+            assessments: components["schemas"]["RunAssessment"][];
+            coverage: components["schemas"]["Coverage"];
+            /**
+             * Error
+             * @default
+             */
+            error: string;
+            /**
+             * Findings
+             * @default []
+             */
+            findings: components["schemas"]["FindingDraft"][];
+        };
+        /** Result */
+        "Result-Output": {
+            /** Attributes */
+            attributes?: {
+                [key: string]: string | number | boolean;
+            } | null;
+            /** File Id */
             file_id?: string | null;
             /** Filename */
             filename?: string | null;
@@ -41538,6 +43111,26 @@ export interface components {
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
         };
+        /** RunAssessment */
+        RunAssessment: {
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Issue Checks
+             * @default []
+             */
+            issue_checks: string[];
+            /**
+             * Pattern Checks
+             * @default []
+             */
+            pattern_checks: string[];
+        };
         /**
          * RunDeleteResponse
          * @description Response from deleting a run
@@ -41555,6 +43148,12 @@ export interface components {
             object: string | null;
             /** Run Id */
             run_id: string;
+        };
+        /** RunRequest */
+        RunRequest: {
+            /** Lookback Hours */
+            lookback_hours?: number | null;
+            settings?: components["schemas"]["EngineSettings"] | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -41941,6 +43540,22 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** Sample */
+        Sample: {
+            /** Eligible */
+            eligible: number;
+            /** Executions */
+            executions: components["schemas"]["Execution"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Next Offset */
+            next_offset?: number | null;
+            /**
+             * Selected
+             * @default 0
+             */
+            selected: number;
+        };
         /**
          * ScheduledJobStaggerSettings
          * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
@@ -41971,6 +43586,24 @@ export interface components {
              * @default 300
              */
             window_seconds: number;
+        };
+        /** Scope */
+        Scope: {
+            /**
+             * All Teams
+             * @default false
+             */
+            all_teams: boolean;
+            /**
+             * Api Key Hash
+             * @default
+             */
+            api_key_hash: string;
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
         };
         /**
          * Screenshot
@@ -42605,7 +44238,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
@@ -43080,87 +44713,6 @@ export interface components {
             success_callbacks: string[];
             /** Team Id */
             team_id: string;
-        };
-        /** TeamDailyActivityExportMetadata */
-        TeamDailyActivityExportMetadata: {
-            /** End Date */
-            end_date: string;
-            /** Export Date */
-            export_date: string;
-            /**
-             * Export Type
-             * @enum {string}
-             */
-            export_type: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
-            /** Start Date */
-            start_date: string;
-            /** Team Ids */
-            team_ids: string[] | null;
-            /** Total Api Requests */
-            total_api_requests: number;
-            /** Total Failed Requests */
-            total_failed_requests: number;
-            /**
-             * Total Flat Cost
-             * @default 0
-             */
-            total_flat_cost: number;
-            /** Total Spend */
-            total_spend: number;
-            /** Total Successful Requests */
-            total_successful_requests: number;
-            /** Total Tokens */
-            total_tokens: number;
-        };
-        /** TeamDailyActivityExportResponse */
-        TeamDailyActivityExportResponse: {
-            /** Data */
-            data: components["schemas"]["TeamDailyActivityExportRow"][];
-            metadata: components["schemas"]["TeamDailyActivityExportMetadata"];
-        };
-        /** TeamDailyActivityExportRow */
-        TeamDailyActivityExportRow: {
-            /** Api Key */
-            api_key?: string | null;
-            /** Api Requests */
-            api_requests: number;
-            /** Cache Creation Input Tokens */
-            cache_creation_input_tokens: number;
-            /** Cache Read Input Tokens */
-            cache_read_input_tokens: number;
-            /** Completion Tokens */
-            completion_tokens: number;
-            /** Date */
-            date: string;
-            /** Failed Requests */
-            failed_requests: number;
-            /**
-             * Flat Cost
-             * @default 0
-             */
-            flat_cost: number;
-            /** Key Alias */
-            key_alias?: string | null;
-            /** Keys */
-            keys?: number | null;
-            /** Model */
-            model?: string | null;
-            /** Prompt Tokens */
-            prompt_tokens: number;
-            /** Spend */
-            spend: number;
-            /** Successful Requests */
-            successful_requests: number;
-            /** Team Alias */
-            team_alias?: string | null;
-            /** Team Id */
-            team_id: string;
-            /** Total Tokens */
-            total_tokens: number;
-            /** User Email */
-            user_email?: string | null;
-            /** User Id */
-            user_id?: string | null;
         };
         /**
          * TeamListItem
@@ -44321,6 +45873,29 @@ export interface components {
             token: string;
         } & {
             [key: string]: unknown;
+        };
+        /** TracePart */
+        TracePart: {
+            /** Content */
+            content: string;
+            /** Execution Id */
+            execution_id: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /**
+             * Parent Span Id
+             * @default
+             */
+            parent_span_id: string;
+            /** Span Id */
+            span_id: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
         };
         /** TrainedTierArtifact */
         TrainedTierArtifact: {
@@ -46419,6 +47994,38 @@ export interface components {
             type: "web_search" | "web_search_2025_08_26";
             user_location?: components["schemas"]["openai__types__responses__web_search_tool_param__UserLocation"] | null;
         };
+        /** Worker */
+        Worker: {
+            /** Id */
+            id: string;
+            /**
+             * Last Seen
+             * Format: date-time
+             */
+            last_seen: string;
+            /** Name */
+            name: string;
+            /**
+             * Revoked
+             * @default false
+             */
+            revoked: boolean;
+            scope: components["schemas"]["Scope"];
+        };
+        /** WorkerCreated */
+        WorkerCreated: {
+            /** Token */
+            token: string;
+            worker: components["schemas"]["Worker"];
+        };
+        /** WorkerName */
+        WorkerName: {
+            /**
+             * Name
+             * @default Lens worker
+             */
+            name: string;
+        };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
             /** Name */
@@ -46778,6 +48385,8 @@ export interface components {
             cache_creation_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Priority */
             cache_creation_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Creation Input Token Cost Above 272K Tokens Ultrafast */
+            cache_creation_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Creation Input Token Cost Batches */
             cache_creation_input_token_cost_batches?: number | null;
             /** Cache Creation Input Token Cost Flex */
@@ -46806,6 +48415,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_flex?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens Ultrafast */
+            cache_read_input_token_cost_above_272k_tokens_ultrafast?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Balanced */
@@ -46832,6 +48443,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Per Second */
+            cost_per_second?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
@@ -46888,6 +48501,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens Ultrafast */
+            input_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Balanced */
@@ -47015,6 +48630,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_flex?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens Ultrafast */
+            output_cost_per_token_above_272k_tokens_ultrafast?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Balanced */
@@ -53835,6 +55452,663 @@ export interface operations {
             };
         };
     };
+    list_engines_engine_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineList"];
+                };
+            };
+        };
+    };
+    create_engine_engine_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EngineSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_sample_engine_preview_sample_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Preview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sample"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_engine_worker_claim_post: {
+        parameters: {
+            query?: {
+                protocol_version?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Claim"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    content_engine_worker__engine_id___job_id__content_get: {
+        parameters: {
+            query: {
+                execution_id: string;
+                cursor?: string;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    heartbeat_engine_worker__engine_id___job_id__heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_engine_worker__engine_id___job_id__model_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    progress_engine_worker__engine_id___job_id__progress_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Progress"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    result_engine_worker__engine_id___job_id__result_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Result-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sample_engine_worker__engine_id___job_id__sample_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sample"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_worker_engine_workers_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerName"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_worker_engine_workers__worker_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_engine_engine__engine_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_engine_engine__engine_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EngineSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_engine_engine__engine_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evidence_content_engine__engine_id__executions__execution_id__get: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                engine_id: string;
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_finding_engine__engine_id__findings__finding_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FindingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_engine__engine_id__runs_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_engine_engine__engine_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Engine"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_run_engine__engine_id__runs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     chat_completion_engines__model__chat_completions_post: {
         parameters: {
             query?: never;
@@ -55352,6 +57626,7 @@ export interface operations {
         parameters: {
             query?: {
                 theme?: ("light" | "dark") | null;
+                variant?: "full" | "monogram";
             };
             header?: never;
             path?: never;
@@ -57063,7 +59338,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "signoz" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -59429,6 +61704,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insights_model_insights_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric the top models are ranked by */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insight_tasks_model_insights_tasks_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric task shares are computed from */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightTasksResponse"];
                 };
             };
             /** @description Validation Error */
@@ -64531,6 +66878,255 @@ export interface operations {
             };
         };
     };
+    test_roi_calculator_connections_roi_calculator_connections_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+        };
+    };
+    update_roi_calculator_identity_map_roi_calculator_identity_map_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ROIIdentityMapUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIIdentityMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_report_roi_calculator_report_get: {
+        parameters: {
+            query?: {
+                mode?: "live" | "demo";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_repositories_roi_calculator_repositories_get: {
+        parameters: {
+            query?: {
+                query?: string;
+                page?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_settings_roi_calculator_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+        };
+    };
+    update_roi_calculator_settings_roi_calculator_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ROISettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_roi_calculator_setup_roi_calculator_setup_reset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISettingsResponse"];
+                };
+            };
+        };
+    };
+    get_roi_calculator_sync_status_roi_calculator_sync_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
+    start_roi_calculator_sync_roi_calculator_sync_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
+    cancel_roi_calculator_sync_roi_calculator_sync_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ROISyncStatus"];
+                };
+            };
+        };
+    };
     get_router_fields_router_fields_get: {
         parameters: {
             query?: never;
@@ -65932,6 +68528,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth token, false for the deployment's configured key. Rows written before this flag existed match neither */
+                used_client_oauth_token?: boolean | null;
                 /** @description Filter logs by span type: llm, agent, mcp, or batch */
                 span_type?: string | null;
                 /** @description Filter logs by model */
@@ -65958,7 +68556,7 @@ export interface operations {
                 group_by_session?: boolean;
                 /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
                 session_cursor?: string | null;
-                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
             };
             header?: never;
@@ -66052,6 +68650,8 @@ export interface operations {
                 status_filter?: string | null;
                 /** @description Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state */
                 cache_hit_filter?: string | null;
+                /** @description Filter logs by the credential the upstream call used: true for a client-forwarded Anthropic OAuth token, false for the deployment's configured key. Rows written before this flag existed match neither */
+                used_client_oauth_token?: boolean | null;
                 /** @description Filter logs by span type: llm, agent, mcp, or batch */
                 span_type?: string | null;
                 /** @description Filter logs by model */
@@ -66078,7 +68678,7 @@ export interface operations {
                 group_by_session?: boolean;
                 /** @description Keyset cursor '<last_activity>|<api_key>|<session_key>' from a previous group_by_session page. UI route only, honored when sorting by startTime */
                 session_cursor?: string | null;
-                /** @description Match a log whose request_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
+                /** @description Match a log whose request_id, litellm_call_id, api_key (hash), team_id, user, end_user, session_id, or model_id equals this value. request_id matches across all time; the other columns match inside start_date/end_date, which stay required */
                 search?: string | null;
             };
             header?: never;
@@ -67038,81 +69638,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    search_team_daily_activity_keys_team_daily_activity_aggregated_search_get: {
-        parameters: {
-            query: {
-                /** @description Exact token hash, or a case-insensitive substring of the key alias or owning user id */
-                search: string;
-                team_ids?: string | null;
-                start_date?: string | null;
-                end_date?: string | null;
-                exclude_team_ids?: string | null;
-                timezone?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_team_daily_activity_export_team_daily_activity_export_get: {
-        parameters: {
-            query?: {
-                start_date?: string | null;
-                end_date?: string | null;
-                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
-                format?: "csv" | "json";
-                team_id?: string | null;
-                exclude_team_ids?: string | null;
-                timezone?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TeamDailyActivityExportResponse"];
-                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */
@@ -69256,48 +71781,6 @@ export interface operations {
             };
         };
     };
-    search_user_daily_activity_keys_user_daily_activity_aggregated_search_get: {
-        parameters: {
-            query: {
-                /** @description Matches keys whose hash equals the value, or whose key alias or user ID contains it (case-insensitive) */
-                search: string;
-                /** @description Start date in YYYY-MM-DD format */
-                start_date?: string | null;
-                /** @description End date in YYYY-MM-DD format */
-                end_date?: string | null;
-                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
-                user_id?: string | null;
-                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
-                timezone?: number | null;
-                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
-                include_current_utc_day?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_user_user_delete_post: {
         parameters: {
             query?: never;
@@ -70077,6 +72560,26 @@ export interface operations {
             };
         };
     };
+    get_agent_identity_providers_v1_agents_identity_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+        };
+    };
     make_agents_public_v1_agents_make_public_post: {
         parameters: {
             query?: never;
@@ -70229,6 +72732,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_identity_status_v1_agents__agent_id__identity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAgentIdentityStatus"];
                 };
             };
             /** @description Validation Error */
@@ -72561,6 +75095,72 @@ export interface operations {
             };
         };
     };
+    pin_mcp_server_tools_v1_mcp_server__server_id__pin_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["PinnedMCPTool"];
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpin_mcp_server_tools_v1_mcp_server__server_id__pin_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reject_mcp_server_submission_v1_mcp_server__server_id__reject_put: {
         parameters: {
             query?: never;
@@ -74502,6 +77102,128 @@ export interface operations {
             header?: never;
             path: {
                 tool_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_traces_v1_traces_get: {
+        parameters: {
+            query?: {
+                /** @description Window start, unix ms. Default: 24h ago */
+                start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_otlp_traces_v1_traces_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_agent_trace_v1_traces__trace_id__get: {
+        parameters: {
+            query?: {
+                trace_ref?: string;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
+        parameters: {
+            query?: {
+                trace_ref?: string;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+                span_id: string;
             };
             cookie?: never;
         };

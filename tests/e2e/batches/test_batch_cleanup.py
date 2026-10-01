@@ -7,7 +7,6 @@ import pytest
 from batch_cleanup import (
     BATCH_CANCEL_TIMEOUT_SECONDS,
     CLEANUP_DELAYS,
-    BatchCleanupLeftover,
     cleanup_batch,
     cleanup_file,
     cleanup_result,
@@ -141,7 +140,7 @@ class TestFileCleanup:
             calls=ExpectedCalls((f"delete None {MANAGED_FILE_ID}",)),
             files=(UnknownApiError(status_code=400, body=IN_USE_REFUSAL),),
         )
-        with pytest.warns(BatchCleanupLeftover, match=MANAGED_FILE_ID):
+        with pytest.warns(UserWarning, match=MANAGED_FILE_ID):
             cleanup_file(client, MANAGED_FILE_ID, key="test-key")
         client.calls.assert_done()
 
@@ -241,7 +240,7 @@ class TestBatchCancellation:
         key: Final = manager.key()
         manager.defer(lambda: cleanup_file(client, MANAGED_FILE_ID, key=key))
         manager.defer(lambda: cleanup_batch(client, MANAGED_BATCH_ID, key=key, clock=ticks))
-        with pytest.warns(BatchCleanupLeftover) as leftovers:
+        with pytest.warns(UserWarning, match="^Left ") as leftovers:
             manager.teardown()
         client.calls.assert_done()
         messages: Final = tuple(str(warning.message) for warning in leftovers)

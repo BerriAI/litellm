@@ -38,6 +38,7 @@ V1_KEY: Final = "synthetic-v1-collection-key"
 V3_PATH: Final = "/api/v3/detect"
 V1_PATH: Final = "/api/v1/detect/webhook"
 BLOCK_MARK: Final = "SYNTHETIC-INJECTION"
+STRAY_V3_BLOCK_MARK: Final = "SYNTHETIC-STRAY-VERSION-BLOCK"
 KILL_MARK: Final = "SYNTHETIC-KILLSWITCH"
 DENY_MARK: Final = "SYNTHETIC-DENY"
 SINK_500_MARK: Final = "SYNTHETIC-SINK-500"
@@ -144,7 +145,11 @@ def _verdict(seen: Seen, text: str) -> tuple[int, bytes]:
         return 200, json.dumps({"action": "NONE"}).encode()
     assert seen.target == V3_PATH, seen.target
     turn: Final = "turn-" + hashlib.sha256(text.encode()).hexdigest()[:12]
-    if BLOCK_MARK in text or (LOG_BLOCK_MARK in text and agent == LOG_AGENT):
+    if (
+        BLOCK_MARK in text
+        or (STRAY_V3_BLOCK_MARK in text and agent is None)
+        or (LOG_BLOCK_MARK in text and agent == LOG_AGENT)
+    ):
         return 200, json.dumps(
             {
                 "hookSpecificOutput": {"permissionDecision": "block"},
@@ -363,7 +368,9 @@ def _rig_config(sink_url: str, root: Path) -> Path:
             format_hint="anthropic.messages",
         ),
         _guardrail("straiker-v3-as-v1", V3_KEY, sink_url, "pre_call", False, api_version="v1"),
+        _guardrail("straiker-v3-stray-version", V3_KEY, sink_url, "pre_call", False, api_version="2024-09-01"),
         _guardrail("straiker-v1", V1_KEY, sink_url, "pre_call", False),
+        _guardrail("straiker-v1-empty-version", V1_KEY, sink_url, "pre_call", False, api_version=""),
         _guardrail("straiker-v1-post", V1_KEY, sink_url, "post_call", False),
     ]
     path: Final = root / "straiker.yaml"
@@ -784,6 +791,36 @@ def test_explicit_api_version_v1_overrides_key_prefix(rig: Rig) -> None:
     calls: Final = _v1_calls(rig, marker, V3_KEY)
     assert len(calls) == 1, rig.sink_calls(marker)
     assert calls[0].headers["x-straiker-webhook-format"] == "litellm"
+
+
+def test_stray_api_version_with_v3_key_still_enforces_on_v3(rig: Rig) -> None:
+    allowed_marker: Final = rig.marker()
+    allowed: Final = _chat(rig, "stray version " + allowed_marker, guardrails=["straiker-v3-stray-version"])
+    assert allowed.status_code == 200, allowed.text
+    assert len(_v3_request_calls(rig, allowed_marker, agent=None)) == 1
+    assert len(rig.provider_calls(allowed_marker, rig.provider_drain())) == 1
+
+    blocked_marker: Final = rig.marker()
+    blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-stray-version"])
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1
+    assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
+
+
+def test_empty_api_version_with_v1_key_still_enforces_on_v1(rig: Rig) -> None:
+    allowed_marker: Final = rig.marker()
+    allowed: Final = _chat(rig, "empty version " + allowed_marker, guardrails=["straiker-v1-empty-version"])
+    assert allowed.status_code == 200, allowed.text
+    assert len(_v1_calls(rig, allowed_marker, V1_KEY)) == 1
+    assert len(rig.provider_calls(allowed_marker, rig.provider_drain())) == 1
+
+    blocked_marker: Final = rig.marker()
+    blocked: Final = _chat(rig, f"{V1_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v1-empty-version"])
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert len(_v1_calls(rig, blocked_marker, V1_KEY)) == 1
+    assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 
 
 # E: configured client and format_hint ride as headers; request header for agent fills in when YAML has none

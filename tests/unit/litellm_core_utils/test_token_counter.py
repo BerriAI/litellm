@@ -442,6 +442,78 @@ def test_token_counter_with_tools(message_count_pair):
         ), f"Expected {expected_tokens} tokens, got {counted_tokens}."
 
 
+def test_token_counter_counts_gemini_function_declarations():
+    openai_tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_weather",
+                "description": "Find current weather conditions for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "City and region"},
+                        "units": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    gemini_tools: Final = litellm.utils.get_optional_params(
+        model="gemini-2.5-pro",
+        custom_llm_provider="gemini",
+        tools=openai_tools,
+    )["tools"]
+    camel_case_tools: Final = [{"functionDeclarations": gemini_tools[0]["function_declarations"]}]
+
+    openai_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=openai_tools,
+    )
+    gemini_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=gemini_tools,
+    )
+    camel_case_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=camel_case_tools,
+    )
+
+    assert openai_tokens == gemini_tokens == camel_case_tokens
+
+
+def test_token_counter_skips_non_mapping_tools():
+    openai_tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "description": "Find current weather conditions for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string", "description": "City and region"}},
+                "required": ["location"],
+            },
+        },
+    }
+    messages: Final = [{"role": "user", "content": "What's the weather?"}]
+    valid_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=messages,
+        tools=[openai_tool],
+    )
+    mixed_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=messages,
+        tools=["bad", None, openai_tool],
+    )
+
+    assert mixed_tokens == valid_tokens
+
+
 class NeedsToleranceUpdateError(Exception):
     """Custom exception to mark tests that have improved"""
 

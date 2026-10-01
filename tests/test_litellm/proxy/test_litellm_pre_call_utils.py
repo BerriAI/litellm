@@ -38,6 +38,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     move_guardrails_to_metadata,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_logging_from_dynamic_params
 from litellm.litellm_core_utils.get_provider_specific_headers import (
@@ -868,6 +869,31 @@ def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> No
 
     assert logging_obj.shadow_eval_request_snapshot is None
     assert proxy_request == {"body": {"messages": [{"role": "user", "content": "new request"}]}}
+
+
+def test_body_snapshot_excludes_team_callback_credentials() -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.types.litellm_params import TRUSTED_CALLBACK_VARS_FIELD
+
+    callback_vars: Final = {
+        "langfuse_public_key": "pk-lf-team",
+        "langfuse_secret_key": "sk-lf-team-secret",
+        "langfuse_host": "https://cloud.langfuse.com",
+    }
+    proxy_request: Final = {"body": None}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "proxy_server_request": proxy_request,
+        "success_callback": ["langfuse"],
+        **callback_vars,
+        TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {
+        "body": {"messages": [{"role": "user", "content": "hi"}], "success_callback": ["langfuse"]}
+    }, proxy_request
 
 
 @pytest.mark.asyncio
@@ -6768,6 +6794,55 @@ async def test_add_litellm_data_to_request_redacts_oauth_header_from_logging_cop
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, metadata_variable_name",
+    [
+        ("/v1/messages", "litellm_metadata"),
+        ("/v1/chat/completions", "metadata"),
+    ],
+)
+async def test_add_litellm_data_to_request_stamps_used_client_oauth_token(path, metadata_variable_name):
+    """A seat-billed request and a configured-key request must land in spend logs differing on exactly
+    the credential flag, and the flag must never carry the token itself."""
+
+    async def metadata_for(client_headers: dict) -> dict:
+        request_mock = _make_request_mock(path, {"Content-Type": "application/json", **client_headers})
+        updated = await add_litellm_data_to_request(
+            data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_client_headers_to_llm_api": True},
+            version="test-version",
+        )
+        return updated[metadata_variable_name]
+
+    def spend_log_row_metadata(request_metadata: dict) -> dict:
+        row = get_logging_payload(
+            kwargs={
+                "model": "claude-sonnet-5",
+                "custom_llm_provider": "anthropic",
+                "litellm_params": {"metadata": request_metadata},
+            },
+            response_obj={},
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+        )
+        return json.loads(row["metadata"])
+
+    seat_row = spend_log_row_metadata(
+        await metadata_for({"Authorization": _OAUTH_TOKEN, "x-litellm-api-key": "Bearer sk-virtual-key"})
+    )
+    key_row = spend_log_row_metadata(await metadata_for({"Authorization": "Bearer sk-virtual-key"}))
+
+    assert seat_row["used_client_oauth_token"] is True
+    assert key_row["used_client_oauth_token"] is False
+    differing_keys = {key for key in seat_row.keys() | key_row.keys() if seat_row.get(key) != key_row.get(key)}
+    assert differing_keys == {"used_client_oauth_token"}
+    assert "sk-ant-oat01" not in json.dumps(seat_row, default=repr)
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_of_logging_copies():
     """Credentials kept for transport must not survive anywhere under proxy_server_request."""
     secrets = {
@@ -7558,6 +7633,23 @@ def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     forwarded = _headers_forwarded_to({"anthropic-beta": "claude-code-20250219"}, "openai")
 
     assert forwarded == {}
+
+
+@pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
+def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(authorization_header_name):
+    assert add_provider_specific_headers_to_request(data={}, headers=_client_headers(authorization_header_name)) is True
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        _client_headers(None),
+        {"content-type": "application/json", "authorization": "Bearer sk-a-normal-key"},
+        {"anthropic-beta": "claude-code-20250219", "authorization": "Bearer sk-ant-api03-a-configured-key"},
+    ],
+)
+def test_add_provider_specific_headers_reports_no_oauth_credential_without_a_forwarded_token(headers):
+    assert add_provider_specific_headers_to_request(data={}, headers=headers) is False
 
 
 def test_no_provider_specific_header_when_client_sends_nothing_anthropic():
@@ -8470,3 +8562,31 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
     for name, value in secrets.items():
         assert updated["secret_fields"]["raw_headers"][name.lower()] == value
         assert request.headers[name] == value
+
+
+def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
+    from litellm.proxy._types import AddTeamCallback
+    from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
+
+    under_signoz = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="signoz",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_signoz.callback_vars == {
+        "signoz_ingestion_key": "team-key",
+        "signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443",
+    }
+
+    under_other = convert_key_logging_metadata_to_callback(
+        data=AddTeamCallback(
+            callback_name="langfuse",
+            callback_type="success",
+            callback_vars={"signoz_ingestion_key": "team-key", "langfuse_host": "https://cloud.langfuse.com"},
+        ),
+        team_callback_settings_obj=None,
+    )
+    assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
