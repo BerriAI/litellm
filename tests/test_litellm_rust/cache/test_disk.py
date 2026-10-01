@@ -10,8 +10,9 @@ import pytest
 
 from litellm.caching.caching import Cache
 from litellm.caching.disk_cache import DiskCache
+from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
-from tests.test_litellm_rust.support.cache import CacheTestHandle, CacheTestResolver, request
+from tests.test_litellm_rust.support.cache import CacheTestResolver, activate_native, native_runtime, request
 from tests.test_litellm_rust.support.isolation import rebound
 
 pytestmark: Final = pytest.mark.requires_rust_extension
@@ -31,7 +32,7 @@ async def test_disk_reads_python_entries_and_python_reads_native_entries(tmp_pat
         "large",
         {"timestamp": time.time(), "response": {"text": "x" * 70_000}},
     )
-    binding: Final = CacheTestResolver(SimpleNamespace(cache=CacheTestHandle.disk(str(tmp_path)))).resolve()
+    binding: Final = native_runtime(Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path)))
 
     assert binding.lookup(request("sync")) == response
     assert await binding.async_lookup(request("async")) == response
@@ -52,10 +53,10 @@ async def test_disk_reads_python_entries_and_python_reads_native_entries(tmp_pat
 
 
 async def test_disk_entries_survive_a_fresh_handle_and_expire_on_time(tmp_path: Path) -> None:
-    first: Final = CacheTestResolver(SimpleNamespace(cache=CacheTestHandle.disk(str(tmp_path)))).resolve()
+    first: Final = native_runtime(Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path)))
     await first.async_store(request("persistent"), {"value": "persistent"})
     await first.async_store({**request("expiring"), "ttl_seconds": 0.3}, {"value": "expiring"})
-    fresh: Final = CacheTestResolver(SimpleNamespace(cache=CacheTestHandle.disk(str(tmp_path)))).resolve()
+    fresh: Final = native_runtime(Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path)))
     assert fresh.lookup(request("persistent")) == {"value": "persistent"}
     assert fresh.lookup(request("expiring")) == {"value": "expiring"}
     await asyncio.sleep(0.4)
@@ -63,39 +64,36 @@ async def test_disk_entries_survive_a_fresh_handle_and_expire_on_time(tmp_path: 
     assert fresh.lookup(request("persistent")) == {"value": "persistent"}
 
 
-def test_disk_facade_registers_and_store_changes_fall_back(tmp_path: Path) -> None:
-    facade: Final = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
-    with pytest.raises(TypeError, match="directories must match"):
-        CacheTestHandle.disk(str(tmp_path / "other"))._bind_facade(facade)
-    handle: Final = CacheTestHandle.disk(str(tmp_path))
-    handle._bind_facade(facade)
-    resolver: Final = CacheTestResolver(SimpleNamespace(cache=facade))
-    binding: Final = resolver.resolve()
-    assert binding.kind == "native"
-    binding.store(request("native"), {"value": "native"})
+def test_selected_disk_runtime_declines_store_changes(tmp_path: Path) -> None:
+    facade: Final = activate_native(Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path)))
+    selected: Final = CacheTestResolver(SimpleNamespace(cache=facade))
+    native: Final = selected.resolve()
+    native.store(request("native"), {"value": "native"})
     assert facade.get_cache(cache_key="native") == {"value": "native"}
-
-    with rebound(facade.cache, "disk_cache", diskcache.Cache(str(tmp_path))):
-        assert resolver.resolve().kind == "python_callback"
-    assert resolver.resolve().kind == "native"
-
-    class CustomDiskCache(DiskCache):
-        pass
-
-    with rebound(facade, "cache", CustomDiskCache(disk_cache_dir=str(tmp_path))):
-        assert resolver.resolve().kind == "python_callback"
+    replacement: Final = diskcache.Cache(str(tmp_path))
+    try:
+        with rebound(facade.cache, "disk_cache", replacement):
+            with pytest.raises(_native.RustBridgeDeclined):
+                selected.resolve()
+        assert selected.resolve().kind == "native"
+    finally:
+        replacement.close()
 
     class CustomStore(diskcache.Cache):
         pass
 
-    custom_facade: Final = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
-    custom_facade.cache.disk_cache = CustomStore(str(tmp_path))
-    with pytest.raises(TypeError, match="built-in diskcache store"):
-        CacheTestHandle.disk(str(tmp_path))._bind_facade(custom_facade)
+    unsupported: Final = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
+    store: Final = CustomStore(str(tmp_path))
+    try:
+        unsupported.cache.disk_cache = store
+        with pytest.raises(_native.RustBridgeDeclined, match="built-in diskcache store"):
+            native_runtime(unsupported)
+    finally:
+        store.close()
 
 
 async def test_disk_native_batch_lookup_and_store_report_partial_hits(tmp_path: Path) -> None:
-    binding: Final = CacheTestResolver(SimpleNamespace(cache=CacheTestHandle.disk(str(tmp_path)))).resolve()
+    binding: Final = native_runtime(Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path)))
     requests: Final = [request("hit"), request("miss"), request("disabled")]
     requests[2]["controls"] = {
         "supported_call_type": True,

@@ -172,7 +172,7 @@ async fn missing_credentials_come_from_the_injected_secret_source(
     })
     .unwrap();
 
-    route.execute(request, &()).await.unwrap();
+    route.execute(request, &(), None).await.unwrap();
 
     assert_eq!(source.requested(), MistralOcrConfig.secret_names());
     assert_eq!(
@@ -201,6 +201,7 @@ async fn the_client_uses_the_injected_http_pool_configuration() {
         .execute(
             ocr_request("mistral/model", &upstream.uri(), json!({})),
             &(),
+            None,
         )
         .await
         .unwrap();

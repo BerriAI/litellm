@@ -1,11 +1,13 @@
-use litellm_auth::ResolvedCredential;
+use litellm_auth::{ResolvedCredential, TokenProviderHandle};
+use litellm_host::observation::ObservationSender;
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
-    machine::{HostTokenProvider, TokenProtocol},
+    machine::HostServices,
     protocol::Protocol,
     protocol::Reply,
 };
-use litellm_llms::base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse};
+use litellm_llms::base_llm::ocr::error::Error;
+use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
 use crate::ocr::types::{LiteLLMOcrRequest, OcrDocumentInput};
 
@@ -31,27 +33,38 @@ impl Protocol for Ocr {
     type StreamHead = std::convert::Infallible;
 }
 
-impl TokenProtocol for Ocr {
-    fn acquire_token_op(reply: Reply<ResolvedCredential>) -> OcrOp {
-        OcrOp::AcquireAzureAdToken(reply)
-    }
-}
-
 pub type OcrMachine = HostedMachine<Ocr>;
 
+fn caller_token_provider(services: HostServices<Ocr>) -> TokenProviderHandle {
+    TokenProviderHandle::from_callback(move || {
+        let host_services = services.clone();
+        async move {
+            host_services
+                .call(OcrOp::AcquireAzureAdToken)
+                .await
+                .map_err(|error| {
+                    litellm_auth::Error::CredentialAcquisition(error.to_string().into())
+                })
+        }
+    })
+}
+
 impl crate::ocr::OcrRoute {
-    pub fn machine(self, request: OcrCall) -> OcrMachine {
+    pub fn machine(self, request: OcrCall, observers: Option<ObservationSender>) -> OcrMachine {
         hosted_call(
             request,
-            move |projection: OcrCall, services, hooks| async move {
+            observers,
+            move |projection: OcrCall, services, interceptors, observers| async move {
                 let request = LiteLLMOcrRequest {
                     azure_ad_token_provider: projection
                         .caller_token
-                        .then(|| HostTokenProvider::handle(services))
+                        .then(|| caller_token_provider(services))
                         .or(projection.request.azure_ad_token_provider),
                     ..projection.request
                 };
-                self.run(request, &hooks).await.map(CallOutput::Complete)
+                self.run(request, &interceptors, observers.as_ref())
+                    .await
+                    .map(CallOutput::Complete)
             },
         )
     }
