@@ -132,12 +132,7 @@ jobs:
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-downloads-py${{ env.UV_PYTHON }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-downloads-py${{ env.UV_PYTHON }}-
+        uses: ./.github/actions/cache-uv-downloads
 
       - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip'
@@ -274,7 +269,7 @@ jobs:
       - name: Upload to Codecov
         id: codecov-upload
         continue-on-error: true
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           use_oidc: true
           directory: coverage-reports
@@ -285,7 +280,7 @@ jobs:
       - name: Upload to Codecov (retry)
         if: steps.codecov-upload.outcome == 'failure'
         continue-on-error: true
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           use_oidc: true
           directory: coverage-reports
