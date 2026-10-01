@@ -8,7 +8,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
-from starlette.types import Message
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.proxy.middleware.gzip_middleware import (
     MINIMUM_SIZE_BYTES,
@@ -36,6 +36,14 @@ async def _with_etag(request: Request) -> Response:
     return Response(b"y" * (MINIMUM_SIZE_BYTES * 4), headers={"etag": '"v1"'})
 
 
+async def _partial(request: Request) -> Response:
+    return Response(b"p" * (MINIMUM_SIZE_BYTES * 4), status_code=206, headers={"content-range": "bytes 0-1999/9000"})
+
+
+async def _no_transform(request: Request) -> Response:
+    return Response(b"n" * (MINIMUM_SIZE_BYTES * 4), headers={"cache-control": "public, no-transform"})
+
+
 async def _huge(request: Request) -> Response:
     return Response(b"z" * (OFF_LOOP_SIZE_BYTES * 2), media_type="application/json")
 
@@ -56,12 +64,14 @@ APP = Starlette(
         Route("/stream", _json_stream),
         Route("/etag", _with_etag),
         Route("/huge", _huge),
+        Route("/partial", _partial),
+        Route("/no-transform", _no_transform),
     ]
 )
 APP.add_middleware(GZipBufferedResponseMiddleware)
 
 
-async def _send_messages(path: str, accept_encoding: str | None) -> tuple[Message, ...]:
+async def _send_messages(path: str, accept_encoding: str | None, app: ASGIApp = APP) -> tuple[Message, ...]:
     headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding is not None else []
     scope = {"type": "http", "method": "GET", "path": path, "query_string": b"", "headers": headers}
     sent: list[Message] = []  # mutable-ok: ASGI send callback collects messages in order
@@ -78,7 +88,7 @@ async def _send_messages(path: str, accept_encoding: str | None) -> tuple[Messag
     async def send(message: Message) -> None:
         sent.append(message)
 
-    await APP(scope, receive, send)
+    await app(scope, receive, send)
     return tuple(sent)
 
 
@@ -143,6 +153,8 @@ async def test_vary_marks_every_negotiable_variant(path, accept_encoding, expect
         ("/encoded", "gzip", "br"),
         ("/etag", "gzip", None),
         ("/stream", "gzip", None),
+        ("/partial", "gzip", None),
+        ("/no-transform", "gzip", None),
     ],
 )
 @pytest.mark.asyncio
@@ -161,6 +173,30 @@ async def test_streamed_chunks_are_forwarded_one_by_one():
 
     assert [m["type"] for m in messages].count("http.response.start") == 1
     assert chunks == STREAM_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_start_message_without_headers_key_is_still_gzipped():
+    body: Final = b"h" * (MINIMUM_SIZE_BYTES * 4)
+
+    async def headerless_app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200})
+        await send({"type": "http.response.body", "body": body})
+
+    messages = await _send_messages("/", "gzip", GZipBufferedResponseMiddleware(headerless_app))
+
+    assert _headers(messages)["content-encoding"] == "gzip"
+    assert gzip.decompress(_body(messages)) == body
+
+
+@pytest.mark.asyncio
+async def test_start_without_a_body_message_is_still_forwarded():
+    async def start_only_app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 204, "headers": [(b"x-done", b"1")]})
+
+    messages = await _send_messages("/", "gzip", GZipBufferedResponseMiddleware(start_only_app))
+
+    assert messages == ({"type": "http.response.start", "status": 204, "headers": [(b"x-done", b"1")]},)
 
 
 def test_proxy_app_gzips_large_responses_for_clients_that_accept_it():

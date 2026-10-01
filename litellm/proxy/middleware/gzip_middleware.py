@@ -53,6 +53,7 @@ class _BufferedBodyGzipResponder:
             await self.send(message)
             return
         body: Final[bytes] = message.get("body", b"")
+        start.setdefault("headers", ())
         headers: Final = MutableHeaders(scope=start)
         negotiable: Final = (
             message["type"] == "http.response.body"
@@ -60,6 +61,8 @@ class _BufferedBodyGzipResponder:
             and len(body) >= MINIMUM_SIZE_BYTES
             and "content-encoding" not in headers
             and "etag" not in headers
+            and start["status"] != 206
+            and "no-transform" not in headers.get("cache-control", "").lower()
         )
         if negotiable:
             headers.add_vary_header("Accept-Encoding")
@@ -73,6 +76,11 @@ class _BufferedBodyGzipResponder:
         await self.send(start)
         await self.send({**message, "body": compressed})
 
+    async def release_held_start(self) -> None:
+        if not self.decided and self.held_start is not None:
+            self.decided = True
+            await self.send(self.held_start)
+
 
 class GZipBufferedResponseMiddleware:
     def __init__(self, app: ASGIApp) -> None:
@@ -83,4 +91,6 @@ class GZipBufferedResponseMiddleware:
             await self.app(scope, receive, send)
             return
         gzip_accepted: Final = accepts_gzip(Headers(scope=scope).get("accept-encoding", ""))
-        await self.app(scope, receive, _BufferedBodyGzipResponder(send, gzip_accepted))
+        responder: Final = _BufferedBodyGzipResponder(send, gzip_accepted)
+        await self.app(scope, receive, responder)
+        await responder.release_held_start()
