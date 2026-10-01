@@ -4969,6 +4969,16 @@ source = { editable = "enterprise" }
 name = "litellm-proxy-extras"
 version = "0.4.103"
 source = { editable = "litellm-proxy-extras" }
+dependencies = [
+    { name = "psycopg" },
+    { name = "psycopg-binary" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "psycopg", specifier = ">=3.2,<4.0" },
+    { name = "psycopg-binary", specifier = ">=3.2,<4.0" },
+]
 
 [[package]]
 name = "llm-sandbox"
