@@ -3352,7 +3352,7 @@ class MCPServerManager:
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 if new_server.spec_path:
-                    self._invalidate_server_definition_caches(mcp_server.server_id)
+                    self._drop_listed_tools(mcp_server.server_id)
                 self.prime_oauth_metadata_discovery(new_server)
                 verbose_logger.debug("Added MCP Server: %s", new_server.name)
 
@@ -3391,7 +3391,7 @@ class MCPServerManager:
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 if new_server.spec_path:
-                    self._invalidate_server_definition_caches(mcp_server.server_id)
+                    self._drop_listed_tools(mcp_server.server_id)
                 self.prime_oauth_metadata_discovery(new_server)
                 verbose_logger.debug("Updated MCP Server: %s", new_server.name)
 
@@ -4675,9 +4675,12 @@ class MCPServerManager:
         )
 
         self._invalidate_discovery_lists(server_id)
+        self._drop_listed_tools(server_id)
+        invalidate_oauth_metadata_cache(server_id)
+
+    def _drop_listed_tools(self, server_id: str) -> None:
         self._listed_tools_by_server_id.pop(server_id, None)
         self._listed_tools_generations[server_id] = self._listed_tools_generations.get(server_id, 0) + 1
-        invalidate_oauth_metadata_cache(server_id)
 
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
         """Key the listed-tool cache by every request input that can change the served catalog.
