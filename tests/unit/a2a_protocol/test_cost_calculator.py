@@ -577,8 +577,9 @@ async def test_chat_agent_dispatch_rejects_missing_or_different_admission(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize("configured_fee", (None, 0.0, 0.25))
+@pytest.mark.parametrize("pricing_source", ("model_map", "router", "other_agent_router"))
 async def test_chat_adapter_preserves_model_pricing_without_a_fixed_fee(
-    monkeypatch: pytest.MonkeyPatch, stream: bool, configured_fee: float | None
+    monkeypatch: pytest.MonkeyPatch, stream: bool, configured_fee: float | None, pricing_source: str
 ) -> None:
     import json
     from typing import Final
@@ -588,20 +589,28 @@ async def test_chat_adapter_preserves_model_pricing_without_a_fixed_fee(
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.agent_endpoints import agent_registry
-    from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
     from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.proxy.route_llm_request import route_request
     from litellm.types.agents import AgentResponse
 
     await _reset_callbacks_and_settle_pending_logs()
     logger: Final = CostLogger()
     monkeypatch.setattr(litellm, "callbacks", [logger])
     monkeypatch.setattr(litellm, "model_cost", {
-        **litellm.model_cost,
-        "a2a/token-target": {
+        **{key: value for key, value in litellm.model_cost.items() if key != "a2a/token-target"},
+        **({"a2a/token-target": {
             "input_cost_per_token": 0.0, "output_cost_per_token": 0.125,
             "litellm_provider": "a2a", "mode": "chat",
-        },
+        }} if pricing_source != "router" else {}),
     })
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "a2a/token-target",
+        "litellm_params": {
+            "model": "a2a/other-agent" if pricing_source == "other_agent_router" else "a2a/token-target",
+            "api_base": "https://wrong-agent.test/",
+            "input_cost_per_token": 0.0, "output_cost_per_token": 0.125,
+        },
+    }]) if pricing_source != "model_map" else None
     target: Final = AgentResponse(
         agent_id="token-target", agent_name="token-target",
         agent_card_params={"url": "https://agent.test/", "capabilities": {"streaming": True}},
@@ -615,6 +624,7 @@ async def test_chat_adapter_preserves_model_pricing_without_a_fixed_fee(
     await prepare_agent_invocation(auth, target.agent_id, None)
 
     def reply(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "agent.test", "Dispatch must use the admitted agent destination"
         body: Final = json.loads(request.content)
         result: Final = {
             "jsonrpc": "2.0", "id": body["id"],
@@ -627,10 +637,10 @@ async def test_chat_adapter_preserves_model_pricing_without_a_fixed_fee(
 
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(reply))
     try:
-        pending: Final = await route_a2a_agent_request(
+        pending: Final = await route_request(
             data={"model": "a2a/token-target", "messages": [{"role": "user", "content": "Hi"}],
                   "stream": stream, "client": client},
-            route_type="acompletion", user_api_key_dict=auth,
+            route_type="acompletion", user_api_key_dict=auth, llm_router=router, user_model=None,
         )
         response: Final = await pending
         if stream:
@@ -643,3 +653,5 @@ async def test_chat_adapter_preserves_model_pricing_without_a_fixed_fee(
         assert logger.response_cost == pytest.approx(0.125 if configured_fee is None else configured_fee)
     finally:
         await client.close()
+        if router is not None:
+            router.discard()

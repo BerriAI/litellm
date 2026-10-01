@@ -136,8 +136,9 @@ def managed_inference_request(
     selected: Final = resolve_inference_model(aliased_body.get("model"), settings, cli_model, endpoint_model, kind=kind)
     import litellm
 
+    key_aliases: Final[dict[str, object] | None] = auth.aliases if auth is not None else None
     aliased: Final = (
-        alias_target(selected, CallerAliases((), (litellm.model_alias_map, auth.aliases))) or selected
+        alias_target(selected, CallerAliases((), (litellm.model_alias_map, key_aliases))) or selected
         if isinstance(selected, str) and auth is not None
         else selected
     )
@@ -252,7 +253,7 @@ async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
         raise litellm.BudgetExceededError(current_cost=spend, max_budget=budget, message="Agent budget exceeded")
 
 
-_INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
+_INVOCATION_COST: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:

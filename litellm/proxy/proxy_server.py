@@ -3020,7 +3020,7 @@ async def increment_spend_counters(
     user_id: str | None,
     response_cost: float | None,
     org_id: str | None = None,
-    budget_reservation: dict | None = None,
+    budget_reservation: dict[str, object] | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
     request_started_at: datetime | None = None,

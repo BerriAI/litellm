@@ -477,14 +477,20 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     data.pop("enable_tag_filtering", None)
 
-    if _is_a2a_agent_model(data.get("model")):
+    agent_request_data: Final[dict[str, object]] = data
+    agent_model: Final = agent_request_data.get("model")
+    if isinstance(agent_model, str) and _is_a2a_agent_model(agent_model):
         from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
         from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
 
-        registered_agent: Final = await get_agent_with_read_through(data["model"][4:])
+        registered_agent: Final = await get_agent_with_read_through(agent_model[4:])
         if registered_agent is not None:
             agent_response: Final = await route_a2a_agent_request(
-                data, route_type, user_api_key_dict=user_api_key_dict, registered_agent=registered_agent
+                agent_request_data,
+                route_type,
+                user_api_key_dict=user_api_key_dict,
+                registered_agent=registered_agent,
+                llm_router=llm_router,
             )
             if agent_response is not None:
                 return agent_response
@@ -719,7 +725,9 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     route_a2a_agent_request,
                 )
 
-                result: Final = await route_a2a_agent_request(data, route_type, user_api_key_dict=user_api_key_dict)
+                result: Final = await route_a2a_agent_request(
+                    agent_request_data, route_type, user_api_key_dict=user_api_key_dict, llm_router=llm_router
+                )
                 if result is not None:
                     return result
                 # Fall through to raise exception below if result is None

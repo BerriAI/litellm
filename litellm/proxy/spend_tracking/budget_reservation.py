@@ -285,7 +285,7 @@ async def reserve_budget_for_request(
     if not counters:
         return None
 
-    input_token_counts: Final = (
+    input_token_counts: Final[Mapping[str, int]] = (
         await count_request_input_tokens(
             request_body=request_body,
             route=route,

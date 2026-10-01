@@ -324,7 +324,17 @@ class _ProxyDBLogger(CustomLogger):
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
-            budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            budget_reservation: Final[dict[str, object] | None] = _get_budget_reservation_from_metadata(
+                metadata=metadata
+            )
+            billing_agent_id: Final = (
+                agent_id_value if isinstance(agent_id_value := metadata.get("billing_agent_id"), str) else None
+            )
+            billing_agent_counter_key: Final = (
+                counter_key_value
+                if isinstance(counter_key_value := metadata.get("billing_agent_counter_key"), str)
+                else None
+            )
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
@@ -404,8 +414,8 @@ class _ProxyDBLogger(CustomLogger):
                             tags=tags,
                             response_cost=response_cost,
                         ),
-                        billing_agent_id=metadata.get("billing_agent_id"),
-                        billing_agent_counter_key=metadata.get("billing_agent_counter_key"),
+                        billing_agent_id=billing_agent_id,
+                        billing_agent_counter_key=billing_agent_counter_key,
                     )
                     if not charged:
                         return
@@ -729,7 +739,7 @@ async def _update_database_and_spend_counters(
     start_time: datetime | None,
     end_time: datetime | None,
     response_cost: float,
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
@@ -798,7 +808,7 @@ async def _update_database_and_spend_counters_in_batch(
     start_time: datetime | None,
     end_time: datetime | None,
     response_cost: float,
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     request_tags: list[str] | None,
     model_access_groups: Sequence[str] | None,
     project_id: str | None,

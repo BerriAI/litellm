@@ -131,7 +131,8 @@ class A2AStreamingIterator(Generic[_StreamChunk]):
             # Build result for logging
             result: Final = self._build_logging_result(usage)
 
-            bind_budget_reservation_to_callbacks(self.logging_obj.litellm_params)
+            litellm_params: Final[dict[str, object]] = self.logging_obj.litellm_params
+            bind_budget_reservation_to_callbacks(litellm_params)
 
             # Call success handlers - they will build standard_logging_object
             asyncio.create_task(
