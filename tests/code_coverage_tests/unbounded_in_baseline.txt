@@ -39,14 +39,6 @@ litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval pr
 litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval prisma token.in `list(data.api_key_ids)` 0
 litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval prisma user_id.in `list(data.user_ids)` 0
 litellm/proxy/management_endpoints/budget_management_endpoints.py info_budget prisma budget_id.in `data.budgets` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_aggregated_where_clause raw-sql api_key.IN `IN ({placeholders})` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_aggregated_where_clause raw-sql {entity_id_field}.IN `IN ({placeholders})` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_aggregated_where_clause raw-sql {entity_id_field}.IN `IN ({placeholders})` 1
-litellm/proxy/management_endpoints/common_daily_activity.py _build_where_conditions prisma [entity_id_field].in `entity_id` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_where_conditions prisma api_key.in `api_key` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_where_conditions prisma not.in `exclude_entity_ids` 0
-litellm/proxy/management_endpoints/common_daily_activity.py get_api_key_metadata prisma token.in `list(api_keys)` 0
-litellm/proxy/management_endpoints/common_daily_activity.py get_api_key_metadata prisma token.in `list(missing_keys)` 0
 litellm/proxy/management_endpoints/common_utils.py _team_admin_can_invite_user prisma team_id.in `admin_user_obj.teams` 0
 litellm/proxy/management_endpoints/common_utils.py _user_has_admin_privileges prisma team_id.in `user_obj.teams` 0
 litellm/proxy/management_endpoints/customer_endpoints.py delete_end_user prisma user_id.in `data.user_ids` 0
@@ -149,4 +141,7 @@ litellm/proxy/utils.py PrismaClient.get_data prisma budget_id.in `budget_id_list
 litellm/proxy/utils.py PrismaClient.get_data prisma team_id.in `team_id_list` 0
 litellm/proxy/utils.py PrismaClient.get_data prisma user_id.in `user_id_list` 0
 litellm/proxy/utils.py prefetch_config_params prisma param_name.in `param_names` 0
+litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma ?.in `list(scope.entity_ids)` 0
+litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma api_key.in `list(scope.api_keys)` 0
+litellm/repositories/daily_activity_repository.py DailyActivityRepository.daily_rows prisma not.in `list(scope.exclude_entity_ids)` 0
 litellm/router_utils/auto_router_model_naming.py <module> raw-sql classifier_type.IN `IN ({_LLM_CLASSIFIER_TYPES_SQL})` 0
