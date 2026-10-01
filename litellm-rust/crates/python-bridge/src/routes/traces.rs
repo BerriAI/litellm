@@ -46,6 +46,13 @@ fn map_error(error: Error) -> PyErr {
     }
 }
 
+fn map_sql_error(error: Error) -> PyErr {
+    match error {
+        Error::QueryFailed(400 | 404) => PyValueError::new_err(error.to_string()),
+        error => map_error(error),
+    }
+}
+
 #[pyclass]
 pub struct NativeTraceStorage {
     storage: Storage,
@@ -115,7 +122,7 @@ impl NativeTraceStorage {
         crate::execution::run_async(
             py,
             async move { litellm_traces::query_sql(&client, &connection, &sql).await },
-            map_error,
+            map_sql_error,
         )
     }
 

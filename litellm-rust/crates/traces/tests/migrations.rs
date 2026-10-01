@@ -1158,6 +1158,17 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
     let reader = Connection::configured(&database.url, "trace_test", "help_reader", "")?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     if populated {
+        execute_write(&database, "SYSTEM STOP MERGES trace_test.spend_logs").await?;
+        insert_rows(
+            &database,
+            "spend_logs",
+            vec![serde_json::from_value(serde_json::json!({
+                "request_id": "request-1", "response_id": "response-1", "team_id": "team-1",
+                "api_key": "key-1", "metadata": r#"{"obsolete":true,"labels":{"priority":"old"}}"#,
+                "start_time": timestamp / 1_000_000, "end_time": timestamp / 1_000_000
+            }))?],
+        )
+        .await?;
         let metadata = serde_json::json!({
             "project": "example", "labels": {"priority": 3, "enabled": true},
             "dotted.key": "literal", "quote'\\key": null, "items": [{"name": "first"}],
@@ -1267,6 +1278,14 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         !populated
     );
     if populated {
+        let versions = read_json(&database, "SELECT count() AS count FROM spend_logs").await?;
+        assert_eq!(versions["data"][0]["count"], 2);
+        assert_eq!(help["metadata"]["sampled_rows"], 1);
+        assert!(
+            !fields
+                .iter()
+                .any(|field| field["path"] == serde_json::json!(["obsolete"]))
+        );
         assert!(
             columns
                 .iter()
@@ -1292,7 +1311,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
                 guide.contains(expression),
                 "missing plain-text expression: {expression}"
             );
-            let sql = format!("SELECT {expression} AS value FROM spend_logs");
+            let sql = format!("SELECT {expression} AS value FROM spend_logs FINAL");
             let body = litellm_traces::query_sql(&database.client, &reader, &sql).await?;
             let values: serde_json::Value = serde_json::from_str(&body)?;
             assert_ne!(values["data"][0]["value"], "");
@@ -1322,6 +1341,83 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
             assert_eq!(values["data"][0]["TraceId"], "trace-1");
             assert_eq!(values["data"][0]["spend"], 0.25);
         }
+    }
+    Ok(())
+}
+
+#[rstest]
+#[case::metadata(2, 1)]
+#[case::attributes(1, 2)]
+#[case::all(2, 2)]
+#[tokio::test]
+async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] spend_rows: usize,
+    #[case] span_rows: usize,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    execute_write(
+        &database,
+        "CREATE USER help_reader SETTINGS max_rows_to_read = 1",
+    )
+    .await?;
+    for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
+        execute_write(
+            &database,
+            &format!("GRANT SELECT ON trace_test.{table} TO help_reader"),
+        )
+        .await?;
+    }
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let spend = (0..spend_rows)
+        .map(|index| {
+            serde_json::from_value(serde_json::json!({
+                "request_id": format!("request-{index}"), "start_time": timestamp / 1_000_000,
+                "end_time": timestamp / 1_000_000, "metadata": r#"{"custom":{"enabled":true}}"#
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    insert_rows(&database, "spend_logs", spend).await?;
+    let spans = (0..span_rows).map(|index| serde_json::from_value(serde_json::json!({
+        "Timestamp": timestamp, "TraceId": "trace", "SpanId": format!("span-{index}"),
+        "SpanAttributes": {"custom.span": "value"}, "ResourceAttributes": {"custom.resource": "value"}
+    }))).collect::<Result<Vec<_>, _>>()?;
+    insert_rows(&database, "otel_traces", spans).await?;
+    let reader = Connection::configured(&database.url, "trace_test", "help_reader", "")?;
+    let help: serde_json::Value =
+        serde_json::from_str(&litellm_traces::query_help(&database.client, &reader).await?)?;
+    assert_eq!(help["tables"].as_array().ok_or("tables")?.len(), 3);
+    assert!(!help["examples"].as_array().ok_or("examples")?.is_empty());
+    assert_eq!(
+        help["normalized_fields"]
+            .as_array()
+            .ok_or("normalized fields")?
+            .len(),
+        NORMALIZED_FIELD_DEFINITIONS.len()
+    );
+    let guide = help["guide"].as_str().ok_or("guide")?;
+    assert!(guide.contains("TraceId: String"));
+    assert_eq!(
+        guide.contains("Metadata discovery unavailable:"),
+        spend_rows > 1
+    );
+    assert_eq!(
+        guide.contains("Attribute discovery unavailable:"),
+        span_rows > 1
+    );
+    for (catalog, unavailable) in [
+        (&help["metadata"], spend_rows > 1),
+        (&help["attributes"][0], span_rows > 1),
+        (&help["attributes"][1], span_rows > 1),
+    ] {
+        assert_eq!(catalog.get("error").is_some(), unavailable);
+        assert_eq!(catalog["truncated"], unavailable);
+        assert_eq!(
+            catalog["fields"].as_array().ok_or("fields")?.is_empty(),
+            unavailable
+        );
     }
     Ok(())
 }

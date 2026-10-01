@@ -281,3 +281,32 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(recording
     }
     assert body["attributes"][0]["fields"][0]["expression"] == "SpanAttributes['custom.span']"
     assert body["attributes"][1]["fields"][0]["expression"] == "ResourceAttributes['custom.resource']"
+
+
+@pytest.mark.parametrize("clickhouse_status, expected_status", [(400, 400), (404, 400), (500, 503), (503, 503)])
+def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
+    recording_server: RecordingServer, clickhouse_status: int, expected_status: int
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.tracing_endpoints import provide_receiver, router
+
+    recording_server.expected_requests = 2
+    recording_server.enqueue(ResponseSpec(status=clickhouse_status, body=b"ClickHouse rejected the query"))
+    envelope: Final = {"meta": [{"name": "answer", "type": "UInt8"}], "data": [{"answer": 42}], "rows": 1}
+    recording_server.enqueue(ResponseSpec(body=envelope))
+    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url, recording_server.base_url)
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role="proxy_admin", token="test")
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(TraceStore(storage))
+    with TestClient(app) as client:
+        failed: Final = client.post("/v1/traces/query", json={"sql": "SELEC 42"})
+        assert failed.status_code == expected_status, failed.text
+        recovered: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json() == envelope
+    assert recording_server.requests[0].raw_body == b"SELEC 42"

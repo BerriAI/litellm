@@ -11,9 +11,9 @@ mod guide;
 const SAMPLE_ROWS: usize = 200;
 const MAX_FIELDS: usize = 200;
 const MAX_DEPTH: usize = 16;
-const METADATA_SQL: &str = "SELECT metadata FROM spend_logs \
+const METADATA_SQL: &str = "SELECT metadata FROM spend_logs FINAL \
     WHERE start_time >= now() - INTERVAL 7 DAY AND length(metadata) <= 8192 \
-    ORDER BY start_time DESC LIMIT 201";
+    LIMIT 201";
 
 #[derive(Deserialize)]
 struct Rows<T> {
@@ -69,6 +69,8 @@ struct MetadataCatalog {
     truncated: bool,
     sample_sql: &'static str,
     scope: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -87,6 +89,8 @@ struct AttributeCatalog {
     truncated: bool,
     discovery_sql: String,
     scope: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 pub async fn query_sql(
@@ -194,6 +198,7 @@ fn metadata_catalog(sample: &[MetadataRow]) -> MetadataCatalog {
         invalid_json_rows: invalid_rows,
         truncated: limited,
         sample_sql: METADATA_SQL,
+        error: None,
         scope: "Up to 200 recent rows from the last 7 days, excluding metadata larger than 8192 bytes; up to 200 paths and 16 levels. Missing paths may exist outside this sample. Array indexes are 1-based and describe sampled positions, not a fixed schema",
     }
 }
@@ -208,15 +213,25 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
             columns,
         });
     }
-    let sample = rows::<MetadataRow>(client, connection, METADATA_SQL).await?;
+    let metadata = match rows::<MetadataRow>(client, connection, METADATA_SQL).await {
+        Ok(sample) => metadata_catalog(&sample),
+        Err(error) => MetadataCatalog {
+            error: Some(error.to_string()),
+            truncated: true,
+            ..metadata_catalog(&[])
+        },
+    };
     let mut attributes = Vec::new();
     for column in ["SpanAttributes", "ResourceAttributes"] {
         let sql = format!(
             "SELECT DISTINCT arrayJoin(mapKeys({column})) AS key FROM \
              (SELECT {column} FROM otel_traces WHERE Timestamp >= now() - INTERVAL 7 DAY \
-             ORDER BY Timestamp DESC LIMIT 200) ORDER BY key LIMIT 201"
+             LIMIT 200) ORDER BY key LIMIT 201"
         );
-        let keys = rows::<AttributeRow>(client, connection, &sql).await?;
+        let (keys, error) = match rows::<AttributeRow>(client, connection, &sql).await {
+            Ok(keys) => (keys, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
         let fields = keys
             .iter()
             .take(MAX_FIELDS)
@@ -228,11 +243,10 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Stri
             .collect();
         attributes.push(AttributeCatalog {
             table: "otel_traces", column, fields,
-            truncated: keys.len() > MAX_FIELDS, discovery_sql: sql,
+            truncated: error.is_some() || keys.len() > MAX_FIELDS, discovery_sql: sql, error,
             scope: "Distinct keys from up to 200 recent spans in the last 7 days; up to 200 keys per map. Missing keys may exist outside this sample",
         });
     }
-    let metadata = metadata_catalog(&sample);
     let guide = guide::QueryGuide {
         tables: &tables,
         normalized_fields: &NORMALIZED_FIELD_DEFINITIONS,
