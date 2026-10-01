@@ -202,8 +202,6 @@ def build_config(
     install: bool = False,
 ) -> SessionConfig:
     """Normalize public keyword arguments into a SessionConfig."""
-    if sandbox is None:
-        raise TypeError("sandbox= is required, e.g. sandbox=litellm.sandbox.local('.')")
     resolved_harness = require_harness(harness)
     routed_model, gateway = resolve_model_route(model, api_key, api_base)
     return SessionConfig(
@@ -873,7 +871,7 @@ def aagent_session(
     return AsyncSession(config)
 
 
-async def _arun(
+async def arun_agent(
     harness: Harness,
     prompt: str,
     *,
@@ -918,7 +916,7 @@ async def _arun(
         return await session.arun(prompt)
 
 
-def _astream(
+def astream_agent(
     harness: Harness,
     prompt: str,
     *,
@@ -1049,7 +1047,7 @@ def aagent(
     `await litellm.aagent(...)` returns a Result. With stream=True it returns an async
     iterator of events instead: `async for event in litellm.aagent(..., stream=True)`.
     """
-    kwargs: dict[str, Any] = {  # mutable-ok: forwarded as **kwargs to _arun/_astream
+    kwargs: dict[str, Any] = {  # mutable-ok: forwarded as **kwargs to arun_agent/astream_agent
         "sandbox": sandbox,
         "model": model,
         "api_key": api_key,
@@ -1068,5 +1066,5 @@ def aagent(
         "install": install,
     }
     if stream:
-        return _astream(harness, prompt, **kwargs)
-    return _arun(harness, prompt, **kwargs)
+        return astream_agent(harness, prompt, **kwargs)
+    return arun_agent(harness, prompt, **kwargs)
