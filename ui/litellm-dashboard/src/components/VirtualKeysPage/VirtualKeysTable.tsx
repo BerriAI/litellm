@@ -101,7 +101,7 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
 };
 
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
-  const { userId, userRole } = useAuthorized();
+  const { userId } = useAuthorized();
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -119,7 +119,7 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     columnFilters: urlColumnFilters,
     onColumnFiltersChange: setUrlColumnFilters,
   } = useUrlTableState(TABLE_STATE_OPTIONS);
-  const myKeysEnabled = isMyKeysEnabled(myKeysParam, userRole, userId);
+  const myKeysEnabled = isMyKeysEnabled(myKeysParam, userId);
   const columnFilters = useMemo(
     () => withMyKeysFilter(urlColumnFilters.filter(isUsableFilter), myKeysEnabled),
     [urlColumnFilters, myKeysEnabled],
@@ -127,10 +127,10 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const onColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
     (updaterOrValue) => {
       const { myKeys, rest } = splitMyKeysFilter(functionalUpdate(updaterOrValue, columnFilters));
-      void setMyKeysParam(myKeysQueryParam(myKeys, userRole, userId));
+      void setMyKeysParam(myKeysQueryParam(myKeys));
       setUrlColumnFilters(rest);
     },
-    [columnFilters, setUrlColumnFilters, setMyKeysParam, userRole, userId],
+    [columnFilters, setUrlColumnFilters, setMyKeysParam],
   );
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility(
     "virtual-keys",
