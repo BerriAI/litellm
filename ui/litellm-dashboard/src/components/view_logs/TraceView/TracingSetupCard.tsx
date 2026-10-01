@@ -559,6 +559,192 @@ function setupTitle(enabled: boolean, connected: boolean) {
   return connected ? "Connect another agent" : "Connect your agent";
 }
 
+interface ConnectAgentProps {
+  accessToken: string;
+  onOpenTrace: (trace: TraceSummary) => void;
+  connected: boolean;
+  checked: boolean;
+  checking: boolean;
+  onCheck: () => void;
+  readOnly: boolean;
+  canMintTracingKey: boolean;
+}
+
+function EnableTracing({ checked, checking, onCheck }: { checked: boolean; checking: boolean; onCheck: () => void }) {
+  return (
+    <>
+      <Step title="Enable tracing on the proxy">
+        <p className="mb-3 text-sm leading-6 text-muted-foreground">
+          Set your ClickHouse writer and read-only reader URLs, add this to config.yaml, then restart the proxy. Ask
+          your proxy administrator if you don’t manage this deployment.
+        </p>
+        <CodeBlock code={PROXY_CONFIG_SNIPPET} tabs={<FileLabel>config.yaml</FileLabel>} />
+        <a
+          className="mt-3 inline-flex items-center gap-1 text-sm underline underline-offset-4"
+          href={`${DOCS_URL}#configure-an-existing-proxy`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          ClickHouse and proxy setup <ArrowUpRight aria-hidden="true" className="size-3.5" />
+        </a>
+      </Step>
+      {checked && !checking && (
+        <p className="mt-4 text-sm text-muted-foreground">
+          Tracing is still unavailable. Check that the configuration was applied to this proxy and it has restarted.
+        </p>
+      )}
+      <Button className="mt-6" onClick={onCheck} disabled={checking}>
+        {checking && <Loader2 aria-hidden="true" className="size-4 animate-spin" />}
+        {checking ? "Checking…" : "Check setup"}
+      </Button>
+    </>
+  );
+}
+
+function ConnectAgent({
+  accessToken,
+  onOpenTrace,
+  connected,
+  checked,
+  checking,
+  onCheck,
+  readOnly,
+  canMintTracingKey,
+}: ConnectAgentProps) {
+  const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
+  const [framework, setFramework] = useState(FRAMEWORKS[0].id);
+  const [installer, setInstaller] = useState<Installer>("pip");
+  const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
+  const [tracingKey, setTracingKey] = useState<string | null>(null);
+  const guide = FRAMEWORKS.find((f) => f.id === framework) ?? FRAMEWORKS[0];
+  const packages = installPackages(guide);
+  const install = guide.typescript ? `npm install ${packages}` : PY_INSTALL[installer](packages);
+  const quickstart = guide.quickstart.replace("{PROXY}", proxyUrl);
+  return (
+    <>
+      {!readOnly && (
+        <Step title="See it work in one click">
+          <p className="mb-3 text-sm leading-6 text-muted-foreground">
+            Send a small sample run (an agent, an LLM call and a tool call) to confirm tracing works end to end.
+          </p>
+          <SendTestTrace accessToken={accessToken} onOpenTrace={onOpenTrace} />
+        </Step>
+      )}
+
+      <Endpoints proxyUrl={proxyUrl} />
+
+      <div className="mt-6 space-y-2">
+        <label id="tracing-framework" className="text-sm font-medium">
+          Your agent framework
+        </label>
+        <Select
+          value={framework}
+          onValueChange={(value) => {
+            if (value) setFramework(value);
+          }}
+        >
+          <SelectTrigger aria-labelledby="tracing-framework" className="w-full">
+            <SelectValue>
+              <img src={guide.logo} alt="" className="size-4" />
+              {guide.label}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {FRAMEWORKS.map((f) => (
+              <SelectItem key={f.id} value={f.id}>
+                <img src={f.logo} alt="" className="size-4" />
+                {f.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <Step title="Get a LiteLLM key">
+        {canMintTracingKey && !readOnly ? (
+          <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={setTracingKey} />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Use any LiteLLM virtual key you already have, or ask a proxy admin for one.
+          </p>
+        )}
+      </Step>
+
+      <Step
+        title={
+          <span className="inline-flex items-center gap-1.5">
+            Let <img src={anthropicLogo.src} alt="" className="size-3.5" /> Claude Code or
+            <img src={openaiLogo.src} alt="" className="size-3.5" /> Codex connect it
+          </span>
+        }
+      >
+        <p className="mb-3 text-sm leading-6 text-muted-foreground">
+          Run this in your agent’s project. It starts your coding agent with the setup task and reads the key from
+          LITELLM_API_KEY.
+        </p>
+        <CodeBlock
+          code={codingAgentCommand(codingAgent, codingAgentPrompt(proxyUrl, guide))}
+          wrap
+          tabs={
+            <LineTabs
+              value={codingAgent}
+              options={["Claude Code", "Codex"]}
+              onChange={setCodingAgent}
+              logos={CODING_AGENT_LOGOS}
+            />
+          }
+        />
+      </Step>
+
+      <details className="mt-6 border-y py-4">
+        <summary className="cursor-pointer text-sm font-medium">Set up manually</summary>
+        <Step title="Install dependencies">
+          <CodeBlock
+            code={install}
+            tabs={
+              guide.typescript ? (
+                <FileLabel>npm</FileLabel>
+              ) : (
+                <LineTabs value={installer} options={["pip", "uv"]} onChange={setInstaller} />
+              )
+            }
+          />
+        </Step>
+        <Step title="Configure environment">
+          <CodeBlock
+            code={tracingEnvSnippet(proxyUrl, tracingKey)}
+            display={tracingEnvSnippet(proxyUrl, tracingKey && maskSecret(tracingKey))}
+            tabs={<FileLabel>Shell</FileLabel>}
+          />
+        </Step>
+        <Step title="Run your agent">
+          <p className="mb-2 text-sm text-muted-foreground">
+            Replace the example model with a model configured on your proxy.
+          </p>
+          <CodeBlock
+            code={guide.typescript ? quickstart : `import os\n\n${quickstart}`}
+            tabs={<FileLabel>{guide.typescript ? "my_agent.ts" : "my_agent.py"}</FileLabel>}
+          />
+          <div className="mt-3">
+            <CodeBlock code={guide.typescript ? TS_RUN_SNIPPET : PY_RUN_SNIPPET} tabs={<FileLabel>Shell</FileLabel>} />
+          </div>
+        </Step>
+      </details>
+
+      <TraceReceipt connected={connected} checked={checked} checking={checking} onCheck={onCheck} />
+
+      {!connected && (
+        <section className="mt-6">
+          <h3 className="mb-2 text-sm font-medium">
+            Example run <span className="font-normal text-muted-foreground">(sample data, not your runs)</span>
+          </h3>
+          <TracePreview />
+        </section>
+      )}
+    </>
+  );
+}
+
 export function TracingSetupCard({
   detail,
   accessToken,
@@ -578,16 +764,7 @@ export function TracingSetupCard({
   readOnly?: boolean;
   canMintTracingKey?: boolean;
 }) {
-  const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
-  const [framework, setFramework] = useState(FRAMEWORKS[0].id);
-  const [installer, setInstaller] = useState<Installer>("pip");
-  const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
-  const [tracingKey, setTracingKey] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
-  const guide = FRAMEWORKS.find((f) => f.id === framework) ?? FRAMEWORKS[0];
-  const packages = installPackages(guide);
-  const install = guide.typescript ? `npm install ${packages}` : PY_INSTALL[installer](packages);
-  const quickstart = guide.quickstart.replace("{PROXY}", proxyUrl);
   const enabled = detail === null;
   const check = () => {
     setChecked(true);
@@ -616,159 +793,19 @@ export function TracingSetupCard({
         {enabled && <ActiveDot />}
         {enabled ? "Tracing enabled" : "Tracing is not enabled"}
       </p>
-
-      {!enabled ? (
-        <>
-          <Step title="Enable tracing on the proxy">
-            <p className="mb-3 text-sm leading-6 text-muted-foreground">
-              Set your ClickHouse writer and read-only reader URLs, add this to config.yaml, then restart the proxy. Ask
-              your proxy administrator if you don’t manage this deployment.
-            </p>
-            <CodeBlock code={PROXY_CONFIG_SNIPPET} tabs={<FileLabel>config.yaml</FileLabel>} />
-            <a
-              className="mt-3 inline-flex items-center gap-1 text-sm underline underline-offset-4"
-              href={`${DOCS_URL}#configure-an-existing-proxy`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              ClickHouse and proxy setup <ArrowUpRight aria-hidden="true" className="size-3.5" />
-            </a>
-          </Step>
-          {checked && !checking && (
-            <p className="mt-4 text-sm text-muted-foreground">
-              Tracing is still unavailable. Check that the configuration was applied to this proxy and it has restarted.
-            </p>
-          )}
-          <Button className="mt-6" onClick={check} disabled={checking}>
-            {checking && <Loader2 aria-hidden="true" className="size-4 animate-spin" />}
-            {checking ? "Checking…" : "Check setup"}
-          </Button>
-        </>
+      {enabled ? (
+        <ConnectAgent
+          accessToken={accessToken}
+          onOpenTrace={onOpenTrace}
+          connected={connected}
+          checked={checked}
+          checking={checking}
+          onCheck={check}
+          readOnly={readOnly}
+          canMintTracingKey={canMintTracingKey}
+        />
       ) : (
-        <>
-          {!readOnly && (
-            <Step title="See it work in one click">
-              <p className="mb-3 text-sm leading-6 text-muted-foreground">
-                Send a small sample run (an agent, an LLM call and a tool call) to confirm tracing works end to end.
-              </p>
-              <SendTestTrace accessToken={accessToken} onOpenTrace={onOpenTrace} />
-            </Step>
-          )}
-
-          <Endpoints proxyUrl={proxyUrl} />
-
-          <div className="mt-6 space-y-2">
-            <label id="tracing-framework" className="text-sm font-medium">
-              Your agent framework
-            </label>
-            <Select
-              value={framework}
-              onValueChange={(value) => {
-                if (value) setFramework(value);
-              }}
-            >
-              <SelectTrigger aria-labelledby="tracing-framework" className="w-full">
-                <SelectValue>
-                  <img src={guide.logo} alt="" className="size-4" />
-                  {guide.label}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {FRAMEWORKS.map((f) => (
-                  <SelectItem key={f.id} value={f.id}>
-                    <img src={f.logo} alt="" className="size-4" />
-                    {f.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <Step title="Get a LiteLLM key">
-            {canMintTracingKey && !readOnly ? (
-              <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={setTracingKey} />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Use any LiteLLM virtual key you already have, or ask a proxy admin for one.
-              </p>
-            )}
-          </Step>
-
-          <Step
-            title={
-              <span className="inline-flex items-center gap-1.5">
-                Let <img src={anthropicLogo.src} alt="" className="size-3.5" /> Claude Code or
-                <img src={openaiLogo.src} alt="" className="size-3.5" /> Codex connect it
-              </span>
-            }
-          >
-            <p className="mb-3 text-sm leading-6 text-muted-foreground">
-              Run this in your agent’s project. It starts your coding agent with the setup task and reads the key from
-              LITELLM_API_KEY.
-            </p>
-            <CodeBlock
-              code={codingAgentCommand(codingAgent, codingAgentPrompt(proxyUrl, guide))}
-              wrap
-              tabs={
-                <LineTabs
-                  value={codingAgent}
-                  options={["Claude Code", "Codex"]}
-                  onChange={setCodingAgent}
-                  logos={CODING_AGENT_LOGOS}
-                />
-              }
-            />
-          </Step>
-
-          <details className="mt-6 border-y py-4">
-            <summary className="cursor-pointer text-sm font-medium">Set up manually</summary>
-            <Step title="Install dependencies">
-              <CodeBlock
-                code={install}
-                tabs={
-                  guide.typescript ? (
-                    <FileLabel>npm</FileLabel>
-                  ) : (
-                    <LineTabs value={installer} options={["pip", "uv"]} onChange={setInstaller} />
-                  )
-                }
-              />
-            </Step>
-            <Step title="Configure environment">
-              <CodeBlock
-                code={tracingEnvSnippet(proxyUrl, tracingKey)}
-                display={tracingEnvSnippet(proxyUrl, tracingKey && maskSecret(tracingKey))}
-                tabs={<FileLabel>Shell</FileLabel>}
-              />
-            </Step>
-            <Step title="Run your agent">
-              <p className="mb-2 text-sm text-muted-foreground">
-                Replace the example model with a model configured on your proxy.
-              </p>
-              <CodeBlock
-                code={guide.typescript ? quickstart : `import os\n\n${quickstart}`}
-                tabs={<FileLabel>{guide.typescript ? "my_agent.ts" : "my_agent.py"}</FileLabel>}
-              />
-              <div className="mt-3">
-                <CodeBlock
-                  code={guide.typescript ? TS_RUN_SNIPPET : PY_RUN_SNIPPET}
-                  tabs={<FileLabel>Shell</FileLabel>}
-                />
-              </div>
-            </Step>
-          </details>
-
-          <TraceReceipt connected={connected} checked={checked} checking={checking} onCheck={check} />
-
-          {!connected && (
-            <section className="mt-6">
-              <h3 className="mb-2 text-sm font-medium">
-                Example run <span className="font-normal text-muted-foreground">(sample data, not your runs)</span>
-              </h3>
-              <TracePreview />
-            </section>
-          )}
-        </>
+        <EnableTracing checked={checked} checking={checking} onCheck={check} />
       )}
     </div>
   );
