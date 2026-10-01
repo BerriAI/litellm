@@ -43,6 +43,9 @@ _SECRET_COLUMNS: Final = (
     _SecretColumn("LiteLLM_UserTable", "user_id", "metadata", only_rows_with_marked_ciphertexts=True),
     _SecretColumn("LiteLLM_DeletedTeamTable", "id", "metadata", only_rows_with_marked_ciphertexts=True),
     _SecretColumn("LiteLLM_DeletedVerificationToken", "id", "metadata", only_rows_with_marked_ciphertexts=True),
+    _SecretColumn(
+        "LiteLLM_ManagedVectorStoresTable", "vector_store_id", "litellm_params", only_rows_with_marked_ciphertexts=True
+    ),
 )
 
 _STORED_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
