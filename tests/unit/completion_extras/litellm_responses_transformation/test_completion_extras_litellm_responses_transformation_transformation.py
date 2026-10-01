@@ -2868,15 +2868,6 @@ def test_reasoning_items_streaming_emitted_on_response_completed():
 
 
 def test_reasoning_items_preserved_when_merged_with_tool_calls():
-    """
-    Regression: when a Responses turn contains [message, reasoning, function_call]
-    (reasoning item arriving AFTER the assistant message), the merge path that
-    attaches accumulated tool_calls onto the last message choice must also backfill
-    the structured ``reasoning_items`` (with ``encrypted_content``) onto that
-    message; otherwise the encrypted reasoning payload needed to round-trip on the
-    next turn is silently dropped. The flattened ``reasoning_content`` string is
-    already backfilled by the existing code; ``reasoning_items`` currently is not.
-    """
     from unittest.mock import Mock
 
     from openai.types.responses import (
@@ -3064,8 +3055,6 @@ def _build_message_plus_tool_call_response(
     output_items,
     model="gpt-4o",
 ):
-    """Helper that wraps output_items into a minimal ResponsesAPIResponse and returns the
-    transformed ModelResponse produced by LiteLLMResponsesTransformationHandler."""
     from unittest.mock import Mock
 
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -3181,10 +3170,6 @@ def _make_function_tool_call(call_id, name, arguments, tc_id="fc_bug18401"):
 
 
 def test_message_plus_function_call_merged_into_single_choice():
-    """Regression: a Responses turn that contains both a message and a function_call must
-    collapse into a single Chat Completions choice, because Chat Completions clients only
-    read choices[0]. Prior to the fix the bridge emitted two choices (content in [0],
-    tool_calls in [1]) which caused tools to be silently ignored downstream."""
     result = _build_message_plus_tool_call_response(
         output_items=[
             _make_output_message("Fetching the weather now."),
@@ -3212,9 +3197,6 @@ def test_message_plus_function_call_merged_into_single_choice():
 
 
 def test_tool_only_turn_unchanged():
-    """Guard against regressing the pre-fix behaviour for tool-only turns: when the
-    Responses output has no assistant message, a fresh Choice must still be appended
-    with the accumulated tool_calls and finish_reason='tool_calls'."""
     result = _build_message_plus_tool_call_response(
         output_items=[
             _make_function_tool_call(
@@ -3234,8 +3216,6 @@ def test_tool_only_turn_unchanged():
 
 
 def test_message_only_turn_unchanged():
-    """Guard: a message-only Responses turn must still produce a single choice with
-    finish_reason='stop' after the merge fix (no accumulated_tool_calls path taken)."""
     result = _build_message_plus_tool_call_response(
         output_items=[_make_output_message("Just a plain answer.")]
     )
@@ -3248,9 +3228,6 @@ def test_message_only_turn_unchanged():
 
 
 def test_multiple_function_calls_after_message_merged():
-    """When a message is followed by multiple parallel function_calls, all of them must
-    land on the single message-carrying choice (Chat Completions groups them all under
-    one message)."""
     result = _build_message_plus_tool_call_response(
         output_items=[
             _make_output_message("Fetching two cities in parallel."),
@@ -3280,10 +3257,6 @@ def test_multiple_function_calls_after_message_merged():
 
 
 def test_multiple_message_items_tool_calls_collapse_onto_last():
-    """When the Responses output contains two assistant messages before a function_call,
-    the accumulated tool_calls must attach to the LAST (most recent) message choice, not
-    the first, because that is the one the model was on when it decided to call the tool.
-    The earlier message choice must remain a plain text turn with finish_reason='stop'."""
     result = _build_message_plus_tool_call_response(
         output_items=[
             _make_output_message("first", message_id="msg_first"),
@@ -3311,11 +3284,6 @@ def test_multiple_message_items_tool_calls_collapse_onto_last():
 
 
 def test_multiblock_message_plus_function_call_merged_into_choice_zero():
-    """Regression (Greptile P1 flagged on #33931): a SINGLE ResponseOutputMessage with
-    multiple output-text content blocks must still collapse its accumulated tool_calls
-    onto choices[0], not a later choice. Chat Completions clients only read choices[0];
-    before this fix a two-block message followed by a function_call produced two choices
-    and attached the tool call to the last one, hiding it from choices[0]-only clients."""
     result = _build_message_plus_tool_call_response(
         output_items=[
             _make_output_message("First block.", extra_texts=["Second block."]),
@@ -3337,13 +3305,111 @@ def test_multiblock_message_plus_function_call_merged_into_choice_zero():
     assert tool_calls[0]["id"] == "call_paris"
 
 
+def _make_output_message_with_no_blocks(message_id="msg_no_blocks"):
+    from openai.types.responses import ResponseOutputMessage
+
+    return ResponseOutputMessage(
+        id=message_id,
+        content=[],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+
+def test_merged_block_citations_still_point_at_their_text():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    first_text = "Chile's Labor Code defines it in Article 7. "
+    second_text = "See Article 7 for the wording."
+    output_message = ResponseOutputMessage(
+        id="msg_citations",
+        content=[
+            ResponseOutputText(
+                annotations=[
+                    {
+                        "type": "url_citation",
+                        "start_index": 0,
+                        "end_index": 5,
+                        "title": "Chile",
+                        "url": "https://example.com/chile",
+                    }
+                ],
+                text=first_text,
+                type="output_text",
+                logprobs=[],
+            ),
+            ResponseOutputText(
+                annotations=[
+                    {
+                        "type": "url_citation",
+                        "start_index": 4,
+                        "end_index": 11,
+                        "title": "Article 7",
+                        "url": "https://example.com/article-7",
+                    }
+                ],
+                text=second_text,
+                type="output_text",
+                logprobs=[],
+            ),
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    result = _build_message_plus_tool_call_response(output_items=[output_message])
+
+    assert len(result.choices) == 1
+    merged_text = result.choices[0].message.content
+    assert merged_text == first_text + second_text
+    cited_spans = [
+        merged_text[annotation["start_index"] : annotation["end_index"]]
+        for annotation in result.choices[0].message.annotations
+    ]
+    assert cited_spans == ["Chile", "Article"]
+
+
+def test_message_with_no_content_blocks_yields_no_choice():
+    with pytest.raises(ValueError, match="Unknown items"):
+        _build_message_plus_tool_call_response(output_items=[_make_output_message_with_no_blocks()])
+
+
+def test_message_with_no_content_blocks_keeps_reasoning_for_the_tool_call():
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem, Summary
+
+    encrypted = "gAAAAABpw5FAKEempty=="
+    reasoning_item = ResponseReasoningItem(
+        id="rs_no_blocks",
+        summary=[Summary(text="look up the article", type="summary_text")],
+        type="reasoning",
+        content=None,
+        encrypted_content=encrypted,
+        status=None,
+    )
+
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            reasoning_item,
+            _make_output_message_with_no_blocks(),
+            _make_function_tool_call(
+                call_id="call_no_blocks",
+                name="search_legislation",
+                arguments='{"query": "Article 7"}',
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+    assert [tool_call.function.name for tool_call in choice.message.tool_calls] == ["search_legislation"]
+    assert choice.message.reasoning_content == "look up the article"
+    assert choice.message.reasoning_items[0]["encrypted_content"] == encrypted
+
+
 def test_streaming_text_plus_function_call_lands_on_choice_index_zero():
-    """Streaming counterpart to the merged-choice fix: when a message and a function_call
-    arrive in the same Responses turn, both the content deltas and the tool_call deltas
-    must be emitted on choice index 0, and the terminal response.completed chunk must
-    carry finish_reason='tool_calls'. This mirrors the non-streaming merge behaviour so
-    that Chat Completions clients that only read choices[0] see both the text and the
-    tool call."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )

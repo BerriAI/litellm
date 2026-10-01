@@ -5,16 +5,24 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import accumulate
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
-from openai.types.responses import Response
+from openai.types.responses import Response, ResponseOutputRefusal, ResponseOutputText
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
     FunctionCallOutput,
     ResponseCustomToolCallOutputParam,
     ResponseCustomToolCallParam,
+)
+from openai.types.responses.response_output_text import (
+    Annotation as ResponseTextAnnotation,
+)
+from openai.types.responses.response_output_text import (
+    AnnotationContainerFileCitation,
+    AnnotationURLCitation,
 )
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
@@ -73,7 +81,7 @@ if TYPE_CHECKING:
         ChatCompletionToolReferenceObject,
         OpenAIMessageContentListBlock,
     )
-    from litellm.types.utils import Choices
+    from litellm.types.utils import Choices, Message
 
 
 _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"))
@@ -202,6 +210,37 @@ def _pending_reasoning_items(
     pending_reasoning_item: _BuiltReasoningItem | None,
 ) -> list[ChatCompletionReasoningItem] | None:
     return _as_chat_reasoning_items(() if pending_reasoning_item is None else (pending_reasoning_item,))
+
+
+def _output_block_text(block: ResponseOutputText | ResponseOutputRefusal) -> str:
+    return block.text if isinstance(block, ResponseOutputText) else ""
+
+
+def _shift_text_annotation(annotation: ResponseTextAnnotation, offset: int) -> ResponseTextAnnotation:
+    if offset == 0 or not isinstance(annotation, (AnnotationURLCitation, AnnotationContainerFileCitation)):
+        return annotation
+    return annotation.model_copy(
+        update={"start_index": annotation.start_index + offset, "end_index": annotation.end_index + offset}
+    )
+
+
+def _merged_message_annotations(
+    content: Sequence[ResponseOutputText | ResponseOutputRefusal],
+) -> Iterator[ResponseTextAnnotation]:
+    block_starts: Final = accumulate((len(_output_block_text(block)) for block in content), initial=0)
+    for block, start in zip(content, block_starts, strict=False):
+        if isinstance(block, ResponseOutputText):
+            yield from (_shift_text_annotation(annotation, start) for annotation in block.annotations)
+
+
+def _is_text_only_choice(choice: "Choices") -> bool:
+    return not getattr(choice.message, "tool_calls", None)
+
+
+def _backfill_field(message: "Message", field: str, value: object) -> dict[str, object]:
+    if value is None or getattr(message, field, None) is not None:
+        return {}
+    return {field: value}
 
 
 _ToolChoiceT = TypeVar("_ToolChoiceT")
@@ -674,101 +713,57 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         starting_index: int,
         reasoning_content: str | None,
         pending_reasoning_item: _BuiltReasoningItem | None,
-    ) -> tuple[list[Any], int]:
-        """Build ONE Choices for a ResponseOutputMessage, merging all of its content
-        blocks into a single message.
-
-        Chat Completions choices carry one message each; a Responses message with
-        several output-text blocks (observed from providers that stream multiple
-        text parts per turn) must still collapse to one choice, because
-        Chat-Completions-only clients read choices[0] exclusively. Emitting one
-        choice per content block hid tool_calls on any later block from those
-        clients (#33931 multi-block report). Text blocks are joined and their
-        annotations concatenated, index-shifted to the position they fall at in
-        the merged text.
-        """
+    ) -> tuple[list["Choices"], int]:
         from litellm.types.utils import Choices, Message
 
-        merged_text_parts: Final[list[str]] = []
-        merged_annotations: Final[list[Any]] = []
-        offset = 0
-        for content in item.content:
-            response_text = getattr(content, "text", "") or ""
-            raw_annotations = getattr(content, "annotations", None)
-            annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(raw_annotations)
-            if annotations:
-                for annotation in annotations:
-                    url_citation = annotation.get("url_citation")
-                    if isinstance(url_citation, dict):
-                        shifted_citation = dict(url_citation)
-                        for index_field in ("start_index", "end_index"):
-                            current = shifted_citation.get(index_field)
-                            if isinstance(current, int):
-                                shifted_citation[index_field] = current + offset
-                        annotation = {**annotation, "url_citation": shifted_citation}
-                    merged_annotations.append(annotation)
-            merged_text_parts.append(response_text)
-            offset += len(response_text)
-
-        msg = Message(
+        if not item.content:
+            return [], starting_index
+        annotations: Final = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+            list(_merged_message_annotations(item.content))
+        )
+        message: Final = Message(
             role=item.role,
-            content="".join(merged_text_parts),
+            content="".join(_output_block_text(block) for block in item.content),
             reasoning_content=reasoning_content,
-            annotations=merged_annotations or None,
+            annotations=annotations,
             reasoning_items=_pending_reasoning_items(pending_reasoning_item),
         )
-        return [Choices(message=msg, finish_reason="stop", index=starting_index)], starting_index + 1
+        return [Choices(message=message, finish_reason="stop", index=starting_index)], starting_index + 1
 
     @staticmethod
     def _merge_accumulated_tool_calls_into_choices(
-        choices: list[Any],
-        accumulated_tool_calls: list[dict[str, Any]],
+        choices: Sequence["Choices"],
+        accumulated_tool_calls: Sequence[Mapping[str, object]],
         reasoning_content: str | None,
         pending_reasoning_item: _BuiltReasoningItem | None,
         fallback_index: int,
-    ) -> None:
-        """Attach accumulated tool_calls to the last text-message choice, or
-        append a new tool-only choice if no text message was produced.
-
-        Backfills reasoning_content and reasoning_items onto the merged choice
-        so encrypted reasoning survives the assistant+tool_calls merge path.
-        """
+    ) -> list["Choices"]:
         from litellm.types.utils import Choices, Message, chat_completion_tool_call_from_dict
 
-        last_msg_choice = next(
-            (
-                c
-                for c in reversed(choices)
-                if getattr(c, "message", None) is not None and not getattr(c.message, "tool_calls", None)
-            ),
+        tool_calls: Final = [chat_completion_tool_call_from_dict(tool_call) for tool_call in accumulated_tool_calls]
+        target_position: Final = next(
+            (position for position in reversed(range(len(choices))) if _is_text_only_choice(choices[position])),
             None,
         )
-        if last_msg_choice is None:
-            msg = Message(
+        if target_position is None:
+            tool_only_message: Final = Message(
                 content=None,
-                tool_calls=accumulated_tool_calls,
+                tool_calls=tool_calls,
                 reasoning_content=reasoning_content,
                 reasoning_items=_pending_reasoning_items(pending_reasoning_item),
             )
-            choices.append(Choices(message=msg, finish_reason="tool_calls", index=fallback_index))
-            return
-
-        last_msg_choice.message.tool_calls = [
-            chat_completion_tool_call_from_dict(tool_call) for tool_call in accumulated_tool_calls
-        ]
-        if getattr(last_msg_choice.message, "content", None) is None:
-            last_msg_choice.message.content = ""
-        last_msg_choice.finish_reason = "tool_calls"
-        needs_reasoning_content_backfill = (
-            reasoning_content is not None and getattr(last_msg_choice.message, "reasoning_content", None) is None
+            return [*choices, Choices(message=tool_only_message, finish_reason="tool_calls", index=fallback_index)]
+        target: Final = choices[target_position]
+        merged_message: Final = target.message.model_copy(
+            update={
+                "content": "" if target.message.content is None else target.message.content,
+                "tool_calls": tool_calls,
+                **_backfill_field(target.message, "reasoning_content", reasoning_content),
+                **_backfill_field(target.message, "reasoning_items", _pending_reasoning_items(pending_reasoning_item)),
+            }
         )
-        if needs_reasoning_content_backfill:
-            last_msg_choice.message.reasoning_content = reasoning_content
-        needs_reasoning_items_backfill = (
-            pending_reasoning_item is not None and getattr(last_msg_choice.message, "reasoning_items", None) is None
-        )
-        if needs_reasoning_items_backfill:
-            last_msg_choice.message.reasoning_items = _pending_reasoning_items(pending_reasoning_item)
+        merged_choice: Final = target.model_copy(update={"message": merged_message, "finish_reason": "tool_calls"})
+        return [*choices[:target_position], merged_choice, *choices[target_position + 1 :]]
 
     @staticmethod
     def _convert_response_output_to_choices(
@@ -798,7 +793,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         except ImportError:
             ResponseApplyPatchToolCall = None
 
-        choices: Final[list[Any]] = []
+        choices: Final[list[Choices]] = []
         index = 0
         reasoning_content: str | None = None
         pending_reasoning_item: _BuiltReasoningItem | None = None
@@ -825,8 +820,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     pending_reasoning_item=pending_reasoning_item,
                 )
                 choices.extend(new_choices)
-                reasoning_content = None
-                pending_reasoning_item = None
+                if new_choices:
+                    reasoning_content = None
+                    pending_reasoning_item = None
 
             elif isinstance(item, ResponseFunctionToolCall):
                 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -875,7 +871,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 pass  # don't fail request if item in list is not supported
 
         if accumulated_tool_calls:
-            LiteLLMResponsesTransformationHandler._merge_accumulated_tool_calls_into_choices(
+            return LiteLLMResponsesTransformationHandler._merge_accumulated_tool_calls_into_choices(
                 choices=choices,
                 accumulated_tool_calls=accumulated_tool_calls,
                 reasoning_content=reasoning_content,
