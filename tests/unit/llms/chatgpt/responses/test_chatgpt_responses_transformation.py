@@ -39,7 +39,7 @@ class TestChatGPTResponsesAPITransformation:
     def test_chatgpt_preserves_service_tier(self, requested_tier: str, expected_tier: str, effort: str) -> None:
         config: Final = ChatGPTResponsesAPIConfig()
         request: Final = config.transform_responses_api_request(
-            model="chatgpt/gpt-5.6-sol",
+            model="chatgpt/gpt-6.1-sol",
             input=[{"role": "user", "content": "Reply with OK"}],
             response_api_optional_request_params={
                 "service_tier": requested_tier,
@@ -62,7 +62,7 @@ class TestChatGPTResponsesAPITransformation:
     def test_chatgpt_does_not_introduce_unsupported_service_tier(self, requested_tier: str | None) -> None:
         config: Final = ChatGPTResponsesAPIConfig()
         request: Final = config.transform_responses_api_request(
-            model="chatgpt/gpt-5.6-sol",
+            model="chatgpt/gpt-6.1-sol",
             input=[{"role": "user", "content": "Reply with OK"}],
             response_api_optional_request_params={} if requested_tier is None else {"service_tier": requested_tier},
             litellm_params=GenericLiteLLMParams(),
@@ -95,7 +95,6 @@ class TestChatGPTResponsesAPITransformation:
         assert config is not None
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
-
 
     @pytest.mark.parametrize(
         "model_name",
