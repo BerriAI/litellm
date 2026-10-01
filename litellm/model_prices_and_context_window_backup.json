@@ -5516,7 +5516,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-nano": {
-        "deprecation_date": "2027-04-14",
+        "deprecation_date": "2026-10-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -5550,7 +5550,7 @@
         "supports_vision": true
     },
     "azure/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2027-04-14",
+        "deprecation_date": "2026-10-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -6133,7 +6133,7 @@
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-07-31",
+        "deprecation_date": "2027-06-25",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6168,7 +6168,7 @@
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
-        "deprecation_date": "2027-07-31",
+        "deprecation_date": "2027-06-25",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
@@ -6346,7 +6346,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4o-transcribe": {
-        "deprecation_date": "2026-12-31",
+        "deprecation_date": "2026-10-15",
         "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -10972,7 +10972,7 @@
         "supports_web_search": false
     },
     "azure/us/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2027-04-14",
+        "deprecation_date": "2026-10-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -16146,6 +16146,7 @@
     },
     "deepseek-chat": {
         "cache_read_input_token_cost": 2.8e-08,
+        "deprecation_date": "2026-07-24",
         "input_cost_per_token": 2.8e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 131072,
@@ -16167,6 +16168,7 @@
     },
     "deepseek-reasoner": {
         "cache_read_input_token_cost": 2.8e-08,
+        "deprecation_date": "2026-07-24",
         "input_cost_per_token": 2.8e-07,
         "litellm_provider": "deepseek",
         "max_input_tokens": 131072,
@@ -22085,6 +22087,7 @@
     "deepseek/deepseek-chat": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 2.8e-08,
+        "deprecation_date": "2026-07-24",
         "input_cost_per_token": 2.8e-07,
         "input_cost_per_token_cache_hit": 2.8e-08,
         "litellm_provider": "deepseek",
@@ -22139,6 +22142,7 @@
     },
     "deepseek/deepseek-reasoner": {
         "cache_read_input_token_cost": 2.8e-08,
+        "deprecation_date": "2026-07-24",
         "input_cost_per_token": 2.8e-07,
         "input_cost_per_token_cache_hit": 2.8e-08,
         "litellm_provider": "deepseek",
@@ -29472,6 +29476,7 @@
         "output_cost_per_token_flex": 5e-06
     },
     "gemini/gemini-2.5-computer-use-preview-10-2025": {
+        "deprecation_date": "2026-07-28",
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "gemini",
@@ -70612,7 +70617,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4.1-nano": {
-        "deprecation_date": "2027-04-14",
+        "deprecation_date": "2026-10-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -71059,7 +71064,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4.1-nano": {
-        "deprecation_date": "2027-04-14",
+        "deprecation_date": "2026-10-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
