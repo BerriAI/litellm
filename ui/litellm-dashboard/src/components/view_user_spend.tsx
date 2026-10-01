@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { modelAvailableCall } from "./networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 // Define the props type
@@ -9,8 +10,16 @@ interface ViewUserSpendProps {
   userSpend: number | null;
   userMaxBudget: number | null;
   selectedTeam: any | null;
+  budgetDuration?: string | null;
+  budgetLoading?: boolean;
 }
-const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget, selectedTeam }) => {
+const ViewUserSpend: React.FC<ViewUserSpendProps> = ({
+  userSpend,
+  userMaxBudget,
+  selectedTeam,
+  budgetDuration = null,
+  budgetLoading = false,
+}) => {
   const { accessToken, userRole, userId: userID } = useAuthorized();
   let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
   const [maxBudget, setMaxBudget] = useState(
@@ -107,7 +116,18 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
     modelsToDisplay = userModels;
   }
 
-  const displayMaxBudget = maxBudget !== null ? `$${formatNumberWithCommas(Number(maxBudget), 4)} limit` : "No limit";
+  let displayMaxBudget: string;
+  if (budgetLoading) {
+    displayMaxBudget = "—";
+  } else if (maxBudget !== null) {
+    displayMaxBudget = `$${formatNumberWithCommas(Number(maxBudget), 4)} limit`;
+  } else {
+    displayMaxBudget = "No limit";
+  }
+
+  const durationLabel = maxBudget !== null && budgetDuration ? getBudgetDurationLabel(budgetDuration) : null;
+  const budgetPeriodSuffix =
+    !budgetLoading && durationLabel && durationLabel !== "Not set" ? ` over ${durationLabel}` : "";
 
   const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 
@@ -120,7 +140,12 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
         </div>
         <div>
           <p className="text-sm text-muted-foreground">Max Budget</p>
-          <p className="text-2xl font-semibold text-foreground">{displayMaxBudget}</p>
+          <p className="text-2xl font-semibold text-foreground">
+            {displayMaxBudget}
+            {budgetPeriodSuffix && (
+              <span className="text-sm font-normal text-muted-foreground">{budgetPeriodSuffix}</span>
+            )}
+          </p>
         </div>
       </div>
       {/* <div className="ml-auto">
