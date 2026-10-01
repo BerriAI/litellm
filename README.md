@@ -1,5 +1,5 @@
 <h1 align="center">
-        🚅 LiteLLM
+        <img src="./.github/litellm-logo.svg" alt="LiteLLM" width="400">
     </h1>
     <p align="center">
         <p align="center">LiteLLM AI Gateway
