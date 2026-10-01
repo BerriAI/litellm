@@ -2,14 +2,14 @@ import gzip
 import io
 import json
 from collections.abc import Mapping
-from typing import Literal, get_type_hints
+from typing import Final, Literal, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-from fastapi import Request
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
+from starlette.requests import Request
 
 
 
@@ -1276,6 +1276,33 @@ def test_shared_inference_model_selection_preserves_handler_precedence(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,path,skip_parse",
+    [
+        ("POST", "/v1/traces", True),
+        ("GET", "/v1/traces", False),
+        ("POST", "/v1/messages", False),
+        ("POST", "/v1/traces/other", False),
+    ],
+)
+async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_parse: bool) -> None:
+    body: Final = b'{"key":"value"}'
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+    request: Final = Request(
+        {"type": "http", "method": method, "path": path, "headers": [(b"content-type", b"application/json")]},
+        receive,
+    )
+
+    parsed: Final = await _read_request_body(request)
+    if skip_parse:
+        assert parsed == {}
+        receive.assert_not_awaited()
+    else:
+        assert parsed == {"key": "value"}
+        receive.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("content_type, encoding", [
     ("application/json", ""), ("application/x-protobuf", ""), ("application/json", "gzip"),
 ])
@@ -1301,4 +1328,39 @@ async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_lim
     with pytest.raises(TracingPayloadTooLargeError):
         await TraceReceiver(store).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
     assert len(received) == 2
+    store.insert_spans.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auth_body_read_and_trace_handler_leave_stream_for_receiver_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import OTLP_MAX_BODY_BYTES
+    from litellm.proxy import tracing_endpoints
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+    from litellm.tracing import TraceReceiver
+
+    chunk: Final = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
+    receive: Final = AsyncMock(
+        side_effect=[{"type": "http.request", "body": chunk, "more_body": True}] * 2
+    )
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/v1/traces", "headers": [(b"content-type", b"application/json")]},
+        receive,
+    )
+    store: Final = MagicMock()
+    store.insert_spans = AsyncMock()
+    monkeypatch.setattr(tracing_endpoints, "receiver", TraceReceiver(store))
+
+    parsed, parse_error = await _read_request_body_deferring_parse_failure(request)
+    assert parsed == {}
+    assert parse_error is None
+    receive.assert_not_awaited()
+
+    response: Final = await tracing_endpoints.ingest_otlp_traces(
+        request, UserAPIKeyAuth(token="key", team_id="team")
+    )
+    assert response.status_code == 413
+    assert receive.await_count == 2
     store.insert_spans.assert_not_awaited()
