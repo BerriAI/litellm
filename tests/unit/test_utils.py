@@ -2501,7 +2501,11 @@ def test_get_valid_models_bedrock_lists_what_the_deployment_credentials_can_invo
 
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
-    ).mock(side_effect=lambda request: signed_by_the_deployment(request, {"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}))
+    ).mock(
+        side_effect=lambda request: signed_by_the_deployment(
+            request, {"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}
+        )
+    )
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/inference-profiles",
         params={"typeEquals": "SYSTEM_DEFINED"},

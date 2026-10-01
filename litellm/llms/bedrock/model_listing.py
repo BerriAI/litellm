@@ -1,13 +1,14 @@
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
-from typing import Final
-from urllib.parse import urlencode
+from typing import Final, TypeAlias
+from urllib.parse import quote, urlencode
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.router import LiteLLM_Params
@@ -16,7 +17,7 @@ MODEL_PREFIX: Final = "bedrock/"
 LIST_MODELS_TIMEOUT: Final = 10.0
 INFERENCE_PROFILES_PAGE_SIZE: Final = 1000
 
-QueryPairs = tuple[tuple[str, str], ...]
+QueryPairs: TypeAlias = tuple[tuple[str, str], ...]
 
 
 class FoundationModelSummary(BaseModel):
@@ -78,14 +79,18 @@ class BedrockModelLister(BaseAWSLLM):
             yield from self._active_inference_profile_ids(page.next_token)
 
     def _get_json(self, path: str, query: QueryPairs) -> object:
-        url: Final = f"https://bedrock.{self._aws_region_name}.{get_aws_dns_suffix(self._aws_region_name)}{path}?{urlencode(query)}"
+        host: Final = f"bedrock.{self._aws_region_name}.{get_aws_dns_suffix(self._aws_region_name)}"
+        url: Final = f"https://{host}{path}?{urlencode(query, quote_via=quote)}"
         response: Final = self._client.get(url=url, headers=self._auth_headers(url), timeout=LIST_MODELS_TIMEOUT)
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError:
-            raise Exception(
-                f"Failed to list Bedrock models in {self._aws_region_name}. "
-                f"Status code: {response.status_code}, Response: {response.text}"
+            raise BedrockError(
+                status_code=response.status_code,
+                message=(
+                    f"Failed to list Bedrock models in {self._aws_region_name}. "
+                    f"Status code: {response.status_code}, Response: {response.text}"
+                ),
             )
         return response.json()
 
