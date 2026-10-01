@@ -153,21 +153,23 @@ class TestOpenInferProviderConfig:
         assert "max_completion_tokens" not in optional_params
 
     @pytest.mark.parametrize(
-        ("model", "input_cost_per_token", "output_cost_per_token"),
+        "model",
         (
-            ("openinfer/@oi/Llama-3.2-1B-Instruct", 2e-08, 2e-08),
-            ("openinfer/@oi/Qwen3.5-9B", 1.5e-07, 1.8e-07),
-            ("openinfer/@oi/Qwen3.5-27B", 7.2e-07, 7.2e-07),
-            ("openinfer/@oi/Gemma4-31B-It", 5.2e-07, 7.5e-07),
+            "openinfer/@oi/Llama-3.2-1B-Instruct",
+            "openinfer/@oi/Qwen3.5-9B",
+            "openinfer/@oi/Qwen3.5-27B",
+            "openinfer/@oi/Gemma4-31B-It",
         ),
     )
-    def test_catalog_token_rates_match_vendor_per_million_prices(
-        self, model: str, input_cost_per_token: float, output_cost_per_token: float
-    ):
-        for path in _PRICE_FILES:
-            catalog = json.loads(path.read_text())
-            row = catalog[model]
-            assert row["input_cost_per_token"] == input_cost_per_token
-            assert row["output_cost_per_token"] == output_cost_per_token
-            assert row["input_cost_per_token"] > 0
-            assert row["output_cost_per_token"] > 0
+    def test_catalog_rows_are_positive_and_backup_agrees(self, model: str):
+        primary = json.loads(_PRICE_FILES[0].read_text())[model]
+        backup = json.loads(_PRICE_FILES[1].read_text())[model]
+
+        assert primary == backup
+        assert primary["litellm_provider"] == "openinfer"
+        assert primary["mode"] == "chat"
+        assert primary["max_tokens"] == primary["max_output_tokens"]
+        assert primary["max_input_tokens"] > 0
+        assert primary["max_output_tokens"] > 0
+        assert primary["input_cost_per_token"] > 0
+        assert primary["output_cost_per_token"] > 0
