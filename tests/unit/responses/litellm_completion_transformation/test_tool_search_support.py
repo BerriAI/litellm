@@ -5,7 +5,7 @@ import pytest
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.responses.main import ResponseToolSearchCall
+from litellm.types.responses.main import ResponseToolSearchCall, build_tool_search_call
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -48,6 +48,14 @@ def test_client_tool_search_becomes_chat_function_tool() -> None:
 def test_server_tool_search_stays_hosted_and_is_dropped() -> None:
     result, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
         tools=[{"type": "tool_search", "execution": "server"}]
+    )
+
+    assert result == []
+
+
+def test_non_tool_search_builtin_tools_are_dropped() -> None:
+    result, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+        tools=[{"type": "computer_use"}, {"type": "image_generation"}, {"type": "shell"}]
     )
 
     assert result == []
@@ -145,6 +153,25 @@ def test_tool_search_output_without_call_id_is_dropped() -> None:
     assert messages == []
 
 
+def test_tool_search_output_serializes_unserializable_tools_with_string_fallback() -> None:
+    class UnserializableTool:
+        def __str__(self) -> str:
+            return "fallback-tool"
+
+    messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [UnserializableTool()],
+            }
+        ],
+        responses_api_request={},
+    )
+
+    assert messages[0]["content"] == '["fallback-tool"]'
+
+
 def test_tool_search_response_becomes_tool_search_call_item() -> None:
     output = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
         _tool_search_response(),
@@ -181,3 +208,15 @@ def test_tool_search_response_is_accepted_by_responses_api_response() -> None:
 
     assert response.output[-1].type == "tool_search_call"
     assert response.output[-1].arguments == {"query": "weather"}
+
+
+def test_tool_search_call_defaults_non_string_arguments_to_object() -> None:
+    item = build_tool_search_call({"id": "ts_1", "arguments": None})
+
+    assert item.arguments == {}
+
+
+def test_tool_search_call_rejects_invalid_json_arguments_as_string() -> None:
+    item = build_tool_search_call({"id": "ts_1", "arguments": "{"})
+
+    assert item.arguments == "{"

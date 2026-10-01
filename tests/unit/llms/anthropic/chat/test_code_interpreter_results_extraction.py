@@ -4,7 +4,6 @@ the non-streaming _hidden_params propagation of code_interpreter_results,
 and mock end-to-end streaming integration.
 """
 
-from unittest.mock import MagicMock
 
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 from litellm.main import stream_chunk_builder
@@ -14,6 +13,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputCodeInterpreterCallLog,
+    build_code_interpreter_log_outputs,
 )
 from litellm.types.utils import Choices, Message, ModelResponse
 
@@ -28,6 +28,17 @@ def _make_model_response(code_interpreter_results=None, provider_specific_fields
     resp = ModelResponse()
     resp.choices = [choice]
     return resp
+
+
+def test_build_code_interpreter_log_outputs_combines_stdout_and_stderr():
+    outputs = build_code_interpreter_log_outputs({"stdout": "out\n", "stderr": "error\n"})
+
+    assert outputs == [OutputCodeInterpreterCallLog(type="logs", logs="out\nSTDERR: error\n")]
+
+
+def test_build_code_interpreter_log_outputs_empty_and_non_dict_content():
+    assert build_code_interpreter_log_outputs({}) is None
+    assert build_code_interpreter_log_outputs("not-a-dict") is None
 
 
 def test_extract_tool_result_output_items_from_pydantic_objects():

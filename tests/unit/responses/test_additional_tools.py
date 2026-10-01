@@ -99,3 +99,20 @@ def test_tool_search_output_tools_do_not_override_top_level_tools():
     hoisted = hoist_additional_tools(request_input, [_TOP_LEVEL_TOOL])
 
     assert hoisted.tools == (_TOP_LEVEL_TOOL, {"type": "function", "name": "get_weather"})
+
+
+def test_invalid_input_items_do_not_break_tool_hoisting():
+    """Invalid input items are treated as ordinary history, not hoisting candidates."""
+    request_input = [
+        {"role": "user", "content": None},
+        {
+            "type": "tool_search_output",
+            "call_id": "call_tool_search",
+            "tools": [{"type": "function", "name": "get_weather"}],
+        },
+    ]
+
+    hoisted = hoist_additional_tools(request_input, None)
+
+    assert hoisted.input == request_input
+    assert hoisted.hoisted == ({"type": "function", "name": "get_weather"},)

@@ -558,6 +558,26 @@ def test_has_non_string_content_responses_structured_input():
     assert has_non_string_content(data) is True
 
 
+def test_has_non_string_content_reasoning_plain_and_structured_parts():
+    data = {
+        "input": [
+            {"type": "reasoning", "content": "plain reasoning"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "plain summary"}]},
+        ]
+    }
+
+    assert has_non_string_content(data) is False
+
+    data["input"].append(
+        {
+            "type": "reasoning",
+            "content": [{"type": "image_url", "image_url": {"url": "..."}}],
+        }
+    )
+
+    assert has_non_string_content(data) is True
+
+
 def test_has_non_string_content_empty_data():
     assert has_non_string_content({}) is False
     assert has_non_string_content({"messages": []}) is False
@@ -599,6 +619,27 @@ def test_apply_redacted_messages_back_rewrites_text_only_responses_list_input():
     data = {"input": [{"type": "text", "text": "leak"}]}
     apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
     assert data["input"] == [{"type": "text", "text": "[REDACTED]"}]
+
+
+def test_apply_redacted_messages_back_rewrites_reasoning_content_and_summary():
+    data = {
+        "input": [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "content": [{"type": "summary_text", "text": "reasoning-secret"}],
+                "summary": [{"type": "summary_text", "text": "summary-secret"}],
+            }
+        ]
+    }
+    redacted = [
+        {"role": "assistant", "content": "reasoning-[REDACTED]"},
+        {"role": "assistant", "content": "summary-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["content"] == "reasoning-[REDACTED]"
+    assert data["input"][0]["summary"] == "summary-[REDACTED]"
 
 
 def test_apply_redacted_messages_back_rewrites_string_batches():
@@ -785,6 +826,45 @@ def test_apply_redacted_messages_back_rewrites_tool_search_output_tool_descripti
     assert apply_redacted_messages_back(data, redacted) is True
     assert data["input"][0]["tools"][0]["description"] == "tool-[REDACTED]"
     assert data["input"][0]["tools"][0]["name"] == "get_weather"
+
+
+def test_apply_redacted_messages_back_preserves_tool_search_output_non_text_tools() -> None:
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {"type": "function", "name": "one", "description": "leak-one"},
+                    {"type": "function", "name": "two"},
+                ],
+            }
+        ]
+    }
+    redacted = [{"role": "tool", "content": "one-[REDACTED]"}, {"role": "tool", "content": ""}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["tools"][0]["description"] == "one-[REDACTED]"
+    assert data["input"][0]["tools"][1] == {"type": "function", "name": "two"}
+
+
+def test_apply_redacted_messages_back_rewrites_mixed_response_content_parts() -> None:
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "message-secret"},
+                    {"type": "image_url", "image_url": {"url": "..."}},
+                ],
+            }
+        ]
+    }
+    redacted = [{"role": "user", "content": [{"type": "input_text", "text": "message-[REDACTED]"}]}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["content"] == "message-[REDACTED]"
 
 
 def test_apply_redacted_messages_back_rewrites_tool_search_output_fallback_output():

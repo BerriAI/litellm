@@ -96,6 +96,16 @@ def test_edited_client_tool_search_keeps_responses_semantics():
     assert list(merged) == [{**original[0], "description": "guarded tool search"}]
 
 
+def test_guardrail_preserves_client_tool_search_when_flattened_tool_is_unchanged() -> None:
+    original = [{"type": "tool_search", "execution": "client", "description": "Search tools"}]
+    groups = _groups(original)
+
+    merged = merge_guardrailed_tools(original, groups, copy.deepcopy(_flat(groups)))
+
+    assert list(merged) == original
+    assert merged[0] is original[0]
+
+
 def test_dropped_client_tool_search_is_removed():
     original = [{"type": "tool_search", "execution": "client", "description": "Search tools"}]
 
