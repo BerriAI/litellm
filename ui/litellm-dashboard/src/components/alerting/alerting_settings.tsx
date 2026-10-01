@@ -24,6 +24,7 @@ interface AlertingSettingsProps {
 
 const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiumUser }) => {
   const [alertingSettings, setAlertingSettings] = useState<alertingSettingsItem[]>([]);
+  const [resetFields, setResetFields] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     // get values
@@ -36,7 +37,15 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
   }, [accessToken]);
 
   const handleInputChange = (fieldName: string, newValue: any) => {
-    // Update the value in the state
+    setResetFields((previous) => {
+      if (!previous.has(fieldName)) {
+        return previous;
+      }
+      const next = new Set(previous);
+      next.delete(fieldName);
+      return next;
+    });
+
     const updatedSettings = alertingSettings.map((setting) =>
       setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
     );
@@ -57,7 +66,11 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
 
     const configuredAlertingArgs: Record<string, unknown> = {};
     alertingSettings.forEach((setting) => {
-      if (setting.field_name !== "slack_alerting" && setting.field_value != null) {
+      if (
+        setting.field_name !== "slack_alerting" &&
+        !resetFields.has(setting.field_name) &&
+        setting.field_value != null
+      ) {
         configuredAlertingArgs[setting.field_name] = setting.field_value;
       }
     });
@@ -65,7 +78,11 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     const { slack_alerting, ...updatedAlertingArgs } = formValues;
     const alertingArgs = {
       ...configuredAlertingArgs,
-      ...Object.fromEntries(Object.entries(updatedAlertingArgs).filter(([, value]) => value != null && value !== "")),
+      ...Object.fromEntries(
+        Object.entries(updatedAlertingArgs).filter(
+          ([fieldName, value]) => !resetFields.has(fieldName) && value != null && value !== "",
+        ),
+      ),
     };
     try {
       await updateConfigFieldSetting(accessToken, "alerting_args", alertingArgs);
@@ -89,8 +106,11 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     }
 
     try {
-      //   deleteConfigFieldSetting(accessToken, fieldName);
-      // update value in state
+      setResetFields((previous) => {
+        const next = new Set(previous);
+        next.add(fieldName);
+        return next;
+      });
 
       const updatedSettings = alertingSettings.map((setting) =>
         setting.field_name === fieldName
