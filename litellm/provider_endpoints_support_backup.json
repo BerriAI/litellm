@@ -1575,7 +1575,7 @@
     },
     "tokenlab": {
       "display_name": "TokenLab (`tokenlab`)",
-      "url": "https://docs.tokenlab.sh/integrations/litellm",
+      "url": "https://tokenlab.sh/docs/en/integrations/litellm",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
