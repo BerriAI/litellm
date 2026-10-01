@@ -596,9 +596,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
             tool_calls = choice["message"].get("tool_calls", None)
-            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = (
-                None  # mutable-ok: holds _handle_invalid_parallel_tool_calls' list; Message.__init__ expects list
-            )
+            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = None
             message_content = choice["message"].get("content", None)
             if tool_calls is not None:
                 _openai_tool_calls = []
@@ -892,6 +890,9 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             }
             if "usage" in chunk and chunk["usage"] is not None:
                 kwargs["usage"] = chunk["usage"]
+            service_tier: Final = chunk.get("service_tier")
+            if isinstance(service_tier, str) and service_tier:
+                kwargs["service_tier"] = service_tier
             return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e

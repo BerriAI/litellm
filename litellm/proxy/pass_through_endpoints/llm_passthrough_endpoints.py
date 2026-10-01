@@ -44,7 +44,10 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
+from litellm.llms.azure.passthrough.transformation import (
+    foreign_azure_deployment,
+    is_azure_body_model_inference_endpoint,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.deepgram.common_utils import (
     deepgram_listen_callback_params,
@@ -468,9 +471,7 @@ async def fal_ai_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={
-            "Authorization": f"Key {fal_ai_api_key}"
-        },  # mutable-ok: pass-through request headers require a mutable mapping
+        custom_headers={"Authorization": f"Key {fal_ai_api_key}"},
         custom_llm_provider="fal_ai",
         is_streaming_request=False,
     )
@@ -2130,6 +2131,35 @@ async def relay_nvidia_nim_request(
     )
 
 
+async def _relay_azure_body_model_group(
+    llm_router: litellm.Router | None,
+    endpoint: str,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Response | None:
+    if llm_router is None or not is_azure_body_model_inference_endpoint(endpoint):
+        return None
+    if not is_json_content_type(request.headers.get("content-type", "")):
+        return None
+    request_body: Final = await get_request_body(request)
+    model: Final = _optional_str(request_body.get("model"))
+    if model is None or not is_passthrough_request_using_router_model(request_body, llm_router):
+        return None
+    is_streaming_request: Final = is_passthrough_request_streaming(request_body)
+    return await open_sse_before_first_byte(
+        _relay_azure_router_model(
+            llm_router=llm_router,
+            model=model,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            is_streaming_request=is_streaming_request,
+            user_api_key_dict=user_api_key_dict,
+        ),
+        ping_interval_seconds=(litellm.sse_keepalive_ping_interval_seconds if is_streaming_request else None),
+    )
+
+
 @router.api_route(
     "/azure_ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -2249,6 +2279,12 @@ async def azure_proxy_route(
                     custom_llm_provider=litellm.LlmProviders.AZURE_AI,
                     extra_headers=cast(dict, extra_headers),
                 )
+
+    body_model_group_relay: Final = await _relay_azure_body_model_group(
+        llm_router=llm_router, endpoint=endpoint, request=request, user_api_key_dict=user_api_key_dict
+    )
+    if body_model_group_relay is not None:
+        return body_model_group_relay
 
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     if base_target_url is None:
@@ -3801,13 +3837,9 @@ async def gigachat_proxy_route(
     raw_model: Final = request_body.get("model")
     model: Final = raw_model if isinstance(raw_model, str) else None
     if model:
-        is_router_model = is_passthrough_request_using_router_model(
-            request_body, llm_router
-        )  # rebind-ok: conditionally set to True
+        is_router_model = is_passthrough_request_using_router_model(request_body, llm_router)
     elif any(word in endpoint for word in ("completions", "embeddings")):
-        raise HTTPException(
-            status_code=400, detail={"error": "Model is required in request body"}
-        )  # mutable-ok: HTTPException detail dict
+        raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
 
     # If router model, use dedicated router passthrough handler
     # This uses the same common processing path as non-router models
@@ -3908,9 +3940,7 @@ async def handle_gigachat_passthrough_router_model(
 
     is_streaming: Final = request_body.get("stream", False)  # pyright: ignore[reportUnknownVariableType]  # request_body is dict[Unknown, Unknown]
 
-    data: dict[str, Any] = await _read_request_body(
-        request=request
-    )  # mutable-ok: mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline
+    data: Final[dict[str, object]] = await _read_request_body(request=request)
     if user_api_key_dict is not None:
         auth_metadata: Final = {
             metadata_key: value

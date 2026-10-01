@@ -9,6 +9,7 @@ import sys
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 import yaml
@@ -34,9 +35,8 @@ GLOB_CHARS = frozenset("*?")
 # tests has to be named by some shard or it runs nowhere. A child listed here is
 # itself decomposed one level deeper and is checked through its own entry.
 SHARDED_ROOTS: tuple[str, ...] = (
-    "tests/proxy_unit_tests",
     "tests/test_litellm",
-    "tests/test_litellm/proxy",
+    "tests/unit/proxy",
 )
 
 
@@ -117,6 +117,50 @@ def _invoked_test_tokens(scalars: Iterable[Scalar]) -> frozenset[str]:
         for scalar in scalars
         if scalar.key in TEST_PATH_KEYS or TEST_RUNNER_RE.search(scalar.value)
         for match in TEST_TOKEN_RE.finditer(_uncommented(scalar.value))
+    )
+
+
+SELECTION_ARM_RE = re.compile(r"(?ms)^\s*([A-Za-z0-9_|*-]+)\)\s*(.*?);;")
+
+
+def _unit_selection_arms(repo_root: pathlib.Path = REPO_ROOT) -> Mapping[str, frozenset[str]]:
+    script: Final = repo_root / ".circleci/scripts/unit_selection.sh"
+    if not script.is_file():
+        return MappingProxyType({})
+    text: Final = _uncommented(script.read_text())
+    return MappingProxyType(
+        {
+            label: frozenset(
+                match.group(0).rstrip("/") for match in TEST_TOKEN_RE.finditer(body)
+            )
+            for label, body in SELECTION_ARM_RE.findall(text)
+        }
+    )
+
+
+def _unit_selection_tokens(repo_root: pathlib.Path = REPO_ROOT) -> frozenset[str]:
+    return frozenset(
+        token for tokens in _unit_selection_arms(repo_root).values() for token in tokens
+    )
+
+
+def _wired_unit_flags(scalars: Iterable[Scalar]) -> frozenset[str]:
+    return frozenset(
+        scalar.value
+        for scalar in scalars
+        if scalar.key == "unit-flag" and "${{" not in scalar.value
+    )
+
+
+def _shard_tokens(
+    scalars: Iterable[Scalar], arms: Mapping[str, frozenset[str]]
+) -> frozenset[str]:
+    wired: Final = _wired_unit_flags(scalars)
+    return _invoked_test_tokens(scalars) | frozenset(
+        token
+        for label, tokens in arms.items()
+        if label in wired
+        for token in tokens
     )
 
 
@@ -474,7 +518,7 @@ def _check_slices() -> int:
 
 
 def _check_shards() -> int:
-    findings = _unassigned_shard_children(_invoked_test_tokens(_all_scalars()))
+    findings = _unassigned_shard_children(_shard_tokens(_all_scalars(), _unit_selection_arms()))
     if findings:
         _report(
             "test directories and files that no shard claims",
@@ -510,7 +554,7 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         str(path.relative_to(repo_root))
         for folders in groups.values()
         for folder in folders
-        for path in (integration_root / folder).glob("test_*.py")
+        for path in (integration_root / folder).rglob("test_*.py")
     )
     browser_manifest: Final = repo_root / "tests/e2e/ui/tests/integrationCritical/expected.json"
     browser_nodes: Final = json.loads(browser_manifest.read_text()) if browser_manifest.exists() else ()
@@ -611,7 +655,10 @@ def main() -> int:
     scalars = _all_scalars()
 
     integration_paths, ownership_findings = _integration_ownership()
-    test_findings = _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | integration_paths) + ownership_findings
+    test_findings = (
+        _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | _unit_selection_tokens() | integration_paths)
+        + ownership_findings
+    )
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
     stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
 

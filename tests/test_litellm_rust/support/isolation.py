@@ -29,7 +29,7 @@ def _list_attribute(container: ModuleType, attribute: str) -> list[object]:
 def _isolated_list(container: ModuleType, attribute: str) -> Generator[None]:
     source: Final = _list_attribute(container, attribute)
     original: Final = list(source)
-    source.clear()  # mutable-ok: test isolation mutates global registries by design
+    source.clear()
     try:
         yield
     finally:
@@ -54,5 +54,5 @@ def isolated_callback_registries() -> Generator[None]:
         for attribute in CALLBACK_ATTRIBUTES:
             stack.enter_context(_isolated_list(litellm, attribute))
         stack.enter_context(_isolated_list(litellm_logging, "_in_memory_loggers"))  # pyright: ignore[reportPrivateUsage]  # no public callback-cache accessor
-        stack.enter_context(rebound(utils, "callback_list", []))  # rebind-ok: isolate legacy callback registry
+        stack.enter_context(rebound(utils, "callback_list", []))
         yield

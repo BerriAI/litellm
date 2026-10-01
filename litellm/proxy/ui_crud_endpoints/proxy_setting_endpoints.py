@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
 from litellm.proxy.config_resolvers.sso import (
@@ -328,6 +329,7 @@ class UISettings(BaseModel):
         description=(
             "Team settings fields a team admin may change on the teams they administer. "
             "Include 'projects' to let team admins create and update projects for those teams. "
+            "Include 'member_key_budgets' to let team admins update budget fields on keys owned by other members of those teams. "
             "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
@@ -1874,7 +1876,7 @@ async def update_ui_settings(
     try:
         settings: Final = effective_cls.model_validate(settings_body)
     except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
+        raise HTTPException(status_code=422, detail=public_validation_errors(e.errors()))
 
     unsupported_team_fields: Final = sorted(
         frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_PERMISSIONS

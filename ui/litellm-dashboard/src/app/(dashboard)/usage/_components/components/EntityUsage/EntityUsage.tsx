@@ -25,7 +25,7 @@ import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
-import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import { getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import type { EntityType } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
@@ -71,8 +71,6 @@ interface EntitySpendData {
     total_successful_requests: number;
     total_failed_requests: number;
     total_tokens: number;
-    api_key_limit?: number | null;
-    total_api_keys?: number | null;
   };
 }
 
@@ -162,7 +160,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   });
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
-  const apiKeyTruncation = getApiKeyTruncation(spendData.metadata?.api_key_limit, spendData.metadata?.total_api_keys);
 
   const {
     data: agentSpendDataRaw,
@@ -662,18 +659,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     {
       key: "keys",
       label: "Key Activity",
-      content: (
-        <KeyActivityPanel
-          keyMetrics={keyMetrics}
-          hidePromptCachingMetrics={entityType === "agent"}
-          apiKeyTruncation={apiKeyTruncation}
-        />
-      ),
+      content: <KeyActivityPanel keyMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
-  const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation };
+  const spendFetchState = { coversRange, cancelled, failed };
 
   return (
     <div style={{ width: "100%" }} className="relative">

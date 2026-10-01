@@ -108,7 +108,7 @@ _GuardrailMethodT = TypeVar("_GuardrailMethodT", bound=Callable[..., object])
 
 
 def _logged_by_inner_guardrail(method: _GuardrailMethodT) -> _GuardrailMethodT:
-    vars(method)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the method the class body just defined
+    vars(method)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True
     return method
 
 
@@ -278,9 +278,7 @@ def _prepare_hook_input(
     guardrail loops do this."""
     if "metadata" not in data:
         data["metadata"] = {}  # mutable-ok: request metadata bucket, hooks mutate it
-    data["metadata"]["guardrails"] = [
-        step.guardrail
-    ]  # mutable-ok: guardrails list is part of the request-payload shape
+    data["metadata"]["guardrails"] = [step.guardrail]
 
     scans_raw_request: Final = callback.scan_raw_request
     hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
@@ -456,7 +454,7 @@ class PipelineExecutor:
         observer: Final = _StreamRewriteObserver(scanner)
         deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_rewrites
         originals: Final = copy.deepcopy(streaming_chunks)
-        hook_input.pop("response", None)  # rebind-ok: an earlier step's stored response goes so this step's is stored
+        hook_input.pop("response", None)
         try:
             if deliver_rewrites:
                 await endpoint_translation.process_output_streaming_response(
@@ -582,7 +580,7 @@ class PipelineExecutor:
                     {"response": response},
                     None,
                     None,
-                )  # mutable-ok: modified-data contract is a plain dict
+                )
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except Exception as e:

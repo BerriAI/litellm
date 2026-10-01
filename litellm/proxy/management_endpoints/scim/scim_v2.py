@@ -582,7 +582,6 @@ async def _users_named_by_member_value(
     subject: Final = value.strip()
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     rows: Final = await _table(UserRepository(prisma_client)).find_many(
-        # mutable-ok: the Prisma serializer requires concrete dicts and a concrete list
         where={"OR": [{"sso_user_id": subject}, {"user_email": email}]},
         take=take,
     )

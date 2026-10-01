@@ -171,12 +171,37 @@ def test_token_exchange_without_a_subject_token_is_rejected_before_any_upstream_
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         peer.drain()
         auth.drain()
-        response: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        cold: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
         assert tool_calls(peer.drain()) == ()
         assert auth.token_requests() == ()
-        if response.status_code == 500:
-            pytest.skip("BUG: /mcp-rest/tools/call without a subject token on a token-exchange server returns 500")
-        assert response.status_code == 401, response.text
+        _assert_subject_token_challenge(cold, alias)
+        warmed: Final = gateway.client.post(
+            "/mcp-rest/tools/call",
+            headers={"x-litellm-api-key": key, "Authorization": "Bearer subject-" + uuid.uuid4().hex},
+            json={"name": f"{alias}-add", "arguments": ADD, "server_id": identity},
+        )
+        assert warmed.status_code == 200, warmed.text
+        assert len(tool_calls(peer.drain())) == 1 and len(auth.token_requests()) == 1
+        auth.drain()
+        warm: Final = call_tool(gateway, key, identity, f"{alias}-add", ADD)
+        assert tool_calls(peer.drain()) == ()
+        assert auth.token_requests() == ()
+        _assert_subject_token_challenge(warm, alias)
+        as_subject: Final = gateway.client.post(
+            "/mcp-rest/tools/call",
+            headers={"x-litellm-api-key": key, "Authorization": f"Bearer {key}"},
+            json={"name": f"{alias}-add", "arguments": ADD, "server_id": identity},
+        )
+        assert tool_calls(peer.drain()) == ()
+        assert auth.token_requests() == ()
+        _assert_subject_token_challenge(as_subject, alias)
+
+
+def _assert_subject_token_challenge(response: httpx.Response, alias: str) -> None:
+    assert response.status_code == 401, response.text
+    challenge: Final = response.headers["www-authenticate"]
+    assert challenge.startswith("Bearer ") and 'error="invalid_token"' in challenge, challenge
+    assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{alias}"' in challenge, challenge
 
 
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
@@ -190,10 +215,7 @@ def test_delegated_auth_forwards_the_callers_bearer_untouched(gateway: Gateway, 
         peer.drain()
         outcome: Final = caller.call(f"{alias}-add", ADD, identity if entry in ("mcp", "root", "sse", "rest") else None)
         assert outcome.ok, outcome.raw
-        seen: Final = _authorizations(peer)
-        if seen == (None,) and entry == "rest":
-            pytest.skip("BUG: /mcp-rest/tools/call drops the caller's Authorization on an oauth_delegate server")
-        assert seen == (f"Bearer {token}".encode(),), seen
+        assert _authorizations(peer) == (f"Bearer {token}".encode(),)
 
 
 @dataclass(frozen=True, slots=True)

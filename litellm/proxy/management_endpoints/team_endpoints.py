@@ -27,7 +27,6 @@ from typing import (
     NamedTuple,
     NoReturn,
     Protocol,
-    TypeAlias,
     TypeVar,
     cast,
 )
@@ -123,13 +122,14 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     resolve_model_budget,
 )
+from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
 from litellm.proxy.management_endpoints.common_utils import (
+    _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
-    _is_user_org_admin_for_team,
-    _is_user_team_admin,
     _set_object_metadata_field,
     _team_member_has_permission,
     _update_metadata_fields,
@@ -477,45 +477,6 @@ async def _refresh_cached_team(
     )
 
 
-TeamAccessRole: TypeAlias = Literal["proxy_admin", "org_admin", "team_admin"]
-
-
-def _raise_team_access_denied() -> NoReturn:
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have access to this team",
-    )
-
-
-async def _resolve_team_access(
-    team_obj: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> TeamAccessRole | None:
-    """Strongest role the caller holds over ``team_obj``, or None when they hold none.
-
-    Org admin outranks team admin so a caller holding both keeps unrestricted edits.
-    """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return "proxy_admin"
-
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return "org_admin"
-
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return "team_admin"
-
-    return None
-
-
-async def _verify_team_access(
-    team_obj: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    """Raise 403 unless the caller is a proxy admin, an org admin for the team's org, or a team admin."""
-    if await _resolve_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict) is None:
-        _raise_team_access_denied()
-
-
 _GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
 
 
@@ -525,7 +486,7 @@ def _general_settings() -> Mapping[str, object]:
     return _GENERAL_SETTINGS.validate_python(general_settings)
 
 
-def _caller_edit_access(role: TeamAccessRole | None, general_settings: Mapping[str, object]) -> TeamEditAccess:
+def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, object]) -> TeamEditAccess:
     """What the caller may change on /team/update, reported on /team/info so the dashboard never re-derives it."""
     match role:
         case "proxy_admin" | "org_admin":
@@ -1159,7 +1120,7 @@ async def _check_user_team_limits(
 
     Only used by /team/new for standalone teams (organization_id is None).
     /team/update does NOT call this — an existing team's admin is already
-    authorized via _verify_team_access() and is not gated by their personal
+    authorized via the team access check and is not gated by their personal
     wallet. Org-scoped teams use _check_org_team_limits() instead.
     """
     # Validate team budget against user's max_budget
@@ -1416,7 +1377,7 @@ async def new_team(
     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -1638,6 +1599,12 @@ async def new_team(
                 data.members_with_roles.append(Member(role="admin", user_id=user_api_key_dict.user_id))
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        _check_disable_global_guardrails_caller_permission(
+            data.disable_global_guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            user_api_key_dict,
+            entity="team",
+        )
 
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
@@ -2172,7 +2139,7 @@ async def update_team(
     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -2270,16 +2237,16 @@ async def update_team(
             # Non-proxy-admins get the same 403 as an access denial so /team/update
             # cannot be used to probe which team ids exist
             if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-                _raise_team_access_denied()
+                team_access_denied()
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
         existing_team: Final = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
-        access_role: Final = await _resolve_team_access(team_obj=existing_team, user_api_key_dict=user_api_key_dict)
+        access_role: Final = await get_team_access().strongest_role(user_api_key_dict, existing_team)
         if access_role is None:
-            _raise_team_access_denied()
+            team_access_denied()
         if access_role == "team_admin":
             data = team_admin_request_or_raise(  # rebind-ok: resent values must not reach the derived writes below
                 team_admin_edit_verdict(
@@ -2313,6 +2280,13 @@ async def update_team(
         )
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        _check_disable_global_guardrails_caller_permission(
+            data.disable_global_guardrails,
+            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            user_api_key_dict,
+            entity="team",
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+        )
 
         if data.soft_budget is not None:
             max_budget_to_check = data.max_budget if data.max_budget is not None else existing_team_row.max_budget
@@ -2340,7 +2314,7 @@ async def update_team(
         if data.organization_id is not None and len(data.organization_id) > 0:  # allow unsetting the organization_id
             # If the caller is relocating the team to a different org, they
             # must also be PROXY_ADMIN or an org-admin of the DESTINATION org.
-            # _verify_team_access above only checked the team's CURRENT org,
+            # the team access check above only covered the team's CURRENT org,
             # so without this gate an org-admin could hand their team to any
             # other org (or capture a team from another org they once
             # administered into a new destination).
@@ -2819,11 +2793,7 @@ async def _validate_team_member_add_permissions(
     the request matches the caller's own ``user_id`` and is being
     added with ``role="user"``.
     """
-    if getattr(user_api_key_dict, "user_role", None) == LitellmUserRoles.PROXY_ADMIN.value:
-        return
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data):
-        return
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data):
+    if await get_team_access().allows(user_api_key_dict, complete_team_data, TEAM_OR_ORG_ADMIN):
         return
 
     if not _is_available_team(
@@ -2996,7 +2966,7 @@ async def _update_team_members_list(
     # extend() consumes the generator as it appends, so a member already added by this
     # same call is seen by the next _member_already_in_team check - the batch dedupes
     # against itself exactly as the append-one-at-a-time loop this replaced did.
-    complete_team_data.members_with_roles.extend(  # rebind-ok: this helper's contract is to grow the caller's roster in place
+    complete_team_data.members_with_roles.extend(
         m for m in resolved_members if not _member_already_in_team(m, complete_team_data)
     )
 
@@ -3635,11 +3605,7 @@ async def _team_member_delete(
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, existing_team_row, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={
@@ -3839,11 +3805,7 @@ async def team_member_update(
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, existing_team_row, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={
@@ -3952,7 +3914,7 @@ async def team_member_update(
 
 def _check_not_resetting_own_spend(user_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
     """
-    _verify_team_access authorizes a team admin (or org admin) over their own
+    The team access check authorizes a team admin (or org admin) over their own
     team, with no check that the target user_id differs from the caller. Left
     unchecked, that admin could target their own LiteLLM_TeamMembership row and
     repeatedly reset it to 0 right before it crosses their per-member cap,
@@ -4031,7 +3993,8 @@ async def reset_team_member_spend_fn(
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=True,
     )
-    await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
+        team_access_denied()
     _check_not_resetting_own_spend(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
     membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
@@ -4126,7 +4089,8 @@ async def reset_team_member_budget_fn(
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=True,
     )
-    await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
+        team_access_denied()
 
     membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
         "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
@@ -4137,9 +4101,7 @@ async def reset_team_member_budget_fn(
 
     team_default_budget_id: Final = await _existing_team_default_budget_id(team_obj, prisma_client)
     budget_link: Final = (
-        {
-            "connect": {"budget_id": team_default_budget_id}
-        }  # mutable-ok: prisma client requires a plain dict data= argument
+        {"connect": {"budget_id": team_default_budget_id}}
         if team_default_budget_id is not None
         else {"disconnect": True}  # mutable-ok: same prisma data= argument
     )
@@ -4406,10 +4368,8 @@ async def delete_team(
         team_row_pydantic = LiteLLM_TeamTable.model_validate(team_row_base.model_dump())
 
         # Verify caller has access to manage this team
-        await _verify_team_access(
-            team_obj=team_row_pydantic,
-            user_api_key_dict=user_api_key_dict,
-        )
+        if not await get_team_access().allows(user_api_key_dict, team_row_pydantic, TEAM_OR_ORG_ADMIN):
+            team_access_denied()
 
         team_rows.append(team_row_pydantic)
 
@@ -4505,26 +4465,12 @@ async def delete_team(
         llm_router=llm_router,
     )
 
-    # ## DELETE TEAM MEMBERSHIPS
-    for team_row in team_rows:
-        ### get all team members
-        team_members = team_row.members_with_roles
-        ### call team_member_delete for each team member
-        tasks = []
-        for team_member in team_members:
-            tasks.append(
-                _team_member_delete(
-                    data=TeamMemberDeleteRequest(
-                        team_id=team_row.team_id,
-                        user_id=team_member.user_id,
-                        user_email=team_member.user_email,
-                    ),
-                    user_api_key_dict=user_api_key_dict,
-                )
-            )
-        await asyncio.gather(*tasks)
-
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
+
+    member_ids_per_team: Final = await _resolve_deleted_team_member_user_ids(
+        teams=team_rows,
+        prisma_client=prisma_client,
+    )
 
     ## DELETE TEAMS
     # Both the delete and the reconcile sweep run under every team's advisory lock
@@ -4553,8 +4499,15 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await _invalidate_deleted_team_member_cache(
+        member_ids_per_team=member_ids_per_team,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     for deleted_team in team_rows:
+        _emit_team_members_metric(
+            deleted_team.model_copy(update={"members_with_roles": ()})  # mutable-ok: pydantic update payload
+        )
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
@@ -4627,6 +4580,63 @@ async def _invalidate_deleted_team_cache(
             for team in teams
         )
     )
+
+
+async def _invalidate_deleted_team_member_cache(
+    member_ids_per_team: Sequence[tuple[str, Sequence[str]]],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    for team_id, member_user_ids in member_ids_per_team:
+        await _evict_deleted_team_member_cache(
+            team_id=team_id,
+            member_user_ids=member_user_ids,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+
+async def _evict_deleted_team_member_cache(
+    team_id: str,
+    member_user_ids: Sequence[str],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    await evict_and_broadcast(cache_keys=tuple(member_user_ids), user_api_key_cache=user_api_key_cache)
+    await asyncio.gather(
+        *(
+            invalidate_team_member_spend_state(
+                user_id=user_id,
+                team_id=team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
+            for user_id in member_user_ids
+        )
+    )
+
+
+async def _resolve_deleted_team_member_user_ids(
+    teams: Sequence[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    resolved: Final = await asyncio.gather(
+        *(_deleted_team_member_user_ids(team=team, prisma_client=prisma_client) for team in teams)
+    )
+    return tuple(zip((team.team_id for team in teams), resolved))
+
+
+async def _deleted_team_member_user_ids(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> tuple[str, ...]:
+    roster_user_ids: Final = frozenset(
+        member.user_id for member in team.members_with_roles if member.user_id is not None
+    )
+    email_only_member_emails: Final = frozenset(
+        member.user_email
+        for member in team.members_with_roles
+        if member.user_id is None and member.user_email is not None
+    )
+    if not email_only_member_emails:
+        return tuple(sorted(roster_user_ids))
+    # One case-insensitive lookup for the whole roster. A per-email fan-out would size the
+    # query count by team membership, the same shape as the P2028 fan-out this path removed.
+    email_only_users: Final = await UserRepository(prisma_client).find_by_emails(sorted(email_only_member_emails))
+    return tuple(sorted(roster_user_ids.union(user.user_id for user in email_only_users)))
 
 
 def _transform_teams_to_deleted_records(
@@ -4737,7 +4747,7 @@ async def validate_membership(user_api_key_dict: UserAPIKeyAuth, team_table: Lit
         return
 
     # Check if user is an org admin for the team's organization
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_table):
+    if await get_team_access().allows(user_api_key_dict, team_table, TEAM_OR_ORG_ADMIN):
         return
 
     raise HTTPException(
@@ -4893,7 +4903,7 @@ async def team_info(
             )
         team_table: Final = LiteLLM_TeamTable.model_validate(team_info.model_dump())
         await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_table)
-        access_role: Final = await _resolve_team_access(team_obj=team_table, user_api_key_dict=user_api_key_dict)
+        access_role: Final = await get_team_access().strongest_role(user_api_key_dict, team_table)
         organization_models: Final[list[str] | None] = (
             _parent_organization_models(team_info) if access_role is not None else None
         )
@@ -5166,10 +5176,10 @@ async def block_team(
         )
 
     # Verify caller has access to manage this team
-    await _verify_team_access(
-        team_obj=LiteLLM_TeamTable.model_validate(existing_team.model_dump()),
-        user_api_key_dict=user_api_key_dict,
-    )
+    if not await get_team_access().allows(
+        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+    ):
+        team_access_denied()
 
     record: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
@@ -5215,10 +5225,10 @@ async def unblock_team(
         )
 
     # Verify caller has access to manage this team
-    await _verify_team_access(
-        team_obj=LiteLLM_TeamTable.model_validate(existing_team.model_dump()),
-        user_api_key_dict=user_api_key_dict,
-    )
+    if not await get_team_access().allows(
+        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+    ):
+        team_access_denied()
 
     record: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
@@ -6099,11 +6109,7 @@ async def team_model_add(
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
 
     # Authorization check - only proxy admin, team admin, or org admin can add models
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={"error": "Only proxy admin or team admin can modify team models"},
@@ -6219,11 +6225,7 @@ async def team_model_delete(
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
 
     # Authorization check - only proxy admin, team admin, or org admin can remove models
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={"error": "Only proxy admin or team admin can modify team models"},
@@ -6296,8 +6298,7 @@ async def team_member_permissions(
     if (
         hasattr(user_api_key_dict, "user_role")
         and not _user_has_admin_view(user_api_key_dict)
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
+        and not await get_team_access().allows(user_api_key_dict, complete_team_data, TEAM_OR_ORG_ADMIN)
         and not _is_available_team(
             team_id=complete_team_data.team_id,
             user_api_key_dict=user_api_key_dict,
@@ -6360,12 +6361,7 @@ async def update_team_member_permissions(
 
     # Available-team self-join must NOT grant write access to team-wide
     # permission policies; only proxy/team/org admins can update them.
-    if (
-        hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, complete_team_data, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={
@@ -6603,7 +6599,7 @@ async def _resolve_team_daily_activity_scope(
         has_full_team_view = True
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable.model_validate(team_alias.model_dump())
-            is_admin = _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+            is_admin = is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
             has_perm = _team_member_has_permission(
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,

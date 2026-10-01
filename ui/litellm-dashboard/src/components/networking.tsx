@@ -115,6 +115,7 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import type { SpanDetail, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -2016,6 +2017,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  used_client_oauth_token?: string;
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
@@ -2100,6 +2102,42 @@ export const uiSpendLogsCall = async ({
     throw error;
   }
 };
+
+/**
+ * Agent tracing. All three respond 501 `{detail}` when `general_settings.tracing` is not
+ * configured; callers can detect that through the thrown `ApiError`'s `status`.
+ */
+export const agentTraceListCall = async ({
+  accessToken,
+  startMs,
+  endMs,
+  cursor,
+}: {
+  accessToken: string;
+  startMs: number;
+  endMs: number;
+  cursor?: string | null;
+}): Promise<TracePage> => {
+  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined };
+  return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
+};
+
+export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined },
+  });
+
+export const agentTraceSpanCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  traceRef?: string,
+): Promise<SpanDetail> =>
+  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined },
+  });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {
@@ -4882,6 +4920,7 @@ export const fetchMCPServerHealth = async (accessToken: string, serverIds?: stri
     return await apiClient.get(`/v1/mcp/server/health`, {
       accessToken,
       query: {
+        include_reachability: true,
         server_ids: serverIds && serverIds.length > 0 ? serverIds : undefined,
       },
     });
@@ -6187,6 +6226,16 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
   }
 };
 
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
+
+export const triggerAgentKillSwitchCall = async (
+  accessToken: string,
+  agentId: string,
+): Promise<AgentKillSwitchResult> =>
+  await apiClient.post<AgentKillSwitchResult>(`/v1/agents/${encodeURIComponent(agentId)}/kill_switch`, {
+    accessToken,
+  });
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
@@ -6226,6 +6275,7 @@ export const patchAgentCall = async (
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
     access_group_ids?: string[];
+    kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
   },
 ) => {
   try {
