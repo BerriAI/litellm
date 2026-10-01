@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_http::ClientVariant;
-use litellm_traces::{Connection, Error, InsertTable, Parameter};
+use litellm_traces::{Connection, Error, InsertTable, Parameter, ReadQuery};
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
     prelude::*,
@@ -9,9 +9,11 @@ use pyo3::{
 
 fn map_error(error: Error) -> PyErr {
     match error {
-        Error::InvalidRow | Error::InvalidTable | Error::InvalidSchema | Error::EmptySql => {
-            PyValueError::new_err(error.to_string())
-        }
+        Error::InvalidRow
+        | Error::InvalidTable
+        | Error::InvalidSchema
+        | Error::EmptySql
+        | Error::InvalidQuery => PyValueError::new_err(error.to_string()),
         Error::InsertTooLarge => PyOverflowError::new_err(error.to_string()),
         Error::InvalidUrl
         | Error::QueryFailed(_)
@@ -33,6 +35,7 @@ pub struct NativeTraceStorage {
 #[pymethods]
 impl NativeTraceStorage {
     #[new]
+    #[pyo3(signature = (database, url, reader_url = None))]
     fn new(database: String, url: &str, reader_url: Option<&str>) -> PyResult<Self> {
         litellm_traces::schema_statements(&database, 1, 1).map_err(map_error)?;
         Ok(Self {
@@ -91,22 +94,48 @@ impl NativeTraceStorage {
         )
     }
 
-    fn query<'py>(
+    fn lens_query<'py>(
         &self,
         py: Python<'py>,
-        sql: String,
+        name: &str,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] parameters: BTreeMap<
             String,
             Parameter,
         >,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let query = litellm_traces::LensQuery::parse(name).map_err(map_error)?;
         let connection = self.reader.clone().ok_or_else(|| {
             PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
         })?;
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         crate::execution::run_async(
             py,
-            async move { litellm_traces::execute_read(&client, &connection, &sql, &parameters).await },
+            async move {
+                litellm_traces::execute_read(&client, &connection, query.sql(), &parameters).await
+            },
+            map_error,
+        )
+    }
+
+    fn query<'py>(
+        &self,
+        py: Python<'py>,
+        query: &str,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] parameters: BTreeMap<
+            String,
+            Parameter,
+        >,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query = ReadQuery::parse(query).map_err(map_error)?;
+        let connection = self.reader.clone().ok_or_else(|| {
+            PyRuntimeError::new_err("Trace reads require a separate ClickHouse reader URL")
+        })?;
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        crate::execution::run_async(
+            py,
+            async move {
+                litellm_traces::execute_named_read(&client, &connection, query, &parameters).await
+            },
             map_error,
         )
     }

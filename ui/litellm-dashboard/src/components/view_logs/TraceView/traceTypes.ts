@@ -25,6 +25,7 @@ export interface Span {
   input_tokens: number;
   output_tokens: number;
   litellm_request_id: string | null;
+  spend?: number | null;
 }
 
 /** One distinct agent in a trace. 200 invocations of `researcher` = one node. */
@@ -35,6 +36,7 @@ export interface AgentNode {
   llm_calls: number;
   tool_calls: number;
   duration_ms: number;
+  spend?: number | null;
 }
 
 export interface TraceSummary {
@@ -56,6 +58,7 @@ export interface TraceSummary {
   input_tokens: number;
   output_tokens: number;
   models: string[];
+  spend?: number | null;
 }
 
 export interface Trace {

@@ -628,9 +628,12 @@ def _custom_logger_class_exists_in_success_callbacks(
 
     Prevents double adding a custom logger callback to the litellm callbacks
 
-    Matches on the exact class; an instance of a subclass does not count as registered
+    Matches on the exact class and callback name; an instance of a subclass does not count as registered
     """
-    return any(type(cb) is type(callback_class) for cb in litellm.success_callback + litellm._async_success_callback)
+    return any(
+        _is_same_registered_custom_logger(cb, callback_class)
+        for cb in litellm.success_callback + litellm._async_success_callback
+    )
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
@@ -643,9 +646,23 @@ def _custom_logger_class_exists_in_failure_callbacks(
 
     Prevents double adding a custom logger callback to the litellm callbacks
 
-    Matches on the exact class; an instance of a subclass does not count as registered
+    Matches on the exact class and callback name; an instance of a subclass does not count as registered
     """
-    return any(type(cb) is type(callback_class) for cb in litellm.failure_callback + litellm._async_failure_callback)
+    return any(
+        _is_same_registered_custom_logger(cb, callback_class)
+        for cb in litellm.failure_callback + litellm._async_failure_callback
+    )
+
+
+def _is_same_registered_custom_logger(existing: object, callback_class: CustomLogger) -> bool:
+    """
+    One logger class can serve several callback names (every OTel v2 preset such as
+    ``otel`` and ``arize`` is an ``OpenTelemetryV2``), so a registered ``otel`` logger
+    must not count as an already registered ``arize`` logger
+    """
+    return type(existing) is type(callback_class) and getattr(existing, "callback_name", None) == getattr(
+        callback_class, "callback_name", None
+    )
 
 
 def get_request_guardrails(kwargs: dict[str, Any]) -> list[str]:
