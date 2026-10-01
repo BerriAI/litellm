@@ -26,7 +26,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy.guardrails._content_utils import as_json_value
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -159,22 +158,24 @@ def _is_part_list(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial i
     return isinstance(value, list)
 
 
-def _row_as_sent(dumped: JsonValue, caller: Mapping[str, object]) -> JsonValue:
-    """The request model validates list content lazily and dumps a list holding
-    any part it rejects as [], so such a row is sent with the caller's content."""
+def _row_as_sent(dumped: JsonValue, caller: Mapping[str, object]) -> object:
+    """The request model dumps a part list holding any part it rejects as [], so such a row is sent with the
+    caller's content"""
     caller_content: Final = caller.get("content")
     if not isinstance(dumped, dict) or not _is_part_list(caller_content):
         return dumped
     dumped_content: Final = dumped.get("content")
     if isinstance(dumped_content, list) and len(dumped_content) == len(caller_content):
         return dumped
-    return {**dumped, "content": as_json_value(caller_content)}
+    return {**dumped, "content": caller_content}  # mutable-ok: json.dumps encodes dict, not MappingProxyType
 
 
-def _rows_as_sent(dumped_rows: JsonValue, caller_rows: Sequence[Mapping[str, object]] | None) -> JsonValue:
+def _rows_as_sent(dumped_rows: JsonValue, caller_rows: Sequence[Mapping[str, object]] | None) -> object:
     if caller_rows is None or not isinstance(dumped_rows, list):
         return dumped_rows
-    return [_row_as_sent(dumped, caller) for dumped, caller in zip(dumped_rows, caller_rows, strict=True)]
+    return [  # mutable-ok: a JSON array, which structured_messages_from_json requires to be a list
+        _row_as_sent(dumped, caller) for dumped, caller in zip(dumped_rows, caller_rows, strict=True)
+    ]
 
 
 def _structured_rows_to_write_back(
@@ -503,7 +504,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             # The model's list content is a lazy iterator that this dump consumes, so it cannot be read again
             dumped: Final[Mapping[str, JsonValue]] = guardrail_request.model_dump(mode="json")
             sent_messages: Final = _rows_as_sent(dumped.get("structured_messages"), structured_messages)
-            request_json: Final = {**dumped, "structured_messages": sent_messages}  # mutable-ok: JSON POST body
+            request_json: Final = {**dumped, "structured_messages": sent_messages}  # mutable-ok: post() needs a dict
 
             response: Final = await self.async_handler.post(
                 url=self.api_base,
