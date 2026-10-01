@@ -182,6 +182,11 @@ def _flush_client_caches() -> None:
     _reset_aws_auth_caches()
 
 
+@pytest.fixture(autouse=True, scope="session")
+def bundled_tiktoken_cache() -> None:
+    importlib.import_module("litellm.litellm_core_utils.default_encoding")
+
+
 @pytest.fixture(scope="session")
 def isolated_aws_config_files(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     aws_dir: Final = tmp_path_factory.mktemp("aws-config")

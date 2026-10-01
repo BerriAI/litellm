@@ -72,6 +72,7 @@ def main() -> int:
             "no:rerunfailures",
             "--timeout=90",
             "--durations=15",
+            "--tb=short",
             f"--hypothesis-seed={options.seed}",
             f"--integration-order-seed={options.order_seed}",
             f"--junitxml={output / 'junit.xml'}",
