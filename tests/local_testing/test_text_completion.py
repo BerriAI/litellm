@@ -30,7 +30,7 @@ litellm.num_retries = 3
 
 FIREWORKS_TEXT_COMPLETION: Final = MappingProxyType(
     {
-        "model": "text-completion-openai/accounts/fireworks/models/gpt-oss-20b",
+        "model": "text-completion-openai/accounts/fireworks/models/glm-5p3-flash",
         "api_base": "https://api.fireworks.ai/inference/v1",
         "api_key": os.environ.get("FIREWORKS_AI_API_KEY"),
     }
