@@ -990,6 +990,27 @@ def test_inherit_builtin_service_tier_pricing_noop_without_base_rate_or_backend(
         litellm.get_model_info.cache_clear()
 
 
+@pytest.mark.parametrize(
+    ("tier_field", "preferred_deployment_rates"),
+    [
+        (
+            "input_cost_per_token_above_272k_tokens_priority",
+            ("input_cost_per_token_priority", "input_cost_per_token_above_272k_tokens"),
+        ),
+        (
+            "cache_read_input_token_cost_above_200k_tokens_flex",
+            ("cache_read_input_token_cost_flex", "cache_read_input_token_cost_above_200k_tokens"),
+        ),
+        ("input_cost_per_token_priority", ()),
+        ("input_cost_per_token_above_batch_priority", ()),
+    ],
+)
+def test_deployment_rates_preferred_over_tier_threshold_rate(
+    tier_field: str, preferred_deployment_rates: tuple[str, ...]
+) -> None:
+    assert Router._deployment_rates_preferred_over_tier_threshold_rate(tier_field) == preferred_deployment_rates
+
+
 def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() -> None:
     model_id: Final = "tier-priced-deployment"
     model_cost_entries: Final = {
