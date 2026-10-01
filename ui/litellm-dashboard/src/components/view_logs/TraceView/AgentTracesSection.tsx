@@ -60,6 +60,7 @@ interface AgentTracesSectionProps {
   /** Called when a run opens / closes, so the page can hide its own header while a run fills the view. */
   onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
+  canMintTracingKey?: boolean;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -100,6 +101,7 @@ export function AgentTracesSection({
   timeControls,
   onRunOpenChange,
   readOnly = false,
+  canMintTracingKey = false,
 }: AgentTracesSectionProps) {
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
@@ -152,6 +154,7 @@ export function AgentTracesSection({
   const setupProps = {
     accessToken,
     readOnly,
+    canMintTracingKey,
     onOpenTrace: openSentTrace,
     onCheck: checkTraces,
     checking: traces.isFetching,
