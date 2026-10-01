@@ -417,6 +417,46 @@ def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_db_params_do_not
     assert handler.IN_MEMORY_GUARDRAILS["rotated"] is loaded
 
 
+def test_sync_guardrail_from_db_applies_other_edits_and_keeps_the_loaded_value_that_does_not_decrypt():
+    handler = InMemoryGuardrailHandler()
+    loaded_params = {"guardrail": "g", "mode": "pre_call", "default_on": True, "api_key": "gk-loaded"}
+    handler.IN_MEMORY_GUARDRAILS["rotated"] = Guardrail(
+        guardrail_id="rotated", guardrail_name="g", litellm_params=LitellmParams(**loaded_params)
+    )
+    edited_on_another_pod = Guardrail(
+        guardrail_id="rotated",
+        guardrail_name="g",
+        litellm_params={**loaded_params, "mode": "post_call", "api_key": "litellm_enc::sealed-under-the-new-key"},
+    )
+
+    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
+        handler.sync_guardrail_from_db(edited_on_another_pod)
+
+    synced_params = reinitialize.call_args.kwargs["guardrail"]["litellm_params"]
+    assert synced_params["mode"] == "post_call"
+    assert synced_params["api_key"] == "gk-loaded"
+
+
+def test_sync_guardrail_from_db_keeps_the_loaded_value_when_a_patch_passes_litellm_params_as_a_model():
+    handler = InMemoryGuardrailHandler()
+    loaded_params = {"guardrail": "g", "mode": "pre_call", "default_on": True, "api_key": "gk-loaded"}
+    handler.IN_MEMORY_GUARDRAILS["rotated"] = Guardrail(
+        guardrail_id="rotated", guardrail_name="g", litellm_params=LitellmParams(**loaded_params)
+    )
+    patched = Guardrail(
+        guardrail_id="rotated",
+        guardrail_name="g",
+        litellm_params=LitellmParams(**{**loaded_params, "default_on": False, "api_key": "litellm_enc::sealed"}),
+    )
+
+    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
+        handler.sync_guardrail_from_db(patched)
+
+    synced_params = reinitialize.call_args.kwargs["guardrail"]["litellm_params"]
+    assert synced_params["default_on"] is False
+    assert synced_params["api_key"] == "gk-loaded"
+
+
 def test_sync_guardrail_from_db_applies_an_edit_to_a_guardrail_loaded_with_an_undecryptable_value():
     handler = InMemoryGuardrailHandler()
     stale_params = {"guardrail": "g", "mode": "pre_call", "default_on": True, "api_key": "litellm_enc::stale"}

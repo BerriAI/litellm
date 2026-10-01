@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from itertools import chain, count
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
@@ -1009,10 +1009,37 @@ class InMemoryGuardrailHandler:
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
             raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
+    def _with_loaded_values_where_undecryptable(self, guardrail_id: str, guardrail: Guardrail) -> Guardrail:
+        """Swap each DB litellm_params value that did not decrypt with the current key for the loaded guardrail's value."""
+        existing: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
+        stored_params: Final = guardrail.get("litellm_params")
+        db_params: Final = _as_json_object(
+            stored_params.model_dump() if isinstance(stored_params, BaseModel) else stored_params
+        )
+        if existing is None or db_params is None or not contains_encrypted_marker(db_params):
+            return guardrail
+        loaded_params: Final = self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
+        if loaded_params is None:
+            return guardrail
+        verbose_proxy_logger.warning(
+            "Guardrail %s has litellm_params that do not decrypt with the current key; keeping the loaded values for "
+            "them. Restart the proxy if the master key was rotated.",
+            guardrail_id,
+        )
+        return Guardrail(
+            **{  # mutable-ok: TypedDict construction
+                **guardrail,
+                "litellm_params": {  # mutable-ok: guardrails read dicts
+                    key: loaded_params.get(key) if contains_encrypted_marker(value) else value
+                    for key, value in db_params.items()
+                },
+            }
+        )
+
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
-        A loaded guardrail is kept when the DB row's params do not decrypt with the current key and the loaded ones do.
+        DB values that do not decrypt with the current key keep the loaded guardrail's values.
         This is the method to call during DB polling.
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
@@ -1020,29 +1047,14 @@ class InMemoryGuardrailHandler:
             verbose_proxy_logger.error("Cannot sync guardrail without guardrail_id")
             return None
 
-        existing: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
-        if (
-            existing is not None
-            and contains_encrypted_marker(guardrail.get("litellm_params"))
-            and not contains_encrypted_marker(
-                self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
-            )
-        ):
-            self._sources[guardrail_id] = "db"
-            verbose_proxy_logger.warning(
-                "Guardrail %s has litellm_params that do not decrypt with the current key; keeping the loaded version. "
-                "Restart the proxy if the master key was rotated.",
-                guardrail_id,
-            )
-            return existing
-
-        if self._has_guardrail_params_changed(guardrail_id, guardrail):
-            guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
+        synced: Final = self._with_loaded_values_where_undecryptable(guardrail_id, guardrail)
+        if self._has_guardrail_params_changed(guardrail_id, synced):
+            guardrail_name: Final = synced.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
                 "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
             )
             return self.reinitialize_guardrail(
-                guardrail=guardrail,
+                guardrail=synced,
                 config_file_path=config_file_path,
                 source="db",
             )
