@@ -150,3 +150,33 @@ def test_native_messages_thinking_display_updates_beta(display: str | None, expl
     )
 
     assert headers.get("anthropic-beta", "").split(",").count(beta) == int(display == "updates" or explicit_beta)
+
+
+@pytest.mark.parametrize("action", (None, "tool_addition", "tool_removal"))
+@pytest.mark.parametrize("explicit_beta", (False, True))
+def test_native_messages_tool_changes_beta(action: str | None, explicit_beta: bool) -> None:
+    from typing import Final
+
+    from litellm.types.llms.anthropic import (
+        ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+        ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+    )
+
+    beta: Final = ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER
+    content: Final = (
+        [{"type": action, "tool": {"type": "tool_reference", "name": "mcp__test__ping"}}]
+        if action
+        else "Answer briefly"
+    )
+    headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
+        headers={"anthropic-beta": beta} if explicit_beta else {},
+        model="claude-fable-5-1",
+        messages=["not a message dict", {"role": "user", "content": "Hello"}, {"role": "system", "content": content}],
+        optional_params={"thinking": {"type": "adaptive", "display": "updates"}},
+        litellm_params={},
+        api_key="sk-ant-test",
+    )
+
+    assert headers.get("anthropic-beta", "").split(",").count(beta) == int(action is not None or explicit_beta)
+
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers.get("anthropic-beta", "").split(",")

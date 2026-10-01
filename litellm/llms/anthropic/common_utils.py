@@ -27,11 +27,13 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
@@ -343,6 +345,18 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if not isinstance(thinking, dict):
             return False
         return thinking.get("type") in ("adaptive", "enabled") and thinking.get("display") == "updates"
+
+    def is_mid_conversation_tool_change_used(self, messages: Sequence[object]) -> bool:
+        for message in messages:
+            if message_field(message, "role") != "system":
+                continue
+            for block in parts_of(message_field(message, "content")):
+                if (
+                    message_field(block, "type") in ("tool_addition", "tool_removal")
+                    and message_field(message_field(block, "tool"), "type") == "tool_reference"
+                ):
+                    return True
+        return False
 
     def is_mid_conversation_output_config_used(self, messages: list[AllMessageValues]) -> bool:
         """
@@ -881,6 +895,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         custom_llm_provider: str,
         is_mid_conversation_output_config_used: bool = False,
         is_thinking_display_updates_used: bool = False,
+        is_mid_conversation_tool_change_used: bool = False,
     ) -> list[str]:
         """
         Get list of common beta headers based on the features that are active.
@@ -919,7 +934,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         thinking_display_betas: Final = (
             (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else ()
         )
-        return list(set(betas).union(thinking_display_betas))
+        tool_change_betas: Final = (
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else ()
+        )
+        return list(set(betas).union(thinking_display_betas, tool_change_betas))
 
     @staticmethod
     def _make_api_key_auth_header(api_key: str, api_base: str | None, use_bearer_for_custom_base: bool = False) -> dict:
@@ -953,6 +971,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         use_bearer_for_custom_base: bool = False,
         is_mid_conversation_output_config_used: bool = False,
         is_thinking_display_updates_used: bool = False,
+        is_mid_conversation_tool_change_used: bool = False,
     ) -> dict:
         betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -1010,7 +1029,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             betas.update(user_anthropic_beta_headers)
 
         all_betas: Final = betas.union(
-            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else ()
+            (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,) if is_thinking_display_updates_used else (),
+            (ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,) if is_mid_conversation_tool_change_used else (),
         )
 
         # Don't send any beta headers to Vertex, except web search which is required
@@ -1080,6 +1100,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             file_id_used=file_id_used,
             is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
             is_thinking_display_updates_used=self.is_thinking_display_updates_used(optional_params.get("thinking")),
+            is_mid_conversation_tool_change_used=self.is_mid_conversation_tool_change_used(messages),
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
