@@ -54,6 +54,7 @@ from litellm.llms.custom_httpx.async_client_cleanup import (  # noqa: E402  # sa
     close_litellm_async_clients,
 )
 from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module  # noqa: E402  # same import-time dependency
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault  # noqa: E402  # same import-time dependency
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1", "localhost"]
 AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
@@ -271,6 +272,11 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def secret_vault_factory() -> type[FakeSecretVault]:
+    return FakeSecretVault
 
 
 @pytest.fixture

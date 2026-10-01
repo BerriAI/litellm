@@ -4,6 +4,7 @@ import asyncio
 import copy
 import inspect
 import warnings
+from typing import Dict
 
 import pytest
 
@@ -148,3 +149,51 @@ def pytest_collection_modifyitems(config, items):
 
     # Reorder the items list
     items[:] = custom_logger_tests + other_tests
+
+
+_PROXY_MODULE_GLOBALS_TO_ISOLATE = (
+    "master_key",
+    "prisma_client",
+    "llm_router",
+)
+
+_MODULE_GLOBAL_MISSING = object()
+_proxy_module_globals_snapshot = pytest.StashKey[Dict[str, object]]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):
+    from litellm.proxy import proxy_server
+
+    item.stash[_proxy_module_globals_snapshot] = {
+        name: getattr(proxy_server, name, _MODULE_GLOBAL_MISSING)
+        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
+    }
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    yield
+    snapshot = item.stash.get(_proxy_module_globals_snapshot, None)
+    if snapshot is None:
+        return
+    from litellm.proxy import proxy_server
+
+    for name, value in snapshot.items():
+        if value is _MODULE_GLOBAL_MISSING:
+            if hasattr(proxy_server, name):
+                delattr(proxy_server, name)
+        else:
+            setattr(proxy_server, name, value)
+
+
+@pytest.fixture(autouse=True)
+def _reset_graceful_shutdown_state():
+    from litellm.proxy.shutdown.graceful_shutdown_manager import (
+        GracefulShutdownManager,
+    )
+
+    GracefulShutdownManager.reset()
+    yield
+    GracefulShutdownManager.reset()

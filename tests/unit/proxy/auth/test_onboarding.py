@@ -631,15 +631,20 @@ async def test_claim_token_rejects_short_password_before_consuming_invite():
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_claim_token_rejects_breached_password_before_consuming_invite():
     """A password found in the HIBP corpus must be rejected and never stored."""
+    from litellm.proxy.auth.password_policy import AsyncHTTPHandler
     from litellm.proxy.proxy_server import claim_onboarding_link
 
     password = "P@ssword123456"
-    respx.get(_hibp_url_for(password)).mock(
-        return_value=httpx.Response(200, text=f"{_hibp_suffix_for(password)}:1387")
-    )
+
+    class _BreachedHibpClient(AsyncHTTPHandler):
+        async def get(self, url: str, **kwargs: object) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text=f"{_hibp_suffix_for(password)}:1387",
+                request=httpx.Request("GET", url),
+            )
 
     invite = _make_invite(is_accepted=False)
     prisma = _make_prisma(invite, _make_user())
@@ -654,6 +659,10 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite():
         patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: claim_onboarding_link reads proxy_server module globals; no injection seam
         patch("litellm.proxy.proxy_server.master_key", "sk-test"),  # test-quality-ok: same as above
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: same as above
+        patch(  # test-quality-ok: the HIBP client is aiohttp-backed, so respx cannot stub it; inject it at the dependency entry point
+            "litellm.proxy.auth.password_policy.get_hibp_client",
+            return_value=_BreachedHibpClient(),
+        ),
     ):
         with pytest.raises(ProxyException) as exc_info:
             await claim_onboarding_link(data=data, request=request)
