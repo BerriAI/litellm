@@ -31,7 +31,9 @@ class DecodedSpan(TypedDict):
     events: ReadOnly[list[DecodedEvent]]
 
 
-ReadQueryName = Literal["list_traces", "trace_identity", "trace_spans", "span_detail", "spend_by_response_ids"]
+ReadQueryName = Literal[
+    "list_traces", "trace_identity", "trace_spans", "span_detail", "span_error", "spend_by_response_ids"
+]
 
 
 class NativeStore(Protocol):
@@ -39,7 +41,7 @@ class NativeStore(Protocol):
 
     def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> Awaitable[None]: ...
 
-    def insert_rows(self, table: str, rows: Sequence[Mapping[str, JsonValue]]) -> Awaitable[None]: ...
+    def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
     def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
@@ -53,9 +55,9 @@ class NativeTraces(Protocol):
         self,
         body: bytes,
         content_type: str | None,
-        content_encoding: str | None,
-        max_decompressed_bytes: int,
     ) -> list[DecodedSpan]: ...
+
+    def trace_encode_error(self, message: str) -> bytes: ...
 
 
 class QueryResponse(BaseModel):
@@ -63,7 +65,6 @@ class QueryResponse(BaseModel):
     data: list[dict[str, JsonValue]]
 
 
-INSERT_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
 
 
@@ -74,13 +75,17 @@ def _native() -> NativeTraces:
     return cast(NativeTraces, native)  # cast-ok: the native extension is validated against this protocol at call sites
 
 
-def decode_otlp(
-    body: bytes, content_type: str | None, content_encoding: str | None, max_decompressed_bytes: int
-) -> list[DecodedSpan]:
-    return _native().trace_decode_otlp(body, content_type, content_encoding, max_decompressed_bytes)
+def decode_otlp(body: bytes, content_type: str | None) -> list[DecodedSpan]:
+    return _native().trace_decode_otlp(body, content_type)
 
 
-class TraceStorage:
+def encode_error(message: str) -> bytes:
+    if get_native_bridge() is None:
+        return b""
+    return _native().trace_encode_error(message)
+
+
+class ClickHouseStorage:
     def __init__(self, database: str, url: str, reader_url: str | None = None) -> None:
         self._native: Final = _native().NativeTraceStorage(database, url, reader_url)
 
@@ -88,7 +93,7 @@ class TraceStorage:
         await self._native.ensure_schema(trace_retention_days, spend_log_retention_days)
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
-        await self._native.insert_rows(table, INSERT_ROWS.validate_python(rows))
+        await self._native.insert_rows(table, rows)
 
     async def query(
         self, name: ReadQueryName, parameters: Mapping[str, object] | None = None

@@ -10,8 +10,8 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens import endpoints
 from litellm.proxy.lens.endpoints import Preview, claim, user_scope, validate_selection
-from litellm.proxy.lens.models import Check, Job, Lens, LensSettings, Scope
-from litellm.proxy.lens.sources import SourceReader, execution_id
+from litellm.proxy.lens.models import Check, Job, Lens, LensSettings, Scope, Worker
+from litellm.proxy.lens.sources import execution_id
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.proxy.spend_tracking.log_visibility import LogVisibility
 from tests.unit.proxy.lens.test_state import lens as sample_lens
@@ -21,9 +21,10 @@ NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
 
 class LensRepositoryStub:
-    def __init__(self, lens: Lens | None, job: Job | None = None) -> None:
+    def __init__(self, lens: Lens | None, job: Job | None = None, workers: tuple[Worker, ...] = ()) -> None:
         self.lens = lens
         self.run = job
+        self.worker_rows = workers
 
     async def get(self, lens_id: str) -> Lens | None:
         return self.lens if self.lens is not None and self.lens.id == lens_id else None
@@ -33,6 +34,12 @@ class LensRepositoryStub:
 
     async def job(self, lens_id: str, job_id: str) -> Job | None:
         return self.run if self.run is not None and self.run.id == job_id else None
+
+    async def lenses(self) -> tuple[Lens, ...]:
+        return (self.lens,) if self.lens is not None else ()
+
+    async def workers(self) -> tuple[Worker, ...]:
+        return self.worker_rows
 
 
 class EvidenceStorageStub:
@@ -137,6 +144,25 @@ async def test_read_lens_requires_permitted_team_visibility(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
+async def test_list_lenses_filters_lenses_and_workers_by_log_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    lens: Final = _lens(Scope(team_id="team-a"))
+    worker_row: Final = worker(team="team-a")
+    auth: Final = _team_member()
+    monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens, workers=(worker_row,)))
+    _set_permitted_teams(monkeypatch, ())
+
+    denied: Final = await endpoints.list_lenses(auth, None)
+    assert denied.lenses == ()
+    assert denied.workers == ()
+    assert denied.tracing_enabled is False
+
+    _set_permitted_teams(monkeypatch, ("team-a",))
+    visible: Final = await endpoints.list_lenses(auth, None)
+    assert tuple(item.id for item in visible.lenses) == ("lens-1",)
+    assert tuple(item.id for item in visible.workers) == (worker_row.id,)
+
+
+@pytest.mark.asyncio
 async def test_list_runs_requires_permitted_team_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     lens: Final = _lens(Scope(team_id="team-a"))
     job: Final = _job(lens)
@@ -174,16 +200,16 @@ async def test_evidence_content_requires_permitted_team_visibility(monkeypatch: 
     lens: Final = _lens(Scope(team_id="team-a"))
     auth: Final = _team_member()
     identity: Final = execution_id("traces", "team-a", "trace-a", "trace-ref")
-    reader: Final = SourceReader(EvidenceStorageStub())
+    storage: Final = EvidenceStorageStub()
     monkeypatch.setattr(endpoints, "repository", lambda: LensRepositoryStub(lens))
     _set_permitted_teams(monkeypatch, ())
 
     with pytest.raises(HTTPException) as error:
-        await endpoints.evidence_content("lens-1", identity, auth, reader, offset=0)
+        await endpoints.evidence_content("lens-1", identity, auth, storage, offset=0)
     assert (error.value.status_code, error.value.detail) == (404, "Lens not found")
 
     _set_permitted_teams(monkeypatch, ("team-a",))
-    content: Final = await endpoints.evidence_content("lens-1", identity, auth, reader, offset=0)
+    content: Final = await endpoints.evidence_content("lens-1", identity, auth, storage, offset=0)
     assert content.execution.trace_ref == "trace-ref"
     assert content.parts[0].content == "verified output"
 
@@ -221,6 +247,7 @@ async def test_preview_sample_is_admin_only() -> None:
                 )
             ),
             UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, token="key-a"),
+            None,
         )
 
     assert (error.value.status_code, error.value.detail) == (403, "Only proxy admins can configure or run Lens")

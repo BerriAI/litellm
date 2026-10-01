@@ -45,7 +45,7 @@ def test_model_insights_reads_only_bounded_rollup() -> None:
         custom_llm_provider="openai",
     )
     table = MagicMock()
-    table.group_by = AsyncMock(side_effect=[[model, prompt_heavy_model], [daily]])
+    table.group_by = AsyncMock(side_effect=[[model, prompt_heavy_model], [daily], []])
     prisma = MagicMock()
     prisma.db.litellm_dailymodelusage = table
     prisma.db.query_raw = AsyncMock()
@@ -60,7 +60,7 @@ def test_model_insights_reads_only_bounded_rollup() -> None:
     assert response.status_code == 200
     assert response.json()["top_models"][0]["model_group"] == "long-context"
     assert "by_task" not in response.json()
-    assert table.group_by.await_count == 2
+    assert table.group_by.await_count == 3
     prisma.db.query_raw.assert_not_awaited()
     prisma.db.litellm_spendlogs.find_many.assert_not_awaited()
 
@@ -96,11 +96,11 @@ def test_model_insights_ranks_top_models_by_selected_metric() -> None:
     )
     request_heavy["_sum"]["request_count"] = "500"
     table = MagicMock()
-    table.group_by = AsyncMock(side_effect=[[token_heavy, request_heavy], []])
+    table.group_by = AsyncMock(side_effect=[[token_heavy, request_heavy], [], []])
 
     by_requests = _call(table, "metric=requests").json()
     by_tokens = _call(
-        MagicMock(group_by=AsyncMock(side_effect=[[token_heavy, request_heavy], []])), "metric=tokens"
+        MagicMock(group_by=AsyncMock(side_effect=[[token_heavy, request_heavy], [], []])), "metric=tokens"
     ).json()
 
     assert by_requests["top_models"][0]["model_group"] == "busy"
@@ -110,13 +110,31 @@ def test_model_insights_ranks_top_models_by_selected_metric() -> None:
 def test_model_insights_scopes_daily_to_ranked_deployments() -> None:
     ranked = _grouped_row(model_group="shared", model="m1", custom_llm_provider="openai")
     table = MagicMock()
-    table.group_by = AsyncMock(side_effect=[[ranked], []])
+    table.group_by = AsyncMock(side_effect=[[ranked], [], []])
 
     _call(table, "metric=tokens")
 
     daily_where = table.group_by.await_args_list[1].kwargs["where"]
     assert daily_where["OR"] == [{"model_group": "shared", "model": "m1", "custom_llm_provider": "openai"}]
     assert "model_group" not in daily_where
+
+
+def test_model_insights_daily_totals_cover_every_model_not_just_the_ranked_ones() -> None:
+    ranked = _grouped_row(model_group="ranked", model="m1", custom_llm_provider="openai")
+    ranked_day = _grouped_row(date="2026-09-28", model_group="ranked", model="m1", custom_llm_provider="openai")
+    whole_gateway_day = _grouped_row(prompt_tokens="7000", completion_tokens="3000", date="2026-09-28")
+    table = MagicMock()
+    table.group_by = AsyncMock(side_effect=[[ranked], [ranked_day], [whole_gateway_day]])
+
+    body = _call(table, "metric=tokens").json()
+
+    totals_call = table.group_by.await_args_list[2].kwargs
+    assert totals_call["by"] == ["date"]
+    assert "OR" not in totals_call["where"]
+    assert body["daily_totals"] == [
+        {"date": "2026-09-28", "spend": 1.25, "prompt_tokens": 7000, "completion_tokens": 3000, "requests": 3}
+    ]
+    assert body["daily"][0]["prompt_tokens"] + body["daily"][0]["completion_tokens"] < 10000
 
 
 def _task_rows() -> list[dict[str, object]]:

@@ -9,7 +9,7 @@ import pytest
 
 from litellm.tracing.store import (
     AmbiguousTraceError,
-    ClickHouseTraceStore,
+    TraceStore,
     agent_nodes,
     decode_cursor,
     encode_cursor,
@@ -285,7 +285,7 @@ async def test_list_traces_sets_next_cursor_on_full_page():
         "models": [],
     }
     client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "trace_ref": "ref1", "start_ms": 900}])
-    store = ClickHouseTraceStore(client)
+    store = TraceStore(client)
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await store.list_traces(scope, 0, 2000, limit=2)
@@ -304,9 +304,10 @@ async def test_list_traces_sets_next_cursor_on_full_page():
 async def test_get_span_not_found_and_found():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
-    store = ClickHouseTraceStore(client)
+    store = TraceStore(client)
     scope: TraceScope = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
     assert await store.get_span("t", "s", scope, "ref") is None
+    assert await store.get_span("t", "s", scope) is None
     stored_input = '[{"role": "user", "content": "hi"}]'
     client.query = AsyncMock(
         return_value=[{"span_id": "s", "input": stored_input, "output": '{"ok": true}', "attributes": {"k": "v"}}]
@@ -325,7 +326,7 @@ async def test_get_span_not_found_and_found():
 async def test_legacy_trace_lookup_requires_reference_only_when_id_is_ambiguous():
     client = MagicMock()
     client.query = AsyncMock(return_value=[{"trace_ref": "ref-a"}, {"trace_ref": "ref-b"}])
-    store = ClickHouseTraceStore(client)
+    store = TraceStore(client)
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):
@@ -340,7 +341,7 @@ async def test_legacy_trace_lookup_requires_reference_only_when_id_is_ambiguous(
 async def test_supplied_reference_skips_identity_lookup_and_keeps_scope():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
-    store = ClickHouseTraceStore(client)
+    store = TraceStore(client)
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
 
     assert await store.get_trace("reused", scope, "forged-ref") is None
@@ -356,7 +357,7 @@ async def test_unambiguous_legacy_lookup_uses_scoped_reference():
     client.query = AsyncMock(side_effect=[[{"trace_ref": "ref-a"}], [_row("root", "", "agent", "agent", "agent")]])
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
 
-    trace = await ClickHouseTraceStore(client).get_trace("reused", scope)
+    trace = await TraceStore(client).get_trace("reused", scope)
 
     assert trace is not None
     assert trace["summary"]["trace_ref"] == "ref-a"
@@ -376,7 +377,7 @@ async def test_unambiguous_legacy_span_lookup_uses_scoped_reference():
     )
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
 
-    span = await ClickHouseTraceStore(client).get_span("reused", "span", scope)
+    span = await TraceStore(client).get_span("reused", "span", scope)
 
     assert span == {
         "span_id": "span",
@@ -388,6 +389,52 @@ async def test_unambiguous_legacy_span_lookup_uses_scoped_reference():
     }
     assert [call.args[0] for call in client.query.await_args_list] == ["trace_identity", "span_detail"]
     assert client.query.await_args_list[1].args[1]["trace_ref"] == "ref-a"
+
+
+@pytest.mark.asyncio
+async def test_span_error_resolves_legacy_trace_reference_within_visibility_scope():
+    client = MagicMock()
+    client.query = AsyncMock(
+        side_effect=[
+            [{"trace_ref": "ref-a"}],
+            [{"span_id": "span", "message": "issue", "total_chars": 5, "version": "version-a"}],
+        ]
+    )
+    scope: TraceScope = {"all_teams": 0, "user_id": "reader", "team_ids": ("team-a",), "api_key_hash": ""}
+
+    page = await TraceStore(client).get_span_error("reused", "span", scope)
+
+    assert page == {
+        "span_id": "span",
+        "message": "issue",
+        "total_chars": 5,
+        "next_cursor": None,
+    }
+    assert [call.args[0] for call in client.query.await_args_list] == ["trace_identity", "span_error"]
+    assert client.query.await_args_list[0].args[1] == {**scope, "trace_id": "reused"}
+    assert client.query.await_args_list[1].args[1]["trace_ref"] == "ref-a"
+    assert client.query.await_args_list[1].args[1]["user_id"] == "reader"
+
+
+@pytest.mark.asyncio
+async def test_span_error_without_visible_trace_reference_skips_diagnostic_query():
+    client = MagicMock()
+    client.query = AsyncMock(return_value=[])
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "key-a"}
+
+    assert await TraceStore(client).get_span_error("trace", "span", scope) is None
+    client.query.assert_awaited_once_with("trace_identity", {**scope, "trace_id": "trace"})
+
+
+@pytest.mark.asyncio
+async def test_span_error_requires_reference_when_visible_trace_id_is_ambiguous():
+    client = MagicMock()
+    client.query = AsyncMock(return_value=[{"trace_ref": "ref-a"}, {"trace_ref": "ref-b"}])
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
+
+    with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):
+        await TraceStore(client).get_span_error("reused", "span", scope)
+    client.query.assert_awaited_once_with("trace_identity", {**scope, "trace_id": "reused"})
 
 
 @pytest.mark.asyncio
@@ -425,7 +472,7 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
         },
     ]
     client.query = AsyncMock(side_effect=[spans, spend])
-    store = ClickHouseTraceStore(client)
+    store = TraceStore(client)
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     trace = await store.get_trace("trace-1", scope, "ref")
@@ -476,7 +523,7 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
     client.query = AsyncMock(side_effect=[rows, spend])
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
-    page = await ClickHouseTraceStore(client).list_traces(scope, 0, 2000)
+    page = await TraceStore(client).list_traces(scope, 0, 2000)
 
     assert [run["spend"] for run in page["data"]] == [0.25, None]
     assert [call.args[0] for call in client.query.await_args_list] == ["list_traces", "spend_by_response_ids"]
@@ -498,7 +545,7 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
         for request_id, cost in (("response-1", 0.25), ("response-1_cache_hit123", 0.0))
     ]
     client.query = AsyncMock(side_effect=[[span], spend])
-    store = ClickHouseTraceStore(client)
+    store = TraceStore(client)
     scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "key-a"}
 
     trace = await store.get_trace("trace-1", scope, "ref")
@@ -506,3 +553,49 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
     assert trace is not None
     assert trace["summary"]["spend"] is None
     assert trace["spans"][0]["spend"] is None
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_continuation_preserves_content_version_scope_and_unicode_offset():
+    from hashlib import sha256
+
+    message = "first 🧪\nlast"
+    version = sha256(message.encode()).hexdigest().upper()
+    client = MagicMock()
+    client.query = AsyncMock(
+        side_effect=[
+            [{"span_id": "span-1", "message": "first 🧪", "total_chars": len(message), "version": version}],
+            [{"span_id": "span-1", "message": "\nlast", "total_chars": len(message), "version": version}],
+        ]
+    )
+    store = TraceStore(client)
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
+    first = await store.get_span_error("trace-1", "span-1", scope, "scoped-run")
+    assert first is not None and first["next_cursor"] is not None
+    last = await store.get_span_error("trace-1", "span-1", scope, "scoped-run", first["next_cursor"])
+    assert last is not None
+    assert first["message"] + last["message"] == message
+    assert last["next_cursor"] is None
+    client.query.assert_awaited_with(
+        "span_error",
+        {
+            **scope,
+            "trace_id": "trace-1",
+            "span_id": "span-1",
+            "trace_ref": "scoped-run",
+            "error_offset": len(first["message"]),
+            "error_version": version,
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", ["garbage", "e30=", "WzEsMl0="])
+async def test_malformed_diagnostic_cursor_never_reaches_storage(cursor):
+    client = MagicMock()
+    client.query = AsyncMock()
+    with pytest.raises(ValueError, match="Invalid diagnostic cursor"):
+        await TraceStore(client).get_span_error(
+            "trace", "span", {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": ""}, cursor=cursor
+        )
+    client.query.assert_not_awaited()

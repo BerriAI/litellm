@@ -204,7 +204,6 @@ jobs:
               tests/unit/proxy/spend_tracking
               --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
               tests/unit/proxy/pass_through_endpoints
-              tests/test_litellm/proxy/pass_through_endpoints
               tests/unit/proxy/_experimental
               --ignore=tests/unit/proxy/_experimental/mcp_server
               tests/unit/proxy/experimental
@@ -217,88 +216,41 @@ jobs:
               tests/unit/proxy/enterprise_billing
               tests/unit/proxy/types_utils
               tests/unit/proxy/logging_endpoints
-              tests/unit/proxy/test__types.py
-              tests/unit/proxy/test_aiohttp_cleanup_closed.py
-              tests/unit/proxy/test_aiohttp_session_recovery.py
-              tests/unit/proxy/test_api_key_masking_in_errors.py
-              tests/unit/proxy/test_audio_speech_prometheus_hooks.py
-              tests/unit/proxy/test_batch_expiry.py
-              tests/unit/proxy/test_batch_metadata_none_fix.py
-              tests/unit/proxy/test_batch_retrieve_bedrock.py
-              tests/unit/proxy/test_batch_x_litellm_model_encoding.py
-              tests/unit/proxy/test_blocked_response_usage.py
-              tests/unit/proxy/test_body_snapshot_callback_params.py
-              tests/unit/proxy/test_budget_reservation.py
-              tests/unit/proxy/test_bug_report_config.py
-              tests/unit/proxy/test_caching_routes.py
-              tests/unit/proxy/test_chat_completion_metadata.py
-              tests/unit/proxy/test_claude_code_marketplace.py
-              tests/unit/proxy/test_collector.py
-              tests/unit/proxy/test_common_request_processing.py
-              tests/unit/proxy/test_component_allowlists.py
-              tests/unit/proxy/test_conftest.py
-              tests/unit/proxy/test_cors_config.py
-              tests/unit/proxy/test_custom_proxy.py
-              tests/unit/proxy/test_dynamic_mcp_route.py
-              tests/unit/proxy/test_empty_model_list.py
-              tests/unit/proxy/test_enforce_user_param.py
-              tests/unit/proxy/test_fallback_management_endpoints.py
-              tests/unit/proxy/test_fastapi_offline_routes.py
-              tests/unit/proxy/test_filter_models_by_team_access_group.py
-              tests/unit/proxy/test_health_check_functions.py
-              tests/unit/proxy/test_health_check_max_tokens.py
-              tests/unit/proxy/test_init_litellm_callbacks.py
-              tests/unit/proxy/test_langfuse_passthrough_security.py
-              tests/unit/proxy/test_lazy_openapi_snapshot.py
-              tests/unit/proxy/test_litellm_pre_call_utils.py
-              tests/unit/proxy/test_max_budget_env_var.py
-              tests/unit/proxy/test_mcp_asgi_response.py
-              tests/unit/proxy/test_model_based_routing_files_batches.py
-              tests/unit/proxy/test_model_deprecations_endpoint.py
-              tests/unit/proxy/test_model_dump_with_preserved_fields.py
-              tests/unit/proxy/test_model_id_header_propagation.py
-              tests/unit/proxy/test_model_info_default_limits.py
-              tests/unit/proxy/test_model_level_guardrails.py
-              tests/unit/proxy/test_model_list_aliases.py
-              tests/unit/proxy/test_model_list_callback_filter.py
-              tests/unit/proxy/test_model_list_discoverable.py
-              tests/unit/proxy/test_model_list_healthy_only.py
-              tests/unit/proxy/test_modify_response_streaming_passthrough.py
-              tests/unit/proxy/test_native_compaction.py
-              tests/unit/proxy/test_openai_ws_passthrough_routes.py
-              tests/unit/proxy/test_openapi_schema_validation.py
-              tests/unit/proxy/test_plugin_routes.py
-              tests/unit/proxy/test_pointfive_dashboard_config.py
-              tests/unit/proxy/test_pointfive_ui_callback.py
-              tests/unit/proxy/test_pricing_field_strip.py
-              tests/unit/proxy/test_prisma_engine_watchdog.py
-              tests/unit/proxy/test_prisma_migration.py
-              tests/unit/proxy/test_prometheus_cleanup.py
-              tests/unit/proxy/test_prometheus_metrics_server.py
-              tests/unit/proxy/test_provider_url_destination_guard.py
-              tests/unit/proxy/test_proxy_cli.py
-              tests/unit/proxy/test_proxy_logging_hook_detection.py
-              tests/unit/proxy/test_proxy_types.py
-              tests/unit/proxy/test_pyroscope.py
-              tests/unit/proxy/test_read_model_list.py
-              tests/unit/proxy/test_redis_auth_cache_flag.py
-              tests/unit/proxy/test_response_model_sanitization.py
-              tests/unit/proxy/test_route_a2a_models.py
-              tests/unit/proxy/test_route_llm_request.py
-              tests/unit/proxy/test_route_priority.py
-              tests/unit/proxy/test_sensitive_route_auth.py
-              tests/unit/proxy/test_shared_health_check.py
-              tests/unit/proxy/test_spend_log_cleanup.py
-              tests/unit/proxy/test_swagger_chat_completions.py
-              tests/unit/proxy/test_team_member_update.py
-              tests/unit/proxy/test_team_org_move.py
-              tests/unit/proxy/test_tools_allowlist_enforcement.py
-              tests/unit/proxy/test_tracing_endpoints.py
-              tests/unit/proxy/test_update_llm_router_resilience.py
-              tests/unit/proxy/test_zerobus_dashboard_config.py
-              tests/unit/proxy/test_proxy_server_endpoints_and_startup.py
-              tests/unit/proxy/test_proxy_utils_model_creation_and_error_logging.py
             unit-flag: proxy-infra
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
+          - shard: proxy-infra-root
+            artifact-name: proxy-infra-root
+            test-path: >-
+              tests/unit/proxy/test_*.py
+              --ignore=tests/unit/proxy/test_aproxy_startup.py
+              --ignore=tests/unit/proxy/test_credential_slot_registry.py
+              --ignore=tests/unit/proxy/test_custom_callback_input.py
+              --ignore=tests/unit/proxy/test_custom_logger_s3_gcs.py
+              --ignore=tests/unit/proxy/test_custom_tokenizer_bug.py
+              --ignore=tests/unit/proxy/test_db_schema_changes.py
+              --ignore=tests/unit/proxy/test_deprecated_key_grace_period.py
+              --ignore=tests/unit/proxy/test_get_favicon.py
+              --ignore=tests/unit/proxy/test_get_image.py
+              --ignore=tests/unit/proxy/test_prisma_client_backoff_retry.py
+              --ignore=tests/unit/proxy/test_prompt_test_endpoint.py
+              --ignore=tests/unit/proxy/test_proxy_config_unit_test.py
+              --ignore=tests/unit/proxy/test_proxy_custom_auth.py
+              --ignore=tests/unit/proxy/test_proxy_reject_logging.py
+              --ignore=tests/unit/proxy/test_proxy_server.py
+              --ignore=tests/unit/proxy/test_proxy_setting_guardrails.py
+              --ignore=tests/unit/proxy/test_proxy_token_counter.py
+              --ignore=tests/unit/proxy/test_proxy_utils.py
+              --ignore=tests/unit/proxy/test_reducto_ocr_route.py
+              --ignore=tests/unit/proxy/test_response_polling_pre_call_checks.py
+              --ignore=tests/unit/proxy/test_server_root_path.py
+              --ignore=tests/unit/proxy/test_ui_path_detection.py
+              --ignore=tests/unit/proxy/test_unit_test_proxy_hooks.py
+              --ignore=tests/unit/proxy/test_update_spend.py
+              --ignore=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
             workers: 4
             reruns: 2
             timeout-minutes: 20

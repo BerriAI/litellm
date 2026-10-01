@@ -35,7 +35,7 @@ from litellm.proxy.lens.models import (
     WorkerCreated,
 )
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
-from litellm.proxy.lens.sources import SourceReader, parse_execution
+from litellm.proxy.lens.sources import SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
     can_access,
     can_view,
@@ -47,10 +47,12 @@ from litellm.proxy.lens.state import (
     snapshot_finding,
 )
 from litellm.proxy.spend_tracking.log_visibility import LogVisibility, log_visibility
+from litellm.proxy.tracing_runtime import provide_storage
 
-router: Final = APIRouter(prefix="/lens", tags=["Lens"])  # mutable-ok: FastAPI requires list
+router: Final = APIRouter(prefix="/lens", tags=["Lens"])
 _bearer: Final = HTTPBearer()
 Auth: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
+StorageDep: TypeAlias = Annotated[Storage | None, Depends(provide_storage)]
 
 
 def repository() -> LensRepository:
@@ -61,10 +63,13 @@ def repository() -> LensRepository:
     return LensRepository(WriterDatabase(writer_wrapper(prisma_client.db)))
 
 
-def source_reader() -> SourceReader:
-    from litellm.proxy.tracing_endpoints import get_receiver
-
-    return SourceReader(get_receiver().store.storage)
+def source_reader(storage: Storage | None) -> SourceReader:
+    if storage is None:
+        raise HTTPException(
+            status_code=501,
+            detail="Agent tracing is not enabled. Set `tracing:` in general_settings and CLICKHOUSE_URL.",
+        )
+    return SourceReader(storage)
 
 
 def user_scope(auth: UserAPIKeyAuth) -> Scope:
@@ -145,14 +150,12 @@ def validate_model(settings: LensSettings, auth: UserAPIKeyAuth) -> None:
 
 
 @router.get("", response_model=LensList)
-async def list_lenses(auth: Auth) -> LensList:
-    from litellm.proxy import tracing_endpoints
-
+async def list_lenses(auth: Auth, storage: StorageDep) -> LensList:
     viewer: Final = await log_visibility(auth)
     return LensList(
         lenses=tuple(e for e in await repository().lenses() if can_view(viewer, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_view(viewer, w.scope)),
-        tracing_enabled=tracing_endpoints.receiver is not None,
+        tracing_enabled=storage is not None,
     )
 
 
@@ -275,11 +278,11 @@ class Preview(BaseModel):
 
 
 @router.post("/preview/sample", response_model=Sample)
-async def preview_sample(body: Preview, auth: Auth) -> Sample:
+async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Sample:
     scope: Final = user_scope(auth)
     validate_selection(body.settings)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
-    return await source_reader().sample(
+    return await source_reader(storage).sample(
         scope,
         body.settings,
         int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000),
@@ -378,14 +381,14 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
 
 
 @router.get("/worker/{lens_id}/{job_id}/sample", response_model=Sample)
-async def sample(lens_id: str, job_id: str, worker: WorkerAuth) -> Sample:
+async def sample(lens_id: str, job_id: str, worker: WorkerAuth, storage: StorageDep) -> Sample:
     lens, job = await assigned(lens_id, job_id, worker)
     if job.sample is not None:
         return job.sample
     pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
     cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
     while True:
-        page = await source_reader().sample(
+        page = await source_reader(storage).sample(
             lens.scope,
             job.settings,
             int(job.start.timestamp() * 1000),
@@ -424,6 +427,7 @@ async def content(
     job_id: str,
     execution_id: str,
     worker: WorkerAuth,
+    storage: StorageDep,
     cursor: str = "",
     offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
@@ -432,7 +436,7 @@ async def content(
     execution: Final = next((e for e in selected.executions if e.id == execution_id), None)
     if execution is None:
         raise HTTPException(404, "Execution is outside this job's sample")
-    return await source_reader().content(lens.scope, execution, cursor, offset)
+    return await source_reader(storage).content(lens.scope, execution, cursor, offset)
 
 
 @router.post("/worker/{lens_id}/{job_id}/model", response_model=ModelResult)
@@ -444,7 +448,7 @@ async def model(lens_id: str, job_id: str, body: ModelRequest, worker: WorkerAut
 
 
 @router.post("/worker/{lens_id}/{job_id}/result", response_model=Lens)
-async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth) -> Lens:
+async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, storage: StorageDep) -> Lens:
     lens: Final = await get_lens(lens_id, worker.scope)
     old: Final = next((j for j in lens.jobs if j.id == job_id), None)
     if old and old.status in ("completed", "failed") and old.worker_id == worker.id:
@@ -466,7 +470,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth) ->
         raise HTTPException(422, "Finding references evidence outside the job")
 
     for finding in body.findings:
-        await validate_finding(lens, selected, finding)
+        await validate_finding(lens, selected, finding, storage)
 
     def finish(e: Lens) -> Lens:
         active: Final = current_job(e)
@@ -534,12 +538,12 @@ async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Cla
     return None
 
 
-async def validate_finding(lens: Lens, selected: Sample, finding: FindingDraft) -> None:
+async def validate_finding(lens: Lens, selected: Sample, finding: FindingDraft, storage: Storage | None) -> None:
     previous: Final = next((f for f in lens.findings if f.id == finding.existing_finding_id), None)
     if finding.existing_finding_id and (previous is None or previous.check_id != finding.check_id):
         raise HTTPException(422, "Existing finding must belong to the same check")
     for evidence in finding.evidence:
-        if not await source_reader().verify_evidence(
+        if not await source_reader(storage).verify_evidence(
             lens.scope, next(e for e in selected.executions if e.id == evidence.execution_id), evidence
         ):
             raise HTTPException(422, "Evidence quote does not match stored content")
@@ -550,7 +554,7 @@ async def evidence_content(
     lens_id: str,
     execution_id: str,
     auth: Auth,
-    reader: Annotated[SourceReader, Depends(source_reader)],
+    storage: StorageDep,
     cursor: str = "",
     offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
@@ -573,4 +577,4 @@ async def evidence_content(
         span_count=1,
         root_seen=source == "requests",
     )
-    return await reader.content(lens.scope, execution, cursor, offset)
+    return await source_reader(storage).content(lens.scope, execution, cursor, offset)

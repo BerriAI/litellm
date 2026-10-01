@@ -389,12 +389,12 @@ def message_text_slot_count(message: AllMessageValues) -> int:
 def _part_with_text(part: object, text: str) -> object:
     if not isinstance(part, Mapping):
         return part
-    return {**part, "text": text}  # mutable-ok: content parts stay JSON-plain dicts
+    return {**part, "text": text}
 
 
 def _content_with_slot_texts(content: Sequence[object], texts: Sequence[str]) -> Sequence[object]:
     remaining_texts: Final = iter(texts)
-    return [  # mutable-ok: message content stays a JSON list
+    return [
         _part_with_text(part, next(remaining_texts)) if _content_part_text(part) is not None else part
         for part in content
     ]
@@ -413,7 +413,7 @@ def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> 
     if not isinstance(content, (str, list)):
         return message
     rewritten_content: Final = texts[0] if isinstance(content, str) else _content_with_slot_texts(content, texts)
-    rewritten: Final = {**message, "content": rewritten_content}  # mutable-ok: chat rows stay JSON-plain dicts
+    rewritten: Final = {**message, "content": rewritten_content}
     return cast("AllMessageValues", rewritten)  # cast-ok: the same row with only its text slots swapped
 
 
