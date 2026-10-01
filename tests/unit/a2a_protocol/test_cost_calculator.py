@@ -456,11 +456,12 @@ async def test_asend_message_streaming_triggers_callbacks():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize("claimed_fee", (None, -1000.0, 0.0, 99.0))
+@pytest.mark.parametrize("fee_field", ("cost_per_query", "litellm_params"))
 @pytest.mark.parametrize("changed_after_admission", (False, True))
 @pytest.mark.parametrize("configured_fee", (None, 0.0, 0.25))
 async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing(
     monkeypatch: pytest.MonkeyPatch, stream: bool, claimed_fee: float | None,
-    changed_after_admission: bool, configured_fee: float | None
+    changed_after_admission: bool, configured_fee: float | None, fee_field: str
 ) -> None:
     import json
     from typing import Final
@@ -509,7 +510,8 @@ async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing
         pending: Final = await route_a2a_agent_request(
             data={"model": "a2a/fee-target", "messages": [{"role": "user", "content": "Hello"}],
                   "stream": stream, "client": client,
-                  **({"cost_per_query": claimed_fee} if claimed_fee is not None else {})},
+                  **({fee_field: claimed_fee if fee_field == "cost_per_query" else {"cost_per_query": claimed_fee}}
+                     if claimed_fee is not None else {})},
             route_type="acompletion", user_api_key_dict=auth,
         )
         response: Final = await pending
@@ -526,3 +528,47 @@ async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing
             assert logger.response_cost == pytest.approx(configured_fee)
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admitted_target", (None, "other"))
+async def test_chat_agent_dispatch_rejects_missing_or_different_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    admitted_target: str | None,
+) -> None:
+    from typing import Final
+    from unittest.mock import Mock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.types.agents import AgentResponse
+
+    registry: Final = agent_registry.AgentRegistry()
+    for name in ("paid", "other"):
+        registry.register_agent(
+            AgentResponse(
+                agent_id=name,
+                agent_name=name,
+                agent_card_params={"url": "https://agent.test/"},
+                litellm_params={"cost_per_query": 0.25},
+            )
+        )
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    if admitted_target is not None:
+        await prepare_agent_invocation(auth, admitted_target, None)
+    provider: Final = Mock(return_value=None)
+    monkeypatch.setattr(litellm, "acompletion", provider)
+    with pytest.raises(HTTPException) as exc:
+        await route_a2a_agent_request(
+            data={"model": "a2a/paid", "messages": [{"role": "user", "content": "Hello"}]},
+            route_type="acompletion",
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 503
+    assert "admission" in str(exc.value.detail).lower()
+    provider.assert_not_called()
