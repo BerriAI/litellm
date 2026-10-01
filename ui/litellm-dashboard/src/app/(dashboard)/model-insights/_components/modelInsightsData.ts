@@ -12,10 +12,13 @@ export type ModelMetric = {
   failed_requests: number;
 };
 export type DailyMetric = ModelMetric & { date: string };
+type Usage = Pick<ModelMetric, "spend" | "prompt_tokens" | "completion_tokens" | "requests">;
+export type DailyTotal = Usage & { date: string };
 export type ModelInsightsResponse = {
   start_date: string;
   end_date: string;
   daily: DailyMetric[];
+  daily_totals: DailyTotal[];
   top_models: ModelMetric[];
 };
 export type TaskSummary = {
@@ -35,7 +38,7 @@ export type Granularity = "day" | "week";
 const DAY_MS = 86_400_000;
 const BUCKET_DAYS: Record<Granularity, number> = { day: 1, week: 7 };
 
-export const metricValue = (row: ModelMetric, metric: Metric) => {
+export const metricValue = (row: Usage, metric: Metric) => {
   if (metric === "requests") return row.requests;
   if (metric === "spend") return row.spend;
   return row.prompt_tokens + row.completion_tokens;
@@ -83,6 +86,17 @@ export const buildSeries = (rows: DailyMetric[], models: string[], metric: Metri
     if (bucket) bucket[row.model_group] = Number(bucket[row.model_group] ?? 0) + metricValue(row, metric);
   }
   return buckets;
+};
+
+export const buildBucketTotals = (totals: DailyTotal[], metric: Metric, window: SeriesWindow) => {
+  const bucketMs = BUCKET_DAYS[window.granularity] * DAY_MS;
+  const origin = toDay(window.start);
+  const byBucket = new Map<string, number>();
+  for (const row of totals) {
+    const bucket = isoDay(origin + Math.floor((toDay(row.date) - origin) / bucketMs) * bucketMs);
+    byBucket.set(bucket, (byBucket.get(bucket) ?? 0) + metricValue(row, metric));
+  }
+  return byBucket;
 };
 
 const shareByModel = (rows: { model_group: string; provider: string }[], values: number[]) => {
