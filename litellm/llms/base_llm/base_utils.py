@@ -5,7 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel
@@ -13,6 +13,9 @@ from pydantic import BaseModel
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
+
+if TYPE_CHECKING:
+    from litellm.types.router import LiteLLM_Params
 
 
 class BaseTokenCounter(ABC):
@@ -64,6 +67,17 @@ class BaseLLMModelInfo(ABC):
         Returns a list of models supported by this provider.
         """
         return []
+
+    def get_models_for_deployment(self, litellm_params: "LiteLLM_Params | None") -> list[str]:
+        """
+        Returns the models the deployment described by `litellm_params` can invoke. The default only reads its
+        api_key and api_base; a provider whose listing needs more of the deployment (cloud credentials, a region)
+        overrides this.
+        """
+        return self.get_models(
+            api_key=litellm_params.api_key if litellm_params is not None else None,
+            api_base=litellm_params.api_base if litellm_params is not None else None,
+        )
 
     @staticmethod
     @abstractmethod
