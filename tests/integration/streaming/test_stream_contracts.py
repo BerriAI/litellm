@@ -102,6 +102,155 @@ def test_chunks_after_a_streaming_fallback_carry_no_response_cost_and_final_usag
         assert len(backup.drain()) == 1
 
 
+def test_sync_chunks_after_a_streaming_fallback_carry_no_response_cost_and_final_usage_is_priced() -> None:
+    pytest.skip("BUG: sync Router mid-stream fallback re-calls the failed primary and never reaches the backup")
+    identity: Final = "sync-stream-fallback-response-cost"
+    messages: Final = [{"role": "user", "content": identity}]
+    primary_chunks: Final = (
+        b'data: {"error": {"message": "overloaded", "type": "server_error", "code": 500}}\n\n',
+        b"data: [DONE]\n\n",
+    )
+
+    with (
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=primary_chunks)) as primary,
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as backup,
+    ):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "synthetic-fallback-key",
+                        "api_base": server.url + "/v1",
+                        "input_cost_per_token": 0.001,
+                        "output_cost_per_token": 0.002,
+                    },
+                }
+                for name, server in (("primary", primary), ("backup", backup))
+            ],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+        )
+        chunks: Final = tuple(
+            router.completion(
+                model="primary",
+                messages=messages,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        )
+
+    observed_costs: Final = tuple(get_hidden_params_dict(chunk).get("response_cost") for chunk in chunks)
+    assert observed_costs == (None, None, None, None), f"observed per-chunk response costs: {observed_costs}"
+    assert chunks[-1].usage.cost == pytest.approx(11 * 0.001 + 4 * 0.002)
+    assert "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices) == "Hello 雪 café"
+    assert len(primary.drain()) == 1
+    assert len(backup.drain()) == 1
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_fallback_keeps_cost_on_the_completed_event() -> None:
+    identity: Final = "responses-stream-fallback-response-cost"
+    response: Final = {
+        "id": identity,
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-4o-mini",
+        "output": [
+            {
+                "id": "msg-" + identity,
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Hello 雪 café", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+    }
+    primary_chunks: Final = (
+        b'data: {"type":"error","sequence_number":0,"error":{"type":"server_error","code":500,"message":"overloaded"}}\n\n',
+    )
+    backup_chunks: Final = (
+        (
+            b"event: response.created\n"
+            + b"data: "
+            + json.dumps(
+                {
+                    "type": "response.created",
+                    "sequence_number": 0,
+                    "response": {**response, "status": "in_progress", "output": [], "usage": None},
+                }
+            ).encode()
+            + b"\n\n"
+        ),
+        (
+            b"event: response.output_text.delta\n"
+            + b"data: "
+            + json.dumps(
+                {
+                    "type": "response.output_text.delta",
+                    "sequence_number": 1,
+                    "item_id": "msg-" + identity,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "Hello 雪 café",
+                },
+                ensure_ascii=False,
+            ).encode()
+            + b"\n\n"
+        ),
+        (
+            b"event: response.completed\n"
+            + b"data: "
+            + json.dumps({"type": "response.completed", "sequence_number": 2, "response": response}).encode()
+            + b"\n\n"
+        ),
+    )
+
+    with (
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=primary_chunks)) as primary,
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=backup_chunks)) as backup,
+    ):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {
+                        "model": "openai/gpt-5.4-mini",
+                        "api_key": "synthetic-fallback-key",
+                        "api_base": server.url + "/v1",
+                        "input_cost_per_token": 0.001,
+                        "output_cost_per_token": 0.002,
+                    },
+                }
+                for name, server in (("primary", primary), ("backup", backup))
+            ],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+            disable_cooldowns=True,
+        )
+        events: Final = tuple(
+            [event async for event in await router.aresponses(model="primary", input=identity, stream=True)]
+        )
+
+    observed_costs: Final = tuple(get_hidden_params_dict(event).get("response_cost") for event in events)
+    assert observed_costs == (None, None, pytest.approx(0.019)), f"observed event response costs: {observed_costs}"
+    assert tuple(event.type for event in events) == (
+        "response.created",
+        "response.output_text.delta",
+        "response.completed",
+    )
+    assert (
+        events[-1].response.usage.input_tokens,
+        events[-1].response.usage.output_tokens,
+        events[-1].response.usage.total_tokens,
+    ) == (11, 4, 15)
+    assert len(primary.drain()) == 1
+    assert len(backup.drain()) == 1
+
+
 @pytest.mark.covers("other.streaming.byte_partitions.preserve_text_identity_and_usage")
 def test_generated_tcp_partitions_preserve_unicode_text_identity_and_final_usage() -> None:
     import litellm
