@@ -52,7 +52,7 @@ class DecodedSpan(TypedDict):
     status_message: ReadOnly[str]
     events: ReadOnly[list[DecodedEvent]]
     normalized: ReadOnly[NormalizedSpan]
-    consumed_attributes: ReadOnly[list[str]]
+    consumed_attributes: ReadOnly[tuple[str, str]]
 
 
 ReadQueryName = Literal["list_traces", "trace_spans", "span_detail", "span_error", "spend_by_response_ids"]
