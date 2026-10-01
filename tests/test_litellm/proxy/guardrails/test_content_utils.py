@@ -513,9 +513,7 @@ def test_build_inspection_messages_includes_reasoning_summary():
             }
         ]
     }
-    assert build_inspection_messages(data) == [
-        {"role": "assistant", "content": "secret summary"}
-    ]
+    assert build_inspection_messages(data) == [{"role": "assistant", "content": "secret summary"}]
 
 
 # ── has_non_string_content ────────────────────────────────────────────────────
@@ -537,6 +535,27 @@ def test_has_non_string_content_responses_api_string_input():
 
 def test_has_non_string_content_responses_api_list_input():
     assert has_non_string_content({"input": ["a", "b"]}) is True
+
+
+def test_has_non_string_content_responses_structured_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "text"}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "text"},
+                    {"type": "image_url", "image_url": {"url": "..."}},
+                ],
+            },
+        ]
+    }
+    assert has_non_string_content(data) is True
 
 
 def test_has_non_string_content_empty_data():
@@ -574,12 +593,12 @@ def test_apply_redacted_messages_back_both_fields():
     assert data["input"] == "[REDACTED]"
 
 
-def test_apply_redacted_messages_back_skips_input_when_not_string():
-    """List ``input`` (multimodal Responses-API) is left alone — the
-    multimodal-degrades-to-block guard runs upstream."""
+def test_apply_redacted_messages_back_rewrites_text_only_responses_list_input():
+    """Text-only Responses input can be flattened safely. Non-text input is
+    rejected upstream by ``has_non_string_content`` before mask-in-place."""
     data = {"input": [{"type": "text", "text": "leak"}]}
     apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
-    assert data["input"] == [{"type": "text", "text": "leak"}]
+    assert data["input"] == [{"type": "text", "text": "[REDACTED]"}]
 
 
 def test_apply_redacted_messages_back_rewrites_string_batches():
@@ -675,6 +694,7 @@ def test_is_string_batch_input_rejects_other_shapes():
 # LIT-4302: custom_tool_call_output walking
 # -------------------------------------------------------------------
 
+
 def test_iter_message_text_walks_custom_tool_call_output():
     """custom_tool_call_output items should yield their output text."""
     data = {
@@ -683,6 +703,7 @@ def test_iter_message_text_walks_custom_tool_call_output():
         ]
     }
     from litellm.proxy.guardrails._content_utils import iter_message_text
+
     texts = list(iter_message_text(data))
     assert "tool-secret" in texts
 
@@ -708,7 +729,6 @@ def test_build_inspection_messages_custom_tool_call_output():
     }
     msgs = build_inspection_messages(data)
     assert any("custom-tool-leak" in m["content"] for m in msgs)
-
 
 
 def test_guardrails_inspect_and_redact_tool_search_output_tool_descriptions():
@@ -773,6 +793,31 @@ def test_apply_redacted_messages_back_rewrites_tool_search_output_fallback_outpu
 
     assert apply_redacted_messages_back(data, redacted) is True
     assert data["input"][0]["output"] == "tool-[REDACTED]"
+
+
+def test_apply_redacted_messages_back_rewrites_responses_messages_and_tool_results_in_order():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "message-secret"}],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{"type": "output_text", "text": "tool-secret"}],
+            },
+        ]
+    }
+    redacted = [
+        {"role": "user", "content": "message-[REDACTED]"},
+        {"role": "tool", "content": "tool-[REDACTED]"},
+    ]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["content"] == "message-[REDACTED]"
+    assert data["input"][1]["output"] == "tool-[REDACTED]"
 
 
 def test_apply_redacted_messages_back_blocks_partial_tool_search_output_rewrite():

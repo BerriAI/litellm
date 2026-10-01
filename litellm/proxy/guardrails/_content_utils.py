@@ -94,6 +94,17 @@ def _iter_text_parts_in_content(content: object) -> Iterator[str]:
                 yield text
 
 
+def _has_plain_text_content(content: object) -> bool:
+    """Return True when in-place masking can replace content without losing parts."""
+    if isinstance(content, str):
+        return True
+    if not isinstance(content, list):
+        return False
+    return all(
+        isinstance(part, str) or (isinstance(part, Mapping) and _part_text(part) is not None) for part in content
+    )
+
+
 def _tool_search_tool_text(tool: Mapping[str, object]) -> str:
     return "\n".join(
         str(value) for key in _TOOL_SEARCH_TOOL_TEXT_KEYS if isinstance(value := tool.get(key), str) and value
@@ -255,6 +266,75 @@ def is_string_batch_input(data: Mapping[str, object]) -> bool:
     return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
 
 
+def _apply_redacted_input_texts(input_value: list[object], response_texts: tuple[str, ...]) -> None:
+    redacted_iter: Final[Iterator[str]] = iter(response_texts)
+    for item_idx, item in enumerate(input_value):
+        if isinstance(item, str):
+            if item:
+                input_value[item_idx] = next(redacted_iter)
+        elif isinstance(item, dict):
+            _apply_redacted_input_item(item, redacted_iter)
+
+
+def _apply_redacted_input_item(item: dict[str, object], redacted_iter: Iterator[str]) -> None:
+    if _part_text(item) is not None:
+        item["text"] = next(redacted_iter)
+    elif item.get("type") == "reasoning":
+        if "content" in item and any(_iter_text_parts_in_content(item["content"])):
+            item["content"] = next(redacted_iter)
+        if isinstance(item.get("summary"), list) and any(_iter_text_parts_in_content(item["summary"])):
+            item["summary"] = next(redacted_iter)
+    elif "content" in item and any(_iter_text_parts_in_content(item["content"])):
+        item["content"] = next(redacted_iter)
+    elif item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
+        if any(_iter_text_parts_in_content(item["output"])):
+            item["output"] = next(redacted_iter)
+    elif item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
+        _apply_redacted_tool_search_tools(item, redacted_iter)
+
+
+def _apply_redacted_tool_search_tools(item: dict[str, object], redacted_iter: Iterator[str]) -> None:
+    rewritten_tools: list[object] = []
+    tools: Final[object] = item["tools"]
+    if not isinstance(tools, list):
+        return
+    for tool in tools:
+        if isinstance(tool, Mapping) and _tool_search_tool_text(tool):
+            rewritten_tools.append(
+                {  # mutable-ok: request tools must remain plain JSON dicts
+                    **tool,
+                    "description": next(redacted_iter),
+                }
+            )
+        else:
+            rewritten_tools.append(tool)
+    item["tools"] = rewritten_tools
+
+
+def _apply_redacted_string_input(data: dict[str, Any], redacted_messages: Sequence[object]) -> None:
+    text_parts: Final[list[str]] = []
+    for msg in redacted_messages:
+        if not isinstance(msg, dict):
+            continue
+        text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
+    data["input"] = "\n".join(text_parts)
+
+
+def _apply_redacted_string_batch_input(data: dict[str, Any], redacted_messages: Sequence[object]) -> bool:
+    batch: Final = data["input"]
+    inspected_indices: Final = tuple(idx for idx, item in enumerate(batch) if item)
+    if len(redacted_messages) != len(inspected_indices):
+        return False
+    if any(not isinstance(message, Mapping) or message.get("content") is None for message in redacted_messages):
+        return False
+    redacted_texts: Final = tuple(
+        "\n".join(_iter_text_parts_in_content(message["content"])) for message in redacted_messages
+    )
+    for idx, text in zip(inspected_indices, redacted_texts):
+        batch[idx] = text
+    return True
+
+
 def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequence[object]) -> bool:
     """Write redacted messages back to whichever field(s) the caller used.
 
@@ -277,49 +357,19 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
     forward the remaining originals unredacted. Callers must block on False.
     """
     if is_string_batch_input(data):
-        batch: Final = data["input"]
-        inspected_indices: Final = tuple(idx for idx, item in enumerate(batch) if item)
-        if len(redacted_messages) != len(inspected_indices):
-            return False
-        if any(not isinstance(message, Mapping) or message.get("content") is None for message in redacted_messages):
-            return False
-        redacted_texts: Final = tuple(
-            "\n".join(_iter_text_parts_in_content(message["content"])) for message in redacted_messages
-        )
-        for idx, text in zip(inspected_indices, redacted_texts):
-            batch[idx] = text
-        return True
+        return _apply_redacted_string_batch_input(data, redacted_messages)
     if "messages" in data:
         data["messages"] = redacted_messages
     input_value: Final = data.get("input")
     if isinstance(input_value, str):
-        text_parts: Final[list[str]] = []
-        for msg in redacted_messages:
-            if not isinstance(msg, dict):
-                continue
-            text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
-        data["input"] = "\n".join(text_parts)
+        _apply_redacted_string_input(data, redacted_messages)
     elif isinstance(input_value, list) and not is_string_batch_input(data):
         response_texts: Final[tuple[str, ...]] = tuple(
-            text for msg in redacted_messages if isinstance(text := _text_of_message(msg), str) and text
+            text for msg in redacted_messages if isinstance(text := _text_of_message(msg), str)
         )
         if len(response_texts) != len(build_inspection_messages(data)):
             return False
-        redacted_iter: Final[Iterator[str]] = iter(response_texts)
-        for item in input_value:
-            if isinstance(item, dict) and item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
-                item["output"] = next(redacted_iter)
-            if (
-                isinstance(item, dict)
-                and item.get("type") == "tool_search_output"
-                and isinstance(item.get("tools"), list)
-            ):
-                item["tools"] = [  # mutable-ok: request tools must remain a JSON list for the provider
-                    {**tool, "description": next(redacted_iter)}  # mutable-ok: request tools remain JSON dicts
-                    if isinstance(tool, Mapping) and isinstance(tool.get("description"), str) and tool["description"]
-                    else tool
-                    for tool in item["tools"]
-                ]
+        _apply_redacted_input_texts(input_value, response_texts)
     return True
 
 
@@ -332,6 +382,22 @@ def _text_of_message(message: object) -> str | None:
     if isinstance(content, list):
         return "\n".join(_iter_text_parts_in_content(content))
     return None
+
+
+def _has_non_string_input_item(item: object) -> bool:
+    if not isinstance(item, dict):
+        return True
+    if _part_text(item) is not None:
+        return False
+    if item.get("type") == "reasoning":
+        return ("content" in item and not _has_plain_text_content(item["content"])) or (
+            "summary" in item and not _has_plain_text_content(item["summary"])
+        )
+    if "content" in item:
+        return not _has_plain_text_content(item["content"])
+    if item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
+        return not _has_plain_text_content(item["output"])
+    return False
 
 
 def has_non_string_content(data: Mapping[str, object]) -> bool:
@@ -353,7 +419,7 @@ def has_non_string_content(data: Mapping[str, object]) -> bool:
         return False
     if not isinstance(input_value, list):
         return True
-    return not all(isinstance(item, dict) for item in input_value)
+    return any(_has_non_string_input_item(item) for item in input_value)
 
 
 def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
@@ -372,7 +438,12 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
         if not isinstance(message, dict):
             continue
         if "_tool_index" in message:
-            flattened.append({"role": message.get("role") or "tool", "content": message["content"]})
+            flattened.append(
+                {  # mutable-ok: fresh synthetic message, not stored in the original request
+                    "role": message.get("role") or "tool",
+                    "content": message["content"],
+                }
+            )
             continue
         text = "\n".join(_iter_text_parts_in_content(message.get("content")))
         if not text:
