@@ -4090,6 +4090,7 @@ dependencies = [
  "litellm-token-counter",
  "litellm-traces",
  "litellm-tracing",
+ "prost",
  "pyo3",
  "pyo3-async-runtimes",
  "qdrant-client",
@@ -4384,6 +4385,7 @@ name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "criterion",
  "flate2",
  "litellm-http",
  "litellm-storage-clickhouse",
@@ -4393,10 +4395,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "strum",
  "testcontainers-modules",
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -4819,6 +4823,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.19",
+ "tracing",
 ]
 
 [[package]]
@@ -4833,6 +4838,8 @@ dependencies = [
  "opentelemetry_sdk 0.33.0",
  "prost",
  "serde",
+ "tonic",
+ "tonic-prost",
 ]
 
 [[package]]

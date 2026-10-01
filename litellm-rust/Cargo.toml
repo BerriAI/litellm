@@ -82,6 +82,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 qdrant-client = { version = "1.19.0", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 rstest = "0.26.1"
+wiremock = "0.6.5"
 rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustify = "=0.7.0"
@@ -116,6 +117,8 @@ time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
 fancy-regex = "0.19.2"
 veil = "0.3.0"
+prost = "0.14.4"
+opentelemetry-proto = "0.33"
 
 [profile.release]
 opt-level = 3

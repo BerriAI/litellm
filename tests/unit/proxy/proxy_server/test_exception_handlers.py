@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 
 from litellm.proxy._types import ProxyException
@@ -31,10 +31,10 @@ from .conftest import normalize
 
 
 def _make_request(parent_otel_span=None, path="/chat/completions"):
-    """A real Request always carries a url; the validation handler reads its path to
-    decide whether the caller is on a surface with its own error contract."""
-    state = SimpleNamespace(parent_otel_span=parent_otel_span)
-    return SimpleNamespace(state=state, url=SimpleNamespace(path=path))
+    return Request({
+        "type": "http", "method": "POST", "path": path, "headers": [],
+        "state": {"parent_otel_span": parent_otel_span},
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -477,3 +477,42 @@ async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid(
     request = _make_request()
     with pytest.raises(HTTPException):
         await otel_unhandled_exception_handler(request=request, exc=HTTPException(status_code=418, detail="teapot"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_type", ["application/json", "application/x-protobuf"])
+@pytest.mark.parametrize("root_path", ["", "/tenant-a"])
+@pytest.mark.parametrize("native_available", [True, False])
+@pytest.mark.parametrize("error", [
+    ProxyException("database credentials: secret", "auth_error", None, 401),
+    HTTPException(403, "database credentials: secret"),
+])
+async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native(
+    media_type: str, root_path: str, native_available: bool,
+    error: ProxyException | HTTPException, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from google.rpc.status_pb2 import Status
+
+    from litellm.proxy.proxy_server import otlp_http_exception_handler
+    from litellm.rust_bridge import loader
+
+    if not native_available:
+        monkeypatch.setattr(loader, "_cached_bridge", None)
+    request: Final = Request({
+        "type": "http", "method": "POST", "path": root_path + "/v1/traces", "root_path": root_path,
+        "headers": [(b"content-type", media_type.encode())],
+    })
+    response: Final = (
+        await openai_exception_handler(request, error)
+        if isinstance(error, ProxyException)
+        else await otlp_http_exception_handler(request, error)
+    )
+    assert response.status_code == (401 if isinstance(error, ProxyException) else 403)
+    assert response.headers["content-type"].startswith(media_type)
+    message: Final = (
+        json.loads(response.body)["message"]
+        if media_type == "application/json"
+        else Status.FromString(response.body).message
+    )
+    expected: Final = "Unauthorized" if isinstance(error, ProxyException) else "Forbidden"
+    assert message == (expected if native_available or media_type == "application/json" else "")

@@ -8,14 +8,18 @@ GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from http.client import responses
+from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from litellm.constants import OTLP_MAX_BODY_BYTES, OTLP_RETRY_AFTER_SECONDS
+from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.tracing import (
     Tenant,
@@ -23,7 +27,7 @@ from litellm.tracing import (
     TracingPayloadTooLargeError,
 )
 from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
-from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
+from litellm.tracing.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
 
 router = APIRouter(tags=["agent tracing"])
 
@@ -66,13 +70,25 @@ async def provide_trace_access(
             return TraceAccessContext(tracing, None, tenant)
 
 
-async def _read_otlp_body(request: Request) -> bytes:
-    body: Final = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > OTLP_MAX_BODY_BYTES:
-            raise TracingPayloadTooLargeError(f"OTLP body exceeds {OTLP_MAX_BODY_BYTES} bytes")
-        body.extend(chunk)
-    return bytes(body)
+def otlp_error_response(
+    request: Request, status_code: int, headers: Mapping[str, str] | None = None
+) -> Response | None:
+    if not is_otlp_trace_request(request):
+        return None
+    body, media_type = encode_otlp_response(
+        request.headers.get("content-type"), responses.get(status_code, "Trace request failed")
+    )
+    return Response(content=body, status_code=status_code, media_type=media_type, headers=headers)
+
+
+def _otlp_error(content_type: str | None, status_code: int, message: str, retry: bool = False) -> Response:
+    body, media_type = encode_otlp_response(content_type, message)
+    return Response(
+        content=body,
+        status_code=status_code,
+        media_type=media_type,
+        headers=MappingProxyType({"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)}) if retry else None,
+    )
 
 
 @router.post("/v1/traces", include_in_schema=False)
@@ -80,24 +96,23 @@ async def ingest_otlp_traces(
     request: Request,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
 ) -> Response:
-    tracing, tenant = context.writer()
     content_type: Final = request.headers.get("content-type")
     try:
+        tracing, tenant = context.writer()
         await tracing.ingest(
-            body=await _read_otlp_body(request),
+            body=request.stream(),
             content_type=content_type,
             content_encoding=request.headers.get("content-encoding"),
             tenant=tenant,
         )
     except TracingPayloadTooLargeError as e:
-        raise HTTPException(status_code=413, detail=str(e))
+        return _otlp_error(content_type, 413, str(e))
     except InvalidOTLPPayloadError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        return _otlp_error(content_type, 400, str(error))
     except RuntimeError:
-        raise HTTPException(
-            status_code=503,
-            headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)},
-        )
+        return _otlp_error(content_type, 503, "Trace ingestion is temporarily unavailable", retry=True)
+    except HTTPException as error:
+        return _otlp_error(content_type, error.status_code, str(error.detail))
     body, media_type = encode_otlp_response(content_type)
     return Response(content=body, media_type=media_type)
 
@@ -147,3 +162,21 @@ async def get_agent_trace_span(
     if span is None:
         raise HTTPException(status_code=404, detail=f"Span {span_id} not found")
     return span
+
+
+@router.get("/v1/traces/{trace_id}/spans/{span_id}/error", response_model=SpanErrorPage)
+async def get_agent_trace_span_error(
+    trace_id: str,
+    span_id: str,
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    trace_ref: Annotated[str, Query()] = "",
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+) -> SpanErrorPage:
+    try:
+        tracing, scope = context.reader()
+        page: Final = await tracing.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if page is None:
+        raise HTTPException(status_code=404, detail="Span diagnostic not found or no longer available")
+    return page

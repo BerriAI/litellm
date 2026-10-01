@@ -436,3 +436,47 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
     assert trace is not None
     assert trace["summary"]["spend"] is None
     assert trace["spans"][0]["spend"] is None
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_continuation_preserves_content_version_scope_and_unicode_offset():
+    from hashlib import sha256
+
+    message = "first 🧪\nlast"
+    version = sha256(message.encode()).hexdigest().upper()
+    client = MagicMock()
+    client.query = AsyncMock(
+        side_effect=[
+            [{"span_id": "span-1", "message": "first 🧪", "total_chars": len(message), "version": version}],
+            [{"span_id": "span-1", "message": "\nlast", "total_chars": len(message), "version": version}],
+        ]
+    )
+    store = TraceStore(client)
+    scope = {"team_ids": ("team-a",), "api_key_hash": "key-a"}
+    first = await store.get_span_error("trace-1", "span-1", scope, "scoped-run")
+    assert first is not None and first["next_cursor"] is not None
+    last = await store.get_span_error("trace-1", "span-1", scope, "scoped-run", first["next_cursor"])
+    assert last is not None
+    assert first["message"] + last["message"] == message
+    assert last["next_cursor"] is None
+    client.query.assert_awaited_with(
+        "span_error",
+        {
+            **scope,
+            "trace_id": "trace-1",
+            "span_id": "span-1",
+            "trace_ref": "scoped-run",
+            "error_offset": len(first["message"]),
+            "error_version": version,
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", ["garbage", "e30=", "WzEsMl0="])
+async def test_malformed_diagnostic_cursor_never_reaches_storage(cursor):
+    client = MagicMock()
+    client.query = AsyncMock()
+    with pytest.raises(ValueError, match="Invalid diagnostic cursor"):
+        await TraceStore(client).get_span_error("trace", "span", {"team_ids": (), "api_key_hash": ""}, cursor=cursor)
+    client.query.assert_not_awaited()
