@@ -14,7 +14,7 @@ from pydantic import JsonValue
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.process import owned_proxy_process
+from tests.integration._support.process import OwnedProxy, owned_proxy_process
 
 PREFERENCES: Final = ("available", "auto_install", "required")
 INVALID_PREFERENCES: Final[tuple[JsonValue, ...]] = (
@@ -31,6 +31,15 @@ MARKETPLACE: Final = "/claude-code/marketplace.json"
 PLUGINS: Final = "/claude-code/plugins"
 SKILL_HUB: Final = "/public/skill_hub"
 PLUGIN_ROWS: Final = 'SELECT manifest_json, enabled, files_json FROM "LiteLLM_ClaudeCodePluginTable" WHERE name = %s'
+
+
+def serving_workers(owned: OwnedProxy) -> tuple[psutil.Process, ...]:
+    port: Final = owned.gateway.client.base_url.port
+    return tuple(
+        child
+        for child in psutil.Process(owned.process.pid).children(recursive=True)
+        if any(conn.status == psutil.CONN_LISTEN and conn.laddr.port == port for conn in child.net_connections("inet"))
+    )
 
 
 def plugin_name() -> str:
@@ -462,10 +471,7 @@ def test_registration_burst_survives_a_worker_kill(gateway: Gateway, tmp_path: P
     with gateway.scenario() as scenario, owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned:
         for name in names:
             scenario.cleanups.callback(delete_plugin, gateway, name)
-        supervisor: Final = psutil.Process(owned.process.pid)
-        workers: Final = eventually(
-            lambda: supervisor.children(recursive=True), lambda found: len(found) >= 2, seconds=30
-        )
+        workers: Final = eventually(lambda: serving_workers(owned), lambda found: len(found) == 2, seconds=30)
 
         def submit(index: int) -> int:
             try:
@@ -479,6 +485,7 @@ def test_registration_burst_survives_a_worker_kill(gateway: Gateway, tmp_path: P
             futures: Final = tuple(pool.submit(submit, index) for index in range(len(names)))
             eventually(lambda: sum(1 for future in futures if future.done()), lambda done: done >= 3, seconds=30)
             workers[0].send_signal(signal.SIGKILL)
+            eventually(lambda: workers[0].is_running(), lambda alive: not alive, seconds=10)
             statuses: Final = tuple(future.result() for future in futures)
         assert set(statuses) <= {200, -1}, statuses
         assert statuses.count(200) >= 3, statuses
@@ -494,6 +501,7 @@ def test_registration_burst_survives_a_worker_kill(gateway: Gateway, tmp_path: P
         assert sum(len(stored_rows(name)) for name in names) == sum(len(found) for found in served)
 
 
+@pytest.mark.timeout(240)
 def test_registrations_survive_a_proxy_restart(gateway: Gateway, tmp_path: Path) -> None:
     names: Final = tuple(plugin_name() for _ in range(10))
     preferences: Final = tuple(PREFERENCES[index % len(PREFERENCES)] for index in range(len(names)))
