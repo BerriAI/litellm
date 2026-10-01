@@ -3062,7 +3062,7 @@ async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
 
 
 @pytest.mark.asyncio
-async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
+async def test_user_info_v2_proxy_admin_can_query_any_user(mocker: MockerFixture) -> None:
     """
     Test that proxy admin can query any user via /v2/user/info.
     """
@@ -3071,9 +3071,9 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
     from litellm.proxy._types import UserInfoV2Response
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
-    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client: Final = mocker.MagicMock()
 
-    mock_user_row = mocker.MagicMock()
+    mock_user_row: Final = mocker.MagicMock()
     mock_user_row.model_dump.return_value = {
         "user_id": "target-user-123",
         "user_email": "target@example.com",
@@ -3081,6 +3081,8 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
         "user_role": "internal_user",
         "spend": 42.5,
         "max_budget": 100.0,
+        "tpm_limit": 100000,
+        "rpm_limit": 1000,
         "models": ["gpt-4"],
         "budget_duration": "30d",
         "budget_reset_at": None,
@@ -3091,8 +3093,9 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
         "teams": ["team-1", "team-2"],
     }
 
-    async def mock_find_unique(*args, **kwargs):
-        if kwargs.get("where", {}).get("user_id") == "target-user-123":
+    async def mock_find_unique(*_args: object, **kwargs: object) -> MagicMock | None:
+        where: Final = kwargs.get("where")
+        if isinstance(where, Mapping) and where.get("user_id") == "target-user-123":
             return mock_user_row
         return None
 
@@ -3100,11 +3103,11 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    mock_request = mocker.MagicMock(spec=Request)
+    mock_request: Final = mocker.MagicMock(spec=Request)
 
-    admin_key = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
+    admin_key: Final = UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN)
 
-    response = await user_info_v2(
+    response: Final = await user_info_v2(
         request=mock_request,
         user_id="target-user-123",
         user_api_key_dict=admin_key,
@@ -3117,6 +3120,8 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker):
     assert response.user_role == "internal_user"
     assert response.spend == 42.5
     assert response.max_budget == 100.0
+    assert response.tpm_limit == 100000
+    assert response.rpm_limit == 1000
     assert response.models == ["gpt-4"]
     assert response.teams == ["team-1", "team-2"]
     assert response.sso_user_id == "sso-abc"
@@ -3447,6 +3452,8 @@ async def test_user_info_v2_response_shape(mocker):
         "user_role",
         "spend",
         "max_budget",
+        "tpm_limit",
+        "rpm_limit",
         "models",
         "budget_duration",
         "budget_reset_at",
