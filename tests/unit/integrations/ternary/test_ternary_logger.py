@@ -250,6 +250,32 @@ def test_merge_token_tags_noop_without_token_columns():
     assert tags == {"team_id": "t1"}
 
 
+def test_merge_token_tags_warns_without_tags_column(caplog):
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    normalized = pl.DataFrame({"BilledCost": [1.0]})
+    source = pl.DataFrame({"prompt_tokens": [5]})
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        out = _merge_token_tags(normalized, source)
+    assert "Tags" not in out.columns
+    assert "no `Tags` column" in caplog.text
+
+
+def test_merge_token_tags_warns_on_row_mismatch(caplog):
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    normalized = pl.DataFrame({"Tags": [json.dumps({"team_id": "t1"})]})
+    source = pl.DataFrame({"prompt_tokens": [1, 2]})
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        out = _merge_token_tags(normalized, source)
+    assert out["Tags"][0] == normalized["Tags"][0]
+    assert "row-count mismatch" in caplog.text
+
+
 def _fake_engine(*, transformed: pl.DataFrame, payload: bytes) -> MagicMock:
     engine = MagicMock()
     engine._transformer.transform = MagicMock(return_value=transformed)
