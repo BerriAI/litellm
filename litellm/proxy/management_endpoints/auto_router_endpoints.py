@@ -8,7 +8,6 @@ POST /auto_router/validate_complexity_router_config - Dry-run the complexity-rou
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
-from math import isclose
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 from uuid import uuid4
@@ -32,7 +31,6 @@ from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.db.autorouter_savings_comparison import historical_session_comparisons
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
     bounded_session_id,
@@ -653,7 +651,6 @@ class _SessionAggRow(BaseModel):
     savings_estimated_actual_spend: float = 0.0
     savings_estimated_classifier_cost: float | None = None
     savings_estimated_saved_spend: float = 0.0
-    savings_comparison_complete: bool = True
     classifier_cost: float
     classifier_cost_recorded_turns: int
     session_seconds: float
@@ -681,25 +678,35 @@ def _cache_bucket(turns: int, hits: int) -> AutoRouterCacheBucket:
 
 
 def _savings_cohort(
-    turns: int, estimated_turns: int, actual_spend: float, saved_spend: float, recorded_savings: float
+    turns: int, estimated_turns: int, spend: float, saved_spend: float
 ) -> tuple[float | None, float | None]:
-    if turns > 0 and estimated_turns == 0 and recorded_savings == 0:
+    if turns > 0 and estimated_turns == 0 and saved_spend == 0:
         return None, None
-    if not isclose(saved_spend, recorded_savings, rel_tol=1e-9, abs_tol=1e-9):
-        return recorded_savings, None
-    return recorded_savings, actual_spend + recorded_savings
+    return saved_spend, spend + saved_spend
+
+
+def _compared_row(row: _SessionAggRow) -> _SessionAggRow:
+    _, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
+    compared: Final = row.router_type == "complexity" and baseline_spend is not None
+    return row.model_copy(
+        update={
+            "savings_estimated_turns": row.turns if compared else 0,
+            "savings_estimated_actual_spend": row.spend if compared else 0.0,
+            "savings_estimated_classifier_cost": (
+                row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None
+            )
+            if compared
+            else 0.0,
+            "savings_estimated_saved_spend": row.saved_spend if compared else 0.0,
+        }
+    )
 
 
 def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return_misses: Final = row.return_turns - row.return_hits
-    saved_spend, compared_baseline = _savings_cohort(
-        row.turns,
-        row.savings_estimated_turns,
-        row.savings_estimated_actual_spend,
-        row.savings_estimated_saved_spend,
-        row.saved_spend,
+    saved_spend, baseline_spend = _savings_cohort(
+        row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
     )
-    baseline_spend: Final = compared_baseline if row.savings_comparison_complete else None
     sessions: Final = row.sessions
     return AutoRouterBenchmarkTotals(
         sessions=sessions,
@@ -710,7 +717,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         spend=row.spend,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
-        savings_estimated_classifier_cost=row.savings_estimated_classifier_cost if baseline_spend is not None else None,
+        savings_estimated_classifier_cost=row.savings_estimated_classifier_cost,
         saved_spend=saved_spend,
         classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
@@ -787,7 +794,6 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
             else None
         ),
         savings_estimated_saved_spend=sum(row.savings_estimated_saved_spend for row in rows),
-        savings_comparison_complete=all(row.savings_comparison_complete for row in rows),
         classifier_cost=sum(row.classifier_cost for row in rows),
         classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
@@ -862,8 +868,8 @@ async def get_auto_router_benchmarks(
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
     baseline, and prompt-caching behaviour bucketed by what the router did.
 
-    Reads session rollups folded once per request at spend-write time, with bounded
-    retained-log recovery for historical comparisons. A user filter selects only turns attributed to that
+    Reads session rollups folded once per request at spend-write time, so this endpoint
+    never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
     internal user when written; older key-only history remains outside user views. A session
     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
@@ -897,44 +903,7 @@ async def get_auto_router_benchmarks(
         api_key,
         user_id,
     )
-    recorded_rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
-    comparisons: Final = (
-        await historical_session_comparisons(
-            prisma_client,
-            start_day.isoformat(),
-            (end_day + timedelta(days=1)).isoformat(),
-            api_key,
-            user_id,
-        )
-        if any(row.savings_estimated_turns < row.turns for row in recorded_rows)
-        else MappingProxyType({})
-    )
-    covered_rows: Final = tuple(
-        row.model_copy(
-            update={
-                **comparison.coverage_fields(row.saved_spend, row.turns),
-                "savings_estimated_classifier_cost": comparison.classifier_cost,
-                "savings_comparison_complete": comparison.complete and comparison.turns == row.turns,
-            }
-        )
-        if (comparison := comparisons.get((row.router_name, row.router_type)))
-        else row.model_copy(update={"savings_comparison_complete": row.savings_estimated_turns == row.turns})
-        for row in recorded_rows
-    )
-    rows: Final = tuple(
-        row.model_copy(
-            update={
-                "savings_comparison_complete": row.savings_comparison_complete
-                and isclose(
-                    row.saved_spend,
-                    row.savings_estimated_saved_spend,
-                    rel_tol=1e-9,
-                    abs_tol=1e-9,
-                ),
-            }
-        )
-        for row in covered_rows
-    )
+    rows: Final = tuple(_compared_row(row) for row in _SESSION_AGG_ROWS.validate_python(raw_rows or ()))
     groups: Final = (
         *(_benchmark_group(row) for row in rows),
         *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
@@ -972,43 +941,16 @@ async def get_auto_router_session(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
-    recorded: Final = await AutoRouterSessionRepository(prisma_client).find_latest_for_key(
+    row: Final = await AutoRouterSessionRepository(prisma_client).find_latest_for_key(
         user_api_key_dict.api_key, bounded_session_id(session_id)
     )
-    if recorded is None:
+    if row is None:
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
-    comparisons: Final = (
-        await historical_session_comparisons(
-            prisma_client,
-            recorded.first_turn_at.isoformat(),
-            (recorded.last_turn_at + timedelta(microseconds=1)).isoformat(),
-            user_api_key_dict.api_key,
-            None,
-            bounded_session_id(session_id),
-        )
-        if recorded.savings_estimated_turns < recorded.turns
-        else MappingProxyType({})
-    )
-    comparison: Final = comparisons.get((recorded.router_name, recorded.router_type))
-    row: Final = (
-        recorded.model_copy(update=comparison.coverage_fields(recorded.saved_spend, recorded.turns))
-        if comparison
-        else recorded
-    )
-    saved_spend, compared_baseline = _savings_cohort(
-        row.turns,
-        row.savings_estimated_turns,
-        row.savings_estimated_actual_spend,
-        row.savings_estimated_saved_spend,
-        row.saved_spend,
-    )
-    baseline_spend: Final = (
-        compared_baseline
-        if row.savings_estimated_turns == row.turns
-        or (comparison and comparison.complete and comparison.turns == row.turns)
-        else None
+    saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
+    _, estimated_baseline_spend = _savings_cohort(
+        row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
     )
     return AutoRouterSessionResponse(
         session_id=session_id,
@@ -1020,8 +962,8 @@ async def get_auto_router_session(
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=saved_spend,
-        baseline_spend=baseline_spend if row.savings_estimated_turns == row.turns else None,
-        savings_estimated_baseline_spend=baseline_spend,
+        baseline_spend=baseline_spend,
+        savings_estimated_baseline_spend=estimated_baseline_spend,
         baseline_model=row.baseline_model,
         baseline_models=row.baseline_models,
     )
