@@ -40,7 +40,6 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
-from litellm.proxy.management.teams.access import TeamAccess
 from litellm.proxy.management_endpoints.team_endpoints import (
     _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
@@ -114,10 +113,10 @@ class OrgAdmins:
 
 def _org_admins(*user_org_pairs: tuple[str, str]) -> AbstractContextManager[object]:
     """Answer the team handlers' org-admin lookup from ``(user_id, organization_id)`` pairs instead of prisma."""
-    team_access: Final = TeamAccess(org_roles=OrgAdmins(of=frozenset(user_org_pairs)))
+    org_roles: Final = OrgAdmins(of=frozenset(user_org_pairs))
     return patch(  # test-quality-ok: this file's MagicMock prisma cannot answer the org-admin lookup
-        "litellm.proxy.management_endpoints.team_endpoints.get_team_access",
-        lambda: team_access,
+        "litellm.proxy.management_endpoints.team_endpoints.get_org_roles",
+        lambda: org_roles,
     )
 
 
@@ -7173,7 +7172,7 @@ async def test_update_team_standalone_models_not_gated_by_user_limit(
     Test that /team/update for a standalone team does NOT gate the team's models
     by the caller's personal allowed models.
 
-    A team admin authorized via TeamAccess.strongest_role() may set the team's models
+    A team admin authorized via roles_on() may set the team's models
     independently of their own personal model list on update.
 
     Scenario:
@@ -7688,7 +7687,7 @@ async def test_update_team_tpm_limit_not_gated_by_user_limit(
     Test that /team/update does NOT gate the team's tpm_limit by the caller's
     personal tpm_limit.
 
-    A team admin authorized via TeamAccess.strongest_role() may raise the team's
+    A team admin authorized via roles_on() may raise the team's
     tpm_limit above their own personal tpm_limit on update.
 
     Scenario:
@@ -8510,6 +8509,7 @@ async def test_update_team_guardrails_with_org_id(
 
     with (
         _team_admin_may_edit("guardrails", "organization_id"),
+        _org_admins(("org-admin-guardrails-test", "test-org-guardrails")),
         patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
@@ -8555,15 +8555,6 @@ async def test_update_team_guardrails_with_org_id(
             return_value=mock_org
         )
 
-        # Destination-org guard in update_team queries for the caller's
-        # ORG_ADMIN membership on the destination org. Return a match so
-        # the guardrails-update path (the subject under test) proceeds.
-        mock_org_admin_membership = MagicMock()
-        mock_org_admin_membership.user_id = "org-admin-guardrails-test"
-        mock_org_admin_membership.organization_id = "test-org-guardrails"
-        mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(
-            return_value=[mock_org_admin_membership]
-        )
 
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
@@ -11108,7 +11099,7 @@ class TestResolveTeamAccessGroupResources:
 async def test_update_team_rejects_unauthorized_caller():
     """
     Test that /team/update returns 403 when the caller is not a proxy admin,
-    not a team admin, and not an org admin — exercising the TeamAccess.strongest_role
+    not a team admin, and not an org admin — exercising the roles_on
     guard added to the update_team endpoint.
     """
     from unittest.mock import Mock
@@ -11598,7 +11589,7 @@ async def test_new_team_blocks_non_admin_passthrough_routes(mock_db_client):
 @pytest.mark.asyncio
 async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
     """Even a team manager (non-proxy-admin) cannot set pass-through routes via
-    /team/update — the gate runs after TeamAccess.strongest_role."""
+    /team/update — the gate runs after roles_on."""
     from fastapi import Request
 
     from litellm.proxy._types import ProxyException, UpdateTeamRequest
@@ -14400,7 +14391,7 @@ def _wire_update_team(stack, existing_metadata):
 
 @pytest.mark.asyncio
 async def test_update_team_output_token_estimate_lowered_rejected_for_team_admin():
-    """End-to-end wiring: TeamAccess.strongest_role admits a team admin, so the gate
+    """End-to-end wiring: roles_on admits a team admin, so the gate
     has to fire inside update_team itself."""
     import contextlib
     from unittest.mock import Mock
@@ -14492,7 +14483,7 @@ _TEAM_BATCH_LIMIT = "batch_enqueued_token_limit"
 
 @pytest.mark.asyncio
 async def test_update_team_batch_enqueued_token_limit_raised_rejected_for_team_admin():
-    """TeamAccess.strongest_role admits a team admin, so the gate has to fire inside
+    """roles_on admits a team admin, so the gate has to fire inside
     update_team itself to keep the team's batch quota admin-owned."""
     import contextlib
     from unittest.mock import Mock
@@ -15313,7 +15304,7 @@ async def test_reset_team_member_spend_fn_forbidden_for_non_admin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reset_team_member_spend_fn_team_admin_cannot_reset_own_spend(monkeypatch):
-    """TeamAccess.allows authorizes a team admin over their own team with no check that the
+    """roles_on authorizes a team admin over their own team with no check that the
     target differs from the caller. Unchecked, that admin could target their own membership row
     and repeatedly zero it right before it crosses their per-member cap, consuming the shared
     team budget without the configured limit ever binding (Veria finding on PR #37971)."""

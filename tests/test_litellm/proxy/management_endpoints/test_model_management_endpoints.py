@@ -23,6 +23,7 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.roles import Role
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
@@ -143,43 +144,41 @@ class TestModelManagementAuthChecks:
             user_role=LitellmUserRoles.INTERNAL_USER,
         )
 
-    @pytest.mark.asyncio
-    async def test_can_user_make_team_model_call_admin_success(self):
-        """Test that admin users can make team model calls"""
+    @pytest.mark.parametrize(
+        "roles",
+        [
+            frozenset({Role.PLATFORM_ADMIN}),
+            frozenset({Role.TEAM_ADMIN}),
+            frozenset({Role.ORG_ADMIN}),
+            frozenset({Role.ORG_ADMIN, Role.TEAM_ADMIN}),
+        ],
+    )
+    def test_can_user_make_team_model_call_admits_any_admin_role(self, roles: frozenset[Role]):
         result = ModelManagementAuthChecks.can_user_make_team_model_call(
-            team_id="test_team", user_api_key_dict=self.admin_user, premium_user=True
+            team_id="test_team", user_api_key_dict=self.team_admin_user, roles=roles, premium_user=True
         )
         assert result is True
 
-    @pytest.mark.asyncio
-    async def test_can_user_make_team_model_call_non_premium_fails(self):
+    def test_can_user_make_team_model_call_non_premium_fails(self):
         """Test that non-premium users cannot make team model calls"""
         with pytest.raises(Exception, match='You must be a LiteLLM Enterprise user to use this feature\\.') as exc_info:
             ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id="test_team",
                 user_api_key_dict=self.admin_user,
+                roles=frozenset({Role.PLATFORM_ADMIN}),
                 premium_user=False,
             )
         assert "403" in str(exc_info.value)
 
-    @pytest.mark.asyncio
-    async def test_can_user_make_team_model_call_team_admin_success(self):
-        """Test that team admins can make calls for their team"""
-        team_obj = LiteLLM_TeamTable(
-            team_id="test_team",
-            team_alias="test_team",
-            members_with_roles=[
-                Member(user_id=self.team_admin_user.user_id, role="admin")
-            ],
-        )
-
-        result = ModelManagementAuthChecks.can_user_make_team_model_call(
-            team_id="test_team",
-            user_api_key_dict=self.team_admin_user,
-            team_obj=team_obj,
-            premium_user=True,
-        )
-        assert result is True
+    def test_can_user_make_team_model_call_rejects_a_caller_with_no_role(self):
+        with pytest.raises(Exception, match="not the admin for this team") as exc_info:
+            ModelManagementAuthChecks.can_user_make_team_model_call(
+                team_id="test_team",
+                user_api_key_dict=self.team_admin_user,
+                roles=frozenset(),
+                premium_user=True,
+            )
+        assert "403" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_allow_team_model_action_success(self):

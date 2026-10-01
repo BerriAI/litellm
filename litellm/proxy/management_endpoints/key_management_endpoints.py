@@ -85,8 +85,8 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
-from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
-from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.teams.authz import is_team_admin, roles_on
+from litellm.proxy.management.teams.dependencies import get_org_roles
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
@@ -4055,9 +4055,8 @@ async def validate_key_team_change(
                 detail=f"User={key.user_id} is not a member of the team={team.team_id}. Check team members via `/team/info`.",
             )
 
-    # Check if the person initiating the change is a Proxy Admin or Team Admin
-    initiator_is_admin: Final = await get_team_access().allows(change_initiated_by, team, TEAM_ADMIN_ONLY)
-    if initiator_is_admin or TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+    initiator_roles: Final = await roles_on(team, change_initiated_by, get_org_roles())
+    if initiator_roles or TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
         team_member_role=None if member_object is None else member_object.role,
         team_table=team_table,
         route=KeyManagementRoutes.KEY_UPDATE.value,
@@ -4945,11 +4944,7 @@ async def can_modify_verification_token(
         if team_table is None:
             return False
 
-        # Check if user is team admin
-        if is_team_admin(
-            user_api_key_dict=user_api_key_dict,
-            team_obj=team_table,
-        ):
+        if await roles_on(team_table, user_api_key_dict, get_org_roles()):
             return True
 
         # Check if the key belongs to the user (they own it)
@@ -6006,16 +6001,12 @@ async def _check_proxy_or_team_admin_for_key(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-        if team_table is not None:
-            if is_team_admin(
-                user_api_key_dict=user_api_key_dict,
-                team_obj=team_table,
-            ):
-                return
+        if team_table is not None and await roles_on(team_table, user_api_key_dict, get_org_roles()):
+            return
 
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail={"error": "You must be a proxy admin or team admin to reset key spend"},
+        detail={"error": "You must be a proxy admin, team admin or org admin to reset key spend"},
     )
 
 
@@ -7277,7 +7268,7 @@ async def _check_key_admin_access(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-        if team_obj is not None and await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
+        if team_obj is not None and await roles_on(team_obj, user_api_key_dict, get_org_roles()):
             return
 
     raise HTTPException(

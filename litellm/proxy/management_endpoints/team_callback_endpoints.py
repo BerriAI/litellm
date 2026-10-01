@@ -44,8 +44,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_validated_callback_metadata,
     convert_key_logging_metadata_to_callback,
 )
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, team_access_denied
-from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.teams.authz import roles_on, team_access_denied
+from litellm.proxy.management.teams.dependencies import get_org_roles
 from litellm.proxy.management_endpoints.team_endpoints import _refresh_cached_team
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
@@ -331,9 +331,7 @@ async def add_team_callbacks(
         # team may write callback credentials. Without this, any
         # authenticated key holder could overwrite another team's logging
         # config (and read back the credentials they wrote).
-        if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-        ):
+        if not await roles_on(LiteLLM_TeamTable(**_existing_team.model_dump()), user_api_key_dict, get_org_roles()):
             team_access_denied()
 
         _validate_team_callback(data)
@@ -500,9 +498,7 @@ async def delete_team_callback(
         # IDOR guard: only proxy admins / org admins / team admins of THIS team may
         # deregister its callbacks, otherwise any authenticated key holder could
         # silence another team's observability integration.
-        if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-        ):
+        if not await roles_on(LiteLLM_TeamTable(**_existing_team.model_dump()), user_api_key_dict, get_org_roles()):
             team_access_denied()
 
         team_metadata: Final = _existing_team.metadata
@@ -633,9 +629,7 @@ async def disable_team_logging(
         # IDOR guard: only proxy admins / org admins / team admins of THIS
         # team may disable its logging — otherwise any authenticated key
         # holder can silence audit logging for any team.
-        if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-        ):
+        if not await roles_on(LiteLLM_TeamTable(**_existing_team.model_dump()), user_api_key_dict, get_org_roles()):
             team_access_denied()
 
         # Update team metadata to disable logging
@@ -774,9 +768,7 @@ async def get_team_callbacks(
         # IDOR guard: callback metadata holds third-party API credentials
         # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /
         # team admins of THIS team may read them.
-        if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
-        ):
+        if not await roles_on(LiteLLM_TeamTable(**_existing_team.model_dump()), user_api_key_dict, get_org_roles()):
             team_access_denied()
 
         team_callback_settings_obj: Final = _resolve_team_callbacks(_existing_team.metadata)

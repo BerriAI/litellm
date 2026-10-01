@@ -21,7 +21,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_config_validation import cross_entry_family_error
-from litellm.proxy.management.teams.access import TeamAccess
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     add_team_callbacks,
     delete_team_callback,
@@ -35,7 +34,7 @@ class _NoOrgAdmins:
         return False
 
 
-NO_ORG_ADMINS: Final = TeamAccess(org_roles=_NoOrgAdmins())
+NO_ORG_ADMINS: Final = _NoOrgAdmins()
 
 
 def _team_row(
@@ -109,7 +108,7 @@ def patched_prisma():
     with (
         patch("litellm.proxy.proxy_server.prisma_client") as mock_client,
         patch(
-            "litellm.proxy.management_endpoints.team_callback_endpoints.get_team_access",
+            "litellm.proxy.management_endpoints.team_callback_endpoints.get_org_roles",
             return_value=NO_ORG_ADMINS,
         ),
     ):
@@ -1497,8 +1496,8 @@ async def test_unknown_team_is_indistinguishable_from_no_access(call_handler, un
     ):  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
         mock_client.get_data = AsyncMock(return_value=_team_row())
         mock_client.db.litellm_teamtable.update = AsyncMock()
-        with patch(  # test-quality-ok: the handler builds its TeamAccess through this module-level provider, so it is the seam to inject through
-            "litellm.proxy.management_endpoints.team_callback_endpoints.get_team_access",
+        with patch(  # test-quality-ok: the handler reads its org-role lookup through this module-level provider, so it is the seam to inject through
+            "litellm.proxy.management_endpoints.team_callback_endpoints.get_org_roles",
             return_value=NO_ORG_ADMINS,
         ):
             with pytest.raises(HTTPException) as no_access:

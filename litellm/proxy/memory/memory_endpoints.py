@@ -32,8 +32,8 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
-from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.teams.authz import roles_on
+from litellm.proxy.management.teams.dependencies import get_org_roles
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import MemoryRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -202,7 +202,7 @@ async def _assert_write_access(
 async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
     """
     True if the caller is a team admin of `team_id`, or an org admin for the
-    team's organization, asked through the same ``TeamAccess.allows`` the
+    team's organization, asked through the same ``roles_on`` the
     team-management endpoints use.
     """
     try:
@@ -214,7 +214,7 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
         return False
 
     try:
-        return await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN)
+        return bool(await roles_on(team_obj, user_api_key_dict, get_org_roles()))
     except Exception as e:
         verbose_proxy_logger.debug("Org-admin check skipped during write-auth (team_id=%s): %s", team_id, e)
         return False

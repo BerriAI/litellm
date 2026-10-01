@@ -23,8 +23,8 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
-from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.teams.authz import roles_on
+from litellm.proxy.management.teams.dependencies import get_org_roles
 from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
     member_budget_patch,
@@ -179,7 +179,7 @@ async def bulk_update_team_member_budgets(
     if team is None:
         raise _team_not_found(team_id)
 
-    if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
+    if not await roles_on(team, user_api_key_dict, get_org_roles()):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_update'"

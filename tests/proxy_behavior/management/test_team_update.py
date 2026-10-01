@@ -12,7 +12,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # The route is self-managed (LIT-5722), so every authenticated caller reaches
 # update_team and denials are the handler's 403, never the route gate's 401.
 # Only PROXY_ADMIN and an ORG_ADMIN of the team's org pass: a team admin is
-# admitted by TeamAccess.strongest_role but then refused because no team field is
+# admitted by roles_on but then refused because no team field is
 # enabled for team admins (team_admin_editable_team_fields defaults to empty).
 MARKER_ALIAS = "behavior-pin-update-marker-alias"
 

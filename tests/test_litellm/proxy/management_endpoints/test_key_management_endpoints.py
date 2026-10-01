@@ -3369,9 +3369,19 @@ async def test_validate_key_team_change_with_member_permissions():
     # Mock the member object returned by _get_user_in_team
     mock_member_object = MagicMock()
 
-    with patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model",
-        new_callable=AsyncMock,
+    class NoOrgAdmins:
+        async def is_org_admin(self, user_id: str, organization_id: str) -> bool:
+            return False
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.can_team_access_model",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: the handler reads its org-role lookup through this module-level provider, so it is the seam to inject through
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_org_roles",
+            lambda: NoOrgAdmins(),
+        ),
     ):
         with patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"

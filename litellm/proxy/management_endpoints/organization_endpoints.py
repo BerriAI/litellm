@@ -63,8 +63,8 @@ from litellm.proxy.management_helpers.utils import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.organization_membership_repository import OrganizationMembershipRepository
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.table_repositories import OrganizationMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (

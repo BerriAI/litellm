@@ -56,6 +56,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
+from litellm.proxy.auth.roles import Role
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -68,8 +69,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, is_team_admin
-from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.teams.authz import roles_on
+from litellm.proxy.management.teams.dependencies import get_org_roles
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
     append_team_models,
@@ -1995,7 +1996,7 @@ class ModelManagementAuthChecks:
     def can_user_make_team_model_call(
         team_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-        team_obj: LiteLLM_TeamTable | None = None,
+        roles: frozenset[Role],
         premium_user: bool = False,
     ) -> Literal[True]:
         if premium_user is False:
@@ -2003,9 +2004,7 @@ class ModelManagementAuthChecks:
                 status_code=403,
                 detail={"error": CommonProxyErrors.not_premium_user.value},
             )
-        if user_api_key_dict.user_role and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-            return True
-        elif team_obj is None or not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        if not roles:
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2092,7 +2091,7 @@ class ModelManagementAuthChecks:
         ModelManagementAuthChecks.can_user_make_team_model_call(
             team_id=model_params.model_info.team_id,
             user_api_key_dict=user_api_key_dict,
-            team_obj=existing_team_row,
+            roles=await roles_on(existing_team_row, user_api_key_dict, get_org_roles()),
             premium_user=premium_user,
         )
         return True
@@ -2134,8 +2133,8 @@ class ModelManagementAuthChecks:
                 )
             team_obj: Final = LiteLLM_TeamTable.model_validate(team_obj_row.model_dump())
 
-            caller_is_admin: Final = await get_team_access().allows(user_api_key_dict, team_obj, TEAM_ADMIN_ONLY)
-            if member_operation is not None and not caller_is_admin:
+            roles: Final = await roles_on(team_obj, user_api_key_dict, get_org_roles())
+            if member_operation is not None and not roles:
                 from litellm.proxy.proxy_server import llm_router
 
                 if llm_router is None or (member_operation == "update" and incoming_model_params is None):
@@ -2155,7 +2154,7 @@ class ModelManagementAuthChecks:
             return ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
                 user_api_key_dict=user_api_key_dict,
-                team_obj=team_obj,
+                roles=roles,
                 premium_user=premium_user,
             )
         ## Check non-team model auth

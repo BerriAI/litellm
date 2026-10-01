@@ -34,17 +34,15 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
-from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.teams.authz import roles_on
+from litellm.proxy.management.teams.dependencies import get_org_roles
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.repositories.table_repositories import (
-    OrganizationMembershipRepository,
-    TeamMembershipRepository,
-)
+from litellm.repositories.organization_membership_repository import OrganizationMembershipRepository
+from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
@@ -322,7 +320,7 @@ async def bulk_remove_team_members(
     if team is None:
         raise _team_not_found(team_id)
 
-    if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
+    if not await roles_on(team, user_api_key_dict, get_org_roles()):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_delete'"

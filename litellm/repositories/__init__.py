@@ -10,6 +10,7 @@ from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
+from litellm.repositories.organization_membership_repository import OrganizationMembershipRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import (
     BatchTable,
@@ -51,7 +52,6 @@ from litellm.repositories.table_repositories import (
     MCPUserCredentialsRepository,
     MemoryRepository,
     ModelTableRepository,
-    OrganizationMembershipRepository,
     PolicyAttachmentRepository,
     PolicyRepository,
     PrismaTableRepository,
