@@ -3,6 +3,8 @@
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 
+import { cn } from "@/lib/cva.config";
+
 import { agentTraceSpanCall } from "../../networking";
 import { KeyValueRows, objectEntries } from "./KeyValueRows";
 import { Card, MessageCard, Section, ToolResultCard } from "./MessageCard";
@@ -12,6 +14,9 @@ import { errorSource, parseJson, parseMessages, prettyPayload } from "./traceUti
 
 const ERROR_SOURCE_LABEL: Record<ErrorSource, string> = { tool: "Tool", model: "Model", litellm: "LiteLLM" };
 const TRACEBACK_MARKER = "Traceback (most recent call last):";
+const STATUS_TEXT = "px-5 py-2 text-[13px] tracking-[-0.26px] text-trace-duration";
+const PAYLOAD_PRE =
+  "font-mono text-[13px] leading-[1.5] tracking-[-0.26px] break-words whitespace-pre-wrap text-trace-text";
 
 /** Exporters record `repr(exc)` + traceback with no separator; keep the exception line. */
 export const errorHeadline = (error: string): string =>
@@ -36,14 +41,15 @@ export function ErrorBlock({ span }: { span: Span }) {
   if (!source) return null;
   const headline = errorHeadline(span.error ?? "") || "Span reported an error status.";
   return (
-    <section aria-label="Error" className="rounded-lg border border-destructive/40 bg-destructive/5 px-3.5 py-3">
-      <div className="flex items-center gap-2 text-[12px] font-medium text-destructive">
+    <section
+      aria-label="Error"
+      className="mx-5 mb-2 rounded-[4px] border-[0.67px] border-destructive/40 bg-destructive/5 px-3 py-2.5"
+    >
+      <div className="flex items-center gap-2 text-[13px] leading-[1.2] font-medium tracking-[-0.26px] text-destructive">
         <AlertTriangle className="size-3.5" />
         {ERROR_SOURCE_LABEL[source]} · {errorReason(headline)}
       </div>
-      <pre className="mt-2 font-mono text-[12px] leading-5 break-words whitespace-pre-wrap text-foreground">
-        {headline}
-      </pre>
+      <pre className={cn("mt-2", PAYLOAD_PRE)}>{headline}</pre>
     </section>
   );
 }
@@ -52,16 +58,14 @@ function PlainPayload({ value }: { value: string }) {
   const entries = objectEntries(parseJson(value));
   if (entries && entries.length > 0) {
     return (
-      <Card>
+      <Card className="px-3 py-2.5">
         <KeyValueRows entries={entries} />
       </Card>
     );
   }
   return (
-    <Card>
-      <pre className="max-h-96 overflow-auto font-mono text-[12px] leading-5 break-words whitespace-pre-wrap text-foreground">
-        {prettyPayload(value)}
-      </pre>
+    <Card className="px-3 py-2.5">
+      <pre className={cn("max-h-96 overflow-auto", PAYLOAD_PRE)}>{prettyPayload(value)}</pre>
     </Card>
   );
 }
@@ -97,12 +101,10 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
   const empty = detail && !detail.input && !detail.output;
 
   return (
-    <div className="flex flex-col gap-1 px-5 py-3">
+    <div className="flex flex-col px-2 pt-1 pb-4">
       <ErrorBlock span={span} />
-      {detailQuery.isLoading && <div className="py-2 text-[12px] text-muted-foreground">Loading span…</div>}
-      {detailQuery.isError && (
-        <div className="py-2 text-[12px] text-muted-foreground">Could not load span: {detailQuery.error.message}</div>
-      )}
+      {detailQuery.isLoading && <div className={STATUS_TEXT}>Loading span…</div>}
+      {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
       {detail?.input ? (
         <Section title="Input">
           <Payload value={detail.input} span={span} role="input" />
@@ -114,7 +116,9 @@ export function DetailContent({ accessToken, traceId, traceRef, span }: DetailCo
         </Section>
       ) : null}
       {empty && span.status !== "error" && (
-        <div className="py-12 text-center text-[12px] text-muted-foreground">No content recorded for this span.</div>
+        <div className="py-12 text-center text-[13px] tracking-[-0.26px] text-trace-duration">
+          No content recorded for this span.
+        </div>
       )}
     </div>
   );

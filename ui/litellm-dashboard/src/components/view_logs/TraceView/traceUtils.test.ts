@@ -15,6 +15,7 @@ import {
   groupRowId,
   isFrameworkSpan,
   median,
+  messageText,
   parseMessages,
   previewText,
   revealSpanInState,
@@ -70,6 +71,13 @@ describe("formatting", () => {
       "Compare ingest thr",
     );
     expect(previewText("plain text")).toBe("plain text");
+  });
+
+  it("decodes JSON escapes in a truncated preview and treats an empty array as no preview", () => {
+    expect(previewText('[{"role": "user", "content": "Thanks\\u2014keep the \\u00a55,000 budget\\nplease \\u20')).toBe(
+      "Thanks—keep the ¥5,000 budget please ",
+    );
+    expect(previewText("[]")).toBe("");
   });
 
   it("pulls the user message out of an OpenInference LangChain input", () => {
@@ -267,6 +275,17 @@ describe("payload helpers", () => {
     expect(parseMessages('{"file_path":"/tmp/x"}')).toBeNull();
     expect(parseMessages("not json")).toBeNull();
   });
+
+  it("shows block-list message content as its text and drops reasoning blocks", () => {
+    const reasoning = { type: "reasoning", summary: [], encrypted_content: "gAAAAB-opaque" };
+    const content = JSON.stringify([reasoning, { type: "text", text: "Part one" }, { type: "text", text: "Part two" }]);
+    const [message] = parseMessages(JSON.stringify({ role: "assistant", content })) ?? [];
+    expect(message.content).toBe("Part one\n\nPart two");
+    expect(messageText(JSON.stringify([reasoning]))).toBe("");
+    const image = JSON.stringify([{ type: "image_url", image_url: { url: "https://x.test/a.png" } }]);
+    expect(messageText(image)).toBe(image);
+    expect(messageText("[not json")).toBe("[not json");
+  });
 });
 
 describe("treeGuides", () => {
@@ -282,5 +301,10 @@ describe("treeGuides", () => {
     const guides = treeGuides([0, 1, 2, 3, 1]);
     expect(guides[1].last).toBe(false);
     expect(guides[3].rails).toEqual([true, false]);
+  });
+
+  it("drops a stem from a row only when the next row is its child", () => {
+    const guides = treeGuides([0, 1, 2, 1, 1, 0]);
+    expect(guides.map((g) => g.stem)).toEqual([true, true, false, false, false, false]);
   });
 });

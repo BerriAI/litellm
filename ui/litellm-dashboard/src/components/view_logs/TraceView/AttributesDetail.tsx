@@ -11,20 +11,34 @@ interface AttributesDetailProps {
   isLoading: boolean;
 }
 
-/** Raw OTEL attributes as key / value rows, ids first. */
+export function DetailGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section aria-label={title} className="flex flex-col gap-2">
+      <h3 className="py-1 text-[13px] font-medium tracking-[-0.26px] text-trace-text">{title}</h3>
+      <Card className="px-3 py-2.5">{children}</Card>
+    </section>
+  );
+}
+
+/** Ids, then the raw OTEL attributes, as dot-bulleted key / value rows. */
 export function AttributesDetail({ traceId, span, attributes, isLoading }: AttributesDetailProps) {
-  const entries: KeyValue[] = [
+  const ids: KeyValue[] = [
     ["trace_id", traceId],
     ["span_id", span.span_id],
     ["parent_span_id", span.parent_span_id ?? "—"],
-    ...Object.entries(attributes ?? {}).sort(([a], [b]) => a.localeCompare(b)),
   ];
+  const attributeEntries: KeyValue[] = Object.entries(attributes ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return (
-    <div className="px-5 py-3">
-      <Card>
-        <KeyValueRows entries={entries} mono />
-      </Card>
-      {isLoading && <div className="mt-2 text-[12px] text-muted-foreground">Loading attributes…</div>}
+    <div className="flex flex-col gap-4 px-7 pt-1 pb-4">
+      <DetailGroup title="Identifiers">
+        <KeyValueRows entries={ids} mono />
+      </DetailGroup>
+      {attributeEntries.length > 0 && (
+        <DetailGroup title="Attributes">
+          <KeyValueRows entries={attributeEntries} />
+        </DetailGroup>
+      )}
+      {isLoading && <div className="text-[13px] text-trace-duration">Loading attributes…</div>}
     </div>
   );
 }

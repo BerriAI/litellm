@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import { DetailPane } from "./DetailPane";
+import { absoluteTime, SpanHoverCard, spanFacts } from "./SpanHoverCard";
 import type { GroupRowData, SpanRowData } from "./traceTree";
 import type { Span, SpanDetail, Trace } from "./traceTypes";
 
@@ -219,5 +220,37 @@ describe("DetailPane", () => {
     expect(within(input).queryByText(systemText, { ignore: "[inert] *" })).not.toBeInTheDocument();
     const output = screen.getByRole("region", { name: "Output" });
     expect(within(output).getAllByText("get_customer_plan", { ignore: "[inert] *" })).not.toHaveLength(0);
+  });
+
+  it("groups ids and OTEL attributes into separate key / value sections on the Attributes tab", async () => {
+    const user = userEvent.setup();
+    renderPane(spanRow(llm));
+    await user.click(screen.getByRole("tab", { name: "Attributes" }));
+    const ids = screen.getByRole("region", { name: "Identifiers" });
+    expect(ids).toHaveTextContent("span_idllm1");
+    expect(ids).toHaveTextContent("parent_span_idroot");
+    const attributes = await screen.findByRole("region", { name: "Attributes" });
+    expect(attributes).toHaveTextContent("gen_ai.request.model");
+    expect(attributes).not.toHaveTextContent("span_id");
+  });
+});
+
+describe("SpanHoverCard", () => {
+  it("shows absolute Start / End times and the agent tag after hovering the row", async () => {
+    const user = userEvent.setup();
+    const traceStartMs = Date.parse(trace.summary.start_time);
+    const timed = span({ span_id: "timed", start_offset_ms: 2000, duration_ms: 3000 });
+    renderWithProviders(
+      <SpanHoverCard facts={spanFacts(timed)} traceStartMs={traceStartMs}>
+        <button type="button">row</button>
+      </SpanHoverCard>,
+    );
+    expect(screen.queryByTestId("span-hover-card")).not.toBeInTheDocument();
+    await user.hover(screen.getByRole("button", { name: "row" }));
+    const card = await screen.findByTestId("span-hover-card", {}, { timeout: 2000 });
+    const time = within(card).getByRole("region", { name: "Time" });
+    expect(time).toHaveTextContent(`Start${absoluteTime(traceStartMs, 2000)}`);
+    expect(time).toHaveTextContent(`End${absoluteTime(traceStartMs, 5000)}`);
+    expect(within(card).getByRole("region", { name: "Tags" })).toHaveTextContent("agent:support_triage_agent");
   });
 });

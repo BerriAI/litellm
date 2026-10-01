@@ -4,7 +4,7 @@ import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/cva.config";
 
-/** Animates height between 0 and auto via grid rows; children stay mounted but inert while closed. */
+/** Snaps between 0 and auto height; children stay mounted but inert while closed. */
 export function Collapse({
   open,
   children,
@@ -15,14 +15,7 @@ export function Collapse({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        "grid transition-[grid-template-rows,opacity] duration-150 ease-[cubic-bezier(0,0,0.2,1)] motion-reduce:transition-none",
-        open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
-      )}
-      aria-hidden={!open}
-      inert={!open}
-    >
+    <div className={cn("grid", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")} aria-hidden={!open} inert={!open}>
       <div className={cn("min-h-0 overflow-hidden", className)}>{children}</div>
     </div>
   );

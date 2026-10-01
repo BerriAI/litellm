@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleCheck } from "lucide-react";
+import { Check } from "lucide-react";
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 
@@ -11,7 +11,7 @@ import type { GroupRowData } from "./traceTree";
 import type { Span, SpanType } from "./traceTypes";
 import { fmtMs, fmtTok } from "./traceUtils";
 
-const HOVER_OPEN_DELAY_MS = 300;
+export const HOVER_OPEN_DELAY_MS = 300;
 const HOVER_CLOSE_DELAY_MS = 100;
 
 const TYPE_LABEL: Record<SpanType, string> = {
@@ -46,7 +46,10 @@ export interface HoverFacts {
   spend: number | null;
   error: string | null;
   failed: boolean;
+  tags: readonly string[];
 }
+
+const agentTags = (agent: string): readonly string[] => (agent ? [`agent:${agent}`] : []);
 
 export const spanFacts = (span: Span): HoverFacts => ({
   name: span.name,
@@ -58,6 +61,7 @@ export const spanFacts = (span: Span): HoverFacts => ({
   spend: span.spend ?? null,
   error: span.error ?? null,
   failed: span.status === "error",
+  tags: agentTags(span.agent),
 });
 
 export const groupFacts = (row: GroupRowData): HoverFacts => {
@@ -73,15 +77,85 @@ export const groupFacts = (row: GroupRowData): HoverFacts => {
     spend: null,
     error: row.members.find((m) => m.status === "error" && m.error)?.error ?? null,
     failed: row.failedCount > 0,
+    tags: agentTags(row.agent),
   };
 };
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-mono text-[11.5px] tabular-nums">{value}</dd>
-    </>
+    <div className="flex justify-between gap-4">
+      <dt className="text-trace-duration">{label}</dt>
+      <dd className="font-mono text-trace-text tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
+function FactSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section aria-label={title} className="flex flex-col gap-1.5">
+      <h4 className="font-semibold text-trace-text">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+function HoverCardBody({ facts, traceStartMs }: { facts: HoverFacts; traceStartMs: number }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5">
+          <SpanIcon type={facts.type} model={facts.model} error={facts.failed} size="sm" />
+        </span>
+        <div className="flex min-w-0 flex-col">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-semibold text-trace-text">{facts.name}</span>
+            {!facts.failed && (
+              <span
+                className="grid size-4 shrink-0 place-items-center rounded-full bg-trace-ok p-0.5"
+                aria-label="Success"
+              >
+                <Check className="size-3 text-trace-ok-glyph" strokeWidth={2.5} />
+              </span>
+            )}
+          </div>
+          <span className="text-[12px] text-trace-duration">
+            {TYPE_LABEL[facts.type]}
+            {facts.model ? ` · ${facts.model}` : ""}
+          </span>
+        </div>
+      </div>
+      <FactSection title="Time">
+        <dl className="flex flex-col gap-1.5">
+          <Fact label="Start" value={absoluteTime(traceStartMs, facts.startMs)} />
+          <Fact label="End" value={absoluteTime(traceStartMs, facts.startMs + facts.durationMs)} />
+          <Fact label="Duration" value={fmtMs(facts.durationMs)} />
+        </dl>
+      </FactSection>
+      {(facts.tokens > 0 || facts.spend != null) && (
+        <FactSection title="Usage">
+          <dl className="flex flex-col gap-1.5">
+            {facts.tokens > 0 && <Fact label="Tokens" value={fmtTok(facts.tokens)} />}
+            {facts.spend != null && <Fact label="Cost" value={formatCost(facts.spend)} />}
+          </dl>
+        </FactSection>
+      )}
+      {facts.tags.length > 0 && (
+        <FactSection title="Tags">
+          <ul className="flex flex-wrap gap-1">
+            {facts.tags.map((tag) => (
+              <li key={tag} className="rounded-[3px] bg-trace-tag px-1 py-0.5 text-trace-duration">
+                {tag}
+              </li>
+            ))}
+          </ul>
+        </FactSection>
+      )}
+      {facts.error && (
+        <div className="rounded-[4px] bg-destructive/10 px-2 py-1.5 font-mono text-[12px] break-words text-destructive">
+          {errorHeadline(facts.error)}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -91,34 +165,20 @@ interface SpanHoverCardProps {
   children: React.ReactElement;
 }
 
-/** Wraps a tree row so hovering it shows timing, usage and the failure headline. */
+/** Wraps a tree row: after a hover delay, shows timing, usage, tags and the failure headline beside the drawer. */
 export function SpanHoverCard({ facts, traceStartMs, children }: SpanHoverCardProps) {
   return (
     <HoverCard>
       <HoverCardTrigger delay={HOVER_OPEN_DELAY_MS} closeDelay={HOVER_CLOSE_DELAY_MS} render={children} />
-      <HoverCardContent side="right" align="start" sideOffset={8} className="w-72 p-3.5 text-[12.5px]">
-        <div className="flex items-center gap-2">
-          <SpanIcon type={facts.type} model={facts.model} error={facts.failed} />
-          <span className="truncate font-semibold">{facts.name}</span>
-          {!facts.failed && <CircleCheck className="size-3.5 shrink-0 text-success" aria-label="Success" />}
-        </div>
-        <div className="mt-0.5 pl-7 text-muted-foreground">
-          {TYPE_LABEL[facts.type]}
-          {facts.model ? ` · ${facts.model}` : ""}
-        </div>
-        <div className="mt-3 mb-1 font-semibold">Time</div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-          <Fact label="Start" value={absoluteTime(traceStartMs, facts.startMs)} />
-          <Fact label="End" value={absoluteTime(traceStartMs, facts.startMs + facts.durationMs)} />
-          <Fact label="Duration" value={fmtMs(facts.durationMs)} />
-          {facts.tokens > 0 && <Fact label="Tokens" value={fmtTok(facts.tokens)} />}
-          {facts.spend != null && <Fact label="Cost" value={formatCost(facts.spend)} />}
-        </dl>
-        {facts.error && (
-          <div className="mt-2.5 rounded-md bg-destructive/10 px-2 py-1.5 font-mono text-[11px] break-words text-destructive">
-            {errorHeadline(facts.error)}
-          </div>
-        )}
+      <HoverCardContent
+        side="left"
+        align="start"
+        sideOffset={0}
+        alignOffset={0}
+        data-testid="span-hover-card"
+        className="max-h-[min(520px,calc(100vh-16px))] w-auto max-w-[420px] overflow-y-auto rounded-[6px] border border-trace-border bg-trace-surface p-3 text-[13px] leading-[1.2] tracking-[-0.26px] text-trace-text shadow-trace-md ring-0 transition-opacity duration-150 ease-[cubic-bezier(0,0,0.2,1)] data-closed:animate-none data-ending-style:opacity-0 data-open:animate-none motion-reduce:transition-none"
+      >
+        <HoverCardBody facts={facts} traceStartMs={traceStartMs} />
       </HoverCardContent>
     </HoverCard>
   );

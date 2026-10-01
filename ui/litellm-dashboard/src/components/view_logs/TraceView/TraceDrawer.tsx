@@ -107,20 +107,24 @@ function Stat({ label, value, error = false }: { label: string; value: string; e
   );
 }
 
-function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
+function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => void; embedded: boolean }) {
   const { summary } = trace;
   const failed = summary.error_count > 0;
   return (
     <header className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-card px-3 py-1.5">
-      <button
-        type="button"
-        onClick={onBack}
-        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-        aria-label="Back to runs"
-      >
-        <ArrowLeft className="size-4" />
-      </button>
-      <span className="mx-1 h-[18px] w-px bg-border" />
+      {!embedded && (
+        <>
+          <button
+            type="button"
+            onClick={onBack}
+            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Back to runs"
+          >
+            <ArrowLeft className="size-4" />
+          </button>
+          <span className="mx-1 h-[18px] w-px bg-border" />
+        </>
+      )}
       <SpanIcon type="agent" error={failed} size="lg" />
       <h1 className="min-w-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
       <IdChip value={summary.trace_id} label="Copy trace ID" showValue />
@@ -237,10 +241,12 @@ interface RunViewProps {
   initialSpanId?: string;
   accessToken: string;
   onBack: () => void;
+  /** Rendered inside the side drawer: the drawer owns closing and sizing. */
+  embedded?: boolean;
 }
 
 /** One agent run: header with totals and "Copy for agent", span tree on the left, span details on the right. */
-export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack }: RunViewProps) {
+export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
   const traceQuery = useQuery({
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
     queryFn: () => agentTraceCall(accessToken, traceId, traceRef),
@@ -250,8 +256,18 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack 
 
   if (traceQuery.isLoading) {
     return (
-      <div role="status" aria-label="Loading trace" className="flex h-[60vh] items-center justify-center">
-        <UiLoadingSpinner className="size-6 text-muted-foreground" />
+      <div
+        role="status"
+        aria-label="Loading trace"
+        className={embedded ? "flex flex-col gap-3 p-4" : "flex h-[60vh] items-center justify-center"}
+      >
+        {embedded ? (
+          [72, 48, 88, 60, 80].map((w) => (
+            <div key={w} className="h-4 animate-pulse rounded bg-trace-row-hover" style={{ width: `${w}%` }} />
+          ))
+        ) : (
+          <UiLoadingSpinner className="size-6 text-muted-foreground" />
+        )}
       </div>
     );
   }
@@ -272,10 +288,13 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack 
   }
   return (
     <div
-      className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-background"
+      className={cn(
+        "flex flex-1 flex-col overflow-hidden bg-background",
+        embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
+      )}
       data-testid="run-view"
     >
-      <RunHeader trace={trace} onBack={onBack} />
+      <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
       <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} initialSpanId={initialSpanId} />
     </div>
   );
