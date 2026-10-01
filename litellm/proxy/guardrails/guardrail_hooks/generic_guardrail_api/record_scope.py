@@ -85,8 +85,7 @@ class RecordScope:
                 return False
             case "per_session":
                 return session_id is None or self._claim_session(json.dumps((*caller, session_id, input_type)))
-            case _:
-                return assert_never(self._scope)
+        return assert_never(self._scope)
 
     def _claim_session(self, key: str) -> bool:
         if self._recorded_sessions.get_cache(key) is True:
