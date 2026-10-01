@@ -67,6 +67,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     SessionRefreshOpened,
     SessionSigningConfigError,
     active_session_signing_keys,
+    legacy_session_keys_from_master_key,
+    open_session_credential_with_legacy,
     open_session_refresh_bearer,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
@@ -75,6 +77,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     MintedSessionToken,
     OpenedSessionToken,
     SessionAudience,
+    SessionKeys,
     SessionPrincipal,
     SessionSigningKeys,
     is_session_refresh_token,
@@ -1236,6 +1239,7 @@ async def aggregate_token(
             keys=keys,
             now=now,
             issue=issue,
+            legacy_keys=legacy_session_keys_from_master_key(master_key, keys),
         )
     if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
         return await _token_exchange_grant(
@@ -1395,10 +1399,13 @@ async def _refresh_token_grant(
     keys: SessionSigningKeys,
     now: datetime,
     issue: _GrantIssuer,
+    legacy_keys: SessionKeys | None = None,
 ) -> Response:
     if not refresh_token:
         return _oauth_error(400, "invalid_request", "refresh_token is required")
-    opened: Final = open_session_refresh_bearer(refresh_token, keys, now, expected_client_id=client_id)
+    opened: Final = open_session_refresh_bearer(
+        refresh_token, keys, now, expected_client_id=client_id, legacy_keys=legacy_keys
+    )
     if not isinstance(opened, SessionRefreshOpened):
         return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
     if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
@@ -1459,7 +1466,13 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
         verbose_logger.error("mcp_gateway_dcr revoke rejected: %s", keys.detail)
         return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
-    opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
+    opened: Final = open_session_refresh_bearer(
+        token,
+        keys,
+        now,
+        expected_client_id=client_id,
+        legacy_keys=legacy_session_keys_from_master_key(master_key, keys),
+    )
     if isinstance(opened, SessionRefreshOpened):
         burned: Final = await _SingleUseGuard(cache).claim(
             f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}", SESSION_REFRESH_TTL_SECONDS + _CLAIM_TTL_BUFFER_SECONDS
@@ -1527,10 +1540,11 @@ async def introspect_gateway_token(
         verbose_logger.error("mcp_gateway_dcr introspect rejected: %s", keys.detail)
         return _oauth_error(500, "server_error", keys.detail)
     now: Final = datetime.now(timezone.utc)
+    legacy_keys: Final = legacy_session_keys_from_master_key(master_key, keys)
     if is_session_token(token):
-        opened = open_session_token(token, keys, now)
+        opened = open_session_credential_with_legacy(open_session_token, token, keys, legacy_keys, now)
     elif is_session_refresh_token(token):
-        opened = open_session_refresh_token(token, keys, now)
+        opened = open_session_credential_with_legacy(open_session_refresh_token, token, keys, legacy_keys, now)
     else:
         return _inactive_introspection_response()
     if not isinstance(opened, OpenedSessionToken):

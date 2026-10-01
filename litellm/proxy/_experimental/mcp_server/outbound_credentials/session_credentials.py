@@ -8,20 +8,26 @@ recovered litellm user (consumer), reloading the live user record and policy bef
 anything runs. This module is the pure surface for both sides; the token-endpoint and
 admission wiring live in their respective call sites.
 
-The signing key is derived with the same memory-hard scrypt construction as
+The signing key is derived with the same HKDF-SHA256 construction as
 :func:`~.bridge_credentials.envelope_keys_from_master_key` but under a distinct domain
 label, so session tokens and bridge envelopes never share key material: a token of one
 family is unverifiable in the other by key separation, on top of the distinct issuers,
 prefixes, and claim shapes.
 """
 
-import hashlib
+import os
+from collections.abc import Callable
 from datetime import datetime
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
+from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import (
+    hkdf_sha256,
+    legacy_kdf_grace_enabled,
+    legacy_scrypt,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     AsymmetricSessionKeys,
     OpenedSessionToken,
@@ -30,6 +36,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     SessionPrincipal,
     SessionRotatedPublicKey,
     SessionSigningKeys,
+    SessionTokenOpenError,
     is_session_refresh_token,
     is_session_token,
     open_session_refresh_token,
@@ -38,37 +45,47 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
 
 _SESSION_SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-gateway:session-signing:"
 
-# scrypt work factors (RFC 7914), identical to the envelope KDF: memory-hard so a captured
-# session token is not a cheap offline oracle for the master key.
-_SCRYPT_N: Final = 2**15
-_SCRYPT_R: Final = 8
-_SCRYPT_P: Final = 1
-_SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
-_DERIVED_KEY_BYTES: Final = 32
-
 
 @lru_cache(maxsize=8)
 def session_keys_from_master_key(master_key: str) -> SessionKeys:
     """Derive the session signing key from the proxy master key.
 
-    A memory-hard scrypt KDF (RFC 7914) over a session-specific domain-label salt yields a
-    256-bit subkey from the one secret, so the producer (mint) and consumer (open) agree on
-    the key without persisting any. The domain label differs from both envelope labels in
-    :mod:`.bridge_credentials`, so compromise or misuse of one token family never crosses
-    into the other. The result is cached (the master key is fixed for a process); rotating
-    ``master_key`` invalidates every outstanding session, which is the intended behavior
-    for a signing-key change.
+    HKDF-SHA256 (RFC 5869) over the master key with a session-specific domain label as
+    ``info`` yields a 256-bit subkey from the one secret, so the producer (mint) and
+    consumer (open) agree on the key without persisting any. The label differs from both
+    envelope labels in :mod:`.bridge_credentials`, so compromise or misuse of one token
+    family never crosses into the other. The result is cached (the master key is fixed for
+    a process); rotating ``master_key`` invalidates every outstanding session, which is
+    the intended behavior for a signing-key change.
     """
-    signing: Final = hashlib.scrypt(
-        master_key.encode(),
-        salt=_SESSION_SIGNING_KEY_DOMAIN,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-        maxmem=_SCRYPT_MAXMEM,
-        dklen=_DERIVED_KEY_BYTES,
-    ).hex()
+    return SessionKeys(signing_key=SecretStr(hkdf_sha256(master_key, _SESSION_SIGNING_KEY_DOMAIN)))
+
+
+@lru_cache(maxsize=8)
+def _legacy_session_keys(master_key: str) -> SessionKeys | None:
+    """The pre-rotation scrypt signing key, kept so session tokens minted before the KDF
+    rotation can still be opened during the opt-in grace window. ``None`` when scrypt is
+    unavailable."""
+    signing: Final = legacy_scrypt(master_key, _SESSION_SIGNING_KEY_DOMAIN)
+    if signing is None:
+        return None
     return SessionKeys(signing_key=SecretStr(signing))
+
+
+def legacy_session_keys_from_master_key(
+    master_key: str,
+    active: SessionSigningKeys,
+    environ: Callable[[str], str | None] = os.environ.get,
+) -> SessionKeys | None:
+    """The legacy session key when the operator enabled the KDF grace window, else ``None``.
+
+    The fallback only applies to the default master-key HS256 path: a configured
+    ``mcp_session_token_signing`` RS256 key was never scrypt-derived, so an
+    :class:`AsymmetricSessionKeys` ``active`` gets no legacy key even with grace on.
+    """
+    if not isinstance(active, SessionKeys) or not legacy_kdf_grace_enabled(environ):
+        return None
+    return _legacy_session_keys(master_key)
 
 
 class SessionSigningPreviousKey(BaseModel):
@@ -214,6 +231,7 @@ def resolve_session_bearer(
     authorization_value: str,
     keys: SessionSigningKeys,
     now: datetime,
+    legacy_keys: SessionKeys | None = None,
 ) -> SessionBearerResult:
     """Classify an ``Authorization`` value presented at the aggregate MCP edge.
 
@@ -232,7 +250,7 @@ def resolve_session_bearer(
         return SessionBearerInvalid()
     if not is_session_token(candidate):
         return NotSessionBearer()
-    opened: Final = open_session_token(candidate, keys, now)
+    opened: Final = open_session_credential_with_legacy(open_session_token, candidate, keys, legacy_keys, now)
     if isinstance(opened, OpenedSessionToken):
         return SessionBearerAdmitted(principal=opened.principal)
     return SessionBearerInvalid(expired=isinstance(opened, SessionExpired))
@@ -260,11 +278,29 @@ class SessionRefreshInvalid(BaseModel):
 SessionRefreshResult: TypeAlias = SessionRefreshOpened | SessionRefreshInvalid
 
 
+def open_session_credential_with_legacy(
+    open_token: Callable[[str, SessionSigningKeys, datetime], OpenedSessionToken | SessionTokenOpenError],
+    token: str,
+    keys: SessionSigningKeys,
+    legacy_keys: SessionKeys | None,
+    now: datetime,
+) -> OpenedSessionToken | SessionTokenOpenError:
+    """Open a session credential under the active keys, then under the legacy keys when
+    grace supplied them. An :class:`OpenedSessionToken` or :class:`SessionExpired` under
+    the active keys is final: expiry must still report as expiry, so only a signature or
+    format failure falls through to the legacy derivation."""
+    primary: Final = open_token(token, keys, now)
+    if isinstance(primary, (OpenedSessionToken, SessionExpired)) or legacy_keys is None:
+        return primary
+    return open_token(token, legacy_keys, now)
+
+
 def open_session_refresh_bearer(
     refresh_value: str,
     keys: SessionSigningKeys,
     now: datetime,
     expected_client_id: str,
+    legacy_keys: SessionKeys | None = None,
 ) -> SessionRefreshResult:
     """Open a session refresh token presented on a ``refresh_token`` grant.
 
@@ -279,7 +315,7 @@ def open_session_refresh_bearer(
     candidate: Final = _strip_bearer(refresh_value)
     if not is_session_refresh_token(candidate):
         return SessionRefreshInvalid()
-    opened: Final = open_session_refresh_token(candidate, keys, now)
+    opened: Final = open_session_credential_with_legacy(open_session_refresh_token, candidate, keys, legacy_keys, now)
     if not isinstance(opened, OpenedSessionToken):
         return SessionRefreshInvalid()
     if opened.principal.client_id != expected_client_id:

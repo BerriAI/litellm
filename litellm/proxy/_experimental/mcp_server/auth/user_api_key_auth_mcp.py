@@ -26,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
     NotBridgeEnvelope,
     envelope_keys_from_master_key,
     is_bridge_envelope_shaped,
+    legacy_envelope_keys_from_master_key,
     resolve_bridge_envelope,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
@@ -870,7 +871,13 @@ class MCPRequestHandler:
         await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
 
         keys: Final = envelope_keys_from_master_key(master_key)
-        result: Final = resolve_bridge_envelope(authorization_value, keys, datetime.now(timezone.utc), server.server_id)
+        result: Final = resolve_bridge_envelope(
+            authorization_value,
+            keys,
+            datetime.now(timezone.utc),
+            server.server_id,
+            legacy_keys=legacy_envelope_keys_from_master_key(master_key),
+        )
         match result:
             case BridgeEnvelopeAdmitted():
                 return result
@@ -1006,6 +1013,7 @@ class MCPRequestHandler:
             SessionBearerInvalid,
             SessionSigningConfigError,
             active_session_signing_keys,
+            legacy_session_keys_from_master_key,
             resolve_session_bearer,
         )
         from litellm.proxy.proxy_server import master_key
@@ -1019,7 +1027,12 @@ class MCPRequestHandler:
         if isinstance(keys, SessionSigningConfigError):
             verbose_logger.error("mcp gateway session admission rejected: %s", keys.detail)
             raise HTTPException(status_code=500, detail="Server misconfigured: mcp_session_token_signing is invalid")
-        result: Final = resolve_session_bearer(authorization_value, keys, datetime.now(timezone.utc))
+        result: Final = resolve_session_bearer(
+            authorization_value,
+            keys,
+            datetime.now(timezone.utc),
+            legacy_keys=legacy_session_keys_from_master_key(master_key, keys),
+        )
         match result:
             case SessionBearerAdmitted():
                 try:

@@ -9,7 +9,8 @@ to the upstream MCP server (consumer). This module is the pure surface for both 
 token-endpoint and admission wiring live in their respective call sites.
 """
 
-import hashlib
+import os
+from collections.abc import Callable
 from datetime import datetime
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
@@ -20,6 +21,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     EnvelopeIdentity,
     EnvelopeKeys,
     EnvelopeMintError,
+    EnvelopeOpenError,
     OpenedEnvelope,
     OpenedRefreshEnvelope,
     RefreshCredential,
@@ -32,54 +34,53 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
     open_envelope,
     open_refresh_envelope,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import (
+    hkdf_sha256,
+    legacy_kdf_grace_enabled,
+    legacy_scrypt,
+)
 
 _SIGNING_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-signing:"
 _ENCRYPTION_KEY_DOMAIN: Final = b"litellm-mcp-bridge:envelope-encryption:"
-
-# scrypt work factors (RFC 7914). n=2**15 with r=8/p=1 costs ~50ms and ~32MB per derivation, which
-# makes offline guessing of a candidate master key memory-hard rather than a bare hash comparison.
-_SCRYPT_N: Final = 2**15
-_SCRYPT_R: Final = 8
-_SCRYPT_P: Final = 1
-# scrypt's working-set is ~128 * N * r * p bytes; cap at twice that so the maxmem ceiling scales
-# with every work factor and a future p or r bump does not trip "memory limit exceeded".
-_SCRYPT_MAXMEM: Final = 128 * _SCRYPT_N * _SCRYPT_R * _SCRYPT_P * 2
-_DERIVED_KEY_BYTES: Final = 32
 
 
 @lru_cache(maxsize=8)
 def envelope_keys_from_master_key(master_key: str) -> EnvelopeKeys:
     """Derive the envelope signing and encryption keys from the proxy master key.
 
-    A memory-hard scrypt KDF (RFC 7914) over two distinct domain-label salts yields two
-    independent 256-bit subkeys from the one secret, so the producer (mint) and consumer
-    (open) agree on keys without persisting any. scrypt is used rather than a bare hash or
-    HMAC so that a captured envelope is not a cheap offline oracle for the master key: each
-    candidate guess costs a full memory-hard derivation, which is what protects a deployment
-    whose master key is weaker than it should be. The result is cached (the master key is
-    fixed for a process), so the KDF runs once per key and adds nothing to the per-request
-    admission path. The derivation is deterministic; rotating ``master_key`` invalidates
-    every outstanding envelope, which is the intended behavior for a signing-key change.
+    HKDF-SHA256 (RFC 5869) over the master key, once per domain label as ``info``, yields
+    two independent 256-bit subkeys from the one secret, so the producer (mint) and consumer
+    (open) agree on keys without persisting any. No memory-hard guessing cost is needed:
+    the master key is a high-entropy secret, so a captured envelope is not a cheap offline
+    oracle for it either way. The result is cached (the master key is fixed for a process),
+    so the KDF runs once per key and adds nothing to the per-request admission path. The
+    derivation is deterministic; rotating ``master_key`` invalidates every outstanding
+    envelope, which is the intended behavior for a signing-key change.
     """
-    signing: Final = hashlib.scrypt(
-        master_key.encode(),
-        salt=_SIGNING_KEY_DOMAIN,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-        maxmem=_SCRYPT_MAXMEM,
-        dklen=_DERIVED_KEY_BYTES,
-    ).hex()
-    encryption: Final = hashlib.scrypt(
-        master_key.encode(),
-        salt=_ENCRYPTION_KEY_DOMAIN,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
-        maxmem=_SCRYPT_MAXMEM,
-        dklen=_DERIVED_KEY_BYTES,
-    ).hex()
+    return EnvelopeKeys(
+        signing_key=SecretStr(hkdf_sha256(master_key, _SIGNING_KEY_DOMAIN)),
+        encryption_key=SecretStr(hkdf_sha256(master_key, _ENCRYPTION_KEY_DOMAIN)),
+    )
+
+
+@lru_cache(maxsize=8)
+def _legacy_envelope_keys(master_key: str) -> EnvelopeKeys | None:
+    """The pre-rotation scrypt subkeys, kept so envelopes minted before the KDF rotation
+    can still be opened during the opt-in grace window. ``None`` when scrypt is unavailable."""
+    signing: Final = legacy_scrypt(master_key, _SIGNING_KEY_DOMAIN)
+    encryption: Final = legacy_scrypt(master_key, _ENCRYPTION_KEY_DOMAIN)
+    if signing is None or encryption is None:
+        return None
     return EnvelopeKeys(signing_key=SecretStr(signing), encryption_key=SecretStr(encryption))
+
+
+def legacy_envelope_keys_from_master_key(
+    master_key: str, environ: Callable[[str], str | None] = os.environ.get
+) -> EnvelopeKeys | None:
+    """The legacy envelope keys when the operator enabled the KDF grace window, else ``None``."""
+    if not legacy_kdf_grace_enabled(environ):
+        return None
+    return _legacy_envelope_keys(master_key)
 
 
 def build_bridge_token_response(
@@ -131,11 +132,40 @@ class BridgeRefreshInvalid(BaseModel):
 BridgeRefreshResult: TypeAlias = BridgeRefreshOpened | BridgeRefreshInvalid
 
 
+def _open_envelope_with_fallback(
+    candidate: str,
+    keys: EnvelopeKeys,
+    legacy_keys: EnvelopeKeys | None,
+    now: datetime,
+) -> OpenedEnvelope | EnvelopeOpenError:
+    """Open an access envelope under the active keys, then under the legacy keys when
+    grace supplied them."""
+    primary: Final = open_envelope(candidate, keys, now)
+    if isinstance(primary, OpenedEnvelope) or legacy_keys is None:
+        return primary
+    return open_envelope(candidate, legacy_keys, now)
+
+
+def _open_refresh_envelope_with_fallback(
+    candidate: str,
+    keys: EnvelopeKeys,
+    legacy_keys: EnvelopeKeys | None,
+    now: datetime,
+) -> OpenedRefreshEnvelope | EnvelopeOpenError:
+    """Open a refresh envelope under the active keys, then under the legacy keys when
+    grace supplied them."""
+    primary: Final = open_refresh_envelope(candidate, keys, now)
+    if isinstance(primary, OpenedRefreshEnvelope) or legacy_keys is None:
+        return primary
+    return open_refresh_envelope(candidate, legacy_keys, now)
+
+
 def open_bridge_refresh_envelope(
     refresh_value: str,
     keys: EnvelopeKeys,
     now: datetime,
     expected_server_id: str,
+    legacy_keys: EnvelopeKeys | None = None,
 ) -> BridgeRefreshResult:
     """Open a refresh envelope a bridge ``oauth_delegate`` client presented on a refresh_token grant.
 
@@ -150,7 +180,7 @@ def open_bridge_refresh_envelope(
     candidate: Final = _strip_bearer(refresh_value)
     if not is_refresh_envelope(candidate):
         return BridgeRefreshInvalid()
-    opened: Final = open_refresh_envelope(candidate, keys, now)
+    opened: Final = _open_refresh_envelope_with_fallback(candidate, keys, legacy_keys, now)
     if not isinstance(opened, OpenedRefreshEnvelope):
         return BridgeRefreshInvalid()
     if opened.identity.server_id != expected_server_id:
@@ -207,6 +237,7 @@ def resolve_bridge_envelope(
     keys: EnvelopeKeys,
     now: datetime,
     expected_server_id: str,
+    legacy_keys: EnvelopeKeys | None = None,
 ) -> BridgeEnvelopeResult:
     """Classify an ``Authorization`` value presented to a bridge ``oauth_delegate`` server.
 
@@ -233,7 +264,7 @@ def resolve_bridge_envelope(
         return BridgeEnvelopeInvalid()
     if not is_envelope(candidate):
         return NotBridgeEnvelope()
-    opened: Final = open_envelope(candidate, keys, now)
+    opened: Final = _open_envelope_with_fallback(candidate, keys, legacy_keys, now)
     if not isinstance(opened, OpenedEnvelope):
         return BridgeEnvelopeInvalid()
     if opened.identity.server_id != expected_server_id:
