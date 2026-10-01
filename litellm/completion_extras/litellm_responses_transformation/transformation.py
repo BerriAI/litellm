@@ -237,10 +237,21 @@ def _is_text_only_choice(choice: "Choices") -> bool:
     return not getattr(choice.message, "tool_calls", None)
 
 
-def _backfill_field(message: "Message", field: str, value: object) -> dict[str, object]:
-    if value is None or getattr(message, field, None) is not None:
-        return {}
-    return {field: value}
+def _merged_reasoning_fields(
+    message: "Message",
+    reasoning_content: str | None,
+    pending_reasoning_item: _BuiltReasoningItem | None,
+) -> dict[str, object]:
+    merged: Final = {
+        "reasoning_content": " ".join(
+            text for text in (getattr(message, "reasoning_content", None), reasoning_content) if text
+        ),
+        "reasoning_items": [
+            *(getattr(message, "reasoning_items", None) or ()),
+            *(_pending_reasoning_items(pending_reasoning_item) or ()),
+        ],
+    }
+    return {field: value for field, value in merged.items() if value}
 
 
 _ToolChoiceT = TypeVar("_ToolChoiceT")
@@ -758,8 +769,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             update={
                 "content": "" if target.message.content is None else target.message.content,
                 "tool_calls": tool_calls,
-                **_backfill_field(target.message, "reasoning_content", reasoning_content),
-                **_backfill_field(target.message, "reasoning_items", _pending_reasoning_items(pending_reasoning_item)),
+                **_merged_reasoning_fields(target.message, reasoning_content, pending_reasoning_item),
             }
         )
         merged_choice: Final = target.model_copy(update={"message": merged_message, "finish_reason": "tool_calls"})

@@ -3402,6 +3402,64 @@ def test_message_with_no_content_blocks_keeps_reasoning_for_the_tool_call():
     assert choice.message.reasoning_items[0]["encrypted_content"] == encrypted
 
 
+def _make_reasoning_item(item_id: str, summary_text: str, encrypted_content: str) -> "ResponseReasoningItem":
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem, Summary
+
+    return ResponseReasoningItem(
+        id=item_id,
+        summary=[Summary(text=summary_text, type="summary_text")],
+        type="reasoning",
+        content=None,
+        encrypted_content=encrypted_content,
+        status=None,
+    )
+
+
+def test_reasoning_emitted_after_the_message_stays_on_the_merged_choice():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    before_message = _make_reasoning_item("rs_before", "plan the lookup", "enc_before_FAKE==")
+    after_message = _make_reasoning_item("rs_after", "pick the article", "enc_after_FAKE==")
+
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            before_message,
+            _make_output_message("Let me look that up."),
+            after_message,
+            _make_function_tool_call(
+                call_id="call_after_reasoning",
+                name="search_legislation",
+                arguments='{"query": "Article 14"}',
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 1
+    message = result.choices[0].message
+    assert result.choices[0].finish_reason == "tool_calls"
+    assert [tool_call.function.name for tool_call in message.tool_calls] == ["search_legislation"]
+    assert message.reasoning_content == "plan the lookup pick the article"
+    assert [item["id"] for item in message.reasoning_items] == ["rs_before", "rs_after"]
+    assert [item["encrypted_content"] for item in message.reasoning_items] == ["enc_before_FAKE==", "enc_after_FAKE=="]
+
+    history = [
+        {"role": "user", "content": "What does Article 14 say?"},
+        {
+            "role": "assistant",
+            "content": message.content,
+            "tool_calls": [tool_call.model_dump() for tool_call in message.tool_calls],
+            "reasoning_items": message.reasoning_items,
+        },
+        {"role": "tool", "tool_call_id": "call_after_reasoning", "content": "Article 14 text"},
+    ]
+    input_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(history)
+    replayed = [item for item in input_items if item.get("type") == "reasoning"]
+    assert [item["id"] for item in replayed] == ["rs_before", "rs_after"]
+    assert [item["encrypted_content"] for item in replayed] == ["enc_before_FAKE==", "enc_after_FAKE=="]
+
+
 def test_streaming_text_plus_function_call_lands_on_choice_index_zero():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
