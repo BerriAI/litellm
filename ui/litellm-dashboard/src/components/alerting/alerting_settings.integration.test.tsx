@@ -86,4 +86,34 @@ describe("AlertingSettings", () => {
       expect(updateConfigFieldSetting).toHaveBeenCalledWith("sk-test", "alerting_args", {});
     });
   });
+
+  it("clears reset and form state when the access token changes", async () => {
+    const refreshedSettings = settingsResponse.map((setting) =>
+      setting.field_name === "budget_alert_ttl" ? { ...setting, field_value: 90 } : setting,
+    );
+    alertingSettingsCall.mockImplementation((token: string) =>
+      Promise.resolve(token === "sk-new" ? refreshedSettings : settingsResponse),
+    );
+
+    const user = userEvent.setup();
+    const { rerender } = renderWithProviders(<AlertingSettings accessToken="sk-old" premiumUser />);
+
+    const budgetInput = await screen.findByDisplayValue("60");
+    fireEvent.change(budgetInput, { target: { value: "75" } });
+    await user.click(screen.getByRole("button", { name: "Reset budget_alert_ttl" }));
+
+    rerender(<AlertingSettings accessToken="sk-new" premiumUser />);
+    await screen.findByDisplayValue("90");
+
+    await user.click(screen.getByRole("switch", { name: "slack_alerting" }));
+    await user.click(screen.getByRole("button", { name: "Update Settings" }));
+
+    await waitFor(() => {
+      expect(updateConfigFieldSetting).toHaveBeenNthCalledWith(1, "sk-new", "alerting_args", {
+        budget_alert_ttl: 90,
+      });
+    });
+    expect(updateConfigFieldSetting).toHaveBeenNthCalledWith(2, "sk-new", "alerting", ["slack"]);
+  });
+
 });
