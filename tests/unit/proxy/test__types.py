@@ -460,3 +460,9 @@ def test_an_http_mcp_server_is_unaffected_by_the_stdio_flag(monkeypatch, request
     assert request_model(server_id="http-1", transport="http", url="https://mcp.example.com").url == "https://mcp.example.com"
     with pytest.raises(ValidationError, match="url or spec_path is required"):
         request_model(server_id="http-1", transport="http")
+
+
+@pytest.mark.parametrize("request_model", MCP_SERVER_REQUESTS)
+def test_a_non_mapping_mcp_server_payload_gets_a_validation_error(request_model):
+    with pytest.raises(ValidationError, match="valid dictionary"):
+        request_model.model_validate("not-a-server")
