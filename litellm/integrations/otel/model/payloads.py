@@ -803,7 +803,7 @@ def _joined_choice(parts: tuple[str, ...]) -> tuple[_Choice, ...]:
 def _text_completion_choice(choice: Mapping[str, object], text: str) -> Mapping[str, object]:
     synthesized: Final = _text_choice(text, as_str(choice.get("finish_reason")))
     merged: Final = (*choice.items(), *synthesized.items())
-    return {k: v for k, v in merged if k != "text"}  # mutable-ok: mappers json.dumps and isinstance(dict) it
+    return {k: v for k, v in merged if k != "text"}
 
 
 def _completion_choices(response: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:

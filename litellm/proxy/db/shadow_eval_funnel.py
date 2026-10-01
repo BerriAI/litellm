@@ -47,7 +47,7 @@ def record_shadow_eval_funnel_event(job_id: str, stage: ShadowEvalFunnelStage) -
 async def flush_shadow_eval_funnel(prisma_client: "PrismaClient") -> None:
     if not _pending:
         return
-    batch: Final = dict(_pending)  # mutable-ok: snapshot drained from the queue
+    batch: Final = dict(_pending)
     _pending.clear()
     for job_id, counters in batch.items():
         try:

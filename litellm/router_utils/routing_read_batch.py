@@ -37,10 +37,10 @@ async def _backfill_prefetched_cache(
     due_keys: tuple[str, ...],
     values: Mapping[str, object],
 ) -> None:
-    cache_keys: Final = list(due_keys)  # mutable-ok: _prepare_batch_get takes a list
+    cache_keys: Final = list(due_keys)
     prepare_batch_get: Final = cache._prepare_batch_get  # pyright: ignore[reportPrivateUsage]  # memory backfill
     pending: Final = await prepare_batch_get(cache_keys, local_only=True)
-    redis_values: Final = {  # mutable-ok: _apply_batch_get accepts a dictionary
+    redis_values: Final = {
         key: values[key]
         for key, local in zip(due_keys, pending.result)
         if local is None and values.get(key) is not None
@@ -190,11 +190,7 @@ class RoutingReadBatch:
         )
         reads: Final = (
             (litellm_router_instance.cooldown_cache.cooldown_store, cooldown_keys),
-            *(
-                ()
-                if selector is None
-                else ((selector.router_cache, list(usage_keys)),)  # mutable-ok: DualCache batch reads take a list
-            ),
+            *(() if selector is None else ((selector.router_cache, list(usage_keys)),)),
         )
         results: Final = await self._read_prefetched(reads) or await DualCache.async_batch_get_cache_shared(
             reads, parent_otel_span=parent_otel_span
@@ -234,8 +230,6 @@ class RoutingReadBatch:
                 key not in prefetch.fetched for key, local_value in zip(keys, pending.result) if local_value is None
             ):
                 return None
-            missed = {  # mutable-ok: _apply_batch_get takes a dict
-                key: values.get(key) for key, local in zip(keys, pending.result) if local is None
-            }
+            missed = {key: values.get(key) for key, local in zip(keys, pending.result) if local is None}
             results.append(await cache._apply_batch_get(pending, missed))  # pyright: ignore[reportPrivateUsage]  # same two-step read as async_batch_get_cache_shared
         return results
