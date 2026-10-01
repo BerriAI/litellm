@@ -17553,6 +17553,9 @@ def get_logo_url():
     return {"logo_url": ""}
 
 
+_UI_ASSET_CACHE_HEADERS: Final = {"Cache-Control": "no-cache"}
+
+
 def _serve_custom_ui_logo(candidate: str) -> Response | None:
     """Serve one admin-configured logo, or None when it is unusable so the caller falls back."""
     from litellm.proxy.common_utils.static_asset_utils import (
@@ -17573,7 +17576,7 @@ def _serve_custom_ui_logo(candidate: str) -> Response | None:
         return None
 
     safe_logo_path, media_type = safe_logo
-    return FileResponse(safe_logo_path, media_type=media_type)
+    return FileResponse(safe_logo_path, media_type=media_type, headers=_UI_ASSET_CACHE_HEADERS)
 
 
 @app.get("/get_image", include_in_schema=False)
@@ -17647,8 +17650,8 @@ async def get_image(
     safe_logo: Final = resolve_validated_local_image_path(default_logo)
     if safe_logo is not None:
         safe_logo_path, media_type = safe_logo
-        return FileResponse(safe_logo_path, media_type=media_type)
-    return FileResponse(bundled_light_logo, media_type="image/png")
+        return FileResponse(safe_logo_path, media_type=media_type, headers=_UI_ASSET_CACHE_HEADERS)
+    return FileResponse(bundled_light_logo, media_type="image/png", headers=_UI_ASSET_CACHE_HEADERS)
 
 
 @app.get("/get_favicon", include_in_schema=False)
@@ -17665,7 +17668,7 @@ async def get_favicon():
 
     if not favicon_url:
         if os.path.exists(default_favicon):
-            return FileResponse(default_favicon, media_type="image/x-icon")
+            return FileResponse(default_favicon, media_type="image/x-icon", headers=_UI_ASSET_CACHE_HEADERS)
         raise HTTPException(status_code=404, detail="Default favicon not found")
 
     if favicon_url.startswith(("http://", "https://")):
@@ -17674,13 +17677,13 @@ async def get_favicon():
         safe_favicon: Final = resolve_validated_local_image_path(favicon_url)
         if safe_favicon is not None:
             safe_favicon_path, media_type = safe_favicon
-            return FileResponse(safe_favicon_path, media_type=media_type)
+            return FileResponse(safe_favicon_path, media_type=media_type, headers=_UI_ASSET_CACHE_HEADERS)
         verbose_proxy_logger.warning(
             "LITELLM_FAVICON_URL %r is not a supported image file or does not exist, falling back to default favicon",
             favicon_url,
         )
         if os.path.exists(default_favicon):
-            return FileResponse(default_favicon, media_type="image/x-icon")
+            return FileResponse(default_favicon, media_type="image/x-icon", headers=_UI_ASSET_CACHE_HEADERS)
         raise HTTPException(status_code=404, detail="Favicon not found")
 
 
