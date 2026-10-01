@@ -234,7 +234,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         user_prompt: Final = self.get_user_prompt_from_request(data, call_type)
 
         if user_prompt:
-            verbose_proxy_logger.info("Azure Text Moderation: User prompt: %s", user_prompt)
+            verbose_proxy_logger.debug("Azure Text Moderation: User prompt: %s", user_prompt)
             await self.async_make_request(
                 text=user_prompt,
             )

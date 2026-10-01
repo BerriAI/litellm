@@ -1,3 +1,4 @@
+import logging
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -136,6 +137,31 @@ async def test_azure_text_moderation_chat_call_type_scans_messages_not_input() -
             )
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_azure_text_moderation_does_not_log_responses_prompt_above_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    guardrail: Final = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="azure_text_moderation_api_base",
+    )
+    prompt: Final = "unique benign responses prompt e5f8a2c1"
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        with patch.object(guardrail.async_handler, "post", return_value=_moderation_response(0)):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="azure_text_moderation_api_key"),
+                cache=None,
+                data={"input": prompt},
+                call_type="aresponses",
+            )
+
+    assert not any(record.levelno >= logging.INFO and prompt in record.getMessage() for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]
 
 
 @pytest.mark.asyncio

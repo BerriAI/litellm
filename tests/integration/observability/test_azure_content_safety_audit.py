@@ -647,6 +647,28 @@ def test_text_moderation_opt_in_blocks_responses_input_above_threshold(
         assert _provider_calls(provider) == ()
 
 
+def test_text_moderation_opt_in_blocks_streamed_responses_input_above_threshold(
+    audit_rig: tuple[OwnedProxy, Wire, Wire, threading.Event],
+) -> None:
+    owned, azure, provider, _ = audit_rig
+    prompt: Final = f"synthetic prompt {_MODERATION_MARKER} " + uuid.uuid4().hex
+    with owned.gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-4.1-mini", api_base=provider.url + "/v1", api_key="synthetic-provider-key"
+        )
+        with owned.gateway.client.stream(
+            "POST",
+            "/v1/responses",
+            json={"model": model, "guardrails": [_TEXT_MODERATION], "input": prompt, "stream": True},
+            headers={"Authorization": f"Bearer {owned.gateway.key}"},
+        ) as response:
+            body: Final = response.read().decode()
+        assert response.status_code == 400, body
+        assert "Prompt Shield" not in body, body
+        assert _analyze_texts(azure.drain()) == (prompt,)
+        assert _provider_calls(provider) == ()
+
+
 def test_azure_outage_produces_the_same_outcome_on_responses_and_chat(
     audit_rig: tuple[OwnedProxy, Wire, Wire, threading.Event],
 ) -> None:
