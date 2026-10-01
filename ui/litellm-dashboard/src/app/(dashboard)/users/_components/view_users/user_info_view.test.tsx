@@ -130,6 +130,19 @@ describe("UserInfoView", () => {
     expect(aliases.length).toBeGreaterThan(0);
   });
 
+  it("seeds the user rate limits when opening the edit form", async () => {
+    mockUserGetInfoV2.mockResolvedValue({
+      ...MOCK_USER_DATA,
+      tpm_limit: 100000,
+      rpm_limit: null,
+    });
+
+    render(<UserInfoView {...defaultProps} userRole="proxy_admin" initialTab={1} startInEditMode />);
+
+    expect(await screen.findByRole("spinbutton", { name: /tpm limit/i })).toHaveValue(100000);
+    expect(await screen.findByRole("spinbutton", { name: /rpm limit/i })).toHaveValue(null);
+  });
+
   it("should render overview spend and budget with two decimal places", async () => {
     mockUserGetInfoV2.mockResolvedValue({
       ...MOCK_USER_DATA,
