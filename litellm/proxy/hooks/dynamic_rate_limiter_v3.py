@@ -5,7 +5,7 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 import os
 from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from fastapi import HTTPException
 
@@ -686,7 +686,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """
         Update token usage for priority-based rate limiting after successful API calls.
 

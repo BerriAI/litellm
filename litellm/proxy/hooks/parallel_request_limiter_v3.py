@@ -5008,7 +5008,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         return pipeline_operations
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """
         Update TPM usage on successful API calls by incrementing counters using pipeline
         """
@@ -5126,7 +5126,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             completion_tokens,
         )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """
         On failure: decrement max_parallel_requests and refund the upfront
         TPM reservation only against the scopes the reservation actually

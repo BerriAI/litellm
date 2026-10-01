@@ -6829,7 +6829,7 @@ class ProxyConfig:
             health_check_concurrency = general_settings.get("health_check_concurrency", None)
             health_check_details = general_settings.get("health_check_details", True)
             ### BATCH LINE ITEM CALLBACKS ###
-            _store_batch_line_items: Final = general_settings.get("store_batch_line_items_in_callbacks")
+            _store_batch_line_items: Final[object] = general_settings.get("store_batch_line_items_in_callbacks")
             if _store_batch_line_items is not None:
                 if isinstance(_store_batch_line_items, str):
                     litellm.store_batch_line_items_in_callbacks = _store_batch_line_items.lower() == "true"

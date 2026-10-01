@@ -491,7 +491,7 @@ class RouterBudgetLimiting(CustomLogger):
         await self._clear_detached_increment_operations()
         return True
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         if is_batch_line_item_event(kwargs):

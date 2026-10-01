@@ -918,7 +918,7 @@ class CheckBatchCost:
                 batch_failed_requests=batch_result.failed_requests,
                 batch_prompt_cost=batch_result.prompt_cost,
                 batch_completion_cost=batch_result.completion_cost,
-                batch_output_file_content=content_bytes,
+                batch_output_file_content=content_bytes if isinstance(content_bytes, bytes) else None,
                 batch_error_file_content=error_file_content,
             )
         except Exception:

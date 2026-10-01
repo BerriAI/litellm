@@ -492,7 +492,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             )  # don't block execution for cache updates
         )
 
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
+    async def async_log_success_event(self, kwargs: dict[str, Any], response_obj: object, start_time, end_time):
         if is_batch_line_item_event(kwargs):
             return
         from litellm.proxy.common_utils.callback_utils import (
@@ -699,7 +699,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         except Exception as e:
             self.print_verbose(e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         if is_batch_line_item_event(kwargs):
             return
         try:

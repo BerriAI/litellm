@@ -4,7 +4,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Any, Final
 
 from openai.types import Batch
 
@@ -485,7 +485,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> list[dict]:
         return healthy_deployments
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: dict[str, Any], response_obj, start_time, end_time):
         """
         Track spend for virtual key + model in DualCache
 
