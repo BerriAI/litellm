@@ -3,6 +3,8 @@ from threading import Lock
 from typing import Final
 
 import httpx
+from httpx._client import USE_CLIENT_DEFAULT, UseClientDefault
+from httpx._types import AuthTypes
 from typing_extensions import ReadOnly, TypedDict
 
 
@@ -107,10 +109,13 @@ def send_with_capture(
     capture: UpstreamResponseCapture | None,
     attempt_id: str,
     stream: bool,
+    *,
+    auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
+    follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
 ) -> httpx.Response:
     if capture is None:
-        return client.send(request, stream=stream)
-    response: Final = client.send(request, stream=True)
+        return client.send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+    response: Final = client.send(request, stream=True, auth=auth, follow_redirects=follow_redirects)
     for item in (*response.history, response):
         capture.record(attempt_id, item)
     try:
@@ -128,10 +133,13 @@ async def async_send_with_capture(
     capture: UpstreamResponseCapture | None,
     attempt_id: str,
     stream: bool,
+    *,
+    auth: AuthTypes | UseClientDefault | None = USE_CLIENT_DEFAULT,
+    follow_redirects: bool | UseClientDefault = USE_CLIENT_DEFAULT,
 ) -> httpx.Response:
     if capture is None:
-        return await client.send(request, stream=stream)
-    response: Final = await client.send(request, stream=True)
+        return await client.send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
+    response: Final = await client.send(request, stream=True, auth=auth, follow_redirects=follow_redirects)
     for item in (*response.history, response):
         capture.record(attempt_id, item)
     try:

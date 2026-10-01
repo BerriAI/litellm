@@ -1391,6 +1391,7 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
     session = await asyncio.to_thread(_mint_session_on_dead_loop, handler)
     assert not session.closed
 
+    gc.collect()
     baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
     del handler
     gc.collect()
