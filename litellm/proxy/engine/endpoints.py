@@ -69,11 +69,7 @@ def user_scope(auth: UserAPIKeyAuth, write: bool = False) -> Scope:
         raise HTTPException(403, "Only proxy admins can configure or run Lens")
     if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
         return Scope(all_teams=True)
-    if auth.team_id:
-        return Scope(team_id=auth.team_id)
-    if auth.token:
-        return Scope(api_key_hash=auth.token)
-    raise HTTPException(403, "A team or API key is required")
+    raise HTTPException(403, "Lens requires proxy administrator access")
 
 
 async def get_engine(engine_id: str, scope: Scope) -> Engine:
@@ -348,27 +344,12 @@ async def sample(engine_id: str, job_id: str, worker: WorkerAuth) -> Sample:
     engine, job = await assigned(engine_id, job_id, worker)
     if job.sample is not None:
         return job.sample
-    pages: list[Sample] = []  # mutable-ok: collect a paginated database snapshot before freezing the batch
-    offset = 0  # rebind-ok: database pagination advances until exhaustion
-    while True:
-        pages.append(
-            await source_reader().sample(
-                engine.scope,
-                job.settings,
-                int(job.start.timestamp() * 1000),
-                int(job.end.timestamp() * 1000),
-                offset=offset,
-            )
-        )
-        if pages[-1].next_offset is None:
-            break
-        offset = pages[-1].next_offset
-    selected: Final = Sample(
-        executions=tuple(
-            execution for page in pages for execution in page.executions
-        ),  # comprehension-ok: flatten database pages
-        eligible=pages[0].eligible,
-        selected=pages[0].selected,
+    selected: Final = await source_reader().sample(
+        engine.scope,
+        job.settings,
+        int(job.start.timestamp() * 1000),
+        int(job.end.timestamp() * 1000),
+        page_size=0,
     )
 
     def freeze(e: Engine) -> Engine:

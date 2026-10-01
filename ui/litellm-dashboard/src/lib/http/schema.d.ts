@@ -29883,6 +29883,11 @@ export interface components {
              */
             grouping_batches: number;
             /**
+             * Inconclusive
+             * @default 0
+             */
+            inconclusive: number;
+            /**
              * Investigated
              * @default 0
              */
@@ -32576,6 +32581,7 @@ export interface components {
              *       "eligible": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
+             *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
              *       "screened": 0,
@@ -39869,6 +39875,7 @@ export interface components {
              *       "eligible": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
+             *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
              *       "screened": 0,

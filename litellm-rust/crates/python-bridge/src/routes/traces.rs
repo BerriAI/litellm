@@ -111,7 +111,7 @@ impl NativeTraceStorage {
         crate::execution::run_async(
             py,
             async move {
-                litellm_traces::execute_read(&client, &connection, query.sql(), &parameters).await
+                litellm_traces::execute_lens_read(&client, &connection, query, &parameters).await
             },
             map_error,
         )

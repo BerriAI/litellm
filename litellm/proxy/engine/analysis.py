@@ -24,6 +24,7 @@ from .models import (
     Sample,
     TracePart,
 )
+from .trace_store import TraceStore, overview_content, trace_store
 
 
 class Observation(Record):
@@ -44,6 +45,7 @@ class SpanRead(Record):
 
 
 class TraceReview(Extraction):
+    feedback_page: int | None = Field(default=None, ge=0)
     reads: tuple[SpanRead, ...] = Field(default=(), max_length=2)
 
 
@@ -61,7 +63,7 @@ class Clusters(Record):
 
 
 class Decision(Record):
-    action: Literal["read", "observations", "catalog", "submit", "inconclusive"]
+    action: Literal["read", "observations", "catalog", "feedback", "submit", "inconclusive"]
     page: int = Field(default=0, ge=0)
     execution_id: str | None = None
     cursor: str = ""
@@ -190,52 +192,54 @@ def partition_content(parts: tuple[TracePart, ...], limit: int = 24000) -> tuple
     return partition_items(parts, lambda part: len(part.model_dump_json()) + 20, limit)
 
 
-async def read_execution(execution: Execution, read: ReadContent) -> ExecutionContent:
-    pages: list[ExecutionContent] = []  # mutable-ok: assemble all database pages for one execution
+async def read_execution(execution: Execution, read: ReadContent, store: TraceStore) -> ExecutionContent:
     cursor = ""  # rebind-ok: advance a database cursor until exhaustion
+    partial = False  # rebind-ok: preserve incomplete source status across pages
     while True:
-        pages.append(await read(execution.id, cursor, 0))
-        if not pages[-1].next_cursor or pages[-1].next_cursor == cursor:
-            break
-        cursor = pages[-1].next_cursor
-    return ExecutionContent(
-        execution=execution,
-        parts=tuple(chain.from_iterable(p.parts for p in pages)),
-        next_cursor=pages[-1].next_cursor,
-        partial=any(p.partial for p in pages),
-    )
-
-
-def overview_content(part: TracePart, roots: frozenset[str]) -> str:
-    limit: Final = max(160, min(2000, 12000 // max(len(roots), 1))) if not part.parent_span_id else 160
-    if len(part.content) <= limit:
-        return part.content
-    return (
-        part.content[: limit // 3]
-        + "\n[... preview omitted; read this span for evidence ...]\n"
-        + part.content[-(limit * 2 // 3) :]
-    )
+        page = await read(execution.id, cursor, 0)
+        store.add(page.parts)
+        partial = partial or page.partial
+        if not page.next_cursor or page.next_cursor == cursor:
+            return page.model_copy(update=MappingProxyType({"parts": (), "partial": partial}))
+        cursor = page.next_cursor
 
 
 async def extract(claim: Claim, execution: Execution, read: ReadContent, model: ModelCall) -> Examined:
-    page: Final = await read_execution(execution, read)
-    roots: Final = frozenset(p.span_id for p in page.parts if not p.parent_span_id)
-    overview: Final = tuple(
-        (p.span_id, p.parent_span_id, p.name, p.kind, overview_content(p, roots)) for p in page.parts
-    )
+    with trace_store() as store:
+        try:
+            return await extract_stored(claim, execution, read, model, store)
+        except ValidationError:
+            return Examined(execution=execution, observations=(), parts=(), partial=True, cannot_assess=True)
+
+
+async def extract_stored(
+    claim: Claim, execution: Execution, read: ReadContent, model: ModelCall, store: TraceStore
+) -> Examined:
+    page: Final = await read_execution(execution, read, store)
+    root_count: Final = sum(not p.parent_span_id for p in store.parts())
+    first_root: Final = next((p for p in store.parts() if not p.parent_span_id), None)
+    span_count: Final = store.count()
+    feedback: Final = feedback_pages(claim)
 
     async def fetch(request: SpanRead) -> tuple[TracePart, ...]:
-        previous: Final = max((p.span_id for p in page.parts if p.span_id < request.span_id), default="")
+        previous: Final = store.previous(request.span_id)
         content: Final = await read(execution.id, previous, request.offset)
         return tuple(p for p in content.parts if p.span_id == request.span_id)
 
     async def examine(catalog: tuple[tuple[str, str, str, str, str], ...]) -> Examined:
+        feedback_page = 0  # rebind-ok: navigate bounded feedback pages
+        feedback_seen: set[int] = {0}  # mutable-ok: detect feedback navigation loops
+        must_decide = False  # rebind-ok: unavailable evidence requires a final decision
         previous = TraceReview()  # rebind-ok: model state advances after evidence reads
         reads: tuple[SpanRead, ...] = ()  # rebind-ok: retain completed reads to detect loops
         additional: tuple[TracePart, ...] = ()  # rebind-ok: retain evidence fetched during this review
 
         async def review(
-            previous: TraceReview, reads: tuple[SpanRead, ...], additional: tuple[TracePart, ...]
+            previous: TraceReview,
+            reads: tuple[SpanRead, ...],
+            additional: tuple[TracePart, ...],
+            feedback_page: int,
+            must_decide: bool,
         ) -> TraceReview:
             prompt: Final = json.dumps(
                 {  # mutable-ok: JSON encoder requires a dictionary
@@ -266,45 +270,71 @@ async def extract(claim: Claim, execution: Execution, read: ReadContent, model: 
                     "return reads; otherwise return reads=[] and your final observations. Carry forward still-valid earlier "
                     "observations and remove disproved ones. cannot_assess means insufficient evidence to assess this run, "
                     "not absence of an issue. Never manufacture an issue just to produce a result.",
+                    "navigation": "Feedback pages are available with feedback_page=N. Read relevant feedback before "
+                    "finalizing. When must_decide=true, return final observations without further reads or navigation.",
+                    "must_decide": must_decide,
                     "context": claim.job.settings.context,
                     "checks": tuple(c.model_dump() for c in claim.job.settings.analysis_checks),
                     "execution": execution.model_dump(),
-                    "catalog_complete": page.next_cursor is None and len(catalog) == len(overview),
+                    "catalog_complete": page.next_cursor is None and len(catalog) == span_count,
                     "catalog_fields": ("span_id", "parent_span_id", "name", "kind", "preview"),
                     "catalog": catalog,
                     "task_and_outcome": tuple(
-                        p.model_copy(update=MappingProxyType({"content": overview_content(p, roots)})).model_dump()
-                        for p in page.parts
-                        if not p.parent_span_id
-                        and (p.span_id in frozenset(row[0] for row in catalog) or p.span_id == min(roots, default=""))
+                        p.model_copy(update=MappingProxyType({"content": overview_content(p, root_count)})).model_dump()
+                        for p in (first_root,)
+                        if p is not None
                     ),
                     "read_evidence": tuple(p.model_dump() for p in additional[-2:]),
                     "previous_observations": tuple(o.model_dump() for o in previous.observations),
-                    "completed_reads": tuple(r.model_dump() for r in reads),
-                    "feedback": tuple((f.check_id, f.title, f.status, f.reason) for f in claim.findings if f.reason),
-                    "response_schema": TraceReview.model_json_schema(),
+                    "completed_read_count": len(reads),
+                    "last_completed_read": reads[-1].model_dump() if reads else None,
+                    "feedback": feedback[feedback_page] if feedback else (),
+                    "feedback_page": feedback_page,
+                    "feedback_pages": len(feedback),
+                    "response_schema": Extraction.model_json_schema()
+                    if must_decide
+                    else TraceReview.model_json_schema(),
                 },
                 ensure_ascii=False,
             )
-            return await structured_response(ModelRequest(purpose="extract", prompt=prompt), TraceReview, model)
+            request: Final = ModelRequest(purpose="extract", prompt=prompt)
+            if must_decide:
+                final: Final = await structured_response(request, Extraction, model)
+                return TraceReview(observations=final.observations, cannot_assess=final.cannot_assess)
+            return await structured_response(request, TraceReview, model)
 
-        response = TraceReview()  # rebind-ok: replace the model response each evidence turn
+        response: TraceReview
         requested: tuple[SpanRead, ...] = ()  # rebind-ok: each turn asks for new evidence
         fetched: tuple[tuple[TracePart, ...], ...] = ()  # rebind-ok: each turn fetches requested evidence
         while True:
-            response = await review(previous, reads, additional)
-            requested = tuple(
-                r for r in response.reads if r not in reads and any(p.span_id == r.span_id for p in page.parts)
-            )
-            if not requested:
+            response = await review(previous, reads, additional, feedback_page, must_decide)
+            if must_decide or (not response.reads and response.feedback_page is None):
                 break
+            if response.feedback_page is not None:
+                if response.feedback_page >= len(feedback) or response.feedback_page in feedback_seen:
+                    must_decide = True
+                else:
+                    feedback_page = response.feedback_page
+                    feedback_seen.add(feedback_page)
+                previous = response
+                continue
+            requested = tuple(r for r in response.reads if r not in reads and store.get(r.span_id) is not None)
+            if not requested:
+                must_decide = True
+                previous = response
+                continue
             fetched = tuple([parts async for parts in concurrent_results(requested, fetch)])
             if not any(p.content and p not in additional for p in chain.from_iterable(fetched)):
-                break
+                must_decide = True
+                previous = response
+                continue
             previous = response
             reads = (*reads, *requested)
-            additional = (*additional, *chain.from_iterable(fetched))
-        evidence: Final = (*page.parts, *additional)
+            store.add_reads(tuple(chain.from_iterable(fetched)))
+            additional = tuple(chain.from_iterable(fetched))
+        cited_evidence: Final = tuple(chain.from_iterable(o.evidence for o in response.observations))
+        verified: Final = tuple(store.evidence(e) for e in cited_evidence)
+        evidence: Final = tuple(dict.fromkeys(p for p in verified if p is not None))
         observations: Final = tuple(
             o
             for o in response.observations
@@ -318,11 +348,10 @@ async def extract(claim: Claim, execution: Execution, read: ReadContent, model: 
             observations=observations,
             parts=evidence,
             partial=page.partial or page.next_cursor is not None or bool(response.reads) or invalid_observations,
-            cannot_assess=not page.parts or response.cannot_assess or bool(response.reads) or invalid_observations,
+            cannot_assess=not span_count or response.cannot_assess or bool(response.reads) or invalid_observations,
         )
 
-    catalogs: Final = partition_items(overview, lambda row: len(json.dumps(row)), 24000)
-    reviews: Final = tuple([await examine(catalog) for catalog in catalogs or ((),)])
+    reviews: Final = tuple([await examine(catalog) for catalog in store.catalogs(root_count)])
     observations: Final = tuple(chain.from_iterable(item.observations for item in reviews))
     cited: Final = frozenset(e.span_id for e in chain.from_iterable(o.evidence for o in observations))
     retained: Final = tuple(
@@ -331,10 +360,19 @@ async def extract(claim: Claim, execution: Execution, read: ReadContent, model: 
     return Examined(
         execution=execution,
         observations=observations,
-        parts=tuple(dict.fromkeys(retained)),
+        parts=tuple(dict.fromkeys((*retained, *((first_root,) if first_root else ())))),
         partial=any(r.partial for r in reviews),
-        cannot_assess=all(r.cannot_assess for r in reviews),
+        cannot_assess=not reviews or all(r.cannot_assess for r in reviews),
     )
+
+
+def feedback_pages(claim: Claim, check_id: str | None = None) -> tuple[tuple[tuple[str, str, str, str, str], ...], ...]:
+    entries: Final = tuple(
+        (f.id, f.check_id, f.title, f.status, f.reason)
+        for f in claim.findings
+        if check_id is None or f.check_id == check_id
+    )
+    return partition_items(entries, lambda row: len(json.dumps(row)), 8000)
 
 
 async def investigate(
@@ -344,11 +382,28 @@ async def investigate(
     read: ReadContent,
     model: ModelCall,
 ) -> Investigation:
+    with trace_store() as store:
+        try:
+            return await investigate_stored(claim, candidate, examined, read, model, store)
+        except ValidationError:
+            return Investigation(finding=None, parts=())
+
+
+async def investigate_stored(
+    claim: Claim,
+    candidate: Candidate,
+    examined: tuple[Examined, ...],
+    read: ReadContent,
+    model: ModelCall,
+    store: TraceStore,
+) -> Investigation:
     additional: tuple[TracePart, ...] = ()  # rebind-ok: investigation accumulates fetched evidence
     navigation: ExecutionContent | None = None  # rebind-ok: last fetched page
     reads: tuple[Decision, ...] = ()  # rebind-ok: track completed tool requests to detect loops
     observation_page = 0  # rebind-ok: model controls navigation through observations
     catalog_page = 0  # rebind-ok: model controls navigation through the run catalog
+    feedback_page = 0  # rebind-ok: navigate bounded prior finding pages
+    feedback: Final = feedback_pages(claim, candidate.check_id)
     stalled = False  # rebind-ok: a repeated request requires a decision rather than a loop
 
     async def decide(
@@ -357,6 +412,7 @@ async def investigate(
         reads: tuple[Decision, ...],
         observation_page: int,
         catalog_page: int,
+        feedback_page: int,
         stalled: bool,
     ) -> Decision | Investigation:
         relevant: Final = tuple(item for item in examined if item.execution.id in candidate.execution_ids)
@@ -377,9 +433,9 @@ async def investigate(
             sorted(
                 unique.values(),
                 key=lambda p: (
+                    p not in recent,
                     (p.execution_id, p.span_id) not in cited,
                     bool(p.parent_span_id),
-                    p not in recent,
                     p.kind == "llm",
                 ),
             )
@@ -403,7 +459,8 @@ async def investigate(
                 "to fetch original content. Reads return up to 40 spans; advance cursor from next_cursor for more spans "
                 "or offset by 8000 for longer content; offset=1 reads original beginning after an abbreviated excerpt. "
                 "Read any execution in the supplied catalog. Use action='catalog' or 'observations' with page to fetch "
-                "another page of runs or supporting observations. Pages start at zero and no evidence is discarded. "
+                "another page of runs or supporting observations. Use action=feedback to read prior findings and dismissal "
+                "reasons. Review relevant feedback before deciding. Pages start at zero and no evidence is discarded. "
                 "Return action='submit' and finding={title,description,check_id,kind:issue|pattern,priority:high|medium|low,"
                 "suggestion,limitation,evidence:[{execution_id,span_id,quote}],existing_finding_id} only when evidence supports it. "
                 "Never put internal run aliases in prose; the evidence links identify the runs. "
@@ -444,17 +501,13 @@ async def investigate(
                     }
                     for item in catalog
                 ),
-                "reads_already_completed": tuple(r.model_dump() for r in reads),
+                "completed_read_count": len(reads),
+                "last_completed_read": reads[-1].model_dump() if reads else None,
                 "catalog": tuple(e.execution.model_dump() for e in catalog),
-                "existing_findings": tuple(
-                    f.model_dump(
-                        mode="json",
-                        include=MappingProxyType(
-                            {key: True for key in ("id", "check_id", "title", "status", "reason")}
-                        ),
-                    )
-                    for f in claim.findings
-                ),
+                "existing_findings_fields": ("id", "check_id", "title", "status", "reason"),
+                "existing_findings": feedback[feedback_page] if feedback else (),
+                "feedback_page": feedback_page,
+                "feedback_pages": len(feedback),
                 "evidence": tuple(p.model_dump() for p in evidence),
                 "must_decide": stalled,
                 "last_read": navigation.model_dump(exclude=MappingProxyType({"parts": True})) if navigation else None,
@@ -462,7 +515,7 @@ async def investigate(
             ensure_ascii=False,
         )
         if len(prompt) > 100000:
-            raise ValueError("Investigation context is too large; analysis is incomplete")
+            return Investigation(finding=None, parts=evidence)
         request: Final = ModelRequest(purpose="investigate", prompt=prompt)
         decision: Final = await investigation_decision(request, model, 1 if stalled else 2)
         if decision.action == "submit" and decision.finding:
@@ -477,18 +530,34 @@ async def investigate(
                 and finding.check_id == candidate.check_id
                 and finding.kind == candidate.kind
                 and valid_existing
-                and all(evidence_valid(e, tuple(unique.values())) for e in finding.evidence)
+                and all(
+                    evidence_valid(e, tuple(unique.values())) or store.evidence(e) is not None for e in finding.evidence
+                )
             ):
                 return Investigation(finding=finding, parts=evidence)
-        if stalled or decision.action not in ("read", "observations", "catalog"):
+        if stalled or decision.action not in ("read", "observations", "catalog", "feedback"):
             return Investigation(finding=None, parts=evidence)
+        page_count: Final = MappingProxyType(
+            {
+                "observations": len(supporting_batches),
+                "catalog": len(catalog_batches),
+                "feedback": len(feedback),
+            }
+        )
+        if decision.action in page_count and decision.page >= page_count[decision.action]:
+            return Decision(action="inconclusive")
         return decision
 
     step_result: Decision | Investigation = (  # rebind-ok: next evidence turn changes the decision
         Decision(action="inconclusive")
     )
     while True:
-        step_result = await decide(additional, navigation, reads, observation_page, catalog_page, stalled)
+        step_result = await decide(
+            additional, navigation, reads, observation_page, catalog_page, feedback_page, stalled
+        )
+        if isinstance(step_result, Decision) and step_result.action == "inconclusive":
+            stalled = True
+            continue
         if isinstance(step_result, Investigation):
             return step_result
         if any(
@@ -503,9 +572,14 @@ async def investigate(
             observation_page = step_result.page
         elif step_result.action == "catalog":
             catalog_page = step_result.page
+        elif step_result.action == "feedback":
+            feedback_page = step_result.page
         elif any(e.execution.id == step_result.execution_id for e in examined):
             navigation = await read(step_result.execution_id or "", step_result.cursor, step_result.offset)
-            additional = (*additional, *navigation.parts)
+            if not any(p.content and p not in additional for p in navigation.parts):
+                stalled = True
+            store.add_reads(navigation.parts)
+            additional = navigation.parts
         else:
             return Investigation(finding=None, parts=additional)
 
@@ -609,7 +683,7 @@ async def _analyze_sample(
     investigating: Final = grouping.model_copy(
         update=MappingProxyType({"grouped_batches": len(batches), "candidates": len(candidates)})
     )
-    findings: Final = tuple(
+    investigated: Final = tuple(
         [
             item
             async for item in investigate_candidates(
@@ -618,9 +692,13 @@ async def _analyze_sample(
         ]
     )
     return Result(
-        findings=findings,
+        findings=tuple(item.finding for item in investigated if item.finding is not None),
         assessments=assessments,
-        coverage=investigating.model_copy(update=MappingProxyType({"investigated": len(candidates)})),
+        coverage=investigating.model_copy(
+            update=MappingProxyType(
+                {"investigated": len(candidates), "inconclusive": sum(item.finding is None for item in investigated)}
+            )
+        ),
     )
 
 
@@ -656,7 +734,18 @@ async def cluster_batches(
             "Grouping observations", coverage.model_copy(update=MappingProxyType({"grouped_batches": index}))
         )
         candidates = await consolidate(batch, candidates)
-    return Clusters(candidates=candidates)
+    registry: tuple[Candidate, ...] = ()  # rebind-ok: compare every surviving candidate against all earlier patterns
+    for candidate in candidates:
+        matching = tuple(c for c in registry if (c.check_id, c.kind) == (candidate.check_id, candidate.kind))
+        unrelated = tuple(c for c in registry if (c.check_id, c.kind) != (candidate.check_id, candidate.kind))
+        carried = (candidate,)
+        retained: list[Candidate] = []  # mutable-ok: collect settled pages once
+        for prior in partition_items(matching, candidate_size, 16000):
+            merged, settled = await merge_candidates((*prior, *carried), len(prior), model)
+            carried = merged
+            retained.extend(settled)
+        registry = (*unrelated, *retained, *carried)
+    return Clusters(candidates=registry)
 
 
 def candidate_size(candidate: Candidate) -> int:
@@ -740,13 +829,6 @@ async def merge_candidates(
     return tuple(c for c, active in preserved if active), tuple(c for c, active in preserved if not active)
 
 
-async def investigate_candidate(
-    claim: Claim, candidate: Candidate, examined: tuple[Examined, ...], read: ReadContent, model: ModelCall
-) -> tuple[FindingDraft, ...]:
-    investigation: Final = await investigate(claim, candidate, examined, read, model)
-    return (investigation.finding,) if investigation.finding else ()
-
-
 async def examine_executions(
     claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
 ) -> AsyncIterator[Examined]:
@@ -772,19 +854,22 @@ async def investigate_candidates(
     model: ModelCall,
     progress: ReportProgress,
     coverage: Coverage,
-) -> AsyncIterator[FindingDraft]:
-    async def check(candidate: Candidate) -> tuple[FindingDraft, ...]:
-        return await investigate_candidate(claim, candidate, examined, read, model)
+) -> AsyncIterator[Investigation]:
+    async def check(candidate: Candidate) -> Investigation:
+        return await investigate(claim, candidate, examined, read, model)
 
     completed: Final = iter(range(1, len(candidates) + 1))
+    inconclusive = 0  # rebind-ok: report unresolved candidates as each result arrives
     async with aclosing(concurrent_results(candidates, check, claim.job.settings.concurrency)) as results:
-        async for findings in results:
+        async for investigation in results:
+            inconclusive += int(investigation.finding is None)
             await progress(
                 "Checking original evidence",
-                coverage.model_copy(update=MappingProxyType({"investigated": next(completed)})),
+                coverage.model_copy(
+                    update=MappingProxyType({"investigated": next(completed), "inconclusive": inconclusive})
+                ),
             )
-            for finding in findings:
-                yield finding
+            yield investigation
 
 
 def observation_batches(observations: tuple[Observation, ...]) -> tuple[tuple[Observation, ...], ...]:

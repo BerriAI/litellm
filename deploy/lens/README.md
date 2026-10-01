@@ -22,7 +22,7 @@ Developers can build locally with `LENS_WORKER_IMAGE=litellm-lens-worker:local d
 
 The worker needs outbound HTTPS access to LiteLLM. It needs no inbound ports, provider keys, direct database access, or GPU. The proxy calls your selected model through its configured router; trace content reaches that model provider. Use a model with JSON output support and known token prices. One worker handles one scan at a time and can serve multiple lenses. For more throughput, start another worker with a separate credential
 
-V1 setup, manual runs, feedback, and worker credentials are restricted to proxy administrators. Admin viewers can inspect results. Worker credentials can serve the administrator’s lenses. Revoke it in the connection dialog when retiring a worker. Redeploy the worker alongside proxy upgrades so their API versions match
+V1 setup, manual runs, feedback, and worker credentials are restricted to proxy administrators. Proxy-admin viewers can inspect results. Regular user and team keys cannot access the Lens API. Worker credentials can serve the administrator’s lenses. Revoke it in the connection dialog when retiring a worker. Redeploy the worker alongside proxy upgrades so their API versions match
 
 ## Configure a lens
 
@@ -67,7 +67,7 @@ V1 requires ClickHouse for both sources. It does not reconstruct sessions from u
 
 ## API access
 
-The UI and API use the same scan lifecycle. Authenticate with a proxy administrator credential for writes, or an authorized viewer credential for reads. Worker credentials are only for worker operations
+The UI and API use the same scan lifecycle. Authenticate with a proxy administrator credential for writes, or a proxy-admin viewer credential for reads. Worker credentials are only for worker operations
 
 ```bash
 curl "$LITELLM_URL/engine" -H "Authorization: Bearer $LITELLM_API_KEY" \
@@ -99,3 +99,7 @@ python -m tests.proxy_behavior.lens.evaluate --api-base "$LITELLM_URL" \
 ```
 
 Set `LITELLM_API_KEY` privately. This makes paid model calls. Inspect missed and unexpected per-run labels, final findings and coverage; do not equate a passing dataset with guaranteed detection on arbitrary traces
+
+The worker uses temporary disk space for trace content while reviewing it, and removes those files after each review. Its Docker image supplies a writable temporary volume while keeping the application filesystem read-only
+
+To check that accepted behavior stays accepted without hiding new problems, run the evaluator with `--dataset tests/proxy_behavior/lens/feedback_cases.json`. Reports include elapsed time, model call count, reported cost when the proxy provides it, missed checks, unexpected checks, and inconclusive candidates

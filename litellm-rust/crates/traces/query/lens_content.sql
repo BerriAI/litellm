@@ -1,4 +1,5 @@
-WITH (value, budget) -> if(lengthUTF8(value) <= budget, value,
+WITH greatest(toInt64({offset:UInt32})-1,1) AS content_offset,
+(value, budget) -> if(lengthUTF8(value) <= budget, value,
     concat(substringUTF8(value, 1, intDiv(budget, 3)), '\n[... content omitted ...]\n',
         substringUTF8(value, -(budget - intDiv(budget, 3))))) AS excerpt
 SELECT * FROM (
@@ -8,9 +9,9 @@ SELECT * FROM (
             concat('Input: ',excerpt(Input,2000),'\nOutput: ',excerpt(Output,5000),
                 '\nStatus: ',StatusCode,' ',excerpt(StatusMessage,500)),
             substringUTF8(concat('Input: ',Input,'\nOutput: ',Output,'\nStatus: ',StatusCode,' ',StatusMessage),
-                {offset:UInt32},8000)) AS content,
+                content_offset,8000)) AS content,
         lengthUTF8(concat('Input: ',Input,'\nOutput: ',Output,'\nStatus: ',StatusCode,' ',StatusMessage))
-            >= {offset:UInt32}+8000 AS truncated
+            >= content_offset+8000 AS truncated
     FROM otel_traces WHERE {source:String}='traces'
       AND ({all_teams:UInt8}=1 OR TeamId={team:String})
       AND ({key_hash:String}='' OR ApiKeyHash={key_hash:String})
@@ -24,9 +25,9 @@ SELECT * FROM (
         if({offset:UInt32}=1 AND lengthUTF8(concat('Input: ',messages,'\nOutput: ',response,'\nError: ',error_str))>8000,
             concat('Input: ',excerpt(messages,2000),'\nOutput: ',excerpt(response,5000),'\nError: ',excerpt(error_str,500)),
             substringUTF8(concat('Input: ',messages,'\nOutput: ',response,'\nError: ',error_str),
-                {offset:UInt32},8000)) AS content,
+                content_offset,8000)) AS content,
         lengthUTF8(concat('Input: ',messages,'\nOutput: ',response,'\nError: ',error_str))
-            >= {offset:UInt32}+8000 AS truncated
+            >= content_offset+8000 AS truncated
     FROM spend_logs FINAL WHERE {source:String}='requests'
       AND ({all_teams:UInt8}=1 OR team_id={team:String})
       AND ({key_hash:String}='' OR api_key={key_hash:String})

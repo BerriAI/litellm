@@ -557,7 +557,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     </p>
                     <p className="mt-3 text-sm">
                       {j.coverage?.screened ?? 0} reviewed / {j.coverage?.eligible ?? 0} eligible ·{" "}
-                      {j.coverage?.investigated ?? 0} patterns investigated
+                      {j.coverage?.investigated ?? 0} patterns investigated · {j.coverage?.inconclusive ?? 0} inconclusive
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {j.coverage?.partial ?? 0} partial executions · {j.coverage?.unassessable ?? 0} could not be
@@ -732,12 +732,12 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
             {requestEvidence.data?.parts.length === 0 && <p>Request was not found or is past retention</p>}
             <div className="flex gap-2">
               {requestOffset > 0 && (
-                <Button variant="outline" onClick={() => setRequestOffset(requestOffset - 8000)}>
+                <Button variant="outline" onClick={() => setRequestOffset(Math.max(0, requestOffset - 8000))}>
                   Previous section
                 </Button>
               )}
               {requestEvidence.data?.parts.some((p) => p.truncated) && (
-                <Button variant="outline" onClick={() => setRequestOffset(requestOffset + 8000)}>
+                <Button variant="outline" onClick={() => setRequestOffset(requestOffset === 0 ? 1 : requestOffset + 8000)}>
                   Next section
                 </Button>
               )}

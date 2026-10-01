@@ -119,7 +119,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         assert archived.findings == ()
         with pytest.raises(HTTPException) as foreign_history:
             await endpoints.read_run(engine.id, claimed.job.id, UserAPIKeyAuth(team_id="other"))
-        assert foreign_history.value.status_code == 404
+        assert foreign_history.value.status_code == 403
         cancelled: Final = await endpoints.cancel_engine(engine.id, admin)
         assert cancelled.jobs[0].status == "cancelled"
         assert await endpoints.cancel_engine(engine.id, admin) == cancelled
@@ -128,7 +128,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
             await endpoints.worker_auth(credentials)
         assert revoked.value.status_code == 401
         with pytest.raises(HTTPException) as foreign:
-            await endpoints.get_engine(engine.id, endpoints.user_scope(UserAPIKeyAuth(team_id="other")))
+            await endpoints.get_engine(engine.id, endpoints.Scope(team_id="other"))
         assert foreign.value.status_code == 404
     finally:
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_EngineRun" WHERE engine_id=$1', engine.id)

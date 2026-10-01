@@ -45,3 +45,11 @@ async def test_incompatible_worker_is_rejected_before_claiming_work() -> None:
         await claim(worker(), protocol_version=1)
     assert error.value.status_code == 409
     assert "Upgrade" in error.value.detail
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM, None))
+def test_regular_keys_cannot_read_lens_results(role: LitellmUserRoles | None) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role, team_id="team", token="hashed-test-key")
+    with pytest.raises(HTTPException) as error:
+        user_scope(auth)
+    assert error.value.status_code == 403

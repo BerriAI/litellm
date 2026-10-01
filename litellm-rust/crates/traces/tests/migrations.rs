@@ -678,10 +678,11 @@ async fn lens_request_sample_does_not_trust_caller_tags(
 }
 
 #[rstest]
-#[case::all("100", 0, 0, 1001)]
-#[case::percentage("10", 0, 0, 101)]
-#[case::capped("100", 25, 0, 25)]
-#[case::preview("10", 25, 1, 1001)]
+#[case::snapshot("100", 0, 0, 1001, 0)]
+#[case::all("100", 0, 0, 1001, 100)]
+#[case::percentage("10", 0, 0, 101, 100)]
+#[case::capped("100", 25, 0, 25, 100)]
+#[case::preview("10", 25, 1, 1001, 100)]
 #[tokio::test]
 async fn lens_selection_pages_without_losing_or_repeating_runs(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
@@ -689,6 +690,7 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
     #[case] cap: i64,
     #[case] preview: i64,
     #[case] expected: usize,
+    #[case] page_size: usize,
 ) -> TestResult {
     use litellm_traces::LensQuery;
     let database = database?;
@@ -704,7 +706,8 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
     let end = time::OffsetDateTime::now_utc().unix_timestamp() * 1000 + 60000;
     let mut seen = std::collections::BTreeSet::new();
-    for offset in (0..expected).step_by(100) {
+    let step = if page_size == 0 { expected } else { page_size };
+    for offset in (0..expected).step_by(step) {
         let parameters = BTreeMap::from([
             ("source".into(), Parameter::Text("requests".into())),
             ("all_teams".into(), Parameter::Integer(0)),
@@ -715,7 +718,7 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
             ("service".into(), Parameter::Text(String::new())),
             ("filter_keys".into(), Parameter::Strings(vec![])),
             ("filter_values".into(), Parameter::Strings(vec![])),
-            ("limit".into(), Parameter::Integer(100)),
+            ("limit".into(), Parameter::Integer(page_size as i64)),
             ("offset".into(), Parameter::Integer(offset as i64)),
             ("sample_percent".into(), Parameter::Text(percent.into())),
             ("sample_cap".into(), Parameter::Integer(cap)),
@@ -723,16 +726,16 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
             ("selected_team".into(), Parameter::Text(String::new())),
             ("execution_ids".into(), Parameter::Strings(vec![])),
         ]);
-        let body = execute_read(
+        let body = litellm_traces::execute_lens_read(
             &database.client,
             &connection,
-            LensQuery::Sample.sql(),
+            LensQuery::Sample,
             &parameters,
         )
         .await?;
         let json: serde_json::Value = serde_json::from_str(&body)?;
         let rows = json["data"].as_array().expect("sample rows");
-        assert_eq!(rows.len(), 100.min(expected - offset));
+        assert_eq!(rows.len(), step.min(expected - offset));
         for row in rows {
             assert_eq!(row["eligible"], 1001);
             assert!(seen.insert(row["trace_id"].as_str().expect("run id").to_owned()));
@@ -765,7 +768,7 @@ async fn lens_content_keeps_output_visible_after_long_input(
         "request_id": "request", "team_id": "team", "start_time": time::OffsetDateTime::now_utc().unix_timestamp()*1000, "end_time": time::OffsetDateTime::now_utc().unix_timestamp()*1000, "messages": "x".repeat(input_length), "response": "Delivered result"
     }))?]).await?;
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
-    let parameters = BTreeMap::from([
+    let mut parameters = BTreeMap::from([
         ("source".into(), Parameter::Text("requests".into())),
         ("all_teams".into(), Parameter::Integer(0)),
         ("team".into(), Parameter::Text("team".into())),
@@ -791,5 +794,23 @@ async fn lens_content_keeps_output_visible_after_long_input(
         json["data"][0]["truncated"],
         u8::from(input_length + "Input: \nOutput: Delivered result\nError: ".len() > 8000)
     );
+    let original = format!(
+        "Input: {}\nOutput: Delivered result\nError: ",
+        "x".repeat(input_length)
+    );
+    let mut recovered = String::new();
+    for offset in (2..original.len() + 2).step_by(8000) {
+        parameters.insert("offset".into(), Parameter::Integer(offset as i64));
+        let body = execute_read(
+            &database.client,
+            &connection,
+            LensQuery::Content.sql(),
+            &parameters,
+        )
+        .await?;
+        let page: serde_json::Value = serde_json::from_str(&body)?;
+        recovered.push_str(page["data"][0]["content"].as_str().expect("content"));
+    }
+    assert_eq!(recovered, original);
     Ok(())
 }

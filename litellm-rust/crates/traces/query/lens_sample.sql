@@ -58,5 +58,6 @@ WHERE ({selected_team:String}='' OR team_id={selected_team:String})
       concat(source,char(0),team_id,char(0),if(trace_ref='',trace_id,trace_ref))))
 )
 )
-WHERE {preview:UInt8}=1 OR position <= selected
-ORDER BY position LIMIT {limit:UInt32} OFFSET {offset:UInt64}
+WHERE ({preview:UInt8}=1 OR position <= selected)
+  AND ({limit:UInt32}=0 OR (position > {offset:UInt64} AND position <= {offset:UInt64}+{limit:UInt32}))
+ORDER BY position

@@ -121,7 +121,7 @@ class SourceReader:
             selected=rows[0].selected if rows else 0,
             next_offset=(
                 offset + len(rows)
-                if rows and offset + len(rows) < (rows[0].eligible if preview else rows[0].selected)
+                if page_size and rows and offset + len(rows) < (rows[0].eligible if preview else rows[0].selected)
                 else None
             ),
             executions=tuple(

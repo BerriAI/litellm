@@ -242,3 +242,34 @@ it("opens the saved results of an older batch", async () => {
   expect(await screen.findByText("Earlier batch finding")).toBeVisible();
   expect(screen.queryByText(issue.title)).not.toBeInTheDocument();
 });
+
+it("reads request content from the beginning after its abbreviated preview", async () => {
+  testQueryClient.clear();
+  const requestId = btoa(JSON.stringify(["requests", "", "request-1"]));
+  const job = {
+    ...engine.jobs[0],
+    sample: {
+      eligible: 1,
+      executions: [{ ...engine.jobs[0].sample!.executions[0], id: requestId, source: "requests" as const }],
+    },
+  };
+  vi.mocked(apiClient.get).mockImplementation(async (path, options) => {
+    if (path === "/engine") return { engines: [{ ...engine, jobs: [job] }], workers: [], tracing_enabled: true };
+    if (path === "/engine/lens/runs") return [job];
+    const offset = options?.query?.offset ?? 0;
+    return { parts: [{ span_id: "request", content: offset === 0 ? "Abbreviated preview" : `Original at ${offset}`, truncated: true }] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<EngineView accessToken="test" readOnly />);
+  await user.click(await screen.findByRole("tab", { name: "Runs" }));
+  await user.click(screen.getByRole("button", { name: "Open request" }));
+  expect(await screen.findByText("Abbreviated preview")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Next section" }));
+  expect(await screen.findByText("Original at 1")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Next section" }));
+  expect(await screen.findByText("Original at 8001")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Previous section" }));
+  expect(await screen.findByText("Original at 1")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Previous section" }));
+  expect(await screen.findByText("Abbreviated preview")).toBeVisible();
+});

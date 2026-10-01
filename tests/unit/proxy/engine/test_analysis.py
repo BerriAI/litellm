@@ -133,7 +133,8 @@ async def test_independent_investigations_overlap_and_report_completions() -> No
             )
         ]
     )
-    assert results == ()
+    assert len(results) == 2
+    assert all(result.finding is None for result in results)
     assert tuple(progress_counts.get_nowait() for _ in range(progress_counts.qsize())) == (1, 2)
 
 
@@ -267,8 +268,10 @@ async def test_reviewer_stops_repeated_read_requests() -> None:
         reads.put(offset)
         return ExecutionContent(execution=execution, parts=(part,), partial=True)
 
-    async def model(_request: ModelRequest) -> ModelResult:
+    async def model(request: ModelRequest) -> ModelResult:
         calls.put(1)
+        if json.loads(request.prompt)["must_decide"]:
+            return ModelResult(content='{"observations": [], "cannot_assess": true}', cost=0)
         return ModelResult(
             content=TraceReview(reads=(SpanRead(span_id="01"),), cannot_assess=True).model_dump_json(), cost=0
         )
@@ -276,7 +279,8 @@ async def test_reviewer_stops_repeated_read_requests() -> None:
     claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
     result: Final = await extract(claim, execution, read, model)
     assert result.cannot_assess
-    assert reads.qsize() == calls.qsize() == 2
+    assert reads.qsize() == 2
+    assert calls.qsize() == 3
 
 
 def test_chunks_preserve_all_spans_and_keep_context_bounded() -> None:
@@ -688,3 +692,196 @@ async def test_investigation_context_accounts_for_metadata_on_thousands_of_short
         model,
     )
     assert result.finding is None
+
+
+@pytest.mark.asyncio
+async def test_completed_read_does_not_make_supported_review_unknown() -> None:
+    from litellm.proxy.engine.analysis import Observation, SpanRead, TraceReview
+
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    part: Final = TracePart(execution_id="run", span_id="s", name="task", kind="agent", content="timeout")
+    observation: Final = Observation(
+        check_id="retries", summary="Failed", evidence=(Evidence(execution_id="run", span_id="s", quote="timeout"),)
+    )
+    calls: Final = SimpleQueue[int]()
+
+    async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(execution=execution, parts=(part,))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(1)
+        if json.loads(request.prompt)["must_decide"]:
+            return ModelResult(
+                content=json.dumps({"observations": [observation.model_dump()], "cannot_assess": False}), cost=0
+            )
+        return ModelResult(
+            content=TraceReview(reads=(SpanRead(span_id="s"),), observations=(observation,)).model_dump_json(), cost=0
+        )
+
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    result: Final = await extract(claim, execution, read, model)
+    assert result.observations == (observation,)
+    assert not result.cannot_assess and not result.partial
+    assert calls.qsize() == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ("catalog", "observations", "feedback", "read"))
+async def test_empty_navigation_requires_a_final_decision(action: str) -> None:
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    examined: Final = Examined(execution=execution, observations=(), parts=(), partial=False, cannot_assess=False)
+    calls: Final = SimpleQueue[int]()
+
+    async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(execution=execution, parts=())
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(1)
+        assert calls.qsize() <= 2
+        if json.loads(request.prompt)["must_decide"]:
+            return ModelResult(content='{"action":"inconclusive"}', cost=0)
+        return ModelResult(content=json.dumps({"action": action, "page": 999, "execution_id": "run"}), cost=0)
+
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    result: Final = await investigate(
+        claim,
+        Candidate(check_id="retries", title="Timeout", hypothesis="Failed", execution_ids=("run",)),
+        (examined,),
+        read,
+        model,
+    )
+    assert result.finding is None
+    assert calls.qsize() == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ("extract", "investigate"))
+async def test_large_feedback_history_is_accessible_without_overflowing_context(phase: str) -> None:
+    from litellm.proxy.engine.state import merge_finding
+
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    part: Final = TracePart(execution_id="run", span_id="span", name="task", kind="agent", content="timeout")
+    accepted: Final = merge_finding(engine(), finding("run"), 1, NOW)
+    prior: Final = tuple(
+        accepted.model_copy(
+            update=MappingProxyType({"id": str(i), "status": "dismissed", "reason": f"Accepted-{i}: " + "x" * 1900})
+        )
+        for i in range(60)
+    )
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=prior)
+    pages: Final = SimpleQueue[int]()
+
+    async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(execution=execution, parts=(part,))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = json.loads(request.prompt)
+        assert len(request.prompt) < 50000
+        pages.put(payload["feedback_page"])
+        last: Final = payload["feedback_pages"] - 1
+        if payload["feedback_page"] == 0:
+            return ModelResult(
+                content=json.dumps(
+                    {"feedback_page": last} if phase == "extract" else {"action": "feedback", "page": last}
+                ),
+                cost=0,
+            )
+        assert "Accepted-59" in request.prompt
+        return ModelResult(content='{"observations":[]}' if phase == "extract" else '{"action":"inconclusive"}', cost=0)
+
+    if phase == "extract":
+        result: Final = await extract(claim, execution, read, model)
+        assert not result.observations
+    else:
+        investigated: Final = await investigate(
+            claim,
+            Candidate(check_id="retries", title="Timeout", hypothesis="Failed", execution_ids=("run",)),
+            (Examined(execution=execution, observations=(), parts=(part,), partial=False, cannot_assess=False),),
+            read,
+            model,
+        )
+        assert investigated.finding is None
+    assert pages.qsize() == 2
+    assert pages.get_nowait() == 0
+    assert pages.get_nowait() > 0
+
+
+@pytest.mark.asyncio
+async def test_final_registry_reconciles_patterns_split_across_pages() -> None:
+    from litellm.proxy.engine.analysis import Clusters, Observation, cluster_batches
+
+    observations: Final = tuple(
+        Observation(
+            check_id="retries",
+            summary=("timeout " + "x" * 1800),
+            evidence=(Evidence(execution_id=f"run{i}", span_id="s", quote="timeout"),),
+        )
+        for i in range(20)
+    )
+    calls: Final = SimpleQueue[int]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(1)
+        payload: Final = json.loads(request.prompt)
+        candidates: Final = tuple(Candidate.model_validate(c) for c in payload["candidates"])
+        grouped: Final = (
+            candidates
+            if calls.qsize() == 1
+            else (
+                candidates[0].model_copy(
+                    update=MappingProxyType({"execution_ids": tuple(c.execution_ids[0] for c in candidates)})
+                ),
+            )
+        )
+        return ModelResult(content=Clusters(candidates=grouped).model_dump_json(), cost=0)
+
+    async def progress(_stage: str, _coverage: Coverage) -> None:
+        return None
+
+    result: Final = await cluster_batches((observations,), model, progress, Coverage())
+    assert len(result.candidates) == 1
+    assert frozenset(result.candidates[0].execution_ids) == frozenset(f"run{i}" for i in range(20))
+
+
+@pytest.mark.asyncio
+async def test_invalid_candidate_response_preserves_other_findings_and_reports_inconclusive() -> None:
+    from litellm.proxy.engine.analysis import investigate_candidates
+
+    execution: Final = Execution(
+        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
+    )
+    part: Final = TracePart(execution_id="run", span_id="span", name="tool", kind="tool", content="timeout")
+    item: Final = Examined(execution=execution, observations=(), parts=(part,), partial=False, cannot_assess=False)
+    candidates: Final = tuple(
+        Candidate(check_id="retries", title=title, hypothesis="Failure", execution_ids=("run",))
+        for title in ("Valid", "Malformed")
+    )
+    counts: Final = SimpleQueue[int]()
+
+    async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(execution=execution, parts=())
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if '"title": "Malformed"' in request.prompt:
+            return ModelResult(content="not JSON", cost=0)
+        return ModelResult(content=json.dumps({"action": "submit", "finding": finding("run").model_dump()}), cost=0)
+
+    async def progress(_stage: str, coverage: Coverage) -> None:
+        counts.put(coverage.inconclusive)
+
+    claim: Final = Claim(engine_id="engine", job=queue_job(engine(), NOW, "job").jobs[0], findings=())
+    results: Final = tuple(
+        [
+            result
+            async for result in investigate_candidates(claim, candidates, (item,), read, model, progress, Coverage())
+        ]
+    )
+    assert tuple(result.finding for result in results if result.finding is not None) == (finding("run"),)
+    assert sum(result.finding is None for result in results) == 1
+    assert max(counts.get_nowait() for _ in range(counts.qsize())) == 1

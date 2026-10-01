@@ -3,8 +3,10 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final
 
@@ -20,6 +22,7 @@ from litellm.proxy.engine.models import (
     EngineSettings,
     Execution,
     ExecutionContent,
+    Finding,
     Job,
     ModelRequest,
     ModelResult,
@@ -43,6 +46,7 @@ class Case(BaseModel):
 class Dataset(BaseModel):
     checks: tuple[Check, ...]
     cases: tuple[Case, ...]
+    feedback: tuple[Finding, ...] = ()
 
 
 def fixtures(case: Case) -> tuple[Execution, tuple[TracePart, ...]]:
@@ -78,7 +82,12 @@ def fixtures(case: Case) -> tuple[Execution, tuple[TracePart, ...]]:
 
 
 async def evaluate(
-    cases: tuple[Case, ...], checks: tuple[Check, ...], client: httpx.AsyncClient, model_name: str, concurrency: int
+    cases: tuple[Case, ...],
+    checks: tuple[Check, ...],
+    client: httpx.AsyncClient,
+    model_name: str,
+    concurrency: int,
+    feedback: tuple[Finding, ...] = (),
 ) -> dict[str, object]:
     records: Final = MappingProxyType({case.name: fixtures(case) for case in cases})
     settings: Final = EngineSettings(
@@ -92,7 +101,7 @@ async def evaluate(
     now: Final = datetime.now(timezone.utc)
     claim: Final = Claim(
         engine_id="evaluation",
-        findings=(),
+        findings=feedback,
         job=Job(id="evaluation", created_at=now, start=now, end=now, settings=settings, revision=1),
     )
 
@@ -116,6 +125,10 @@ async def evaluate(
             partial=not execution.root_seen,
         )
 
+    costs: Final = SimpleQueue[float | None]()
+    decisions: Final = SimpleQueue[tuple[str, str]]()
+    started: Final = time.monotonic()
+
     async def model(request: ModelRequest) -> ModelResult:
         response: Final = await client.post(
             "/v1/chat/completions",
@@ -127,7 +140,14 @@ async def evaluate(
             },
         )
         response.raise_for_status()
-        return ModelResult(content=response.json()["choices"][0]["message"]["content"], cost=0)
+        raw_cost: Final = response.headers.get("x-litellm-response-cost")
+        cost: Final = float(raw_cost) if raw_cost else None
+        costs.put(cost)
+        answer: Final = response.json()["choices"][0]["message"]["content"]
+        if request.purpose == "investigate":
+            payload, _ = json.JSONDecoder().raw_decode(request.prompt)
+            decisions.put((payload["candidate"]["title"], answer))
+        return ModelResult(content=answer, cost=cost or 0)
 
     async def progress(stage: str, coverage: Coverage) -> None:
         logging.info("%s", json.dumps({"stage": stage, **coverage.model_dump()}))
@@ -140,6 +160,16 @@ async def evaluate(
         progress,
     )
     assessed: Final = MappingProxyType({a.execution_id: frozenset(a.issue_checks) for a in result.assessments})
+    final_checks: Final = MappingProxyType(
+        {
+            case.name: frozenset(
+                f.check_id
+                for f in result.findings
+                if f.kind == "issue" and any(e.execution_id == case.name for e in f.evidence)
+            )
+            for case in cases
+        }
+    )
     comparisons: Final = tuple(
         {
             "case": c.name,
@@ -148,22 +178,38 @@ async def evaluate(
             "found": sorted(assessed.get(c.name, frozenset())),
             "missed": sorted(c.expected - assessed.get(c.name, frozenset())),
             "unexpected": sorted(assessed.get(c.name, frozenset()) - c.expected),
+            "final_found": sorted(final_checks[c.name]),
+            "final_missed": sorted(c.expected - final_checks[c.name]),
+            "final_unexpected": sorted(final_checks[c.name] - c.expected),
         }
         for c in cases
     )
-    return {"cases": comparisons, "result": result.model_dump(mode="json")}
+    measured: Final = tuple(costs.get_nowait() for _ in range(costs.qsize()))
+    return {
+        "cases": comparisons,
+        "runtime_seconds": time.monotonic() - started,
+        "model_calls": len(measured),
+        "reported_cost_usd": sum(value for value in measured if value is not None)
+        if all(value is not None for value in measured)
+        else None,
+        "missed_checks": sum(len(c["missed"]) for c in comparisons),
+        "unexpected_checks": sum(len(c["unexpected"]) for c in comparisons),
+        "investigation_responses": tuple(decisions.get_nowait() for _ in range(decisions.qsize())),
+        "result": result.model_dump(mode="json"),
+    }
 
 
 async def main() -> None:
     parser: Final = argparse.ArgumentParser(description="Run paid, real-model Lens quality evaluations")
     parser.add_argument("--api-base", required=True)
+    parser.add_argument("--dataset", type=Path, default=Path(__file__).with_name("quality_cases.json"))
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=("dev", "holdout", "all"), default="all")
     parser.add_argument("--background", type=int, default=0, help="Additional clean runs for rare-problem batch tests")
     parser.add_argument("--concurrency", type=int, default=8)
     args: Final = parser.parse_args()
-    dataset: Final = Dataset.model_validate_json(Path(__file__).with_name("quality_cases.json").read_text())
+    dataset: Final = Dataset.model_validate_json(args.dataset.read_text())
     selected: Final = tuple(c for c in dataset.cases if args.split == "all" or c.split == args.split)
     background: Final = tuple(
         Case(
@@ -182,7 +228,9 @@ async def main() -> None:
         headers={"Authorization": "Bearer " + os.environ["LITELLM_API_KEY"]},
         timeout=180,
     ) as client:
-        report: Final = await evaluate((*selected, *background), dataset.checks, client, args.model, args.concurrency)
+        report: Final = await evaluate(
+            (*selected, *background), dataset.checks, client, args.model, args.concurrency, dataset.feedback
+        )
     args.output.write_text(
         json.dumps({"model": args.model, "background_runs": args.background, **report}, indent=2) + "\n"
     )
