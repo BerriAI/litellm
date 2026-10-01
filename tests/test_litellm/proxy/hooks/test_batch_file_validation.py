@@ -2286,3 +2286,268 @@ async def test_disable_flag_still_skips_batch_processing_with_enqueued_limits():
 
     assert result is data
     afile_content_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Models-only read: the allowlist forces the download, nothing charges the
+# tokens, so the per-row tokenization is skipped.
+# ---------------------------------------------------------------------------
+
+_MODELS_ONLY_ALLOWED = "gpt-4o-mini"
+_MODELS_ONLY_DENIED = "gpt-4o"
+
+
+def _models_only_file(models):
+    """A JSONL batch file naming ``models``, one chat row each."""
+    import json as _json
+
+    body = "\n".join(
+        _json.dumps({"body": {"model": m, "messages": [{"role": "user", "content": "x" * 64}]}})
+        for m in models
+    )
+    content = MagicMock()
+    content.content = body.encode("utf-8")
+    return content
+
+
+def _restricted_user(**kwargs):
+    return UserAPIKeyAuth(
+        api_key="sk-restricted-models-only",
+        user_id="alice",
+        models=[_MODELS_ONLY_ALLOWED],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_models_only_read_skips_tokenization_for_restricted_key():
+    """Opt-out set + model allowlist: read the file, validate it, don't tokenize.
+
+    ``async_pre_call_hook`` swallows unexpected exceptions and returns ``data``,
+    so the returned value alone proves nothing — assert on the calls that
+    separate the intended path from error recovery.
+    """
+    rate_limiter = _make_rate_limiter()
+    data = {"input_file_id": "file-abc123"}
+    afile_content = AsyncMock(return_value=_models_only_file([_MODELS_ONLY_ALLOWED] * 2))
+
+    with (
+        patch(  # test-quality-ok: operator config is a module global read at call time; the hook exposes no injection point
+            "litellm.proxy.proxy_server.general_settings",
+            {"disable_batch_input_file_rate_limiting": True},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: module global; None selects the no-router provider-resolution path
+        patch("litellm.afile_content", new=afile_content),  # test-quality-ok: this is the file-read boundary the test fakes; nothing HTTP sits below it here
+        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens") as count_entry_tokens,  # test-quality-ok: the call under assertion -- the test's subject is whether it runs
+        patch.object(rate_limiter, "_enforce_batch_file_model_access", new=AsyncMock()) as enforce,
+        patch.object(rate_limiter, "_check_and_increment_batch_counters", new=AsyncMock()) as counters,
+    ):
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_restricted_user(),
+            cache=MagicMock(),
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result == data
+    # Not the full-skip path: the file really was downloaded...
+    afile_content.assert_awaited_once()
+    # ...and every model in it was still checked against the allowlist.
+    enforce.assert_awaited_once()
+    assert set(enforce.await_args.kwargs["models"]) == {_MODELS_ONLY_ALLOWED}
+    # Nothing charges this batch, so the discarded tokenization is skipped.
+    count_entry_tokens.assert_not_called()
+    counters.assert_not_awaited()
+    assert "_batch_token_count" not in data
+
+
+@pytest.mark.asyncio
+async def test_models_only_read_still_rejects_unauthorized_model():
+    """The opt-out must not turn into an authorization bypass."""
+    rate_limiter = _make_rate_limiter()
+    afile_content = AsyncMock(return_value=_models_only_file([_MODELS_ONLY_DENIED]))
+
+    async def _raise_unauthorized(**kwargs):
+        raise Exception(
+            f"Key not allowed to access model. This key only has access to "
+            f"models={kwargs['valid_token'].models}"
+        )
+
+    with (
+        patch(  # test-quality-ok: operator config is a module global read at call time; the hook exposes no injection point
+            "litellm.proxy.proxy_server.general_settings",
+            {"disable_batch_input_file_rate_limiting": True},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: module global; None selects the no-router provider-resolution path
+        patch("litellm.afile_content", new=afile_content),  # test-quality-ok: this is the file-read boundary the test fakes; nothing HTTP sits below it here
+        patch(  # test-quality-ok: stands in for the authorization decision being simulated
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(side_effect=_raise_unauthorized),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_restricted_user(),
+                cache=MagicMock(),
+                data={"input_file_id": "file-abc123"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 403
+    assert _MODELS_ONLY_DENIED in str(exc.value.detail)
+    afile_content.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_restricted_key_without_opt_out_still_counts_tokens():
+    """No opt-out configured: the pre-existing path is untouched."""
+    rate_limiter = _make_rate_limiter()
+    afile_content = AsyncMock(return_value=_models_only_file([_MODELS_ONLY_ALLOWED] * 2))
+    data = {"input_file_id": "file-abc123"}
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: operator config is a module global read at call time; the hook exposes no injection point
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: module global; None selects the no-router provider-resolution path
+        patch("litellm.afile_content", new=afile_content),  # test-quality-ok: this is the file-read boundary the test fakes; nothing HTTP sits below it here
+        patch(  # test-quality-ok: the call under assertion -- the test's subject is whether it runs
+            "litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", return_value=7
+        ) as count_entry_tokens,
+        patch.object(rate_limiter, "_enforce_batch_file_model_access", new=AsyncMock()),
+        patch.object(rate_limiter, "_check_and_increment_batch_counters", new=AsyncMock()) as counters,
+    ):
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_restricted_user(),
+            cache=MagicMock(),
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result == data
+    afile_content.assert_awaited_once()
+    assert count_entry_tokens.call_count == 2
+    counters.assert_awaited_once()
+    assert data["_batch_token_count"] == 14
+    assert data["_batch_request_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_models_only_read_disabled_when_enqueued_scopes_apply():
+    """Enqueued-token reservations are priced from the totals, so keep counting."""
+    rate_limiter = _make_rate_limiter()
+    afile_content = AsyncMock(return_value=_models_only_file([_MODELS_ONLY_ALLOWED] * 2))
+
+    with (
+        patch(  # test-quality-ok: operator config is a module global read at call time; the hook exposes no injection point
+            "litellm.proxy.proxy_server.general_settings",
+            {"disable_batch_input_file_rate_limiting": True},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: module global; None selects the no-router provider-resolution path
+        patch("litellm.afile_content", new=afile_content),  # test-quality-ok: this is the file-read boundary the test fakes; nothing HTTP sits below it here
+        patch(  # test-quality-ok: the call under assertion -- the test's subject is whether it runs
+            "litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", return_value=7
+        ) as count_entry_tokens,
+        patch.object(rate_limiter, "_enforce_batch_file_model_access", new=AsyncMock()),
+        patch.object(rate_limiter, "_reserve_batch_enqueued_tokens", new=AsyncMock()) as reserve,
+    ):
+        data = {"input_file_id": "file-abc123"}
+        await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_restricted_user(metadata={"batch_enqueued_token_limit": 10}),
+            cache=MagicMock(),
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert count_entry_tokens.call_count == 2
+    reserve.assert_awaited_once()
+    assert data["_batch_token_count"] == 14
+
+
+def _models_only_file_with_malformed_row(model):
+    """One valid row plus a line that is not JSON at all."""
+    import json as _json
+
+    body = "\n".join(
+        [
+            _json.dumps({"body": {"model": model, "messages": [{"role": "user", "content": "x" * 64}]}}),
+            "{ this is not json",
+        ]
+    )
+    content = MagicMock()
+    content.content = body.encode("utf-8")
+    return content
+
+
+@pytest.mark.asyncio
+async def test_models_only_read_applies_to_skip_listed_provider():
+    """The provider skip list reaches the models-only path too, not just the global flag."""
+    rate_limiter = _make_rate_limiter()
+    data = {"input_file_id": "file-abc123", "model": "my-vllm-model"}
+    afile_content = AsyncMock(return_value=_models_only_file([_MODELS_ONLY_ALLOWED]))
+
+    with (
+        patch(  # test-quality-ok: operator config is a module global read at call time; the hook exposes no injection point
+            "litellm.proxy.proxy_server.general_settings",
+            {"skip_batch_input_file_rate_limiting_for_providers": ["hosted_vllm"]},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: module global; a router must exist for provider resolution
+        patch(  # test-quality-ok: stands in for the deployment credentials the provider is resolved from
+            "litellm.proxy.openai_files_endpoints.common_utils.get_credentials_for_model",
+            return_value={"custom_llm_provider": "hosted_vllm"},
+        ),
+        patch("litellm.afile_content", new=afile_content),  # test-quality-ok: this is the file-read boundary the test fakes; nothing HTTP sits below it here
+        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens") as count_entry_tokens,  # test-quality-ok: the call under assertion -- the test's subject is whether it runs
+        patch.object(rate_limiter, "_enforce_batch_file_model_access", new=AsyncMock()) as enforce,
+    ):
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_restricted_user(),
+            cache=MagicMock(),
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result == data
+    # A restricted key still forces the download, so this is the models-only path
+    # rather than the full skip that an unrestricted key would take.
+    afile_content.assert_awaited_once()
+    enforce.assert_awaited_once()
+    count_entry_tokens.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_models_only_read_skips_size_estimate_for_malformed_row():
+    """A row that is not JSON names no model, so it needs no size estimate either."""
+    rate_limiter = _make_rate_limiter()
+    afile_content = AsyncMock(return_value=_models_only_file_with_malformed_row(_MODELS_ONLY_ALLOWED))
+
+    with (
+        patch(  # test-quality-ok: operator config is a module global read at call time; the hook exposes no injection point
+            "litellm.proxy.proxy_server.general_settings",
+            {"disable_batch_input_file_rate_limiting": True},
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: module global; None selects the no-router provider-resolution path
+        patch("litellm.afile_content", new=afile_content),  # test-quality-ok: this is the file-read boundary the test fakes; nothing HTTP sits below it here
+        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens") as count_entry_tokens,  # test-quality-ok: the call under assertion -- the test's subject is whether it runs
+        patch("litellm.proxy.hooks.batch_rate_limiter._estimate_batch_entry_tokens") as estimate_tokens,  # test-quality-ok: the malformed-row fallback under assertion
+        patch.object(rate_limiter, "_enforce_batch_file_model_access", new=AsyncMock()) as enforce,
+    ):
+        data = {"input_file_id": "file-abc123"}
+        result = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_restricted_user(),
+            cache=MagicMock(),
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    # What the caller observes: the batch is admitted and nothing is charged for
+    # it, malformed row included.
+    assert result == data
+    assert "_batch_token_count" not in data
+    assert "_batch_request_count" not in data
+    afile_content.assert_awaited_once()
+    # The malformed row cannot smuggle a model past the allowlist, and neither
+    # counter runs for it.
+    enforce.assert_awaited_once()
+    assert set(enforce.await_args.kwargs["models"]) == {_MODELS_ONLY_ALLOWED}
+    count_entry_tokens.assert_not_called()
+    estimate_tokens.assert_not_called()
