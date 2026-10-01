@@ -888,7 +888,9 @@ def _select_model_name_for_cost_calc(
             base_model
             if base_model is not None
             else _priced_provider_response_model(
-                provider_response_model, completion_response_model, custom_llm_provider
+                provider_response_model,
+                completion_response_model if isinstance(completion_response_model, str) else None,
+                custom_llm_provider,
             )
         )
 
