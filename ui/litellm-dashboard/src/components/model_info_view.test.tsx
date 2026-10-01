@@ -1548,13 +1548,13 @@ describe("ModelInfoView", () => {
     const openCredentialSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText?: string) => {
       const trigger = screen
         .getAllByRole("combobox")
-        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
-        .find((element) => triggerText === undefined || element.textContent?.includes(triggerText));
+        .filter((element) => element.getAttribute("placeholder") === "Select or search for existing credentials")
+        .find((element) => triggerText === undefined || (element as HTMLInputElement).value.includes(triggerText));
       if (trigger === undefined) {
         throw new Error(`Could not find credential selector${triggerText ? ` with ${triggerText}` : ""}`);
       }
       await user.click(trigger);
-      await screen.findByRole("combobox", { expanded: true });
+      await screen.findByRole("option", { name: "None" });
     };
 
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -1808,8 +1808,8 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await openSelect(user, "selected-credential");
-      await user.click(await screen.findByText("other-credential"));
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "other-credential" }));
 
       const payload = await save(user);
 
@@ -1873,11 +1873,10 @@ describe("ModelInfoView", () => {
       await user.click(screen.getByRole("button", { name: /cancel/i }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      const credentialTrigger: HTMLElement = screen
+      const credentialTrigger = screen
         .getAllByRole("combobox")
-        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
-        .at(0) as HTMLElement;
-      expect(credentialTrigger).toHaveTextContent("selected-credential");
+        .find((element) => element.getAttribute("placeholder") === "Select or search for existing credentials");
+      expect(credentialTrigger).toHaveValue("selected-credential");
     });
 
     it("shows Manual in read mode after saving None", async () => {

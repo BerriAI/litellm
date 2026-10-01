@@ -49,6 +49,7 @@ export default function CredentialModal({
   const initialValues = existingCredential
     ? {
         credential_name: existingCredential.credential_name,
+        credential_alias: existingCredential.credential_alias ?? "",
         custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
         ...Object.fromEntries(
           Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
@@ -71,12 +72,19 @@ export default function CredentialModal({
       return;
     }
     const values = projectMountedValues(registry, form.getValues);
-    const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
+    const trimmedValues =
+      typeof values.credential_alias === "string"
+        ? { ...values, credential_alias: values.credential_alias.trim() }
+        : values;
+    const filteredValues = Object.entries(trimmedValues).reduce((acc, [key, value]) => {
       if (value !== "" && value !== undefined && value !== null) {
         acc[key] = value;
       }
       return acc;
     }, {} as any);
+    if (isEdit && existingCredential?.credential_alias && filteredValues.credential_alias === undefined) {
+      filteredValues.credential_alias = null;
+    }
     onSubmit(filteredValues);
     form.reset();
   };
@@ -115,6 +123,18 @@ export default function CredentialModal({
                     onBlur={control.onBlur}
                     placeholder="Enter a friendly name for these credentials"
                     disabled={isEdit}
+                  />
+                )}
+              </MountedFormField>
+
+              <MountedFormField label="Alias:" name="credential_alias" className="mb-4">
+                {(control) => (
+                  <Input
+                    id={control.id}
+                    value={typeof control.value === "string" ? control.value : ""}
+                    onChange={control.onChange}
+                    onBlur={control.onBlur}
+                    placeholder="Optional display label, e.g. Prod OpenAI"
                   />
                 )}
               </MountedFormField>

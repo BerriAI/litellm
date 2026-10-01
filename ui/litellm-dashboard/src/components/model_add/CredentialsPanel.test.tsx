@@ -48,11 +48,12 @@ vi.mock("./CredentialModal", () => ({
       mode === "edit"
         ? {
             credential_name: "openai-key",
+            credential_alias: null,
             custom_llm_provider: "openai",
             api_key: "sk-1****2345",
             api_base: "https://proxy.e2e.example.com/v1",
           }
-        : { credential_name: "new-cred", custom_llm_provider: "openai" };
+        : { credential_name: "new-cred", credential_alias: "Prod", custom_llm_provider: "openai" };
     return (
       <button data-testid={`credential-modal-${mode}-submit`} onClick={() => onSubmit(values)}>
         submit {mode}
@@ -196,6 +197,45 @@ describe("CredentialsPanel", () => {
     const [, updatedName, payload] = vi.mocked(credentialUpdateCall).mock.calls[0];
     expect(updatedName).toBe("openai-key");
     expect(payload.credential_values).toEqual({ api_base: "https://proxy.e2e.example.com/v1" });
+  });
+
+  it("sends credential_alias: null on edit and keeps it out of credential_values", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
+    vi.mocked(credentialUpdateCall).mockResolvedValueOnce(undefined as never);
+
+    renderPanel();
+
+    await user.click(screen.getByTestId("credential-actions-openai-key"));
+    await user.click(await screen.findByTestId("credential-action-edit"));
+    await user.click(screen.getByTestId("credential-modal-edit-submit"));
+
+    await waitFor(() => {
+      expect(credentialUpdateCall).toHaveBeenCalled();
+    });
+    const [, , payload] = vi.mocked(credentialUpdateCall).mock.calls[0];
+    expect(payload.credential_alias).toBeNull();
+    expect(payload.credential_values).not.toHaveProperty("credential_alias");
+  });
+
+  it("sends the alias on create and keeps it out of credential_values", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
+    vi.mocked(credentialCreateCall).mockResolvedValueOnce(undefined as never);
+
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: /add credential/i }));
+    await user.click(screen.getByTestId("credential-modal-add-submit"));
+
+    await waitFor(() => {
+      expect(credentialCreateCall).toHaveBeenCalled();
+    });
+    const [, payload] = vi.mocked(credentialCreateCall).mock.calls[0];
+    expect(payload.credential_alias).toBe("Prod");
+    expect(payload.credential_values).not.toHaveProperty("credential_alias");
   });
 
   describe("Admin Viewer write-action gating", () => {
