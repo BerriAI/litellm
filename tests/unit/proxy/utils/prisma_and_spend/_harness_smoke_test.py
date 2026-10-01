@@ -15,14 +15,14 @@ from litellm.proxy.utils import PrismaClient
 
 
 def test_normalize_scrubs_volatile_keys() -> None:
-    from tests.test_litellm.proxy.utils.prisma_and_spend.conftest import normalize
+    from tests.unit.proxy.utils.prisma_and_spend.conftest import normalize
 
     out = normalize({"id": 1, "spend": 2.0, "team_id": "t1"})
     assert out == {"id": "<VOLATILE>", "spend": "<VOLATILE>", "team_id": "t1"}
 
 
 def test_normalize_recurses_into_lists() -> None:
-    from tests.test_litellm.proxy.utils.prisma_and_spend.conftest import normalize
+    from tests.unit.proxy.utils.prisma_and_spend.conftest import normalize
 
     out = normalize([{"id": "x"}, {"team_id": "t"}])
     assert out == [{"id": "<VOLATILE>"}, {"team_id": "t"}]

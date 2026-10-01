@@ -150,7 +150,7 @@ class _AgentPersistence:
         return self.row
 
     async def update(self, *, data: Mapping[str, object], **kwargs: object) -> LiteLLM_AgentsTable:
-        from tests.test_litellm.proxy.agent_endpoints.test_agent_registry import _stored_agent_row
+        from tests.unit.proxy.agent_endpoints.test_agent_registry import _stored_agent_row
 
         self.row = _stored_agent_row({**self.row.model_dump(), **data})
         return self.row
@@ -163,7 +163,7 @@ def test_identity_settings_edit_preserves_runtime_configuration_on_readback(
 ) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
-    from tests.test_litellm.proxy.agent_endpoints.test_agent_registry import _stored_agent_row
+    from tests.unit.proxy.agent_endpoints.test_agent_registry import _stored_agent_row
 
     runtime: Final = {
         "agent_card_params": {} if cardless else _sample_agent_card_params(),
@@ -1330,7 +1330,7 @@ def test_identity_providers_honor_issuer_specific_audiences_and_global_fallback(
 def test_mode_only_edit_requires_the_existing_identity_sso_tenant(
     monkeypatch: pytest.MonkeyPatch, change: PatchAgentRequest
 ) -> None:
-    from tests.test_litellm.proxy.agent_endpoints.test_managed_identity import BINDING, TENANT, managed_agent
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import BINDING, TENANT, managed_agent
 
     monkeypatch.setattr(agent_endpoints, "_trusted_agent_issuers", lambda: (BINDING.issuer,))
     monkeypatch.delenv("MICROSOFT_TENANT", raising=False)
@@ -1342,7 +1342,7 @@ def test_mode_only_edit_requires_the_existing_identity_sso_tenant(
 
 
 def test_identity_only_edit_preserves_delegated_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tests.test_litellm.proxy.agent_endpoints.test_managed_identity import BINDING, managed_agent
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import BINDING, managed_agent
 
     monkeypatch.setattr(agent_endpoints, "_trusted_agent_issuers", lambda: (BINDING.issuer,))
     monkeypatch.delenv("MICROSOFT_TENANT", raising=False)
@@ -1637,7 +1637,7 @@ def test_agent_detail_cache_miss_preserves_admin_identity_visibility(role, monke
 def test_invalid_identity_and_untrusted_tenant_cannot_be_registered(
     monkeypatch: pytest.MonkeyPatch, trusted: bool
 ) -> None:
-    from tests.test_litellm.proxy.agent_endpoints.test_managed_identity import BINDING
+    from tests.unit.proxy.agent_endpoints.test_managed_identity import BINDING
 
     configuration: Final = BINDING.model_dump(
         exclude={"agent_id", "issuer", "revision", "last_authenticated_at", "active"}
