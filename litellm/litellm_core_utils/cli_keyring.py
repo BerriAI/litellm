@@ -277,7 +277,9 @@ class KeyringVault:
             return api
         live: Final = self._delete_account(api, KEYRING_ACCOUNT)
         staged: Final = self._delete_account(api, KEYRING_STAGING_ACCOUNT)
-        return SecretErased() if isinstance(live, SecretErased) and isinstance(staged, SecretErased) else SecretStranded()
+        return (
+            SecretErased() if isinstance(live, SecretErased) and isinstance(staged, SecretErased) else SecretStranded()
+        )
 
     def _delete_account(self, api: KeyringApi, account: str) -> SecretErase:
         try:
