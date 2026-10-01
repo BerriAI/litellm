@@ -578,6 +578,50 @@ class TestZeroCostDiagnostic:
         assert f"model_group={self.MODEL_GROUP}" in warnings[0]
         assert f"pricing entry '{self.DEPLOYMENT_ID}' has no input_cost_per_token, output_cost_per_token" in warnings[0]
 
+    def test_prices_usage_as_free_for_free_custom_deployment(self) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(self.FREE_PRICING)
+        response: Final = self._response(usage)
+
+        assert logging_obj.prices_usage_as_free(response) is True
+
+    def test_prices_usage_as_free_is_false_for_priced_gpt4o(self) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = LitellmLogging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="lit9097-gpt4o",
+            function_id="fn",
+        )
+        logging_obj.update_environment_variables(
+            model="gpt-4o",
+            user="",
+            optional_params={},
+            litellm_params={"custom_llm_provider": "openai"},
+            custom_llm_provider="openai",
+        )
+        response: Final = self._response(usage, model="gpt-4o")
+
+        assert logging_obj.prices_usage_as_free(response) is False
+
+    def test_prices_usage_as_free_is_false_when_pricing_lookup_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(self.FREE_PRICING)
+        response: Final = self._response(usage)
+        pricing_lookup: Final = MagicMock(side_effect=Exception("pricing lookup failed"))
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.litellm_logging.pricing_entry_for_cost_calc",
+            pricing_lookup,
+        )
+
+        assert logging_obj.prices_usage_as_free(response) is False
+        pricing_lookup.assert_called_once()
+
     def test_zero_cost_with_a_missing_rate_warns_once_and_is_recorded(
         self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
     ) -> None:

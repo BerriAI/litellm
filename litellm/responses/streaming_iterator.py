@@ -1594,7 +1594,9 @@ def _stamp_responses_usage_cost(
         cost: Final[float | None] = logging_obj._response_cost_calculator(result=response_obj)
     except Exception:
         return
-    if isinstance(cost, (int, float)) and cost > 0:
+    if isinstance(cost, (int, float)) and (
+        cost > 0 or (cost == 0 and logging_obj.prices_usage_as_free(response_obj))
+    ):
         setattr(usage_obj, "cost", cost)
 
 
