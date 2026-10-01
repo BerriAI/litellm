@@ -125,21 +125,25 @@ def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoRet
     a credential misconfigured into this field does not become a log entry.
     """
     match failure:
-        case VertexCredentialsFileUnreadable(path=path, reason=reason):
-            verbose_logger.error("Vertex: cannot read the credentials file at %s: %s", redact_string(path), reason)
+        case VertexCredentialsFileUnreadable():
+            verbose_logger.error(
+                "Vertex: cannot read the credentials file at %s: %s", redact_string(failure.path), failure.reason
+            )
             raise ValueError(
-                f"Unable to read the vertex credentials file: {reason}. The proxy log names the path. "
+                f"Unable to read the vertex credentials file: {failure.reason}. The proxy log names the path. "
                 "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
             )
-        case VertexCredentialsFileNotJson(path=path, detail=detail):
-            verbose_logger.error("Vertex: credentials file at %s is not valid JSON: %s", redact_string(path), detail)
+        case VertexCredentialsFileNotJson():
+            verbose_logger.error(
+                "Vertex: credentials file at %s is not valid JSON: %s", redact_string(failure.path), failure.detail
+            )
             raise ValueError(
-                f"The vertex credentials file is not valid JSON: {detail}. The proxy log names the path. "
+                f"The vertex credentials file is not valid JSON: {failure.detail}. The proxy log names the path. "
                 "Check for unescaped newlines in private_key."
             )
-        case VertexCredentialsInlineNotJson(detail=detail):
+        case VertexCredentialsInlineNotJson():
             raise ValueError(
-                f"The inline `vertex_credentials` value is not valid JSON: {detail}. "
+                f"The inline `vertex_credentials` value is not valid JSON: {failure.detail}. "
                 "Check for unescaped newlines in private_key."
             )
         case _:  # pragma: no cover - exhaustiveness guard, unreachable while the union holds
