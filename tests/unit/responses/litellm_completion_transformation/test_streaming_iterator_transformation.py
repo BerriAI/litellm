@@ -215,7 +215,31 @@ def test_client_tool_search_stream_does_not_emit_function_argument_events():
         ],
     )
 
+    arg_only_chunk = ModelResponseStream(
+        id="chunk-1",
+        created=123,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "}"},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+
     added = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+    arg_delta = iterator._transform_chat_completion_chunk_to_response_api_chunk(arg_only_chunk)
     delta = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
     done = iterator._queue_final_tool_call_done_events(
         ModelResponse(
@@ -244,6 +268,7 @@ def test_client_tool_search_stream_does_not_emit_function_argument_events():
     )
 
     assert added is not None
+    assert arg_delta is None
     assert delta is None
     assert done is None
     event_types = [event.type for event in iterator._pending_tool_events if event is not added]

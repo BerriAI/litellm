@@ -149,6 +149,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             for tool in self.responses_api_request.get("tools") or ()
             if isinstance(tool, dict)
         )
+        self._tool_search_call_ids: set[str] = set()  # mutable-ok: accumulator for search-call IDs
         self._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
             self.responses_api_request.get("tools")
         )
@@ -181,7 +182,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return fn_name, None
 
     def _tool_call_item_kwargs(self, call_id: str, fn_name: str, arguments: str, status: str) -> dict[str, object]:
-        if self._is_tool_search_call(fn_name):
+        if self._is_tool_search_call(fn_name, call_id):
+            self._tool_search_call_ids.add(call_id)
             try:
                 arguments_obj: object = json.loads(arguments) if arguments else {}  # mutable-ok: default JSON object
             except json.JSONDecodeError:
@@ -201,8 +203,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         namespace_kwargs: Final = {"namespace": tool_namespace} if tool_namespace else {}
         return {**item_kwargs, "name": tool_name, **namespace_kwargs}
 
-    def _is_tool_search_call(self, fn_name: str) -> bool:
-        return self._tool_search_requested and fn_name == TOOL_SEARCH_FUNCTION_NAME
+    def _is_tool_search_call(self, fn_name: str, call_id: str) -> bool:
+        if not self._tool_search_requested:
+            return False
+        return call_id in self._tool_search_call_ids or fn_name == TOOL_SEARCH_FUNCTION_NAME
 
     def _is_reasoning_end(self, chunk):
         if not chunk.choices:
@@ -302,7 +306,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if fn_args_delta:
                 self._tool_args_by_call_id[call_id] += fn_args_delta
 
-                if self._is_tool_search_call(fn_name):
+                if self._is_tool_search_call(fn_name, call_id):
                     continue
 
                 # Split large argument deltas into smaller chunks to match OpenAI's streaming behavior
@@ -384,7 +388,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # This handles cases where Bedrock sends the complete tool call at the end
             already_streamed = self._tool_args_by_call_id.get(call_id, "")
             remaining_args = final_args[len(already_streamed) :] if final_args else ""
-            if self._is_tool_search_call(fn_name):
+            if self._is_tool_search_call(fn_name, call_id):
                 remaining_args = ""
 
             if remaining_args:
@@ -402,7 +406,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     delta_event.__dict__["sequence_number"] = self._sequence_number
                     self._pending_tool_events.append(delta_event)
 
-            if self._is_tool_search_call(fn_name):
+            if self._is_tool_search_call(fn_name, call_id):
                 self._sequence_number += 1
                 item_kwargs = self._tool_call_item_kwargs(call_id, fn_name, final_args, "completed")
                 item_kwargs["id"] = self._tool_item_id_by_call_id.setdefault(call_id, str(item_kwargs["id"]))

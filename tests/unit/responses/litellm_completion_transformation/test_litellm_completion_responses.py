@@ -3919,6 +3919,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
         iterator._tool_search_requested = False
+        iterator._tool_search_call_ids = set()
         iterator.responses_api_request = {}
         iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(None)
         iterator._web_search_calls = {}
