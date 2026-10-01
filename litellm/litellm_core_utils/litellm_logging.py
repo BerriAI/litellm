@@ -46,6 +46,7 @@ from litellm.constants import (
 from litellm.cost_calculator import (
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    _raw_cost_map_entry,
     _select_model_name_for_cost_calc,
     get_usage_object,
     pricing_entry_for_cost_calc,
@@ -2068,26 +2069,10 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         if pricing is None:
             return False
-        pricing_model: Final = pricing[0]
-        effective_router_model_id: Final = router_model_id or self.get_router_model_id()
-        metadata_model_info_entries: Final = tuple(
-            model_info
-            for metadata_key in ("metadata", "litellm_metadata")
-            if isinstance(metadata := self.litellm_params.get(metadata_key), Mapping)
-            and isinstance(model_info := metadata.get("model_info"), Mapping)
+        explicit_entry: Final = (
+            pricing[1] if self._custom_pricing_for(result) else _raw_cost_map_entry(pricing[0])
         )
-        pricing_sources: Final = (
-            litellm.model_cost.get(pricing_model),
-            litellm.model_cost.get(effective_router_model_id) if effective_router_model_id is not None else None,
-            self.litellm_params,
-            *metadata_model_info_entries,
-        )
-        has_explicit_pricing: Final = any(
-            is_free_usage(usage, pricing_source)
-            for pricing_source in pricing_sources
-            if isinstance(pricing_source, Mapping)
-        )
-        return has_explicit_pricing and is_free_usage(usage, pricing[1])
+        return explicit_entry is not None and is_free_usage(usage, explicit_entry)
 
     def _custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)

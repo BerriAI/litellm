@@ -585,6 +585,30 @@ class TestZeroCostDiagnostic:
 
         assert logging_obj.prices_usage_as_free(response) is True
 
+    def test_prices_usage_as_free_for_explicit_zero_cost_map_rates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        model: Final = "openai/lit9097-zero-cost-map-model"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {"key": model, "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        )
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj({}, model=model, deployment_id=None)
+        response: Final = self._response(usage, model=model)
+
+        assert logging_obj.prices_usage_as_free(response) is True
+
+    def test_prices_usage_as_free_is_false_for_unpriced_shared_backend_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        model: Final = "openai/Qwen/Qwen3-8B"
+        monkeypatch.setitem(litellm.model_cost, model, {})
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj({}, model=model, deployment_id=None)
+        response: Final = self._response(usage, model=model)
+
+        assert logging_obj.prices_usage_as_free(response) is False
+
     def test_prices_usage_as_free_is_false_for_priced_gpt4o(self) -> None:
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
         logging_obj: Final = LitellmLogging(
