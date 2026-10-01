@@ -151,9 +151,7 @@ async def authorize_member_auto_router_dependencies(
     if team.blocked:
         raise HTTPException(status_code=403, detail="This auto router's team is blocked.")
     aliases: Final = team_model_aliases(team)
-    alias_dict: Final = (
-        dict(aliases) if aliases is not None else None  # mutable-ok: auth model and helpers require dict
-    )
+    alias_dict: Final = dict(aliases) if aliases is not None else None
     scoped_actor: Final = user_api_key_dict.model_copy(
         update=MappingProxyType({"team_id": team.team_id, "team_models": team.models, "team_model_aliases": alias_dict})
     )
