@@ -6477,11 +6477,7 @@ def get_standard_logging_object_payload(
         )
 
         response_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
-        id: Final = (
-            f"{response_id}_cache_hit{time.time()}"  # do not duplicate the request id
-            if cache_hit is True
-            else response_id
-        )
+        id: Final = f"{response_id}_cache_hit{time.time()}" if cache_hit is True else response_id
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")
