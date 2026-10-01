@@ -1,4 +1,3 @@
-import ast
 import asyncio
 import copy
 import json
@@ -220,11 +219,13 @@ async def chat_completion_pass_through_endpoint(
     data = {"litellm_call_id": litellm_call_id}
     try:
         body: Final = await request.body()
-        body_str: Final = body.decode()
         try:
-            data = ast.literal_eval(body_str) | data
-        except Exception:
-            data = json.loads(body_str) | data
+            parsed_body: Final = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+        if not isinstance(parsed_body, dict):
+            raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+        data = parsed_body | data
 
         data["adapter_id"] = adapter_id
 
