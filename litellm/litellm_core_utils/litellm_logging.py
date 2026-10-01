@@ -114,6 +114,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
 )
+from litellm.llms.base_llm.base_utils import DynamicModelInfoProvider
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -153,6 +154,8 @@ from litellm.types.utils import (
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
+    LlmProviders,
+    LlmProvidersSet,
     ModelInfo,
     ModelResponse,
     ModelResponseStream,
@@ -2065,12 +2068,29 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_model_name=None,
                 router_model_id=router_model_id,
             )
+            if pricing is None:
+                return False
+            custom_pricing: Final = self._custom_pricing_for(result)
+            raw_entry: Final = None if custom_pricing else _raw_cost_map_entry(pricing[0])
+            dynamic_pricing_entry: Final = (
+                not custom_pricing and raw_entry is None and self._provider_has_dynamic_model_info()
+            )
+            explicit_entry: Final = pricing[1] if custom_pricing or dynamic_pricing_entry else raw_entry
         except Exception:  # noqa: BLE001  # pricing helpers raise plain Exception
             return False
-        if pricing is None:
-            return False
-        explicit_entry: Final = pricing[1] if self._custom_pricing_for(result) else _raw_cost_map_entry(pricing[0])
         return explicit_entry is not None and is_free_usage(usage, explicit_entry)
+
+    def _provider_has_dynamic_model_info(self) -> bool:
+        custom_llm_provider: Final[object] = self.model_call_details.get("custom_llm_provider")
+        if not isinstance(custom_llm_provider, str) or custom_llm_provider not in LlmProvidersSet:
+            return False
+        from litellm.utils import ProviderConfigManager
+
+        provider_config: Final = ProviderConfigManager.get_provider_model_info(
+            model=self.model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+        return isinstance(provider_config, DynamicModelInfoProvider)
 
     def _custom_pricing_for(self, result: object) -> bool:
         litellm_params: Final = getattr(self, "litellm_params", None)

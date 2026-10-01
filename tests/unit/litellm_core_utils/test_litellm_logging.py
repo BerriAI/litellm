@@ -609,6 +609,31 @@ class TestZeroCostDiagnostic:
 
         assert logging_obj.prices_usage_as_free(response) is False
 
+    def test_prices_usage_as_free_for_unmapped_ollama_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        model: Final = "ollama_chat/litellm-unmapped-9097"
+
+        def post_model_info(url: str, **kwargs: object) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"template": "{{ .System }} tools {{ .Prompt }}", "model_info": {"llama.context_length": 32768}},
+            )
+
+        litellm.get_model_info.cache_clear()
+        monkeypatch.setattr(litellm.module_level_client, "post", post_model_info)
+        try:
+            usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+            logging_obj: Final = self._logging_obj(
+                {},
+                model=model,
+                deployment_id=None,
+                custom_llm_provider="ollama_chat",
+            )
+            response: Final = self._response(usage, model=model, custom_llm_provider="ollama_chat")
+
+            assert logging_obj.prices_usage_as_free(response) is True
+        finally:
+            litellm.get_model_info.cache_clear()
+
     def test_prices_usage_as_free_is_false_for_priced_gpt4o(self) -> None:
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
         logging_obj: Final = LitellmLogging(

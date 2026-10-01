@@ -5,11 +5,12 @@ import uuid
 from collections.abc import Iterator, Mapping
 from typing import Final
 
-import litellm
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
+
+import litellm
 
 FREE: Final = {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
 PRICED: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
@@ -41,6 +42,31 @@ def _chat_stream(identity: str, model: str) -> tuple[bytes, ...]:
             {"model": model, "choices": [], "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}},
         ),
         b"data: [DONE]\n\n",
+    )
+
+
+def _ollama_stream(model: str) -> tuple[bytes, ...]:
+    return (
+        json.dumps(
+            {
+                "model": model,
+                "created_at": "2025-01-01T00:00:00Z",
+                "message": {"role": "assistant", "content": "Hello there"},
+                "done": False,
+            }
+        ).encode()
+        + b"\n",
+        json.dumps(
+            {
+                "model": model,
+                "created_at": "2025-01-01T00:00:00Z",
+                "message": {"role": "assistant", "content": ""},
+                "done": True,
+                "prompt_eval_count": 11,
+                "eval_count": 4,
+            }
+        ).encode()
+        + b"\n",
     )
 
 
@@ -95,7 +121,7 @@ def _cost_field(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     (
         pytest.param("openai/gpt-4o-mini", FREE, {"cost": 0.0}, id="free-model-reports-zero"),
         pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(0.019)}, id="priced-model"),
-        pytest.param("openai/Qwen/Qwen3-8B", UNPRICED, {}, id="unpriced-model-omits-cost"),
+        pytest.param("openai/litellm-unpriced-9097", UNPRICED, {}, id="unpriced-model-omits-cost"),
     ),
 )
 def test_chat_completions_stream_final_usage_reports_the_computed_cost(
@@ -136,7 +162,7 @@ def test_chat_completions_stream_final_usage_reports_the_computed_cost(
     (
         pytest.param("openai/gpt-4o-mini", FREE, {"cost": 0.0}, id="free-model-reports-zero"),
         pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(0.019)}, id="priced-model"),
-        pytest.param("openai/Qwen/Qwen3-8B", UNPRICED, {}, id="unpriced-model-omits-cost"),
+        pytest.param("openai/litellm-unpriced-9097", UNPRICED, {}, id="unpriced-model-omits-cost"),
     ),
 )
 def test_responses_stream_completed_usage_reports_the_computed_cost(
@@ -169,6 +195,42 @@ def test_responses_stream_completed_usage_reports_the_computed_cost(
     assert _cost_field(usage) == expected_cost_field, text
 
 
+@pytest.mark.usefixtures("restore_model_cost_after_sdk_call")
+def test_sdk_ollama_stream_reports_dynamic_zero_cost() -> None:
+    model: Final = "ollama_chat/litellm-unmapped-9097"
+    identity: Final = "sdk-ollama-usage-cost-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        if request.target == "/api/show":
+            return Reply(status=404)
+        assert request.target == "/api/chat", request.target
+        return Reply(content_type="application/x-ndjson", chunks=_ollama_stream("litellm-unmapped-9097"))
+
+    litellm.get_model_info.cache_clear()
+    try:
+        with wire_server(respond) as wire:
+            stream: Final = litellm.completion(
+                model=model,
+                api_base=wire.url,
+                messages=[{"role": "user", "content": identity}],
+                stream=True,
+                stream_options={"include_usage": True},
+                num_retries=0,
+            )
+            try:
+                chunks: Final = tuple(stream)
+            finally:
+                asyncio.run(stream.aclose())
+    finally:
+        litellm.get_model_info.cache_clear()
+    usages: Final = tuple(chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None)
+    assert len(usages) == 1, chunks
+    usage: Final = usages[0]
+    usage_dict: Final = usage.model_dump()
+    assert (usage_dict["prompt_tokens"], usage_dict["completion_tokens"], usage_dict["total_tokens"]) == (11, 4, 15)
+    assert _cost_field(usage_dict) == {"cost": 0.0}, usage_dict
+
+
 @pytest.fixture
 def restore_model_cost_after_sdk_call() -> Iterator[None]:
     original: Final = copy.deepcopy(litellm.model_cost)
@@ -183,7 +245,7 @@ def restore_model_cost_after_sdk_call() -> Iterator[None]:
     (
         pytest.param("openai/gpt-4o-mini", FREE, {"cost": 0.0}, id="free-model-reports-zero"),
         pytest.param("openai/gpt-4o-mini", PRICED, {"cost": pytest.approx(0.019)}, id="priced-model"),
-        pytest.param("openai/Qwen/Qwen3-8B", UNPRICED, {}, id="unpriced-model-omits-cost"),
+        pytest.param("openai/litellm-unpriced-9097", UNPRICED, {}, id="unpriced-model-omits-cost"),
     ),
 )
 def test_sdk_completion_stream_final_usage_reports_the_computed_cost(
