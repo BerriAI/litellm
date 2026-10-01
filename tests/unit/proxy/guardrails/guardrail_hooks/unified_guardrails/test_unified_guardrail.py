@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 
@@ -2218,11 +2219,11 @@ class TestStreamingClientDisconnectScan:
     the end-of-stream scan of what it already received."""
 
     @pytest.fixture(autouse=True)
-    def _use_real_mappings(self, monkeypatch):
+    def _use_real_mappings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
 
     @staticmethod
-    def _guarded_stream(guardrail, upstream):
+    def _guarded_stream(guardrail: CustomGuardrail, upstream: AsyncIterable[object]) -> AsyncGenerator[object, None]:
         return UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
             response=upstream,
@@ -2233,7 +2234,7 @@ class TestStreamingClientDisconnectScan:
     async def test_closing_after_released_content_still_scans_it(self):
         guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic secret")
             yield _stream_chunk(" tail", finish_reason="stop")
 
@@ -2248,7 +2249,7 @@ class TestStreamingClientDisconnectScan:
     async def test_closing_mid_text_stream_does_not_hand_the_scan_a_tool_calls_finish(self):
         guardrail = _FinishReasonRecordingGuardrail()
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic secret")
             yield _stream_chunk(" tail", finish_reason="stop")
 
@@ -2263,7 +2264,7 @@ class TestStreamingClientDisconnectScan:
     async def test_upstream_cancellation_after_released_content_still_scans_it(self):
         guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic secret")
             raise asyncio.CancelledError()
 
@@ -2280,12 +2281,12 @@ class TestStreamingClientDisconnectScan:
         guardrail = _GatedScanGuardrail()
         first_chunk_received = anyio.Event()
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic secret")
             await anyio.sleep_forever()
             yield _stream_chunk(" tail", finish_reason="stop")
 
-        async def consume(scope_ready):
+        async def consume(scope_ready: list[anyio.CancelScope]) -> None:
             with anyio.CancelScope() as scope:
                 scope_ready.append(scope)
                 async with contextlib.aclosing(self._guarded_stream(guardrail, upstream())) as stream:
@@ -2309,7 +2310,7 @@ class TestStreamingClientDisconnectScan:
     async def test_closing_after_a_sampled_scan_covered_everything_released_does_not_scan_again(self):
         guardrail = _ScanCountingGuardrail(sampling_rate=1)
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic")
             yield _stream_chunk(" secret")
             await anyio.sleep_forever()
@@ -2328,7 +2329,7 @@ class TestStreamingClientDisconnectScan:
         guardrail = _ScanCountingGuardrail(end_of_stream_only=True, buffer_until_moderated=True)
         upstream_started = anyio.Event()
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("withheld")
             upstream_started.set()
             await anyio.sleep_forever()
@@ -2346,11 +2347,11 @@ class TestStreamingClientDisconnectScan:
     async def test_cancellation_during_end_of_stream_scan_lets_the_scan_finish(self):
         guardrail = _GatedScanGuardrail()
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic secret")
             yield _stream_chunk(" tail", finish_reason="stop")
 
-        async def consume(scope_ready):
+        async def consume(scope_ready: list[anyio.CancelScope]) -> None:
             with anyio.CancelScope() as scope:
                 scope_ready.append(scope)
                 async for _item in self._guarded_stream(guardrail, upstream()):
@@ -2368,10 +2369,10 @@ class TestStreamingClientDisconnectScan:
         assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret tail"]], guardrail.scans
 
     @staticmethod
-    async def _close_after_first_chunk(guardrail):
+    async def _close_after_first_chunk(guardrail: CustomGuardrail) -> dict:
         request_data = {"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}}
 
-        async def upstream():
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
             yield _stream_chunk("synthetic secret")
             yield _stream_chunk(" tail", finish_reason="stop")
 
@@ -2406,7 +2407,7 @@ class TestStreamingClientDisconnectScan:
         assert _recorded_guardrail_statuses(request_data) == ["success"]
 
     @staticmethod
-    async def _tool_call_upstream():
+    async def _tool_call_upstream() -> AsyncIterator[ModelResponseStream]:
         from litellm.types.utils import ChatCompletionDeltaToolCall, Function
 
         tool_call = ChatCompletionDeltaToolCall(
@@ -2421,7 +2422,7 @@ class TestStreamingClientDisconnectScan:
     async def test_cancellation_during_incremental_diff_tool_call_inspection_lets_it_finish_once(self):
         guardrail = _GatedToolCallGuardrail()
 
-        async def consume(scope_ready):
+        async def consume(scope_ready: list[anyio.CancelScope]) -> None:
             with anyio.CancelScope() as scope:
                 scope_ready.append(scope)
                 async with contextlib.aclosing(self._guarded_stream(guardrail, self._tool_call_upstream())) as stream:
