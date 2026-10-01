@@ -25,6 +25,7 @@ litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
 tokio.workspace = true
+wiremock.workspace = true
 
 [[bench]]
 name = "resource-fanout"

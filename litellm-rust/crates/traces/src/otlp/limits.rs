@@ -210,17 +210,3 @@ impl Budget {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[rstest::rstest]
-    #[ignore = "set OTLP_BENCH_BODY to a JSON export and run with --ignored --nocapture"]
-    fn profile_json_preflight() {
-        let body = std::fs::read(std::env::var("OTLP_BENCH_BODY").unwrap()).unwrap();
-        for _ in 0..5 {
-            let start = std::time::Instant::now();
-            assert!(super::json_preflight(&body).is_ok());
-            eprintln!("preflight_us={}", start.elapsed().as_micros());
-        }
-    }
-}

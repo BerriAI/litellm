@@ -293,29 +293,4 @@ mod tests {
             assert!(actual.eq(expected).unwrap());
         });
     }
-
-    #[rstest]
-    #[ignore = "set OTLP_BENCH_BODY to a JSON export and run with --ignored --nocapture"]
-    fn profile_decode_and_python_conversion() {
-        let body = std::fs::read(std::env::var("OTLP_BENCH_BODY").unwrap()).unwrap();
-        Python::initialize();
-        Python::attach(|py| {
-            for _ in 0..5 {
-                let start = std::time::Instant::now();
-                let spans = py
-                    .detach(|| litellm_traces::decode_otlp(&body, Some("application/json")))
-                    .unwrap();
-                let decoded = start.elapsed();
-                let start = std::time::Instant::now();
-                let converted = spans_to_py(py, &spans).unwrap();
-                let converted_in = start.elapsed();
-                assert_eq!(converted.len(), spans.len());
-                eprintln!(
-                    "decode_us={} python_us={}",
-                    decoded.as_micros(),
-                    converted_in.as_micros()
-                );
-            }
-        });
-    }
 }

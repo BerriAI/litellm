@@ -73,7 +73,7 @@ futures-util.workspace = true
 rstest.workspace = true
 sha2.workspace = true
 tokio-tungstenite.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true
 aws-sdk-secretsmanager = "1.117.0"
 
 [[bench]]

@@ -4399,6 +4399,7 @@ dependencies = [
  "time",
  "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]
