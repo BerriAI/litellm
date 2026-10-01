@@ -96,3 +96,19 @@ def test_per_call_and_off_decide_without_claiming_a_session(scope: GuardrailInfo
     )
 
     assert (decisions, session_still_unclaimed) == ([recorded, recorded], True)
+
+
+def test_a_huge_session_id_is_stored_under_a_fixed_size_key() -> None:
+    sessions: Final = InMemoryCache()
+    record_scope: Final = RecordScope("per_session", recorded_sessions=sessions)
+    caller: Final = Caller(key_hash="hash-a", team_id=None, user_id=None)
+    huge_session_id: Final = "s" * 1_000_000
+
+    decisions: Final = [
+        record_scope.should_record_allow(session_id=huge_session_id, caller=caller, input_type="request")
+        for _ in range(2)
+    ]
+
+    assert (decisions, [len(key) for key in sessions.cache_dict]) == ([True, False], [64]), (
+        "a caller-chosen session id must not grow the in-memory dedup cache"
+    )

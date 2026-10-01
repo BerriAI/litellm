@@ -1,3 +1,4 @@
+import hashlib
 import json
 from typing import Final, Literal, NamedTuple
 
@@ -49,6 +50,10 @@ def _jsonable(value: object) -> object:
     return to_jsonable_python(value, fallback=repr, bytes_mode="base64")
 
 
+def _session_key(caller: Caller, session_id: str, input_type: Literal["request", "response"]) -> str:
+    return hashlib.sha256(json.dumps((*caller, session_id, input_type)).encode()).hexdigest()
+
+
 def _sent_value(sent: GenericGuardrailAPIInputs, key: str) -> object:
     return sent.get(key) if key in sent else ()
 
@@ -87,7 +92,7 @@ class RecordScope:
             case "off":
                 return False
             case "per_session":
-                return session_id is None or self._claim_session(json.dumps((*caller, session_id, input_type)))
+                return session_id is None or self._claim_session(_session_key(caller, session_id, input_type))
         return assert_never(self._scope)
 
     def _claim_session(self, key: str) -> bool:
