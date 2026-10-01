@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 if TYPE_CHECKING:
     from litellm.proxy.auth.login_throttle import LoginThrottle
@@ -1978,10 +1979,15 @@ class TestDisableEnvCredentialLogin:
         assert exc_info.value.code == "401"
 
     @pytest.mark.asyncio
-    async def test_db_user_login_still_works_when_disabled(self):
+    @respx.mock
+    async def test_db_user_login_still_works_when_disabled(self, httpx_transport):
         master_key = "sk-1234"
         user_email = "admin@example.com"
         password = "Str0ng!Passw0rd"
+        sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
+        respx.get(f"https://api.pwnedpasswords.com/range/{sha1[:5]}").mock(
+            return_value=httpx.Response(200, text="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:41")
+        )
 
         mock_user = LiteLLM_UserTable(
             user_id="db-admin-1",

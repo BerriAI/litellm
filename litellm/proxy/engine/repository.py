@@ -45,20 +45,24 @@ class EngineRepository:
         )
         return engine
 
-    async def update(self, engine_id: str, transform: Callable[[Engine], Engine], attempts: int = 8) -> Engine | None:
+    async def update(
+        self, engine_id: str, transform: Callable[[Engine], Engine], attempts: int = 8, *, changed_only: bool = False
+    ) -> Engine | None:
         for _ in range(attempts):
-            completed, updated = await self._try_update(engine_id, transform)
+            completed, updated = await self._try_update(engine_id, transform, changed_only)
             if completed:
                 return updated
         return None
 
-    async def _try_update(self, engine_id: str, transform: Callable[[Engine], Engine]) -> tuple[bool, Engine | None]:
+    async def _try_update(
+        self, engine_id: str, transform: Callable[[Engine], Engine], changed_only: bool
+    ) -> tuple[bool, Engine | None]:
         previous: Final = await self.get(engine_id)
         if previous is None:
             return True, None
         candidate: Final = transform(previous)
         if candidate == previous:
-            return True, previous
+            return True, None if changed_only else previous
         updated: Final = candidate.model_copy(update=MappingProxyType({"version": previous.version + 1}))
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
@@ -133,6 +137,24 @@ class EngineRepository:
             return
         await self.db.execute_raw(
             'UPDATE "LiteLLM_EngineWorker" SET data=$1::jsonb WHERE id=$2', worker.model_dump_json(), worker.id
+        )
+
+    async def set_worker_billing(self, worker_id: str, key_id: str) -> Worker | None:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                """UPDATE "LiteLLM_EngineWorker"
+                SET data=jsonb_set(data, '{analysis_key_id}', to_jsonb($1::text))
+                WHERE id=$2 AND COALESCE((data->>'revoked')::boolean, false)=false RETURNING data""",
+                key_id,
+                worker_id,
+            )
+        )
+        return Worker.model_validate(rows[0].data) if rows else None
+
+    async def revoke_worker(self, worker_id: str) -> None:
+        await self.db.execute_raw(
+            """UPDATE "LiteLLM_EngineWorker" SET data=jsonb_set(data, '{revoked}', 'true') WHERE id=$1""",
+            worker_id,
         )
 
     async def heartbeat(self, worker_id: str, now: str) -> None:
