@@ -97,3 +97,55 @@ async def test_get_favicon_sends_no_cache_header(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-cache"
+
+
+@pytest.mark.asyncio
+async def test_get_image_falls_back_to_bundled_logo_when_cached_logo_is_invalid(monkeypatch, tmp_path):
+    """
+    A non-image file shadowing the default logo name should not stop the bundled logo being served.
+    """
+    (tmp_path / "logo.png").write_bytes(b"not an image")
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", str(tmp_path))
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+    monkeypatch.delenv("UI_LOGO_PATH_DARK", raising=False)
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as ac:
+        response = await ac.get("/get_image")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "no-cache"
+
+
+@pytest.mark.asyncio
+async def test_get_favicon_custom_local_file_sends_no_cache_header(monkeypatch, tmp_path):
+    """
+    A custom local favicon file should be revalidated by the browser too.
+    """
+    custom_favicon = tmp_path / "custom_favicon.png"
+    shutil.copy(os.path.join(os.path.dirname(proxy_server.__file__), "logo.png"), custom_favicon)
+    monkeypatch.setenv("LITELLM_FAVICON_URL", str(custom_favicon))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as ac:
+        response = await ac.get("/get_favicon")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "no-cache"
+
+
+@pytest.mark.asyncio
+async def test_get_favicon_falls_back_to_default_when_custom_is_invalid(monkeypatch, tmp_path):
+    """
+    An unusable custom favicon path should fall back to the default favicon, still with no-cache.
+    """
+    invalid_favicon = tmp_path / "invalid.ico"
+    invalid_favicon.write_bytes(b"not an image")
+    monkeypatch.setenv("LITELLM_FAVICON_URL", str(invalid_favicon))
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as ac:
+        response = await ac.get("/get_favicon")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/x-icon"
+    assert response.headers["cache-control"] == "no-cache"
