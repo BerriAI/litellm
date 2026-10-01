@@ -953,6 +953,9 @@ class PrismaManager:
                         verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
                         return False
 
+                    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+                    ProxyExtrasDBManager.raise_if_lens_rename_pending()
                     PrismaManager._raise_if_partitioned_spend_logs()
                     run_prisma(
                         [

@@ -34666,52 +34666,6 @@
           ]
         }
       },
-      "/engine/workers/register": {
-        "post": {
-          "operationId": "register_worker_engine_workers_register_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkerName"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/WorkerCreated"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Register Worker",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
       "/guardrails/register": {
         "post": {
           "description": "Register a guardrail for onboarding (team submission).\n\nAccepts a guardrail config in the\n[Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) format.\nThe submission is stored with status `pending_review` until an admin approves it.",
@@ -34799,6 +34753,52 @@
             }
           ],
           "summary": "Introspect Endpoint",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/lens/workers/register": {
+        "post": {
+          "operationId": "register_worker_lens_workers_register_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerName"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WorkerCreated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Register Worker",
           "tags": [
             "mcp_discoverable"
           ]
