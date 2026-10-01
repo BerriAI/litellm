@@ -38,8 +38,7 @@ def adls_safe_file_name(payload_id: str | None) -> str:
     """A Responses API id is base64 behind `resp_`, and the Data Lake service rejects its `=` padding and `/`, so
     that name drops the padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the
     length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
-    unless a `..` segment, plain or percent-encoded, would place the file outside the log directory, in which case
-    it gets the same rewrite"""
+    unless it has a `..` path segment, which gets the same rewrite so the file stays in the log directory"""
     name: Final = payload_id or str(uuid.uuid4())
     if not name.startswith("resp_") and ".." not in unquote(name).split("/"):
         return f"{name}.json"
