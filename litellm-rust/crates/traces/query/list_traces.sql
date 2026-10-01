@@ -12,8 +12,10 @@ SELECT TraceId AS trace_id,
        groupUniqArrayArray(Models) AS models, sum(ErrorCount) AS error_count,
        arrayDistinct(groupArrayArray(RequestIds)) AS request_ids
 FROM agent_traces_by_key
-WHERE (empty({team_ids:Array(String)}) OR TeamId IN {team_ids:Array(String)})
-  AND ({api_key_hash:String} = '' OR ApiKeyHash = {api_key_hash:String})
+WHERE ({all_teams:UInt8} = 1
+       OR ({user_id:String} != '' AND UserId = {user_id:String})
+       OR has({team_ids:Array(String)}, TeamId)
+       OR ({api_key_hash:String} != '' AND ApiKeyHash = {api_key_hash:String}))
 GROUP BY TeamId, ApiKeyHash, TraceId
 HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
    AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})

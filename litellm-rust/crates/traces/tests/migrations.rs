@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 
 use litellm_http::Client;
 use litellm_traces::{
@@ -102,6 +105,152 @@ async fn mutation_rows(database: &ClickHouseDatabase) -> TestResult<u64> {
         .expect("ClickHouse returns mutation counts as unsigned integers"))
 }
 
+fn trace_row(
+    timestamp: i64,
+    trace_id: &str,
+    span_id: &str,
+    user_id: &str,
+    team_id: &str,
+    api_key_hash: &str,
+) -> BTreeMap<String, serde_json::Value> {
+    serde_json::from_value(serde_json::json!({
+        "Timestamp": timestamp,
+        "TraceId": trace_id,
+        "SpanId": span_id,
+        "ParentSpanId": "",
+        "ServiceName": "proxy",
+        "SpanName": "request",
+        "Input": "request input",
+        "ResourceAttributes": {
+            "litellm.user_id": user_id,
+            "litellm.team_id": team_id,
+            "litellm.api_key_hash": api_key_hash
+        }
+    }))
+    .expect("trace test rows are valid")
+}
+
+fn scoped_parameters(
+    all_teams: bool,
+    user_id: &str,
+    team_ids: &[&str],
+    api_key_hash: &str,
+    extra: BTreeMap<String, Parameter>,
+) -> BTreeMap<String, Parameter> {
+    BTreeMap::from([
+        (
+            "all_teams".into(),
+            Parameter::Integer(if all_teams { 1 } else { 0 }),
+        ),
+        ("user_id".into(), Parameter::Text(user_id.into())),
+        (
+            "team_ids".into(),
+            Parameter::Strings(team_ids.iter().map(|team| (*team).into()).collect()),
+        ),
+        ("api_key_hash".into(), Parameter::Text(api_key_hash.into())),
+    ])
+    .into_iter()
+    .chain(extra)
+    .collect()
+}
+
+fn list_parameters(
+    all_teams: bool,
+    user_id: &str,
+    team_ids: &[&str],
+    api_key_hash: &str,
+    start_ms: i64,
+    end_ms: i64,
+) -> BTreeMap<String, Parameter> {
+    scoped_parameters(
+        all_teams,
+        user_id,
+        team_ids,
+        api_key_hash,
+        BTreeMap::from([
+            ("start_ms".into(), Parameter::Integer(start_ms)),
+            ("end_ms".into(), Parameter::Integer(end_ms)),
+            ("cursor_ms".into(), Parameter::Integer(0)),
+            ("cursor_trace_id".into(), Parameter::Text(String::new())),
+            ("limit".into(), Parameter::Integer(100)),
+        ]),
+    )
+}
+
+fn trace_parameters(
+    all_teams: bool,
+    user_id: &str,
+    team_ids: &[&str],
+    api_key_hash: &str,
+    trace_id: &str,
+) -> BTreeMap<String, Parameter> {
+    scoped_parameters(
+        all_teams,
+        user_id,
+        team_ids,
+        api_key_hash,
+        BTreeMap::from([("trace_id".into(), Parameter::Text(trace_id.into()))]),
+    )
+}
+
+fn span_parameters(
+    all_teams: bool,
+    user_id: &str,
+    team_ids: &[&str],
+    api_key_hash: &str,
+    trace_id: &str,
+) -> BTreeMap<String, Parameter> {
+    scoped_parameters(
+        all_teams,
+        user_id,
+        team_ids,
+        api_key_hash,
+        BTreeMap::from([
+            ("trace_id".into(), Parameter::Text(trace_id.into())),
+            ("trace_ref".into(), Parameter::Text(String::new())),
+        ]),
+    )
+}
+
+async fn read_named_json(
+    database: &ClickHouseDatabase,
+    query: ReadQuery,
+    parameters: &BTreeMap<String, Parameter>,
+) -> TestResult<serde_json::Value> {
+    let reader = Connection::reader(&database.url, "trace_test")?;
+    let body = execute_named_read(&database.client, &reader, query, parameters).await?;
+    Ok(serde_json::from_str(&body)?)
+}
+
+fn trace_keys(response: &serde_json::Value) -> BTreeSet<(String, String)> {
+    response["data"]
+        .as_array()
+        .expect("trace query returns rows")
+        .iter()
+        .map(|row| {
+            (
+                row["trace_id"]
+                    .as_str()
+                    .expect("trace ID is a string")
+                    .into(),
+                row["api_key_hash"]
+                    .as_str()
+                    .expect("API key hash is a string")
+                    .into(),
+            )
+        })
+        .collect()
+}
+
+fn span_ids(response: &serde_json::Value) -> BTreeSet<String> {
+    response["data"]
+        .as_array()
+        .expect("span query returns rows")
+        .iter()
+        .map(|row| row["span_id"].as_str().expect("span ID is a string").into())
+        .collect()
+}
+
 #[rstest]
 #[tokio::test]
 async fn schema_supports_span_rollups_and_spend_joins(
@@ -127,6 +276,8 @@ async fn schema_supports_span_rollups_and_spend_joins(
     insert_rows(&database, "spend_logs", vec![spend]).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
     let list_parameters = BTreeMap::from([
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
         ("api_key_hash".into(), Parameter::Text(String::new())),
         (
@@ -159,6 +310,8 @@ async fn schema_supports_span_rollups_and_spend_joins(
             "response_ids".into(),
             Parameter::Strings(vec!["response-1".into()]),
         ),
+        ("all_teams".into(), Parameter::Integer(0)),
+        ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
         ("api_key_hash".into(), Parameter::Text(String::new())),
         (
@@ -207,6 +360,179 @@ async fn schema_supports_span_rollups_and_spend_joins(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
     );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn trace_reads_apply_user_team_key_and_admin_visibility(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    insert_rows(
+        &database,
+        "otel_traces",
+        vec![
+            trace_row(timestamp, "trace-shared", "span-a", "u1", "t1", "key-a"),
+            trace_row(timestamp, "trace-shared", "span-b", "u1", "t2", "key-b"),
+            trace_row(timestamp, "trace-u2", "span-c", "u2", "t1", "key-c"),
+            trace_row(timestamp, "trace-key", "span-d", "", "t3", "key-d"),
+        ],
+    )
+    .await?;
+    let start_ms = timestamp / 1_000_000 - 1_000;
+    let end_ms = timestamp / 1_000_000 + 1_000;
+
+    let user_list = read_named_json(
+        &database,
+        ReadQuery::ListTraces,
+        &list_parameters(false, "u1", &[], "", start_ms, end_ms),
+    )
+    .await?;
+    assert_eq!(
+        trace_keys(&user_list),
+        BTreeSet::from([
+            ("trace-shared".into(), "key-a".into()),
+            ("trace-shared".into(), "key-b".into()),
+        ])
+    );
+
+    let team_list = read_named_json(
+        &database,
+        ReadQuery::ListTraces,
+        &list_parameters(false, "u2", &["t1"], "", start_ms, end_ms),
+    )
+    .await?;
+    assert_eq!(
+        trace_keys(&team_list),
+        BTreeSet::from([
+            ("trace-shared".into(), "key-a".into()),
+            ("trace-u2".into(), "key-c".into()),
+        ])
+    );
+
+    let key_list = read_named_json(
+        &database,
+        ReadQuery::ListTraces,
+        &list_parameters(false, "", &[], "key-d", start_ms, end_ms),
+    )
+    .await?;
+    assert_eq!(
+        trace_keys(&key_list),
+        BTreeSet::from([("trace-key".into(), "key-d".into())])
+    );
+
+    let admin_list = read_named_json(
+        &database,
+        ReadQuery::ListTraces,
+        &list_parameters(true, "", &[], "", start_ms, end_ms),
+    )
+    .await?;
+    assert_eq!(
+        trace_keys(&admin_list),
+        BTreeSet::from([
+            ("trace-shared".into(), "key-a".into()),
+            ("trace-shared".into(), "key-b".into()),
+            ("trace-u2".into(), "key-c".into()),
+            ("trace-key".into(), "key-d".into()),
+        ])
+    );
+
+    let user_shared_spans = read_named_json(
+        &database,
+        ReadQuery::TraceSpans,
+        &span_parameters(false, "u1", &[], "", "trace-shared"),
+    )
+    .await?;
+    assert_eq!(
+        span_ids(&user_shared_spans),
+        BTreeSet::from(["span-a".into(), "span-b".into()])
+    );
+
+    let team_shared_spans = read_named_json(
+        &database,
+        ReadQuery::TraceSpans,
+        &span_parameters(false, "u2", &["t1"], "", "trace-shared"),
+    )
+    .await?;
+    let team_user_spans = read_named_json(
+        &database,
+        ReadQuery::TraceSpans,
+        &span_parameters(false, "u2", &["t1"], "", "trace-u2"),
+    )
+    .await?;
+    assert_eq!(
+        span_ids(&team_shared_spans)
+            .union(&span_ids(&team_user_spans))
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["span-a".into(), "span-c".into()])
+    );
+
+    let key_spans = read_named_json(
+        &database,
+        ReadQuery::TraceSpans,
+        &span_parameters(false, "", &[], "key-d", "trace-key"),
+    )
+    .await?;
+    assert_eq!(span_ids(&key_spans), BTreeSet::from(["span-d".into()]));
+
+    let admin_shared_spans = read_named_json(
+        &database,
+        ReadQuery::TraceSpans,
+        &span_parameters(true, "", &[], "", "trace-shared"),
+    )
+    .await?;
+    let admin_user_spans = read_named_json(
+        &database,
+        ReadQuery::TraceSpans,
+        &span_parameters(true, "", &[], "", "trace-u2"),
+    )
+    .await?;
+    let admin_key_spans = read_named_json(
+        &database,
+        ReadQuery::TraceSpans,
+        &span_parameters(true, "", &[], "", "trace-key"),
+    )
+    .await?;
+    assert_eq!(
+        span_ids(&admin_shared_spans)
+            .union(&span_ids(&admin_user_spans))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .union(&span_ids(&admin_key_spans))
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "span-a".into(),
+            "span-b".into(),
+            "span-c".into(),
+            "span-d".into(),
+        ])
+    );
+
+    let identities = read_named_json(
+        &database,
+        ReadQuery::TraceIdentity,
+        &trace_parameters(false, "u1", &[], "", "trace-shared"),
+    )
+    .await?;
+    let trace_refs: BTreeSet<String> = identities["data"]
+        .as_array()
+        .expect("identity query returns rows")
+        .iter()
+        .map(|row| {
+            row["trace_ref"]
+                .as_str()
+                .expect("trace reference is a string")
+                .into()
+        })
+        .collect();
+    assert_eq!(trace_refs.len(), 2);
     Ok(())
 }
 

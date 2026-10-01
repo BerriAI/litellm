@@ -6,7 +6,7 @@ use crate::Error;
 
 const SCHEMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-const MIGRATIONS: [&str; 9] = [
+const MIGRATIONS: [&str; 12] = [
     include_str!("../migrations/0001_otel_traces.sql"),
     include_str!("../migrations/0002_agent_traces.sql"),
     include_str!("../migrations/0003_agent_traces_mv.sql"),
@@ -16,6 +16,9 @@ const MIGRATIONS: [&str; 9] = [
     include_str!("../migrations/0007_spend_logs_ttl.sql"),
     include_str!("../migrations/0008_trace_received.sql"),
     include_str!("../migrations/0009_spend_received.sql"),
+    include_str!("../migrations/0010_trace_user.sql"),
+    include_str!("../migrations/0011_agent_traces_user.sql"),
+    include_str!("../migrations/0012_agent_traces_mv_user.sql"),
 ];
 
 pub fn schema_statements(

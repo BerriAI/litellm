@@ -42,16 +42,19 @@ class TracingPayloadTooLargeError(Exception):
 class Tenant:
     """Who sent the spans. Always taken from auth, never from span attributes."""
 
-    def __init__(self, team_id: str, api_key_hash: str, org_id: str = "") -> None:
+    def __init__(self, team_id: str, api_key_hash: str, org_id: str = "", user_id: str = "") -> None:
         self.team_id = team_id
         self.api_key_hash = api_key_hash
         self.org_id = org_id
+        self.user_id = user_id
 
     def stamp(self, row: SpanRow) -> SpanRow:
+        row["UserId"] = self.user_id
         row["TeamId"] = self.team_id
         row["ApiKeyHash"] = self.api_key_hash
         row["ResourceAttributes"] = {  # mutable-ok: the Rust JSON bridge requires a plain dict
             **row["ResourceAttributes"],
+            "litellm.user_id": self.user_id,
             "litellm.team_id": self.team_id,
             "litellm.api_key_hash": self.api_key_hash,
             "litellm.org_id": self.org_id,

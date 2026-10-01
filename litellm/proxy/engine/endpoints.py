@@ -35,7 +35,16 @@ from litellm.proxy.engine.models import (
 )
 from litellm.proxy.engine.repository import EngineRepository, WriterDatabase
 from litellm.proxy.engine.sources import SourceReader, parse_execution
-from litellm.proxy.engine.state import can_access, claim_job, current_job, merge_finding, queue_job, replace_job
+from litellm.proxy.engine.state import (
+    can_access,
+    can_view,
+    claim_job,
+    current_job,
+    merge_finding,
+    queue_job,
+    replace_job,
+)
+from litellm.proxy.spend_tracking.log_visibility import LogVisibility, log_visibility
 
 router: Final = APIRouter(prefix="/engine", tags=["Lens"])  # mutable-ok: FastAPI requires list
 _bearer: Final = HTTPBearer()
@@ -56,21 +65,22 @@ def source_reader() -> SourceReader:
     return SourceReader(get_receiver().store.storage)
 
 
-def user_scope(auth: UserAPIKeyAuth, write: bool = False) -> Scope:
-    if write and auth.user_role != LitellmUserRoles.PROXY_ADMIN:
+def user_scope(auth: UserAPIKeyAuth) -> Scope:
+    if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(403, "Only proxy admins can configure or run Lens")
-    if auth.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        return Scope(all_teams=True)
-    if auth.team_id:
-        return Scope(team_id=auth.team_id)
-    if auth.token:
-        return Scope(api_key_hash=auth.token)
-    raise HTTPException(403, "A team or API key is required")
+    return Scope(all_teams=True)
 
 
 async def get_engine(engine_id: str, scope: Scope) -> Engine:
     engine: Final = await repository().get(engine_id)
     if engine is None or not can_access(scope, engine.scope):
+        raise HTTPException(404, "Lens not found")
+    return engine
+
+
+async def get_visible_engine(engine_id: str, viewer: LogVisibility) -> Engine:
+    engine: Final = await repository().get(engine_id)
+    if engine is None or not can_view(viewer, engine.scope):
         raise HTTPException(404, "Lens not found")
     return engine
 
@@ -125,17 +135,17 @@ def validate_model(settings: EngineSettings, auth: UserAPIKeyAuth) -> None:
 async def list_engines(auth: Auth) -> EngineList:
     from litellm.proxy import tracing_endpoints
 
-    scope: Final = user_scope(auth)
+    viewer: Final = await log_visibility(auth)
     return EngineList(
-        engines=tuple(e for e in await repository().engines() if can_access(scope, e.scope)),
-        workers=tuple(w for w in await repository().workers() if can_access(scope, w.scope)),
+        engines=tuple(e for e in await repository().engines() if can_view(viewer, e.scope)),
+        workers=tuple(w for w in await repository().workers() if can_view(viewer, w.scope)),
         tracing_enabled=tracing_endpoints.receiver is not None,
     )
 
 
 @router.post("", response_model=Engine)
 async def create_engine(settings: EngineSettings, auth: Auth) -> Engine:
-    scope: Final = user_scope(auth, write=True)
+    scope: Final = user_scope(auth)
     validate_model(settings, auth)
     now: Final = datetime.now(timezone.utc)
     engine: Final = Engine(
@@ -151,7 +161,7 @@ async def create_engine(settings: EngineSettings, auth: Auth) -> Engine:
 
 @router.put("/{engine_id}", response_model=Engine)
 async def update_engine(engine_id: str, settings: EngineSettings, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth, write=True))
+    await get_engine(engine_id, user_scope(auth))
     validate_model(settings, auth)
     return required(
         await repository().update(
@@ -170,7 +180,7 @@ async def update_engine(engine_id: str, settings: EngineSettings, auth: Auth) ->
 
 @router.post("/{engine_id}/runs", response_model=Engine)
 async def run_engine(engine_id: str, body: RunRequest, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth, write=True))
+    await get_engine(engine_id, user_scope(auth))
     now: Final = datetime.now(timezone.utc)
     job_id: Final = str(uuid4())
     return required(await repository().update(engine_id, lambda e: queue_job(e, now, job_id, body.lookback_hours)))
@@ -178,7 +188,7 @@ async def run_engine(engine_id: str, body: RunRequest, auth: Auth) -> Engine:
 
 @router.post("/{engine_id}/cancel", response_model=Engine)
 async def cancel_engine(engine_id: str, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth, write=True))
+    await get_engine(engine_id, user_scope(auth))
     now: Final = datetime.now(timezone.utc)
 
     def cancel(e: Engine) -> Engine:
@@ -197,7 +207,7 @@ async def cancel_engine(engine_id: str, auth: Auth) -> Engine:
 
 @router.patch("/{engine_id}/findings/{finding_id}", response_model=Engine)
 async def update_finding(engine_id: str, finding_id: str, body: FindingUpdate, auth: Auth) -> Engine:
-    await get_engine(engine_id, user_scope(auth, write=True))
+    await get_engine(engine_id, user_scope(auth))
     return required(
         await repository().update(
             engine_id,
@@ -236,7 +246,7 @@ class WorkerName(BaseModel):
 
 @router.post("/workers/register", response_model=WorkerCreated)
 async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
-    scope: Final = user_scope(auth, write=True)
+    scope: Final = user_scope(auth)
     token: Final = "lens-" + secrets.token_urlsafe(40)
     worker: Final = Worker(
         id=str(uuid4()), name=body.name, scope=scope, last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -247,7 +257,7 @@ async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
 
 @router.delete("/workers/{worker_id}")
 async def revoke_worker(worker_id: str, auth: Auth) -> bool:
-    scope: Final = user_scope(auth, write=True)
+    scope: Final = user_scope(auth)
     worker: Final = next((w for w in await repository().workers() if w.id == worker_id), None)
     if worker is None or not can_access(scope, worker.scope):
         raise HTTPException(404, "Worker not found")
@@ -437,7 +447,8 @@ async def validate_finding(engine: Engine, selected: Sample, finding: FindingDra
 async def evidence_content(
     engine_id: str, execution_id: str, auth: Auth, cursor: str = "", offset: int = Query(default=0, ge=0, le=1000000)
 ) -> ExecutionContent:
-    engine: Final = await get_engine(engine_id, user_scope(auth))
+    viewer: Final = await log_visibility(auth)
+    engine: Final = await get_visible_engine(engine_id, viewer)
     try:
         source, team, trace_id, trace_ref = parse_execution(execution_id)
     except ValueError:

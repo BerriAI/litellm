@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.proxy.engine.models import Engine, Finding, FindingDraft, Job, Scope, Worker
+from litellm.proxy.spend_tracking.log_visibility import LogVisibility
 
 
 def can_access(viewer: Scope, target: Scope) -> bool:
@@ -11,6 +12,17 @@ def can_access(viewer: Scope, target: Scope) -> bool:
         not target.all_teams
         and viewer.team_id == target.team_id
         and (bool(viewer.team_id) or viewer.api_key_hash == target.api_key_hash)
+    )
+
+
+def can_view(viewer: LogVisibility, target: Scope) -> bool:
+    return viewer.all_teams or (
+        not target.all_teams
+        and (
+            target.team_id in viewer.team_ids
+            if target.team_id
+            else bool(target.api_key_hash) and target.api_key_hash == viewer.api_key_hash
+        )
     )
 
 

@@ -88,8 +88,10 @@ class SpanDetail(TypedDict):
 
 
 class TraceScope(TypedDict):
-    """Who is asking. Empty team_ids = all teams (admins only)."""
+    """A shared request-log visibility policy for trace reads."""
 
+    all_teams: ReadOnly[int]
+    user_id: ReadOnly[str]
     team_ids: ReadOnly[tuple[str, ...]]
     api_key_hash: ReadOnly[str]
 
@@ -112,6 +114,7 @@ class SpanRow(TypedDict):
     Duration: ReadOnly[int]  # ns
     StatusCode: ReadOnly[str]
     StatusMessage: ReadOnly[str]
+    UserId: str
     TeamId: str
     ApiKeyHash: str
     ObservationType: SpanType

@@ -4,7 +4,16 @@ from typing import Final
 import pytest
 
 from litellm.proxy.engine.models import Check, Engine, EngineSettings, Evidence, FindingDraft, Scope, Worker
-from litellm.proxy.engine.state import can_access, claim_job, current_job, merge_finding, queue_job, renew_budget
+from litellm.proxy.engine.state import (
+    can_access,
+    can_view,
+    claim_job,
+    current_job,
+    merge_finding,
+    queue_job,
+    renew_budget,
+)
+from litellm.proxy.spend_tracking.log_visibility import LogVisibility
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 
@@ -47,6 +56,24 @@ def finding(execution: str) -> FindingDraft:
 )
 def test_scope_never_crosses_another_team_or_key(viewer: Scope, target: Scope, allowed: bool) -> None:
     assert can_access(viewer, target) is allowed
+
+
+@pytest.mark.parametrize(
+    ("viewer", "target", "allowed"),
+    (
+        (LogVisibility(team_ids=("alpha",)), Scope(team_id="alpha"), True),
+        (LogVisibility(team_ids=()), Scope(team_id="alpha"), False),
+        (LogVisibility(api_key_hash="key-a"), Scope(api_key_hash="key-a"), True),
+        (LogVisibility(api_key_hash="key-a"), Scope(api_key_hash="key-b"), False),
+        (LogVisibility(), Scope(all_teams=True), False),
+        (LogVisibility(all_teams=True), Scope(all_teams=True), True),
+        (LogVisibility(all_teams=True), Scope(team_id="alpha"), True),
+    ),
+)
+def test_log_visibility_matches_engine_scope(
+    viewer: LogVisibility, target: Scope, allowed: bool
+) -> None:
+    assert can_view(viewer, target) is allowed
 
 
 def test_queue_is_idempotent_and_settings_are_frozen() -> None:

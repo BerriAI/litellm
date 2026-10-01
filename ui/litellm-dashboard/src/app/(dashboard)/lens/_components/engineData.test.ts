@@ -109,7 +109,8 @@ describe("Analysis progress", () => {
 describe("Lens selection and findings", () => {
   it("keeps the scoped trace reference in an evidence citation", () => {
     const id = btoa(JSON.stringify(["traces", "team-a", "reused-trace", "ref-a"]));
-    expect(evidenceTarget(id)).toEqual({ source: "traces", team: "team-a", id: "reused-trace", traceRef: "ref-a" });
+    const expected = { source: "traces", team: "team-a", id: "reused-trace", traceRef: "ref-a" };
+    expect(evidenceTarget(id)).toEqual(expected);
   });
 
   it("preserves literal equals signs in a metadata value", () => {

@@ -104,6 +104,7 @@ def _span_row(span: DecodedSpan) -> SpanRow:
         Duration=max(span["end_ns"] - span["start_ns"], 0),
         StatusCode=span["status_code"],
         StatusMessage=span["status_message"] or _exception_message(span),
+        UserId="",
         TeamId="",
         ApiKeyHash="",
         ObservationType="chain",

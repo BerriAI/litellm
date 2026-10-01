@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from litellm.constants import OTLP_MAX_BODY_BYTES, OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.spend_tracking.log_visibility import log_visibility
 from litellm.tracing import (
     Tenant,
     TraceReceiver,
@@ -27,8 +28,6 @@ from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
 router = APIRouter(tags=["agent tracing"])  # mutable-ok: FastAPI copies the mutable tags list
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
-_ADMIN_ROLES: Final = (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
-
 receiver: TraceReceiver | None = None
 
 
@@ -46,29 +45,18 @@ def tenant_for(user_api_key_dict: UserAPIKeyAuth) -> Tenant:
         team_id=user_api_key_dict.team_id or "",
         api_key_hash=user_api_key_dict.token or "",
         org_id=user_api_key_dict.org_id or "",
+        user_id=user_api_key_dict.user_id or "",
     )
-
-
-def scope_for(user_api_key_dict: UserAPIKeyAuth, team_wide: bool = False) -> TraceScope:
-    if user_api_key_dict.user_role in _ADMIN_ROLES:
-        return TraceScope(team_ids=(), api_key_hash="")
-    if team_wide and user_api_key_dict.team_id:
-        return TraceScope(team_ids=(user_api_key_dict.team_id,), api_key_hash="")
-    if not user_api_key_dict.token:
-        raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-    return TraceScope(team_ids=(user_api_key_dict.team_id or "",), api_key_hash=user_api_key_dict.token)
 
 
 async def read_scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
-    if user_api_key_dict.user_role in _ADMIN_ROLES or not user_api_key_dict.team_id or not user_api_key_dict.user_id:
-        return scope_for(user_api_key_dict)
-    from litellm.proxy.proxy_server import prisma_client
-    from litellm.proxy.spend_tracking.spend_management_endpoints import can_team_member_view_log
-
-    team_wide: Final = prisma_client is not None and await can_team_member_view_log(
-        prisma_client, user_api_key_dict, user_api_key_dict.team_id
+    visibility: Final = await log_visibility(user_api_key_dict)
+    return TraceScope(
+        all_teams=int(visibility.all_teams),
+        user_id=visibility.user_id,
+        team_ids=visibility.team_ids,
+        api_key_hash=visibility.api_key_hash,
     )
-    return scope_for(user_api_key_dict, team_wide=team_wide)
 
 
 async def _read_otlp_body(request: Request) -> bytes:

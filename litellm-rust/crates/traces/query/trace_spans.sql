@@ -8,8 +8,10 @@ SELECT o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name
        o.TeamId AS team_id, o.ApiKeyHash AS api_key_hash
 FROM otel_traces AS o
 WHERE o.TraceId = {trace_id:String}
-  AND (empty({team_ids:Array(String)}) OR o.TeamId IN {team_ids:Array(String)})
-  AND ({api_key_hash:String} = '' OR o.ApiKeyHash = {api_key_hash:String})
+  AND ({all_teams:UInt8} = 1
+       OR ({user_id:String} != '' AND o.UserId = {user_id:String})
+       OR has({team_ids:Array(String)}, o.TeamId)
+       OR ({api_key_hash:String} != '' AND o.ApiKeyHash = {api_key_hash:String}))
   AND ({trace_ref:String} = '' OR
        hex(SHA256(concat(o.TeamId, char(0), o.ApiKeyHash, char(0), o.TraceId))) = {trace_ref:String})
 ORDER BY o.Timestamp

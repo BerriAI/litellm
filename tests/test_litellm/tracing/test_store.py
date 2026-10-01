@@ -286,7 +286,7 @@ async def test_list_traces_sets_next_cursor_on_full_page():
     }
     client.query = AsyncMock(return_value=[row, {**row, "trace_id": "t1", "trace_ref": "ref1", "start_ms": 900}])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await store.list_traces(scope, 0, 2000, limit=2)
     assert [t["trace_id"] for t in page["data"]] == ["t2", "t1"]
@@ -305,7 +305,7 @@ async def test_get_span_not_found_and_found():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": (), "api_key_hash": ""}
+    scope: TraceScope = {"all_teams": 1, "user_id": "", "team_ids": (), "api_key_hash": ""}
     assert await store.get_span("t", "s", scope, "ref") is None
     client.query = AsyncMock(return_value=[{"span_id": "s", "input": "i", "output": "o", "attributes": {"k": "v"}}])
     assert await store.get_span("t", "s", scope, "ref") == {
@@ -321,7 +321,7 @@ async def test_legacy_trace_lookup_requires_reference_only_when_id_is_ambiguous(
     client = MagicMock()
     client.query = AsyncMock(return_value=[{"trace_ref": "ref-a"}, {"trace_ref": "ref-b"}])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     with pytest.raises(AmbiguousTraceError, match="provide trace_ref"):
         await store.get_trace("reused", scope)
@@ -336,7 +336,7 @@ async def test_supplied_reference_skips_identity_lookup_and_keeps_scope():
     client = MagicMock()
     client.query = AsyncMock(return_value=[])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": "key-a"}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
 
     assert await store.get_trace("reused", scope, "forged-ref") is None
     assert await store.get_span("reused", "span", scope, "forged-ref") is None
@@ -349,7 +349,7 @@ async def test_supplied_reference_skips_identity_lookup_and_keeps_scope():
 async def test_unambiguous_legacy_lookup_uses_scoped_reference():
     client = MagicMock()
     client.query = AsyncMock(side_effect=[[{"trace_ref": "ref-a"}], [_row("root", "", "agent", "agent", "agent")]])
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": "key-a"}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
 
     trace = await ClickHouseTraceStore(client).get_trace("reused", scope)
 
@@ -369,7 +369,7 @@ async def test_unambiguous_legacy_span_lookup_uses_scoped_reference():
             [{"span_id": "span", "input": "in", "output": "out", "attributes": {}}],
         ]
     )
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": "key-a"}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": "key-a"}
 
     span = await ClickHouseTraceStore(client).get_span("reused", "span", scope)
 
@@ -414,7 +414,7 @@ async def test_trace_cost_is_scoped_and_counts_repeated_request_once():
     ]
     client.query = AsyncMock(side_effect=[spans, spend])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     trace = await store.get_trace("trace-1", scope, "ref")
 
@@ -462,7 +462,7 @@ async def test_run_list_uses_matching_spend_and_leaves_missing_cost_unavailable(
         }
     ]
     client.query = AsyncMock(side_effect=[rows, spend])
-    scope: TraceScope = {"team_ids": ("team-a",), "api_key_hash": ""}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": ("team-a",), "api_key_hash": ""}
 
     page = await ClickHouseTraceStore(client).list_traces(scope, 0, 2000)
 
@@ -487,7 +487,7 @@ async def test_ambiguous_cache_response_id_keeps_cost_unavailable():
     ]
     client.query = AsyncMock(side_effect=[[span], spend])
     store = ClickHouseTraceStore(client)
-    scope: TraceScope = {"team_ids": ("",), "api_key_hash": "key-a"}
+    scope: TraceScope = {"all_teams": 0, "user_id": "", "team_ids": (), "api_key_hash": "key-a"}
 
     trace = await store.get_trace("trace-1", scope, "ref")
 
