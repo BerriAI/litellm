@@ -57,7 +57,7 @@ from litellm.harness.types import (
     Usage,
 )
 
-__all__ = [
+__all__ = (
     "Approval",
     "AsyncEventStream",
     "AsyncSession",
@@ -95,4 +95,4 @@ __all__ = [
     "agent_capabilities",
     "agent_resume",
     "agent_session",
-]
+)
