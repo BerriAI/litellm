@@ -11,6 +11,8 @@ import os
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 from urllib.parse import quote
 
+import httpx
+
 # Third-party imports
 from fastapi import HTTPException
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -66,7 +68,7 @@ class _PillarProtectHTTPClient(Protocol):
         url: str,
         headers: dict[str, str],
         json: dict[str, object],
-        timeout: float,
+        timeout: float | httpx.Timeout | None,
     ) -> _PillarProtectHTTPResponse: ...
 
 
@@ -284,7 +286,12 @@ class PillarGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.debug("Pillar Guardrail: Initialized with fallback_on_error: %s", self.fallback_on_error)
 
-        # Set timeout with graceful fallback on invalid configuration
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
+            **kwargs,
+        )
+
         if timeout is not None:
             self.timeout = timeout
         else:
@@ -297,12 +304,6 @@ class PillarGuardrail(CustomGuardrail):
                     self.DEFAULT_TIMEOUT,
                 )
                 self.timeout = self.DEFAULT_TIMEOUT
-
-        super().__init__(
-            guardrail_name=guardrail_name,
-            supported_event_hooks=list(self.get_supported_event_hooks()),
-            **kwargs,
-        )
 
     # =========================================================================
     # PUBLIC HOOK METHODS (Main Interface)

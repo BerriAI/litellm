@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
@@ -221,7 +222,7 @@ def master_key_from_config(config: dict[str, JsonValue]) -> str | None:
     normalized copy here would diverge from what the proxy expects.
     """
     general_settings: Final = config.get("general_settings")
-    if not isinstance(general_settings, dict):
+    if not isinstance(general_settings, Mapping):
         return None
     master_key: Final = general_settings.get("master_key")
     if isinstance(master_key, str) and master_key.strip():

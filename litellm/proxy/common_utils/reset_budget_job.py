@@ -40,6 +40,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     model_access_group_cache_key,
     model_access_group_spend_counter_key,
+    project_cache_key,
+    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
@@ -47,7 +49,8 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManage
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import SpendLinkedTable
+from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
+from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     ModelAccessGroupBudgetRepository,
@@ -112,6 +115,11 @@ class _TagRow(_BudgetLinkedRow, Protocol):
 class _ModelAccessGroupRow(_BudgetLinkedRow, Protocol):
     @property
     def access_group_name(self) -> str: ...
+
+
+class _ProjectRow(_BudgetLinkedRow, Protocol):
+    @property
+    def project_id(self) -> str: ...
 
 
 class _EndUserRow(_BudgetLinkedRow, Protocol):
@@ -184,6 +192,14 @@ def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]
     return (model_access_group_cache_key(row.access_group_name),)
 
 
+def _project_counter_key(row: _ProjectRow) -> str:
+    return project_spend_counter_key(row.project_id)
+
+
+def _project_cache_keys(row: _ProjectRow) -> tuple[str, ...]:
+    return (project_cache_key(row.project_id),)
+
+
 def _enduser_counter_key(row: _EndUserRow) -> str:
     return f"spend:end_user:{row.user_id}"
 
@@ -224,12 +240,8 @@ def _queue_budget_linked_resets(
     one transaction, so the reverse order lets the zero re-match a row the
     decrement just moved into the (0, cap] range and erase its carried spend."""
     for budget_id, cap in cascade.rollover_caps.items():
-        writes.queue_spend_zero(
-            where={"budget_id": budget_id, **extra, "spend": {"gt": 0, "lte": cap}}
-        )  # mutable-ok: prisma where filter must be a dict
-        writes.queue_spend_decrement(
-            where={"budget_id": budget_id, **extra, "spend": {"gt": cap}}, amount=cap
-        )  # mutable-ok: prisma where filter must be a dict
+        writes.queue_spend_zero(where={"budget_id": budget_id, **extra, "spend": {"gt": 0, "lte": cap}})
+        writes.queue_spend_decrement(where={"budget_id": budget_id, **extra, "spend": {"gt": cap}}, amount=cap)
     plain_ids: Final = tuple(bid for bid in cascade.budget_ids if bid not in cascade.rollover_caps)
     if plain_ids:
         writes.queue_spend_zero(where=_budget_link_where(plain_ids, extra))
@@ -251,16 +263,10 @@ def _queue_enduser_resets(writes: LinkedSpendResetWrites, cascade: "_BudgetCasca
         return
     cap: Final = cascade.rollover_caps.get(default_budget_id)
     if cap is None:
-        writes.queue_spend_zero(
-            where={"budget_id": None, **_SPENT_ROWS_WHERE}
-        )  # mutable-ok: prisma where filter must be a dict
+        writes.queue_spend_zero(where={"budget_id": None, **_SPENT_ROWS_WHERE})
         return
-    writes.queue_spend_zero(
-        where={"budget_id": None, "spend": {"gt": 0, "lte": cap}}
-    )  # mutable-ok: prisma where filter must be a dict
-    writes.queue_spend_decrement(
-        where={"budget_id": None, "spend": {"gt": cap}}, amount=cap
-    )  # mutable-ok: prisma where filter must be a dict
+    writes.queue_spend_zero(where={"budget_id": None, "spend": {"gt": 0, "lte": cap}})
+    writes.queue_spend_decrement(where={"budget_id": None, "spend": {"gt": cap}}, amount=cap)
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,6 +467,11 @@ class ResetBudgetJob:
         self.prisma_client: PrismaClient = prisma_client
         self.reset_settings: BudgetResetSettings = reset_settings or get_budget_reset_settings()
         self.pod_lock_manager: PodLockManager | None = pod_lock_manager
+
+    @property
+    def _new_batch(self) -> Callable[[], PrismaBatch]:
+        new_batch: Final[Callable[[], PrismaBatch]] = self.prisma_client.db.batch_
+        return new_batch
 
     async def _lease_is_held(self, lock_manager: PodLockManager) -> bool:
         """True only when the lease is readable and someone holds it.
@@ -754,6 +765,11 @@ class ResetBudgetJob:
             where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
             log_subject="model access groups",
         )
+        projects: Final[tuple[_ProjectRow, ...]] = await self._fetch_linked_rows(
+            table=ProjectRepository(self.prisma_client).table,
+            where=_budget_link_where(budget_ids, _SPENT_ROWS_WHERE),
+            log_subject="projects",
+        )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
             {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
                 b.budget_id: cap
@@ -786,6 +802,7 @@ class ResetBudgetJob:
                     (_model_access_group_counter_key(row), _row_carried_spend(row, rollover_caps))
                     for row in model_access_groups
                 ),
+                *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
             ),
             rollover_caps=rollover_caps,
             cache_keys=(
@@ -794,6 +811,7 @@ class ResetBudgetJob:
                 *(key for row in orgs for key in _org_cache_keys(row)),
                 *(key for row in tags for key in _tag_cache_keys(row)),
                 *(key for row in model_access_groups for key in _model_access_group_cache_keys(row)),
+                *(key for row in projects for key in _project_cache_keys(row)),
             ),
         )
 
@@ -814,12 +832,13 @@ class ResetBudgetJob:
         )
 
     async def _commit_budget_cascade_once(self, cascade: _BudgetCascade) -> None:
-        async with budget_cascade_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with budget_cascade_unit_of_work(self._new_batch) as uow:
             _queue_budget_linked_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
@@ -935,7 +954,7 @@ class ResetBudgetJob:
         )
 
     async def _write_key_reset_updates_once(self, updated_keys: Sequence[_RowReset[LiteLLM_VerificationToken]]) -> None:
-        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with spend_reset_unit_of_work(self._new_batch) as uow:
             for k in updated_keys:
                 if k.row.token is None:
                     continue
@@ -959,7 +978,7 @@ class ResetBudgetJob:
         )
 
     async def _write_user_reset_updates_once(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
-        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with spend_reset_unit_of_work(self._new_batch) as uow:
             for u in updated_users:
                 uow.users.queue_spend_reset(
                     user_id=u.row.user_id,
@@ -981,7 +1000,7 @@ class ResetBudgetJob:
         )
 
     async def _write_team_reset_updates_once(self, updated_teams: Sequence[_RowReset[LiteLLM_TeamTable]]) -> None:
-        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with spend_reset_unit_of_work(self._new_batch) as uow:
             for t in updated_teams:
                 uow.teams.queue_spend_reset(
                     team_id=t.row.team_id,

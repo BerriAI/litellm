@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,15 +19,32 @@ use super::constants::{
     AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
     AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
     AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
-    BEDROCK_SERVICE, DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX,
-    SIGV4_COMPUTED_HEADER_NAMES,
+    DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
 };
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
 
-static STATIC_CREDENTIALS_CACHE: OnceLock<Cache<String, Credentials>> = OnceLock::new();
-static AMBIENT_CREDENTIALS_CACHE: OnceLock<Cache<String, Credentials>> = OnceLock::new();
+#[derive(Clone)]
+pub struct AwsAuthService {
+    static_credentials: Cache<String, Credentials>,
+    ambient_credentials: Cache<String, Credentials>,
+}
+
+impl Default for AwsAuthService {
+    fn default() -> Self {
+        Self {
+            static_credentials: Cache::builder()
+                .max_capacity(200)
+                .time_to_live(STATIC_CREDENTIALS_TTL)
+                .build(),
+            ambient_credentials: Cache::builder()
+                .max_capacity(200)
+                .time_to_live(AMBIENT_CREDENTIALS_TTL)
+                .build(),
+        }
+    }
+}
 
 fn credential_cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
     match flow {
@@ -109,35 +125,19 @@ fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn static_credentials_cache() -> &'static Cache<String, Credentials> {
-    STATIC_CREDENTIALS_CACHE.get_or_init(|| {
-        Cache::builder()
-            .max_capacity(200)
-            .time_to_live(STATIC_CREDENTIALS_TTL)
-            .build()
-    })
-}
+impl AwsAuthService {
+    fn get_cached_credentials(&self, key: &str) -> Option<Credentials> {
+        self.static_credentials
+            .get(key)
+            .or_else(|| self.ambient_credentials.get(key))
+    }
 
-fn ambient_credentials_cache() -> &'static Cache<String, Credentials> {
-    AMBIENT_CREDENTIALS_CACHE.get_or_init(|| {
-        Cache::builder()
-            .max_capacity(200)
-            .time_to_live(AMBIENT_CREDENTIALS_TTL)
-            .build()
-    })
-}
-
-fn get_cached_credentials(key: &str) -> Option<Credentials> {
-    static_credentials_cache()
-        .get(key)
-        .or_else(|| ambient_credentials_cache().get(key))
-}
-
-fn set_cached_credentials(key: String, credentials: Credentials, ttl: Duration) {
-    if ttl == STATIC_CREDENTIALS_TTL {
-        static_credentials_cache().insert(key, credentials);
-    } else {
-        ambient_credentials_cache().insert(key, credentials);
+    fn set_cached_credentials(&self, key: String, credentials: Credentials, ttl: Duration) {
+        if ttl == STATIC_CREDENTIALS_TTL {
+            self.static_credentials.insert(key, credentials);
+        } else {
+            self.ambient_credentials.insert(key, credentials);
+        }
     }
 }
 
@@ -215,66 +215,157 @@ pub fn classify_auth(
     AwsAuthFlow::DefaultChain
 }
 
-pub async fn resolve_credentials(
-    config: AwsAuthConfig,
-    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Credentials, Error> {
-    let resolved = config.clone().with_environment(env_lookup);
-    let flow = classify_auth(config, env_lookup);
-    match flow {
-        AwsAuthFlow::SessionToken {
-            access_key_id,
-            secret_access_key,
-            session_token,
-        } => Ok(Credentials::new(
-            access_key_id,
-            secret_access_key,
-            Some(session_token),
-            None,
-            "litellm-static-session",
-        )),
-        AwsAuthFlow::StaticKeys {
-            access_key_id,
-            secret_access_key,
-            region_name,
-        } => {
-            let flow = AwsAuthFlow::StaticKeys {
-                access_key_id: access_key_id.clone(),
-                secret_access_key: secret_access_key.clone(),
-                region_name,
-            };
-            let key = cache_key(&resolved, &flow);
-            if let Some(credentials) = get_cached_credentials(&key) {
-                return Ok(credentials);
-            }
-            let credentials = Credentials::new(
+impl AwsAuthService {
+    pub async fn resolve_credentials(
+        &self,
+        config: AwsAuthConfig,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Credentials, Error> {
+        let resolved = config.clone().with_environment(env_lookup);
+        let flow = classify_auth(config, env_lookup);
+        match flow {
+            AwsAuthFlow::SessionToken {
                 access_key_id,
                 secret_access_key,
+                session_token,
+            } => Ok(Credentials::new(
+                access_key_id,
+                secret_access_key,
+                Some(session_token),
                 None,
-                None,
-                "litellm-static",
-            );
-            set_cached_credentials(
-                key,
-                credentials.clone(),
-                credential_cache_ttl(&flow).unwrap_or(STATIC_CREDENTIALS_TTL),
-            );
-            Ok(credentials)
-        }
-        AwsAuthFlow::Profile { name } => {
-            let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
-                .profile_name(name)
-                .build();
-            provider
-                .provide_credentials()
-                .await
-                .map_err(|error| Error::AwsProfile(error.to_string()))
-        }
-        AwsAuthFlow::AssumeRole { role, session_name } => {
-            if is_already_running_as_role(&role, &resolved).await? {
-                let ambient_flow = AwsAuthFlow::DefaultChain;
-                let key = cache_key(&resolved, &ambient_flow);
-                if let Some(credentials) = get_cached_credentials(&key) {
+                "litellm-static-session",
+            )),
+            AwsAuthFlow::StaticKeys {
+                access_key_id,
+                secret_access_key,
+                region_name,
+            } => {
+                let flow = AwsAuthFlow::StaticKeys {
+                    access_key_id: access_key_id.clone(),
+                    secret_access_key: secret_access_key.clone(),
+                    region_name,
+                };
+                let key = cache_key(&resolved, &flow);
+                if let Some(credentials) = self.get_cached_credentials(&key) {
+                    return Ok(credentials);
+                }
+                let credentials = Credentials::new(
+                    access_key_id,
+                    secret_access_key,
+                    None,
+                    None,
+                    "litellm-static",
+                );
+                self.set_cached_credentials(
+                    key,
+                    credentials.clone(),
+                    credential_cache_ttl(&flow).unwrap_or(STATIC_CREDENTIALS_TTL),
+                );
+                Ok(credentials)
+            }
+            AwsAuthFlow::Profile { name } => {
+                let provider = aws_config::profile::ProfileFileCredentialsProvider::builder()
+                    .profile_name(name)
+                    .build();
+                provider
+                    .provide_credentials()
+                    .await
+                    .map_err(|error| Error::AwsProfile(error.to_string()))
+            }
+            AwsAuthFlow::AssumeRole { role, session_name } => {
+                if is_already_running_as_role(&role, &resolved).await? {
+                    let ambient_flow = AwsAuthFlow::DefaultChain;
+                    let key = cache_key(&resolved, &ambient_flow);
+                    if let Some(credentials) = self.get_cached_credentials(&key) {
+                        return Ok(credentials);
+                    }
+                    let provider =
+                    aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
+                        .build()
+                        .await;
+                    let credentials = provider
+                        .provide_credentials()
+                        .await
+                        .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
+                    self.set_cached_credentials(
+                        key,
+                        credentials.clone(),
+                        credential_cache_ttl(&ambient_flow).unwrap_or(AMBIENT_CREDENTIALS_TTL),
+                    );
+                    return Ok(credentials);
+                }
+                let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+                if let Some(region) = resolved.region_name.clone() {
+                    loader = loader.region(aws_types::region::Region::new(region));
+                }
+                if let Some(endpoint) = resolved.sts_endpoint.clone() {
+                    loader = loader.endpoint_url(endpoint);
+                }
+                if let (Some(access_key_id), Some(secret_access_key)) =
+                    (resolved.access_key_id, resolved.secret_access_key)
+                {
+                    loader = loader.credentials_provider(Credentials::new(
+                        access_key_id,
+                        secret_access_key,
+                        resolved.session_token,
+                        None,
+                        "litellm-role-source",
+                    ));
+                }
+                let sdk_config = loader.load().await;
+                let builder = aws_config::sts::AssumeRoleProvider::builder(role);
+                let builder = match session_name {
+                    Some(name) => builder.session_name(name),
+                    None => builder.session_name(default_session_name()),
+                };
+                let builder = match resolved.external_id {
+                    Some(id) => builder.external_id(id),
+                    None => builder,
+                };
+                let provider = builder.configure(&sdk_config).build().await;
+                provider
+                    .provide_credentials()
+                    .await
+                    .map_err(|error| Error::AwsAssumeRole(error.to_string()))
+            }
+            AwsAuthFlow::WebIdentity {
+                token,
+                role,
+                session_name,
+            } => {
+                let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
+                if let Some(region) = resolved.region_name {
+                    loader = loader.region(aws_types::region::Region::new(region));
+                }
+                if let Some(endpoint) = resolved.sts_endpoint {
+                    loader = loader.endpoint_url(endpoint);
+                }
+                let sdk_config = loader.load().await;
+                let client = aws_sdk_sts::Client::new(&sdk_config);
+                let response = client
+                    .assume_role_with_web_identity()
+                    .role_arn(role)
+                    .role_session_name(session_name)
+                    .web_identity_token(token)
+                    .send()
+                    .await
+                    .map_err(|error| Error::AwsWebIdentity(error.to_string()))?;
+                let credentials = response
+                    .credentials()
+                    .ok_or(Error::AwsMissingWebIdentityCredentials)?;
+                let expiration = SystemTime::try_from(*credentials.expiration())
+                    .map_err(|error| Error::AwsWebIdentityExpiration(error.to_string()))?;
+                Ok(Credentials::new(
+                    credentials.access_key_id(),
+                    credentials.secret_access_key(),
+                    Some(credentials.session_token().to_string()),
+                    Some(expiration),
+                    "litellm-web-identity",
+                ))
+            }
+            AwsAuthFlow::DefaultChain => {
+                let key = cache_key(&resolved, &AwsAuthFlow::DefaultChain);
+                if let Some(credentials) = self.get_cached_credentials(&key) {
                     return Ok(credentials);
                 }
                 let provider =
@@ -285,101 +376,14 @@ pub async fn resolve_credentials(
                     .provide_credentials()
                     .await
                     .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
-                set_cached_credentials(
+                self.set_cached_credentials(
                     key,
                     credentials.clone(),
-                    credential_cache_ttl(&ambient_flow).unwrap_or(AMBIENT_CREDENTIALS_TTL),
+                    credential_cache_ttl(&AwsAuthFlow::DefaultChain)
+                        .unwrap_or(AMBIENT_CREDENTIALS_TTL),
                 );
-                return Ok(credentials);
+                Ok(credentials)
             }
-            let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-            if let Some(region) = resolved.region_name.clone() {
-                loader = loader.region(aws_types::region::Region::new(region));
-            }
-            if let Some(endpoint) = resolved.sts_endpoint.clone() {
-                loader = loader.endpoint_url(endpoint);
-            }
-            if let (Some(access_key_id), Some(secret_access_key)) =
-                (resolved.access_key_id, resolved.secret_access_key)
-            {
-                loader = loader.credentials_provider(Credentials::new(
-                    access_key_id,
-                    secret_access_key,
-                    resolved.session_token,
-                    None,
-                    "litellm-role-source",
-                ));
-            }
-            let sdk_config = loader.load().await;
-            let builder = aws_config::sts::AssumeRoleProvider::builder(role);
-            let builder = match session_name {
-                Some(name) => builder.session_name(name),
-                None => builder.session_name(default_session_name()),
-            };
-            let builder = match resolved.external_id {
-                Some(id) => builder.external_id(id),
-                None => builder,
-            };
-            let provider = builder.configure(&sdk_config).build().await;
-            provider
-                .provide_credentials()
-                .await
-                .map_err(|error| Error::AwsAssumeRole(error.to_string()))
-        }
-        AwsAuthFlow::WebIdentity {
-            token,
-            role,
-            session_name,
-        } => {
-            let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-            if let Some(region) = resolved.region_name {
-                loader = loader.region(aws_types::region::Region::new(region));
-            }
-            if let Some(endpoint) = resolved.sts_endpoint {
-                loader = loader.endpoint_url(endpoint);
-            }
-            let sdk_config = loader.load().await;
-            let client = aws_sdk_sts::Client::new(&sdk_config);
-            let response = client
-                .assume_role_with_web_identity()
-                .role_arn(role)
-                .role_session_name(session_name)
-                .web_identity_token(token)
-                .send()
-                .await
-                .map_err(|error| Error::AwsWebIdentity(error.to_string()))?;
-            let credentials = response
-                .credentials()
-                .ok_or(Error::AwsMissingWebIdentityCredentials)?;
-            let expiration = SystemTime::try_from(*credentials.expiration())
-                .map_err(|error| Error::AwsWebIdentityExpiration(error.to_string()))?;
-            Ok(Credentials::new(
-                credentials.access_key_id(),
-                credentials.secret_access_key(),
-                Some(credentials.session_token().to_string()),
-                Some(expiration),
-                "litellm-web-identity",
-            ))
-        }
-        AwsAuthFlow::DefaultChain => {
-            let key = cache_key(&resolved, &AwsAuthFlow::DefaultChain);
-            if let Some(credentials) = get_cached_credentials(&key) {
-                return Ok(credentials);
-            }
-            let provider =
-                aws_config::default_provider::credentials::DefaultCredentialsChain::builder()
-                    .build()
-                    .await;
-            let credentials = provider
-                .provide_credentials()
-                .await
-                .map_err(|error| Error::AwsDefaultChain(error.to_string()))?;
-            set_cached_credentials(
-                key,
-                credentials.clone(),
-                credential_cache_ttl(&AwsAuthFlow::DefaultChain).unwrap_or(AMBIENT_CREDENTIALS_TTL),
-            );
-            Ok(credentials)
         }
     }
 }
@@ -451,11 +455,12 @@ pub fn is_sigv4_computed_header(name: &str) -> bool {
     SIGV4_COMPUTED_HEADER_NAMES.contains(&name.to_ascii_lowercase().as_str())
 }
 
-pub fn sign_bedrock_post(
+pub fn sign_post(
     url: &str,
     body: &[u8],
     headers: &BTreeMap<String, String>,
     region: &str,
+    service: &str,
     credentials: &Credentials,
     signing_time: SystemTime,
 ) -> Result<BTreeMap<String, String>, Error> {
@@ -463,7 +468,7 @@ pub fn sign_bedrock_post(
     let params = v4::SigningParams::builder()
         .identity(&identity)
         .region(region)
-        .name(BEDROCK_SERVICE)
+        .name(service)
         .time(signing_time)
         .settings(SigningSettings::default())
         .build()
@@ -534,22 +539,28 @@ fn is_bedrock_region(value: &str) -> bool {
             .all(|char| char.is_ascii_alphanumeric() || char == '-')
 }
 
+/// The region a caller configured: `aws_region_name`, then the model's own
+/// region, then the environment. Each service decides what a missing one means.
+pub fn resolve_aws_region(
+    model_region: Option<&str>,
+    optional_params: &Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    optional_params
+        .get("aws_region_name")
+        .and_then(Value::as_str)
+        .or(model_region)
+        .map(str::to_string)
+        .or_else(|| env_lookup(AWS_REGION_NAME))
+        .or_else(|| env_lookup(AWS_REGION))
+}
+
 pub fn resolve_bedrock_region(
     model_region: Option<&str>,
     optional_params: &Map<String, Value>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    if let Some(region) = optional_params
-        .get("aws_region_name")
-        .and_then(Value::as_str)
-    {
-        return region.to_string();
-    }
-    if let Some(region) = model_region {
-        return region.to_string();
-    }
-    env_lookup(AWS_REGION_NAME)
-        .or_else(|| env_lookup(AWS_REGION))
+    resolve_aws_region(model_region, optional_params, env_lookup)
         .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
 }
 
@@ -576,6 +587,37 @@ pub fn aws_auth_config(
             .or_else(|| env("AWS_WEB_IDENTITY_TOKEN")),
         sts_endpoint: value("aws_sts_endpoint").or_else(|| env("AWS_STS_ENDPOINT")),
         external_id: value("aws_external_id").or_else(|| env("AWS_EXTERNAL_ID")),
+    }
+}
+
+/// Where the credentials that sign a request come from, decided when the request is
+/// prepared and resolved when it is sent.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AwsCredentialSource {
+    HostSupplied(Credentials),
+    Chain(AwsAuthConfig),
+}
+
+impl AwsCredentialSource {
+    pub fn from_params(
+        optional_params: &Map<String, Value>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Self {
+        match host_supplied_credentials(optional_params) {
+            Some(credentials) => Self::HostSupplied(credentials),
+            None => Self::Chain(aws_auth_config(optional_params, env_lookup)),
+        }
+    }
+
+    pub async fn resolve(
+        self,
+        auth: &AwsAuthService,
+        env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Credentials, Error> {
+        match self {
+            Self::HostSupplied(credentials) => Ok(credentials),
+            Self::Chain(config) => auth.resolve_credentials(config, env_lookup).await,
+        }
     }
 }
 
@@ -609,9 +651,54 @@ pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::BEDROCK_SERVICE;
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn secret_names_cover_environment_reads() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::BTreeSet::<String>::new(),
+        ));
+        let recorded = seen.clone();
+        let env = |name: &str| {
+            recorded.lock().unwrap().insert(name.to_string());
+            None
+        };
+        resolve_aws_region(None, &Map::new(), &env);
+        aws_auth_config(&Map::new(), &env);
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|name| crate::constants::SECRET_NAMES.contains(&name.as_str()))
+        );
+    }
+
+    #[test]
+    fn a_region_comes_from_the_call_then_the_model_then_the_environment() {
+        let params = Map::from_iter([("aws_region_name".to_string(), Value::from("eu-west-1"))]);
+        let region_name = |key: &str| (key == AWS_REGION_NAME).then(|| "ap-south-1".to_string());
+        let region = |key: &str| (key == AWS_REGION).then(|| "sa-east-1".to_string());
+
+        let resolved = [
+            resolve_aws_region(Some("us-east-2"), &params, &region_name),
+            resolve_aws_region(Some("us-east-2"), &Map::new(), &region_name),
+            resolve_aws_region(None, &Map::new(), &region_name),
+            resolve_aws_region(None, &Map::new(), &region),
+            resolve_aws_region(None, &Map::new(), &no_env),
+        ];
+
+        assert_eq!(
+            resolved.map(|region| region.unwrap_or_else(|| "none".into())),
+            ["eu-west-1", "us-east-2", "ap-south-1", "sa-east-1", "none"]
+        );
+        assert_eq!(
+            resolve_bedrock_region(None, &Map::new(), &no_env),
+            DEFAULT_BEDROCK_REGION
+        );
     }
 
     fn parity_inputs() -> (String, Vec<u8>, BTreeMap<String, String>) {
@@ -696,17 +783,18 @@ mod tests {
 
     #[tokio::test]
     async fn static_credentials_do_not_use_network() {
-        let credentials = resolve_credentials(
-            AwsAuthConfig {
-                access_key_id: Some("ak".into()),
-                secret_access_key: Some("sk".into()),
-                region_name: Some("us-east-1".into()),
-                ..Default::default()
-            },
-            &no_env,
-        )
-        .await
-        .expect("static credentials");
+        let credentials = AwsAuthService::default()
+            .resolve_credentials(
+                AwsAuthConfig {
+                    access_key_id: Some("ak".into()),
+                    secret_access_key: Some("sk".into()),
+                    region_name: Some("us-east-1".into()),
+                    ..Default::default()
+                },
+                &no_env,
+            )
+            .await
+            .expect("static credentials");
         assert_eq!(credentials.access_key_id(), "ak");
         assert_eq!(credentials.session_token(), None);
     }
@@ -756,14 +844,64 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn cache_round_trip_preserves_credentials() {
+        let auth = AwsAuthService::default();
         let key = format!("cache-test-{}", std::process::id());
         let credentials = Credentials::new("cache-ak", "cache-sk", None, None, "test");
-        set_cached_credentials(key.clone(), credentials.clone(), STATIC_CREDENTIALS_TTL);
+        auth.set_cached_credentials(key.clone(), credentials.clone(), STATIC_CREDENTIALS_TTL);
         assert_eq!(
-            get_cached_credentials(&key).map(|value| value.access_key_id().to_string()),
+            auth.get_cached_credentials(&key)
+                .map(|value| value.access_key_id().to_string()),
             Some("cache-ak".to_string())
+        );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn cloned_services_reuse_credentials_but_independent_services_do_not() {
+        let auth = AwsAuthService::default();
+        let config = AwsAuthConfig {
+            access_key_id: Some("configured-key".into()),
+            secret_access_key: Some("configured-secret".into()),
+            region_name: Some("us-east-1".into()),
+            ..AwsAuthConfig::default()
+        };
+        let flow = classify_auth(config.clone(), &no_env);
+        let cached = Credentials::new("cached-key", "cached-secret", None, None, "test");
+        auth.set_cached_credentials(
+            cache_key(&config, &flow),
+            cached.clone(),
+            STATIC_CREDENTIALS_TTL,
+        );
+
+        let reused = auth
+            .clone()
+            .resolve_credentials(config.clone(), &no_env)
+            .await
+            .unwrap();
+        let independent = AwsAuthService::default()
+            .resolve_credentials(config.clone(), &no_env)
+            .await
+            .unwrap();
+        let different = AwsAuthConfig {
+            access_key_id: Some("different-key".into()),
+            ..config.clone()
+        };
+        let other_identity = auth
+            .resolve_credentials(different.clone(), &no_env)
+            .await
+            .unwrap();
+
+        assert_eq!(reused.access_key_id(), cached.access_key_id());
+        assert_eq!(reused.secret_access_key(), cached.secret_access_key());
+        assert_eq!(
+            Some(independent.access_key_id()),
+            config.access_key_id.as_deref()
+        );
+        assert_eq!(
+            Some(other_identity.access_key_id()),
+            different.access_key_id.as_deref()
         );
     }
 
@@ -811,11 +949,12 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_bedrock_post(
+        let signed = sign_post(
             &url,
             &body,
             &signable,
             "us-east-1",
+            BEDROCK_SERVICE,
             &credentials,
             SystemTime::UNIX_EPOCH,
         )
@@ -843,11 +982,12 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_bedrock_post(
+        let signed = sign_post(
             &url,
             &body,
             &headers,
             "us-east-1",
+            BEDROCK_SERVICE,
             &credentials,
             UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
         )
@@ -878,11 +1018,12 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_bedrock_post(
+        let signed = sign_post(
             &url,
             &body,
             &headers,
             "us-east-1",
+            BEDROCK_SERVICE,
             &credentials,
             UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
         )
@@ -898,28 +1039,30 @@ mod tests {
         let body = br#"{"anthropic_version":"bedrock-2023-05-31","max_tokens":1,"messages":[{"role":"user","content":[{"type":"text","text":"ping"}]}]}"#.to_vec();
         let headers =
             BTreeMap::from([("Content-Type".to_string(), "application/json".to_string())]);
-        let credentials = resolve_credentials(
-            AwsAuthConfig {
-                access_key_id: Some(access_key_id),
-                secret_access_key: Some(secret_access_key),
-                region_name: Some("us-west-2".to_string()),
-                ..Default::default()
-            },
-            &no_env,
-        )
-        .await?;
-        let client = reqwest::Client::new();
+        let credentials = AwsAuthService::default()
+            .resolve_credentials(
+                AwsAuthConfig {
+                    access_key_id: Some(access_key_id),
+                    secret_access_key: Some(secret_access_key),
+                    region_name: Some("us-west-2".to_string()),
+                    ..Default::default()
+                },
+                &no_env,
+            )
+            .await?;
+        let client = litellm_http::Client::plain_for_test();
         let mut failures = Vec::new();
 
         for region in ["us-west-2", "us-east-1"] {
             let url = format!(
                 "https://bedrock-runtime.{region}.amazonaws.com/model/us.anthropic.claude-opus-4-8/invoke"
             );
-            let signed_headers = sign_bedrock_post(
+            let signed_headers = sign_post(
                 &url,
                 &body,
                 &headers,
                 region,
+                BEDROCK_SERVICE,
                 &credentials,
                 SystemTime::now(),
             )?;

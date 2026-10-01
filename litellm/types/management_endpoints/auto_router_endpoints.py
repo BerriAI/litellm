@@ -44,6 +44,25 @@ class ComplexityRouterConfigValidationResponse(BaseModel):
     error: str | None = None
 
 
+class AutoRouterAvailabilityRequest(BaseModel):
+    team_id: str | None = None
+    saved_model_id: str | None = None
+    complexity_router_config: Mapping[str, object] | None = None
+
+
+class AutoRouterAllowance(BaseModel):
+    key: str
+    limit: int | None
+    remaining: int | None
+    used_by_this_router: bool = False
+    available: bool = True
+
+
+class AutoRouterAvailabilityResponse(BaseModel):
+    allowances: tuple[AutoRouterAllowance, ...]
+    error: str | None = None
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single request to classify against a complexity-router config that need not be saved yet.
 
@@ -71,6 +90,11 @@ class AutoRouterRoutingTestRequest(BaseModel):
     )
     complexity_router_config: RequestComplexityRouterConfig = Field(
         description="The complexity router config to route against, in the shape /model/new accepts",
+    )
+    saved_model_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Test this saved deployment's server-side configuration instead of the supplied config and default model",
     )
     default_model: str | None = Field(
         default=None,
@@ -132,7 +156,7 @@ class AutoRouterRoutingTestRequest(BaseModel):
         the serving path.
         """
         return MappingProxyType(
-            {  # mutable-ok: MappingProxyType needs a dict to wrap
+            {
                 key: value
                 for key, value in (("messages", self.messages), ("system", self.system), ("tools", self.tools))
                 if value is not None
@@ -199,13 +223,25 @@ class AutoRouterBenchmarkTotals(BaseModel):
         description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
         "subtotal recording, and zero for an empty window"
     )
-    saved_spend: float = Field(
-        description="Signed dollars saved versus each router's savings baseline (derived from its hardest "
-        "tier, or the configured override), from the same per-request savings record the usage tab reads"
+    savings_estimated_turns: int = Field(
+        description="Requests with a matching savings comparison, including historical recorded estimates"
     )
-    baseline_spend: float = Field(description="spend plus saved_spend: the estimated single-model cost")
-    saved_pct: float = Field(description="saved_spend over baseline_spend, as a percentage")
-    saved_per_session: float
+    savings_estimated_actual_spend: float = Field(
+        description="Actual spend, including classifier cost, for covered turns only"
+    )
+    savings_estimated_classifier_cost: float | None = Field(
+        default=None,
+        description="Classifier cost included in the matching historical and newer savings comparison; "
+        "null when classification costs for those requests are unavailable",
+    )
+    saved_spend: float | None = Field(
+        description="Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates"
+    )
+    baseline_spend: float | None = Field(description="Estimated single-model cost for covered turns only")
+    saved_pct: float | None = Field(
+        description="Total recorded savings over the matching historical and current baseline; null when costs are unavailable"
+    )
+    saved_per_session: float | None = Field(description="Recorded savings per session, including historical estimates")
     cache: AutoRouterCacheStats
 
 
@@ -236,17 +272,30 @@ class AutoRouterSessionResponse(BaseModel):
     turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
     last_model: str = Field(description="The deployment model the most recent turn was routed to")
     spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
-    saved_spend: float = Field(description="Estimated savings against the baseline, net of classifier cost")
-    baseline_spend: float = Field(description="spend plus saved_spend: the estimated single-model cost")
+    savings_estimated_turns: int = Field(
+        description="Requests with a matching savings comparison, including historical recorded estimates"
+    )
+    savings_estimated_actual_spend: float = Field(
+        description="Actual spend, including classifier cost, for covered turns only"
+    )
+    saved_spend: float | None = Field(
+        description="Recorded historical savings plus newer estimates, net of classifier cost"
+    )
+    baseline_spend: float | None = Field(
+        description="Estimated single-model cost; unavailable unless every turn is covered"
+    )
+    savings_estimated_baseline_spend: float | None = Field(
+        description="Estimated single-model cost for covered turns only"
+    )
     baseline_model: str | None = Field(
-        description="The savings baseline most of this session's turns were priced against, recorded turn by "
+        description="The savings baseline recorded by most session turns, including historical turns, recorded turn by "
         "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
         "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
         "which derive no baseline and so report no savings"
     )
     baseline_models: Mapping[str, int] = Field(
-        description="Turns priced against each baseline model; more than one entry means the router's "
-        "baseline changed mid-session and baseline_spend mixes both"
+        description="Session turns recording each baseline model; more than one entry means the router's "
+        "baseline changed mid-session; these counts do not imply savings coverage"
     )
 
 

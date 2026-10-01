@@ -138,6 +138,7 @@ async def acompletion_with_mcp(
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=request_tags,
+        raw_headers=raw_headers,
     )
 
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(

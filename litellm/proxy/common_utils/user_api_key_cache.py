@@ -17,6 +17,8 @@ from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+    from litellm.caching.redis_batch import BatchResult
+
 T = TypeVar("T", bound=BaseModel)
 
 _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
@@ -25,6 +27,9 @@ _HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
 def is_user_key_cache_key(key: str) -> bool:
     """Only user-key objects are cached under a bare ``hash_token`` digest; every other object uses a prefixed key."""
     return _HASHED_TOKEN_CACHE_KEY.fullmatch(key) is not None
+
+
+_PIPELINED_SET_OPTIONS: Final = frozenset(("ttl",))
 
 
 class UserApiKeyCache(DualCache):
@@ -85,6 +90,10 @@ class UserApiKeyCache(DualCache):
         self.key_object_cache.update_cache_ttl(
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
         )
+
+    def update_in_memory_max_size(self, max_size: int | None) -> None:
+        super().update_in_memory_max_size(max_size)
+        self.key_object_cache.update_in_memory_max_size(max_size)
 
     def attach_redis_cache(
         self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
@@ -204,10 +213,23 @@ class UserApiKeyCache(DualCache):
         return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
+        """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
+        else, or with options the pipeline does not carry, it goes to Redis directly as before."""
         model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
         payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
+        ttl: Final = kwargs.get("ttl")
+        pipelined: Final = (
+            key is not None
+            and not local_only
+            and kwargs.keys() <= _PIPELINED_SET_OPTIONS
+            and (ttl is None or isinstance(ttl, (int, float)))
+        )
         if key is not None and is_user_key_cache_key(key):
+            if pipelined and await self.key_object_cache.async_set_cache_pre_call(key, payload, ttl) is not None:
+                return None
             return await self.key_object_cache.async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
+        if pipelined and await super().async_set_cache_pre_call(key, payload, ttl) is not None:
+            return None
         return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     def delete_cache(self, key: str) -> None:
@@ -221,6 +243,11 @@ class UserApiKeyCache(DualCache):
             await self.key_object_cache.async_delete_cache(key)
             return
         await super().async_delete_cache(key)
+
+    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
+        if is_user_key_cache_key(key):
+            return await self.key_object_cache.async_delete_cache_pre_call(key)
+        return await super().async_delete_cache_pre_call(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
         """Batch twin of ``async_delete_cache``, partitioned like
@@ -323,6 +350,14 @@ def model_access_group_spend_counter_key(access_group_name: str) -> str:
     up as a budget that never trips or never resets.
     """
     return f"spend:model_access_group:{access_group_name}"
+
+
+def project_cache_key(project_id: str) -> str:
+    return f"project_id:{project_id}"
+
+
+def project_spend_counter_key(project_id: str) -> str:
+    return f"spend:project:{project_id}"
 
 
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds

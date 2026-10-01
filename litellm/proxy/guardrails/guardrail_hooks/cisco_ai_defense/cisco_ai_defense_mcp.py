@@ -34,13 +34,24 @@ def _serialize_mcp_content_item(item: object) -> dict[str, object]:
     model_dump: Final = getattr(item, "model_dump", None)
     if callable(model_dump):
         try:
-            return dict(model_dump(exclude_none=True))
+            dumped: Final[dict[str, object]] = model_dump(exclude_none=True, by_alias=True)
+            return dict(dumped)
         except TypeError:
-            return dict(model_dump())
+            dumped_fallback: Final[dict[str, object]] = model_dump()
+            return dict(dumped_fallback)
     text: Final = getattr(item, "text", None)
     if isinstance(text, str):
         return {"type": getattr(item, "type", "text"), "text": text}
     return {"type": "text", "text": str(item)}
+
+
+def _source_field(source: object, key: str, snake_key: str) -> object:
+    if isinstance(source, dict):
+        for candidate in (key, snake_key):
+            if candidate in source:
+                return source[candidate]  # pyright: ignore[reportUnknownVariableType]  # dict-shaped sources arrive untyped
+        return None
+    return getattr(source, snake_key, None)
 
 
 class _CiscoAIDefenseMcpMixin:
@@ -219,14 +230,14 @@ class _CiscoAIDefenseMcpMixin:
         if isinstance(content, list):
             content[:] = replacement
             structured_replacement: Final = _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
-            if hasattr(response_obj, "structuredContent"):
+            if hasattr(response_obj, "structured_content"):
                 try:
-                    setattr(response_obj, "structuredContent", structured_replacement)
+                    setattr(response_obj, "structured_content", structured_replacement)
                 except (AttributeError, TypeError, ValueError):
                     pass
-            if hasattr(response_obj, "isError"):
+            if hasattr(response_obj, "is_error"):
                 try:
-                    setattr(response_obj, "isError", True)
+                    setattr(response_obj, "is_error", True)
                 except (AttributeError, TypeError, ValueError):
                     pass
             return True
@@ -487,7 +498,7 @@ class _CiscoAIDefenseMcpMixin:
         model_dump: Final = getattr(response, "model_dump", None)
         if callable(model_dump):
             try:
-                dumped = model_dump(exclude_none=True)
+                dumped = model_dump(exclude_none=True, by_alias=True)
             except TypeError:
                 dumped = model_dump()
             if isinstance(dumped, dict):
@@ -507,8 +518,8 @@ class _CiscoAIDefenseMcpMixin:
         source: object = None,
     ) -> dict[str, object]:
         result: Final[dict[str, object]] = {"content": [_serialize_mcp_content_item(item) for item in content]}
-        for key in ("structuredContent", "isError"):
-            value = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
+        for key, snake_key in (("structuredContent", "structured_content"), ("isError", "is_error")):
+            value = _source_field(source, key, snake_key)
             if value is not None and (key != "isError" or isinstance(value, bool)):
                 result[key] = value
         return result
@@ -549,20 +560,21 @@ class _CiscoAIDefenseMcpMixin:
             and all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in response_obj)
         ):
             for index, item in enumerate(response_obj):
-                if item[0] == "structuredContent":
+                if item[0] in ("structuredContent", "structured_content"):
                     response_obj[index] = (item[0], replacement)
                     replaced = True
-        elif hasattr(response_obj, "structuredContent"):
+        elif hasattr(response_obj, "structured_content"):
             try:
-                setattr(response_obj, "structuredContent", replacement)
+                setattr(response_obj, "structured_content", replacement)
                 replaced = True
             except (AttributeError, TypeError, ValueError):
                 pass
         elif isinstance(response_obj, dict):
             result: Final = response_obj.get("result")
             target: Final[dict[object, object]] = result if isinstance(result, dict) else response_obj
-            if "structuredContent" in target:
-                target["structuredContent"] = replacement
+            structured_key: Final = "structured_content" if "structured_content" in target else "structuredContent"
+            if structured_key in target:
+                target[structured_key] = replacement
                 replaced = True
 
         return replaced

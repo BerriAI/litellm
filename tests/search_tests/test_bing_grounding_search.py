@@ -85,7 +85,7 @@ class TestBingGroundingSearch(BaseSearchTest):
 class TestBingGroundingSearchTransformation:
     """
     Full-stack tests through `litellm.search` / `litellm.asearch` with the HTTP layer mocked.
-    Transformation details are unit-tested in tests/test_litellm/llms/azure/search/.
+    Transformation details are unit-tested in tests/unit/llms/azure/search/.
     """
 
     @pytest.fixture(autouse=True)
@@ -196,4 +196,5 @@ class TestBingGroundingSearchTransformation:
         ):
             response = litellm.search(query="pricing check", search_provider="bing_grounding")
 
-        assert response._hidden_params["response_cost"] == pytest.approx(0.035)
+        # Grounding with Bing Search (G1 SKU): $14 per 1,000 transactions, https://www.microsoft.com/en-us/bing/apis, checked 2026-09-24
+        assert response._hidden_params["response_cost"] == pytest.approx(0.014)
