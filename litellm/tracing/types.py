@@ -16,9 +16,33 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 SpanType = Literal["agent", "llm", "tool", "chain", "framework"]
 SpanStatus = Literal["ok", "error", "unset"]
+SpendSource = Literal["clickhouse", "postgres_fallback"]
+SpendFallbackReason = Literal["clickhouse_unavailable", "clickhouse_rows_missing"]
 
 
-class Span(TypedDict):
+class SpendDetails(TypedDict):
+    sources: ReadOnly[tuple[SpendSource, ...]]
+    status: ReadOnly[Literal["complete", "partial", "unavailable"]]
+    subtotal: ReadOnly[float]
+    matched_calls: ReadOnly[int]
+    priced_calls: ReadOnly[int]
+    expected_calls: ReadOnly[int]
+    reasons: ReadOnly[tuple[str, ...]]
+
+
+class SpendTotals(TypedDict):
+    spend: ReadOnly[float | None]
+    spend_details: ReadOnly[NotRequired[SpendDetails]]
+
+
+class Span(SpendTotals):
+    spend_source: ReadOnly[NotRequired[SpendSource | None]]
+    spend_fallback_reason: ReadOnly[NotRequired[SpendFallbackReason | None]]
+    spend_event_id: ReadOnly[NotRequired[str | None]]
+    spend_log_id: ReadOnly[NotRequired[str | None]]
+    spend_subtotal: ReadOnly[NotRequired[float]]
+    spend_reason: ReadOnly[NotRequired[str | None]]
+    litellm_call_id: ReadOnly[NotRequired[str | None]]
     span_id: ReadOnly[str]
     parent_span_id: ReadOnly[str | None]
     name: ReadOnly[str]
@@ -33,10 +57,9 @@ class Span(TypedDict):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     litellm_request_id: ReadOnly[str | None]
-    spend: ReadOnly[float | None]
 
 
-class AgentNode(TypedDict):
+class AgentNode(SpendTotals):
     """One distinct agent in a trace. 200 invocations of `researcher` = one node."""
 
     name: ReadOnly[str]
@@ -45,10 +68,9 @@ class AgentNode(TypedDict):
     llm_calls: int
     tool_calls: int
     duration_ms: float
-    spend: ReadOnly[float | None]
 
 
-class TraceSummary(TypedDict):
+class TraceSummary(SpendTotals):
     trace_id: ReadOnly[str]
     trace_ref: ReadOnly[NotRequired[str]]
     name: ReadOnly[str]
@@ -66,7 +88,6 @@ class TraceSummary(TypedDict):
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     models: ReadOnly[tuple[str, ...]]
-    spend: ReadOnly[float | None]
 
 
 class Trace(TypedDict):

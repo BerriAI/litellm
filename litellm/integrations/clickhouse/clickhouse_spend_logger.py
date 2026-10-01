@@ -104,17 +104,53 @@ def _is_trace_ingest(payload: StandardLoggingPayload) -> bool:
 
 
 def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[str, Any]) -> SpendLogRecord:
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _get_response_for_spend_logs_payload,
+        _get_spend_logs_metadata,
+        _sanitize_request_body_for_spend_logs_payload,
+        should_store_prompts_and_responses_in_spend_logs,
+    )
+
     metadata: Mapping[str, Any] = payload.get("metadata") or MappingProxyType({})
     hidden_params: Mapping[str, Any] = payload.get("hidden_params") or MappingProxyType({})
     usage: Mapping[str, Any] = metadata.get("usage_object") or hidden_params.get("usage_object") or MappingProxyType({})
     cache_read_tokens, cache_write_tokens = _cache_tokens(usage)
     trace_id, span_id = _find_traceparent(metadata, kwargs)
     request_id = str(payload.get("id") or "")
-    redact = litellm.turn_off_message_logging is True
+    redact: Final = (
+        litellm.turn_off_message_logging is True
+        or should_redact_message_logging(kwargs)
+        or not should_store_prompts_and_responses_in_spend_logs()
+    )
+    context: Final = payload.get("spend_context")
+    cleaned_metadata: Final = _get_spend_logs_metadata(
+        metadata=metadata,
+        usage_object=usage,
+        litellm_call_id=payload.get("litellm_call_id"),
+        cost_breakdown=payload.get("cost_breakdown"),
+    )
+    content_fields: Final = frozenset(
+        {
+            "guardrail_information",
+            "vector_store_request_metadata",
+            "mcp_tool_call_metadata",
+            "error_information",
+            "proxy_server_request",
+            "spend_logs_metadata",
+            "eval_information",
+        }
+    )
+    safe_metadata: Final = {
+        **_sanitize_request_body_for_spend_logs_payload(
+            {key: value for key, value in cleaned_metadata.items() if not redact or key not in content_fields}
+        ),
+        "user_api_key_alias": metadata.get("user_api_key_alias"),
+    }
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
     return SpendLogRecord(
-        request_id=request_id,
-        response_id=strip_cache_hit_suffix(request_id),
+        request_id=context["event_id"] if context else request_id,
+        response_id=context["response_id"] if context else strip_cache_hit_suffix(request_id),
         call_type=payload.get("call_type") or "",
         api_key=metadata.get("user_api_key_hash") or "",
         key_alias=metadata.get("user_api_key_alias") or "",
@@ -138,20 +174,34 @@ def spend_log_row_from_payload(payload: StandardLoggingPayload, kwargs: Mapping[
         end_time=_to_ms(payload.get("endTime")) or 0,
         completion_start_time=completion_start_ms or None,
         status=payload.get("status") or "",
-        error_str=payload.get("error_str") or "",
+        error_str=""
+        if redact
+        else _json(_sanitize_request_body_for_spend_logs_payload({"error": payload.get("error_str")}).get("error")),
         cache_hit=payload.get("cache_hit") is True,
         session_id=_session_id(payload, kwargs),
         trace_id=trace_id,
         span_id=span_id,
         request_tags=_request_tags(payload.get("request_tags")),
-        metadata=_json_mapping(MappingProxyType({**metadata, "litellm_lens_internal": is_lens_analysis()})),
-        messages="" if redact else _json(payload.get("messages")),
-        response="" if redact else _json(payload.get("response")),
+        metadata=_json_mapping(
+            MappingProxyType({**safe_metadata, "spend_context": context, "litellm_lens_internal": is_lens_analysis()})
+        ),
+        messages=""
+        if redact
+        else _json(
+            _sanitize_request_body_for_spend_logs_payload({"messages": payload.get("messages")}).get("messages")
+        ),
+        response="" if redact else _get_response_for_spend_logs_payload(payload, kwargs),
     )
 
 
 class ClickHouseSpendLogger(ClickHouseBatchLogger):
     table = SPEND_LOGS_TABLE
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._log(kwargs)
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self._log(kwargs)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         self._log(kwargs)

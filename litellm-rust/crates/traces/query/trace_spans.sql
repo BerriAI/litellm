@@ -5,6 +5,7 @@ SELECT o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name
        o.ServiceName AS service, o.InputPreview AS input_preview, o.Model AS model,
        o.InputTokens AS input_tokens, o.OutputTokens AS output_tokens,
        o.LiteLLMRequestId AS litellm_request_id,
+       o.SpanAttributes['litellm.call_id'] AS litellm_call_id,
        o.TeamId AS team_id, o.ApiKeyHash AS api_key_hash
 FROM otel_traces AS o
 WHERE o.TraceId = {trace_id:String}

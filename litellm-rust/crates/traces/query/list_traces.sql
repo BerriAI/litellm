@@ -1,3 +1,4 @@
+WITH page AS (
 SELECT TraceId AS trace_id,
        hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) AS trace_ref,
        TeamId AS team_id, ApiKeyHash AS api_key_hash,
@@ -21,3 +22,20 @@ HAVING min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
         < ({cursor_ms:Int64}, {cursor_trace_id:String}))
 ORDER BY start_ms DESC, trace_ref DESC
 LIMIT {limit:UInt32}
+), calls AS (
+SELECT TeamId, ApiKeyHash, TraceId,
+       uniqExactIf(SpanId, ObservationType = 'llm') AS llm_call_count,
+       groupUniqArrayIf(1000)(
+           (SpanId, LiteLLMRequestId, SpanAttributes['litellm.call_id'],
+            toUnixTimestamp64Milli(Timestamp),
+            toUnixTimestamp64Milli(Timestamp + toIntervalNanosecond(Duration))),
+           ObservationType = 'llm') AS llm_spans
+FROM otel_traces
+WHERE (TeamId, ApiKeyHash, TraceId) IN (SELECT team_id, api_key_hash, trace_id FROM page)
+GROUP BY TeamId, ApiKeyHash, TraceId
+)
+SELECT page.*, calls.llm_spans, calls.llm_call_count
+FROM page
+LEFT JOIN calls ON page.team_id = calls.TeamId AND page.api_key_hash = calls.ApiKeyHash
+               AND page.trace_id = calls.TraceId
+ORDER BY page.start_ms DESC, page.trace_ref DESC
