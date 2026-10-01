@@ -2181,7 +2181,7 @@ class TestOnlyScanNewMessages:
     def _guardrail(self, **overrides):
         params = dict(guardrail_name="test-guard", only_scan_new_messages=True)
         params.update(overrides)
-        return CustomGuardrail(**params)
+        return CustomGuardrail(**params)  # pyright: ignore[reportArgumentType]  # params values mix str/bool
 
     def _cache(self):
         from litellm.caching import DualCache
@@ -3382,3 +3382,37 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "allow"
+
+
+class TestCustomGuardrailTimeout:
+    def test_timeout_constructor_exposes_it(self):
+        guardrail = CustomGuardrail(guardrail_name="g1", timeout=2.5)
+
+        assert guardrail.timeout == 2.5
+
+    def test_timeout_unset_stays_none(self):
+        guardrail = CustomGuardrail(guardrail_name="g1")
+
+        assert guardrail.timeout is None
+
+    @pytest.mark.parametrize("configured, expected", [(None, 10.0), (3, 3)])
+    def test_unset_timeout_keeps_default_assigned_before_super_init(self, configured, expected):
+        class PresetTimeoutGuardrail(CustomGuardrail):
+            def __init__(self, **kwargs):
+                self.timeout = 10.0
+                super().__init__(guardrail_name="preset", **kwargs)
+
+        guardrail = PresetTimeoutGuardrail(timeout=configured)
+
+        assert guardrail.timeout == expected
+
+    def test_update_in_memory_litellm_params_refreshes_timeout(self):
+        from litellm.types.guardrails import LitellmParams
+
+        guardrail = CustomGuardrail(guardrail_name="g1", timeout=2.5)
+
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(guardrail="generic_guardrail_api", mode="pre_call", timeout=7)
+        )
+
+        assert guardrail.timeout == 7.0
