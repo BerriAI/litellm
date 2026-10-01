@@ -29,13 +29,6 @@ impl Write for AttributeWriter<'_> {
     }
 }
 
-pub(super) fn attribute_size(attributes: &BTreeMap<String, String>) -> usize {
-    attributes
-        .iter()
-        .map(|(key, value)| key.len() + value.len() + 96)
-        .sum()
-}
-
 pub(super) fn attributes(
     values: Vec<KeyValue>,
     budget: &mut Budget,
@@ -47,21 +40,25 @@ pub(super) fn attributes(
         .into_iter()
         .map(|entry| {
             budget.consume(entry.key.len() + 96)?;
-            let text = match entry.value.as_ref().and_then(|value| value.value.as_ref()) {
-                Some(AttributeValue::StringValue(value)) => {
+            let text = match entry.value {
+                Some(AnyValue {
+                    value: Some(AttributeValue::StringValue(value)),
+                }) => {
                     budget.consume(value.len())?;
-                    value.clone()
+                    value
                 }
-                Some(AttributeValue::BytesValue(value)) => {
+                Some(AnyValue {
+                    value: Some(AttributeValue::BytesValue(value)),
+                }) => {
                     budget.consume(value.len().saturating_mul(3))?;
-                    String::from_utf8_lossy(value).into_owned()
+                    String::from_utf8_lossy(&value).into_owned()
                 }
-                _ => {
+                value => {
                     let mut writer = AttributeWriter {
                         body: Vec::new(),
                         budget,
                     };
-                    serde_json::to_writer(&mut writer, &AttributeJson(entry.value.as_ref()))
+                    serde_json::to_writer(&mut writer, &AttributeJson(value.as_ref()))
                         .map_err(|_| DecodeError::TooLarge)?;
                     String::from_utf8(writer.body).map_err(|_| DecodeError::InvalidPayload)?
                 }

@@ -7,10 +7,10 @@ use opentelemetry_proto::tonic::{
 
 use super::{
     DecodedEvent, DecodedSpan,
-    attributes::{attribute_size, attributes},
+    attributes::attributes,
     limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
 };
-use crate::DecodeError;
+use crate::{DecodeError, Shared};
 
 pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
     let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
@@ -26,13 +26,13 @@ fn append_resource(
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
 ) -> Result<(), DecodeError> {
-    let attributes = attributes(
+    let attributes = Shared::new(attributes(
         resource
             .resource
             .map(|resource| resource.attributes)
             .unwrap_or_default(),
         budget,
-    )?;
+    )?);
     for scope in resource.scope_spans {
         append_scope(scope, &attributes, budget, spans)?;
     }
@@ -41,7 +41,7 @@ fn append_resource(
 
 fn append_scope(
     scope_spans: ScopeSpans,
-    resource: &BTreeMap<String, String>,
+    resource: &Shared<BTreeMap<String, String>>,
     budget: &mut Budget,
     spans: &mut Vec<DecodedSpan>,
 ) -> Result<(), DecodeError> {
@@ -49,15 +49,16 @@ fn append_scope(
     if scope.attributes.len() > MAX_ATTRIBUTES {
         return Err(DecodeError::TooLarge);
     }
-    let shared_size = attribute_size(resource) + scope.name.len() + scope.version.len();
+    budget.consume(scope.name.len() + scope.version.len())?;
+    let scope_name: Shared<String> = scope.name.into();
+    let scope_version: Shared<String> = scope.version.into();
     for span in scope_spans.spans {
         if spans.len() >= MAX_SPANS {
             return Err(DecodeError::TooLarge);
         }
         validate_span(&span)?;
         budget.consume(
-            shared_size
-                + span.name.len()
+            span.name.len()
                 + span.trace_state.len()
                 + span
                     .status
@@ -69,8 +70,8 @@ fn append_scope(
         spans.push(decoded_span(
             span,
             resource,
-            &scope.name,
-            &scope.version,
+            &scope_name,
+            &scope_version,
             budget,
         )?);
     }
@@ -118,9 +119,9 @@ fn hex_bytes(bytes: &[u8]) -> String {
 
 fn decoded_span(
     span: Span,
-    resource_attributes: &BTreeMap<String, String>,
-    scope_name: &str,
-    scope_version: &str,
+    resource_attributes: &Shared<BTreeMap<String, String>>,
+    scope_name: &Shared<String>,
+    scope_version: &Shared<String>,
     budget: &mut Budget,
 ) -> Result<DecodedSpan, DecodeError> {
     let status = span.status.unwrap_or_default();
@@ -134,9 +135,14 @@ fn decoded_span(
             .unwrap_or(SpanKind::Unspecified)
             .as_str_name()
             .to_owned(),
-        resource_attributes: resource_attributes.clone(),
-        scope_name: scope_name.to_owned(),
-        scope_version: scope_version.to_owned(),
+        resource_attributes: budget.clone_shared(resource_attributes, |attributes| {
+            attributes
+                .iter()
+                .map(|(key, value)| key.len() + value.len() + 96)
+                .sum()
+        })?,
+        scope_name: budget.clone_shared(scope_name, String::len)?,
+        scope_version: budget.clone_shared(scope_version, String::len)?,
         attributes: attributes(span.attributes, budget)?,
         start_ns: span.start_time_unix_nano,
         end_ns: span.end_time_unix_nano,

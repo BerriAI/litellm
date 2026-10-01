@@ -3,7 +3,7 @@ use std::fmt;
 use prost::encoding::{DecodeContext, WireType, decode_key, decode_varint, skip_field};
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
-use crate::DecodeError;
+use crate::{DecodeError, Shared};
 
 pub(super) const MAX_DEPTH: usize = 32;
 pub(super) const MAX_NODES: usize = 65_536;
@@ -190,11 +190,37 @@ impl Budget {
         Self { remaining }
     }
 
+    pub(super) fn clone_shared<T: Clone>(
+        &mut self,
+        value: &Shared<T>,
+        allocated_bytes: impl FnOnce(&T) -> usize,
+    ) -> Result<Shared<T>, DecodeError> {
+        let cloned = value.clone();
+        if !value.shares_storage_with(&cloned) {
+            self.consume(allocated_bytes(value))?;
+        }
+        Ok(cloned)
+    }
+
     pub(super) fn consume(&mut self, bytes: usize) -> Result<(), DecodeError> {
         self.remaining = self
             .remaining
             .checked_sub(bytes)
             .ok_or(DecodeError::TooLarge)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[rstest::rstest]
+    #[ignore = "set OTLP_BENCH_BODY to a JSON export and run with --ignored --nocapture"]
+    fn profile_json_preflight() {
+        let body = std::fs::read(std::env::var("OTLP_BENCH_BODY").unwrap()).unwrap();
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            assert!(super::json_preflight(&body).is_ok());
+            eprintln!("preflight_us={}", start.elapsed().as_micros());
+        }
     }
 }

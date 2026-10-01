@@ -39,7 +39,7 @@ class NativeStore(Protocol):
 
     def ensure_schema(self, trace_retention_days: int, spend_log_retention_days: int) -> Awaitable[None]: ...
 
-    def insert_rows(self, table: str, rows: Sequence[Mapping[str, JsonValue]]) -> Awaitable[None]: ...
+    def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
     def lens_query(self, name: str, parameters: Mapping[str, str | int | Sequence[str]]) -> Awaitable[str]: ...
 
@@ -63,7 +63,6 @@ class QueryResponse(BaseModel):
     data: list[dict[str, JsonValue]]
 
 
-INSERT_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | list[str]])
 
 
@@ -90,7 +89,7 @@ class TraceStorage:
         await self._native.ensure_schema(trace_retention_days, spend_log_retention_days)
 
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
-        await self._native.insert_rows(table, INSERT_ROWS.validate_python(rows))
+        await self._native.insert_rows(table, rows)
 
     async def query(
         self, name: ReadQueryName, parameters: Mapping[str, object] | None = None

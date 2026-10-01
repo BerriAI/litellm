@@ -12,7 +12,7 @@ fn decodes_neutral_spans(#[case] body: &[u8], #[case] content_type: Option<&str>
     assert_eq!(spans.len(), 6);
     assert_eq!(spans[0].trace_id, "4bad42b84e9de3ba46fc870185f8f023");
     assert_eq!(spans[0].resource_attributes["service.name"], "agent-demo");
-    assert_eq!(spans[0].scope_name, "langsmith");
+    assert_eq!(spans[0].scope_name.as_ref(), "langsmith");
     assert!(
         spans
             .iter()
@@ -137,7 +137,7 @@ fn rejects_ids_and_timestamps_that_cannot_be_stored(
 }
 
 #[rstest]
-fn resource_fanout_is_charged_before_copying(span: opentelemetry_proto::tonic::trace::v1::Span) {
+fn resource_fanout_shares_one_allocation(span: opentelemetry_proto::tonic::trace::v1::Span) {
     use opentelemetry_proto::tonic::{
         common::v1::{AnyValue, KeyValue, any_value::Value},
         resource::v1::Resource,
@@ -155,11 +155,30 @@ fn resource_fanout_is_charged_before_copying(span: opentelemetry_proto::tonic::t
         ..Default::default()
     });
     request.resource_spans[0].scope_spans[0].spans = vec![span; 1024];
+    let second_scope = request.resource_spans[0].scope_spans[0].clone();
+    request.resource_spans[0].scope_spans.push(second_scope);
+    request
+        .resource_spans
+        .push(request.resource_spans[0].clone());
     let body = request.encode_to_vec();
-    assert!(matches!(
-        decode_otlp(&body, None),
-        Err(litellm_traces::DecodeError::TooLarge)
+    let decoded = decode_otlp(&body, None).expect("shared resources do not expand with span count");
+    assert_eq!(decoded.len(), 4096);
+    assert!(
+        decoded[..2048]
+            .iter()
+            .all(|span| litellm_traces::Shared::shares_storage_with(
+                &span.resource_attributes,
+                &decoded[0].resource_attributes
+            ))
+    );
+    assert!(!litellm_traces::Shared::shares_storage_with(
+        &decoded[0].resource_attributes,
+        &decoded[2048].resource_attributes
     ));
+    assert_eq!(
+        *decoded[0].resource_attributes,
+        *decoded[2048].resource_attributes
+    );
 }
 
 #[rstest]
@@ -235,6 +254,97 @@ fn protobuf_preflight_rejects_expansion_before_prost_allocates(
     }];
     request.resource_spans = vec![request.resource_spans[0].clone(); count];
     let body = request.encode_to_vec();
+    assert!(matches!(
+        decode_otlp(&body, None),
+        Err(litellm_traces::DecodeError::TooLarge)
+    ));
+}
+
+#[rstest]
+fn scope_fanout_shares_name_and_version(span: opentelemetry_proto::tonic::trace::v1::Span) {
+    use opentelemetry_proto::tonic::common::v1::InstrumentationScope;
+    use prost::Message;
+    let mut request = request_with(span.clone());
+    request.resource_spans[0].scope_spans[0].scope = Some(InstrumentationScope {
+        name: "n".repeat(16 * 1024),
+        version: "v".repeat(16 * 1024),
+        ..Default::default()
+    });
+    request.resource_spans[0].scope_spans[0].spans = vec![span; 1024];
+    let decoded = decode_otlp(&request.encode_to_vec(), None).unwrap();
+    assert!(
+        decoded
+            .iter()
+            .all(|span| litellm_traces::Shared::shares_storage_with(
+                &span.scope_name,
+                &decoded[0].scope_name
+            ))
+    );
+    assert!(
+        decoded
+            .iter()
+            .all(|span| litellm_traces::Shared::shares_storage_with(
+                &span.scope_version,
+                &decoded[0].scope_version
+            ))
+    );
+    assert_eq!(decoded[0].scope_name.len(), 16 * 1024);
+    assert_eq!(decoded[0].scope_version.len(), 16 * 1024);
+}
+
+#[rstest]
+fn unique_attribute_expansion_still_respects_decoded_budget(
+    span: opentelemetry_proto::tonic::trace::v1::Span,
+) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    use prost::Message;
+    let mut request = request_with(span.clone());
+    request.resource_spans[0].scope_spans[0].spans = (0..1024)
+        .map(|index| {
+            let mut span = span.clone();
+            span.attributes = vec![KeyValue {
+                key: "unique".into(),
+                value: Some(AnyValue {
+                    value: Some(Value::StringValue(format!(
+                        "{index:04}{}",
+                        "x".repeat(16_300)
+                    ))),
+                }),
+                ..Default::default()
+            }];
+            span
+        })
+        .collect();
+    let body = request.encode_to_vec();
+    assert!(body.len() < 16 * 1024 * 1024);
+    assert!(matches!(
+        decode_otlp(&body, None),
+        Err(litellm_traces::DecodeError::TooLarge)
+    ));
+}
+
+#[rstest]
+fn escaped_attribute_expansion_is_bounded_below_four_mib(
+    span: opentelemetry_proto::tonic::trace::v1::Span,
+) {
+    use opentelemetry_proto::tonic::common::v1::{
+        AnyValue, ArrayValue, KeyValue, any_value::Value,
+    };
+    use prost::Message;
+    let mut request = request_with(span);
+    request.resource_spans[0].scope_spans[0].spans[0].attributes = vec![KeyValue {
+        key: "escaped".into(),
+        value: Some(AnyValue {
+            value: Some(Value::ArrayValue(ArrayValue {
+                values: vec![AnyValue {
+                    value: Some(Value::StringValue("\0".repeat(3 * 1024 * 1024))),
+                }],
+            })),
+        }),
+        ..Default::default()
+    }];
+    let body = request.encode_to_vec();
+    assert!(body.len() < 4 * 1024 * 1024);
     assert!(matches!(
         decode_otlp(&body, None),
         Err(litellm_traces::DecodeError::TooLarge)

@@ -6,7 +6,7 @@ mod wire;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-use crate::DecodeError;
+use crate::{DecodeError, Shared};
 
 #[derive(Serialize)]
 pub struct DecodedEvent {
@@ -22,9 +22,9 @@ pub struct DecodedSpan {
     pub trace_state: String,
     pub name: String,
     pub kind: String,
-    pub resource_attributes: BTreeMap<String, String>,
-    pub scope_name: String,
-    pub scope_version: String,
+    pub resource_attributes: Shared<BTreeMap<String, String>>,
+    pub scope_name: Shared<String>,
+    pub scope_version: Shared<String>,
     pub attributes: BTreeMap<String, String>,
     pub start_ns: u64,
     pub end_ns: u64,
