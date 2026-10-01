@@ -702,14 +702,14 @@ class LLMCachingHandler:
         )
         merged: Final = EmbeddingResponse(
             model=cached.model,
-            data=[  # mutable-ok: EmbeddingResponse.data is a pydantic list field
+            data=[
                 item
                 if item is not None
                 else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
                 for position, item in enumerate(cached.data)
             ],
             usage=merged_usage,
-            hidden_params={  # mutable-ok: EmbeddingResponse._hidden_params is a mutable dict field
+            hidden_params={
                 **cached._hidden_params,
                 "cache_hit": True,
             },

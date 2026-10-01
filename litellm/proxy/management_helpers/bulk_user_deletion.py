@@ -135,19 +135,19 @@ def _forbidden(detail: str) -> ManagementProblem:
 
 
 def _in_filter(field: str, values: Iterable[str]) -> Mapping[str, object]:
-    return {field: {"in": sorted(values)}}  # mutable-ok: Prisma query filters are dict-shaped
+    return {field: {"in": sorted(values)}}
 
 
 def _eq_filter(field: str, value: str) -> Mapping[str, object]:
-    return {field: value}  # mutable-ok: Prisma query filters are dict-shaped
+    return {field: value}
 
 
 def _team_users_filter(team_id: str, user_ids: Iterable[str]) -> Mapping[str, object]:
-    return {"team_id": team_id, **_in_filter("user_id", user_ids)}  # mutable-ok: Prisma query filters are dict-shaped
+    return {"team_id": team_id, **_in_filter("user_id", user_ids)}
 
 
 def _any_filter(*clauses: Mapping[str, object]) -> Mapping[str, object]:
-    return {"OR": clauses}  # mutable-ok: Prisma query filters are dict-shaped
+    return {"OR": clauses}
 
 
 def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]":

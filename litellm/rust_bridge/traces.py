@@ -81,7 +81,7 @@ def encode_error(message: str) -> bytes:
     return _native().trace_encode_error(message)
 
 
-class TraceStorage:
+class ClickHouseStorage:
     def __init__(self, database: str, url: str, reader_url: str | None = None) -> None:
         self._native: Final = _native().NativeTraceStorage(database, url, reader_url)
 

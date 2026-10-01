@@ -565,10 +565,8 @@ if MCP_AVAILABLE:
         )
         opts: Final = (
             base_options.model_copy(
-                update={  # mutable-ok: Pydantic update payload
-                    "capabilities": base_options.capabilities.model_copy(
-                        update={"prompts": None, "resources": None}  # mutable-ok: Pydantic update payload
-                    )
+                update={
+                    "capabilities": base_options.capabilities.model_copy(update={"prompts": None, "resources": None})
                 }
             )
             if _mcp_proxy_mode.get()
@@ -1497,7 +1495,7 @@ if MCP_AVAILABLE:
         if _is_admin_terminated_session_id(_session_id, time.monotonic()):
             terminated_response: Final = JSONResponse(
                 status_code=404,
-                content={  # mutable-ok: JSONResponse content must be a plain dict
+                content={
                     "error": "Not Found",
                     "details": "mcp-session-id was terminated by an administrator. Send initialize to start a new session.",
                 },
@@ -1969,7 +1967,7 @@ if MCP_AVAILABLE:
                 supported: Final = ", ".join(configured_versions())
                 await JSONResponse(
                     status_code=400,
-                    content={  # mutable-ok: JSON-RPC error payload
+                    content={
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {
@@ -2314,7 +2312,7 @@ if MCP_AVAILABLE:
                 supported: Final = ", ".join(configured_versions())
                 await JSONResponse(
                     status_code=400,
-                    content={  # mutable-ok: JSON-RPC error payload
+                    content={
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {

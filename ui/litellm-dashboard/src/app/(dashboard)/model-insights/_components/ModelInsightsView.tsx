@@ -15,8 +15,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  buildWeeklySeries,
+  buildBucketTotals,
+  buildSeries,
   formatMetric,
+  Granularity,
   Metric,
   ModelInsightsResponse,
   ModelInsightTasksResponse,
@@ -46,6 +48,8 @@ const CATEGORY_COLORS: Record<string, string> = {
   Data: "#3b82f6",
 };
 const SCALES = ["linear", "log"] as const;
+const GRANULARITIES = ["day", "week"] as const;
+const GRANULARITY_LABELS: Record<Granularity, string> = { day: "Daily", week: "Weekly" };
 const METRIC_LABELS: Record<Metric, string> = { requests: "requests", spend: "spend", tokens: "tokens" };
 const RANKING_ROWS = 5;
 
@@ -112,6 +116,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   const [loaded, setLoaded] = React.useState<{ metric: Metric; response: ModelInsightsResponse } | null>(null);
   const [metric, setMetric] = React.useState<Metric>("tokens");
   const [scale, setScale] = React.useState<Scale>("linear");
+  const [granularity, setGranularity] = React.useState<Granularity>("day");
   const [taskMetric, setTaskMetric] = React.useState<Metric>("spend");
   const [taskData, setTaskData] = React.useState<ModelInsightTasksResponse | null>(null);
   const [taskError, setTaskError] = React.useState<string | null>(null);
@@ -159,8 +164,12 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   const range = React.useMemo(() => ({ start: data?.start_date ?? "", end: data?.end_date ?? "" }), [data]);
   const models = React.useMemo(() => (data ? modelOrder(data.daily, shown) : []), [data, shown]);
   const series = React.useMemo(
-    () => (data ? buildWeeklySeries(data.daily, models, shown, range) : []),
-    [data, models, shown, range],
+    () => (data ? buildSeries(data.daily, models, shown, { ...range, granularity }) : []),
+    [data, models, shown, range, granularity],
+  );
+  const bucketTotals = React.useMemo(
+    () => (data ? buildBucketTotals(data.daily_totals, shown, { ...range, granularity }) : new Map<string, number>()),
+    [data, shown, range, granularity],
   );
   const ranking = React.useMemo(
     () => (data ? rankModels(data.top_models, data.daily, shown, range) : []),
@@ -212,7 +221,9 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
         <CardHeader className="flex-row items-start justify-between space-y-0">
           <div>
             <CardTitle>Top models</CardTitle>
-            <CardDescription>Weekly {METRIC_LABELS[shown]} across your gateway</CardDescription>
+            <CardDescription>
+              {GRANULARITY_LABELS[granularity]} {METRIC_LABELS[shown]} across your gateway
+            </CardDescription>
           </div>
           <div className="flex items-center gap-3">
             <Tabs value={metric} onValueChange={(value) => setMetric(value as Metric)}>
@@ -220,6 +231,15 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
                 {(["requests", "spend", "tokens"] as const).map((value) => (
                   <TabsTrigger key={value} value={value} className="capitalize">
                     {value}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <Tabs value={granularity} onValueChange={(value) => setGranularity(value as Granularity)}>
+              <TabsList aria-label="Bucket size">
+                {GRANULARITIES.map((value) => (
+                  <TabsTrigger key={value} value={value}>
+                    {GRANULARITY_LABELS[value]}
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -248,7 +268,15 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
                 axisLine={false}
                 tickFormatter={(value) => formatMetric(Number(value), shown)}
               />
-              <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(label) =>
+                      `${label} · Gateway total ${formatMetric(bucketTotals.get(String(label)) ?? 0, shown)}`
+                    }
+                  />
+                }
+              />
               {models.map((model, index) => (
                 <Bar
                   key={model}

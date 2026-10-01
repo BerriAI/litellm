@@ -4100,6 +4100,7 @@ dependencies = [
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
+ "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-traces",
  "litellm-tracing",
@@ -4304,6 +4305,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-storage-clickhouse"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "litellm-http",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "litellm-testkit"
 version = "0.1.0"
 dependencies = [
@@ -4387,6 +4402,7 @@ dependencies = [
  "criterion",
  "flate2",
  "litellm-http",
+ "litellm-storage-clickhouse",
  "opentelemetry-proto",
  "prost",
  "rstest",
@@ -4398,7 +4414,6 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
- "url",
  "wiremock",
 ]
 

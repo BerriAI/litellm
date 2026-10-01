@@ -16,7 +16,7 @@ from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE
 from litellm.integrations.clickhouse.schema import (
     OTEL_TRACES_TABLE,
 )
-from litellm.rust_bridge.traces import TraceStorage
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing.types import (
     AgentNode,
     Span,
@@ -29,6 +29,7 @@ from litellm.tracing.types import (
     TraceScope,
     TraceSummary,
 )
+from litellm.tracing.ui_format import to_ui_content
 
 NANOS_PER_MS: Final = 1_000_000
 SPEND_WINDOW_MS: Final = 30 * 60 * 1000
@@ -274,10 +275,10 @@ def trace_from_rows(
     )
 
 
-class ClickHouseTraceStore:
+class TraceStore:
     """Stores spans and runs scoped trace reads."""
 
-    def __init__(self, storage: TraceStorage) -> None:
+    def __init__(self, storage: ClickHouseStorage) -> None:
         self.storage = storage
 
     async def insert_spans(self, rows: Sequence[SpanRow]) -> None:
@@ -360,6 +361,8 @@ class ClickHouseTraceStore:
             span_id=rows[0]["span_id"],
             input=rows[0]["input"],
             output=rows[0]["output"],
+            input_ui=to_ui_content(rows[0]["input"]),
+            output_ui=to_ui_content(rows[0]["output"]),
             attributes=rows[0]["attributes"],
         )
 

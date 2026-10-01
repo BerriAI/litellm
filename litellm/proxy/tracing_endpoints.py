@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from litellm.constants import OTLP_RETRY_AFTER_SECONDS
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.tracing_lifespan import provide_receiver, require_receiver
+from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.tracing import (
     Tenant,
     TraceReceiver,
@@ -27,7 +27,7 @@ from litellm.tracing import (
 from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
 from litellm.tracing.types import SpanDetail, SpanErrorPage, Trace, TracePage, TraceScope
 
-router = APIRouter(tags=["agent tracing"])  # mutable-ok: FastAPI copies the mutable tags list
+router = APIRouter(tags=["agent tracing"])
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 

@@ -27,9 +27,9 @@ from litellm.constants import (
     OTLP_MAX_CONCURRENT_INGESTS,
 )
 from litellm.integrations.clickhouse.schema import ensure_schema
-from litellm.rust_bridge.traces import TraceStorage
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing.decode import OTLPPayloadTooLargeError, decode_otlp
-from litellm.tracing.store import ClickHouseTraceStore
+from litellm.tracing.store import TraceStore
 from litellm.tracing.types import (
     SpanDetail,
     SpanErrorPage,
@@ -89,7 +89,7 @@ class Tenant:
 class TraceReceiver:
     def __init__(
         self,
-        store: ClickHouseTraceStore,
+        store: TraceStore,
         max_concurrent_ingests: int = OTLP_MAX_CONCURRENT_INGESTS,
         decoder: Callable[[bytes, str | None, str | None], tuple[SpanRow, ...]] = decode_otlp,
     ) -> None:
@@ -102,8 +102,8 @@ class TraceReceiver:
     @classmethod
     def from_env(cls) -> "TraceReceiver":
         return cls(
-            store=ClickHouseTraceStore(
-                TraceStorage(
+            store=TraceStore(
+                ClickHouseStorage(
                     database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
                     url=os.environ["CLICKHOUSE_URL"],
                     reader_url=os.environ["CLICKHOUSE_READER_URL"],

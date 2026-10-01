@@ -2,7 +2,6 @@ use std::{
     borrow::Cow,
     collections::BTreeMap,
     io::{BufWriter, Write},
-    time::Duration,
 };
 
 use serde::{Serialize, Serializer, ser::SerializeMap};
@@ -16,7 +15,6 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use crate::{Connection, Error, Shared};
 
 const MAX_INSERT_BYTES: usize = 64 * 1024 * 1024;
-const INSERT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub type InsertRow = BTreeMap<String, Shared<Value>>;
 
@@ -64,50 +62,15 @@ pub async fn insert_shared_rows(
     }
     let received_ms = (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64;
     let (token, body) = prepare_insert(&rows, received_ms, MAX_INSERT_BYTES)?;
-    let mut url = connection.url().clone();
-    let existing_pairs: Vec<(String, String)> = url
-        .query_pairs()
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_ref(),
-                "query"
-                    | "async_insert"
-                    | "async_insert_deduplicate"
-                    | "wait_for_async_insert"
-                    | "input_format_skip_unknown_fields"
-                    | "date_time_input_format"
-            )
-        })
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    url.query_pairs_mut()
-        .clear()
-        .extend_pairs(existing_pairs)
-        .append_pair(
-            "query",
-            &format!(
-                "INSERT INTO `{database}`.{} FORMAT JSONEachRow",
-                table.name()
-            ),
-        )
-        .append_pair("insert_deduplication_token", &token)
-        .append_pair("async_insert", "1")
-        .append_pair("async_insert_deduplicate", "1")
-        .append_pair("wait_for_async_insert", "1")
-        .append_pair("input_format_skip_unknown_fields", "0")
-        .append_pair("date_time_input_format", "best_effort");
-    let response = client
-        .post(url)
-        .timeout(INSERT_TIMEOUT)
-        .header("Content-Encoding", "gzip")
-        .body(body)
-        .send()
-        .await
-        .map_err(|_| Error::Transport)?;
-    if !response.status().is_success() {
-        return Err(Error::InsertFailed(response.status().as_u16()));
-    }
-    Ok(())
+    litellm_storage_clickhouse::insert_compressed_rows(
+        client,
+        connection,
+        database,
+        table.name(),
+        &token,
+        body,
+    )
+    .await
 }
 
 fn shared_rows(rows: Vec<BTreeMap<String, Value>>) -> Vec<InsertRow> {
