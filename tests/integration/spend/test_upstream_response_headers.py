@@ -11,6 +11,10 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
 
+class AmbiguousFallbackAttempt(AssertionError):
+    pass
+
+
 def _provider_response(request: Request) -> Reply:
     body: Final = json.loads(request.body)
     assert not any("capture" in name for name in request.headers)
@@ -158,7 +162,24 @@ def test_upstream_headers_survive_routes_streaming_and_spend_log_readback(
 
 @pytest.mark.timeout(150)
 @pytest.mark.parametrize("stream", (False, True))
-def test_fallback_spend_log_uses_serving_attempt_headers(gateway: Gateway, tmp_path: Path, stream: bool) -> None:
+@pytest.mark.parametrize(
+    "attribute_attempts",
+    (
+        pytest.param(False, id="full-history"),
+        pytest.param(
+            True,
+            id="attempt-attribution",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AmbiguousFallbackAttempt,
+                reason="PR #44053: failed and serving routing attempts share an attempt_id",
+            ),
+        ),
+    ),
+)
+def test_fallback_spend_log_retains_history_and_attributes_attempts(
+    gateway: Gateway, tmp_path: Path, stream: bool, attribute_attempts: bool
+) -> None:
     import yaml
 
     marker: Final = uuid4().hex
@@ -236,3 +257,9 @@ def test_fallback_spend_log_uses_serving_attempt_headers(gateway: Gateway, tmp_p
             assert final_response["status_code"] == 200
             assert ["x-request-id", "header-" + fallback] in final_response["headers"]
             assert "failed-" + marker not in json.dumps(final_response)
+            assert len(captured) == 2, captured
+            failed_response: Final = object_value(captured[0])
+            assert failed_response["status_code"] == 503
+            assert ["x-request-id", "failed-" + marker] in failed_response["headers"]
+            if attribute_attempts and failed_response["attempt_id"] == final_response["attempt_id"]:
+                raise AmbiguousFallbackAttempt(f"Failed and serving attempts share {final_response['attempt_id']!r}")

@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import openai
@@ -10,7 +10,11 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture
+from litellm.litellm_core_utils.upstream_response_capture import (
+    UpstreamResponseCapture,
+    async_send_with_capture,
+    send_with_capture,
+)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -23,12 +27,25 @@ HEADERS: Final = (("x-request-id", "upstream-probe"), ("x-probe", "first"), ("x-
 CONTENT: Final = b'{"choices":[]}'
 
 
-def make_logging(stream: bool = False, attempt: str = "attempt") -> Logging:
+class MissingReceivedHeaders(AssertionError):
+    pass
+
+
+def require_received_headers(capture: UpstreamResponseCapture, status: int) -> None:
+    if not capture.responses:
+        raise MissingReceivedHeaders(f"Received HTTP {status} with {HEADERS!r}; canonical capture is empty")
+    assert len(capture.responses) == 1, capture.snapshot()
+    assert capture.responses[0].status_code == status
+    assert capture.responses[0].attempt_id == "attempt"
+    assert tuple(pair for pair in capture.responses[0].headers if pair[0].startswith("x-")) == HEADERS
+
+
+def make_logging(stream: bool = False, attempt: str = "attempt", call_type: str = "acompletion") -> Logging:
     return Logging(
         model="header-probe",
         messages=[],
         stream=stream,
-        call_type="acompletion",
+        call_type=call_type,
         start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
         litellm_call_id=attempt,
         function_id=attempt,
@@ -436,3 +453,199 @@ async def test_cancelled_body_retains_headers_and_closes_stream() -> None:
         assert logging.upstream_response_capture.responses[0].headers == HEADERS
     finally:
         await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+@pytest.mark.parametrize(
+    "failure",
+    (
+        pytest.param("body", id="body-read"),
+        pytest.param("connect", id="before-headers"),
+        pytest.param(
+            "redirect",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=MissingReceivedHeaders,
+                reason="PR #44053: received redirect headers lost when the next connection fails",
+            ),
+        ),
+        pytest.param(
+            "hook",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=MissingReceivedHeaders,
+                reason="PR #44053: response hook reads the body before canonical capture",
+            ),
+        ),
+    ),
+)
+async def test_received_headers_survive_send_failure(
+    sync: bool, failure: Literal["body", "connect", "redirect", "hook"]
+) -> None:
+    capture: Final = UpstreamResponseCapture()
+
+    class InterruptedBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __iter__(self) -> Iterator[bytes]:
+            yield CONTENT
+            if failure != "redirect":
+                raise httpx.ReadError("interrupted after headers")
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for chunk in self:
+                yield chunk
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def aclose(self) -> None:
+            self.close()
+
+    body: Final = InterruptedBody()
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if failure == "connect" or request.url.path == "/unreachable":
+            raise httpx.ConnectError("connection unavailable", request=request)
+        return httpx.Response(
+            307 if failure == "redirect" else 200,
+            headers=(*HEADERS, ("location", "/unreachable")),
+            stream=body,
+        )
+
+    def read_hook(response: httpx.Response) -> None:
+        response.read()
+
+    async def async_read_hook(response: httpx.Response) -> None:
+        await response.aread()
+
+    error: Final = httpx.ConnectError if failure in ("connect", "redirect") else httpx.ReadError
+    if sync:
+        with httpx.Client(
+            transport=httpx.MockTransport(upstream),
+            follow_redirects=True,
+            event_hooks={"response": [read_hook] if failure == "hook" else []},
+        ) as client:
+            with pytest.raises(error):
+                send_with_capture(
+                    client, client.build_request("GET", "https://upstream.invalid/"), capture, "attempt", False
+                )
+            assert not client.is_closed
+    else:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(upstream),
+            follow_redirects=True,
+            event_hooks={"response": [async_read_hook] if failure == "hook" else []},
+        ) as async_client:
+            with pytest.raises(error):
+                await async_send_with_capture(
+                    async_client,
+                    async_client.build_request("GET", "https://upstream.invalid/"),
+                    capture,
+                    "attempt",
+                    False,
+                )
+            assert not async_client.is_closed
+    assert body.closed == (failure != "connect")
+    if failure == "connect":
+        assert capture.snapshot() == ()
+        return
+    require_received_headers(capture, 307 if failure == "redirect" else 200)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+@pytest.mark.parametrize(
+    ("provider", "endpoint"), (("openai", "embeddings"), ("azure", "embeddings"), ("openai", "images"))
+)
+@pytest.mark.xfail(
+    strict=True,
+    raises=MissingReceivedHeaders,
+    reason="PR #44053: non-chat SDK calls do not pass canonical capture ownership",
+)
+async def test_non_chat_sdk_calls_capture_received_headers(
+    sync: bool, provider: Literal["openai", "azure"], endpoint: Literal["embeddings", "images"]
+) -> None:
+    operation: Final = "embedding" if endpoint == "embeddings" else "image_generation"
+    logging: Final = make_logging(call_type=operation if sync else f"a{operation}")
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert json.loads(request.content)["input" if endpoint == "embeddings" else "prompt"] == (
+            ["probe"] if endpoint == "embeddings" else "probe"
+        )
+        assert request.url.path.endswith("/embeddings" if endpoint == "embeddings" else "/images/generations")
+        payload: Final = (
+            {
+                "object": "list",
+                "model": "header-probe",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.5]}],
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            }
+            if endpoint == "embeddings"
+            else {"created": 1, "data": [{"url": "https://upstream.invalid/image.png"}]}
+        )
+        return httpx.Response(200, headers=HEADERS, json=payload)
+
+    options: Final = {
+        "model": f"{provider}/header-probe",
+        "litellm_logging_obj": logging,
+        "api_key": "synthetic",
+        "api_base": "https://upstream.invalid/v1",
+        "api_version": "2024-02-01",
+        "num_retries": 0,
+    }
+    if sync:
+        with httpx.Client(transport=httpx.MockTransport(upstream)) as borrowed:
+            client: Final = (
+                openai.AzureOpenAI(
+                    api_key="synthetic",
+                    base_url="https://upstream.invalid/v1",
+                    api_version="2024-02-01",
+                    http_client=borrowed,
+                    max_retries=0,
+                )
+                if provider == "azure"
+                else openai.OpenAI(
+                    api_key="synthetic", base_url="https://upstream.invalid/v1", http_client=borrowed, max_retries=0
+                )
+            )
+            result: Final = (
+                litellm.embedding(input=["probe"], client=client, **options)
+                if endpoint == "embeddings"
+                else litellm.image_generation(prompt="probe", client=client, **options)
+            )
+            assert not borrowed.is_closed
+    else:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as async_borrowed:
+            async_client: Final = (
+                openai.AsyncAzureOpenAI(
+                    api_key="synthetic",
+                    base_url="https://upstream.invalid/v1",
+                    api_version="2024-02-01",
+                    http_client=async_borrowed,
+                    max_retries=0,
+                )
+                if provider == "azure"
+                else openai.AsyncOpenAI(
+                    api_key="synthetic",
+                    base_url="https://upstream.invalid/v1",
+                    http_client=async_borrowed,
+                    max_retries=0,
+                )
+            )
+            async_result: Final = (
+                await litellm.aembedding(input=["probe"], client=async_client, **options)
+                if endpoint == "embeddings"
+                else await litellm.aimage_generation(prompt="probe", client=async_client, **options)
+            )
+            assert not async_borrowed.is_closed
+    response: Final = result if sync else async_result
+    assert response.model_dump(exclude_none=True)["data"][0] == (
+        {"object": "embedding", "index": 0, "embedding": [0.5]}
+        if endpoint == "embeddings"
+        else {"url": "https://upstream.invalid/image.png"}
+    )
+    require_received_headers(logging.upstream_response_capture, 200)
