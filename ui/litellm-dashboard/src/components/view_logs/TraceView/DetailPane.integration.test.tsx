@@ -354,7 +354,7 @@ it("retrieves the retained diagnostic one section at a time", async () => {
   expect(screen.queryByText("First diagnostic section")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Next section" })).not.toBeInTheDocument();
   expect(agentTraceSpanErrorCall).toHaveBeenLastCalledWith("sk-test", "t1", "tool1", {
-    traceRef: undefined,
+    traceRef: "ref-a",
     cursor: "next-section",
   });
 });
