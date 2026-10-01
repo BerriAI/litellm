@@ -161,7 +161,7 @@ def get_guardrail_initializer_from_hooks():
                         verbose_proxy_logger.debug(
                             "Found guardrail_initializer_registry in %s: %s",
                             module_path,
-                            list(registry.keys()),
+                            tuple(registry.keys()),
                         )
 
                 # Check for standalone initialize_guardrail function (fallback for directory-based guardrails)
