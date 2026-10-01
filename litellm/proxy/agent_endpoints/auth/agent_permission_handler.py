@@ -47,6 +47,19 @@ class RestrictedAgentAccess:
 AgentAccess: TypeAlias = UnrestrictedAgentAccess | RestrictedAgentAccess
 
 
+def require_key_agent_access_defined() -> bool:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    return general_settings_view().get("require_key_agent_access_defined") is True
+
+
+def _is_proxy_admin(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+    return user_api_key_auth is not None and user_api_key_auth.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    )
+
+
 def _to_stable_ids(agent_ids: frozenset[str]) -> frozenset[str]:
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
@@ -80,7 +93,7 @@ class AgentRequestHandler:
     - If team has restrictions and key has restrictions: use intersection
     - If team has restrictions and key has none: inherit from team
     - If team has no restrictions: use key restrictions
-    - If no restrictions: allow all agents
+    - If no restrictions: allow all agents unless require_key_agent_access_defined is enabled for a non-admin key
     """
 
     @staticmethod
@@ -89,6 +102,7 @@ class AgentRequestHandler:
         resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
         *,
         strict: bool = False,
+        require_access_defined: Callable[[], bool] = require_key_agent_access_defined,
     ) -> AgentAccess:
         """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
         and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
@@ -97,7 +111,8 @@ class AgentRequestHandler:
         key_team_access: Final = await AgentRequestHandler.resolve_key_team_agent_access(
             user_api_key_auth, strict=strict
         )
-        if strict and isinstance(key_team_access, UnrestrictedAgentAccess):
+        deny_undefined: Final = strict or (not _is_proxy_admin(user_api_key_auth) and require_access_defined())
+        if deny_undefined and isinstance(key_team_access, UnrestrictedAgentAccess):
             return RestrictedAgentAccess(frozenset())
         caller_access: Final = await AgentRequestHandler.agent_caller_access(user_api_key_auth, strict=strict)
         own_access: Final = _intersect_agent_access(key_team_access, caller_access)

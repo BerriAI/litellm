@@ -3157,6 +3157,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #12905)."
         ),
     )
+    require_key_agent_access_defined: bool = Field(
+        False,
+        description=(
+            "When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. "
+            "Proxy admins are exempt."
+        ),
+    )
     user_url_validation: bool | None = Field(
         None,
         description=(

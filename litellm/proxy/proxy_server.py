@@ -16212,6 +16212,15 @@ async def model_info_v1(
             user_api_key_dict=user_api_key_dict,
         )
 
+    from litellm.proxy.agent_endpoints.model_list_helpers import (
+        append_agents_to_model_info,
+    )
+
+    await append_agents_to_model_info(
+        models=all_models,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     hidden_names: Final = await get_hidden_unhealthy_model_names(
         healthy_only=healthy_only,
         general_settings=general_settings,
@@ -18174,6 +18183,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "cancel_on_disconnect": "Boolean",
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
+        "require_key_agent_access_defined": "Boolean",
         "user_api_key_cache_max_size": "Integer",
         "transcribe_media_buckets": "List",
     }
