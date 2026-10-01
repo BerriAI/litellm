@@ -157,7 +157,7 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
                 for tool_idx, tool in enumerate(item["tools"]):
                     if _is_object_mapping(tool):
                         messages.append(
-                            {  # mutable-ok: inspection snapshot with a write-back index
+                            {
                                 "role": "tool",
                                 "content": _tool_search_tool_text(tool),
                                 "_tool_index": tool_idx,
@@ -217,7 +217,7 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
         return content
 
     def _rewrite_tool_search_tool(tool: Mapping[str, object]) -> dict[str, object]:
-        rewritten: Final = dict(tool)  # mutable-ok: fresh copy so guardrail rewrites do not mutate the original
+        rewritten: Final = dict(tool)
         for key in _TOOL_SEARCH_TOOL_TEXT_KEYS:
             value = rewritten.get(key)
             if isinstance(value, str) and value:
@@ -259,7 +259,7 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
                     item["output"] = _rewrite_content(item["output"])
                 elif item.get("type") == "tool_search_output" and _is_object_list(item.get("tools")):
                     tools: list[object] = item["tools"]
-                    item["tools"] = [  # mutable-ok: rewrites forwarded tool-search results in place
+                    item["tools"] = [
                         _rewrite_tool_search_tool(tool) if _is_object_mapping(tool) else tool for tool in tools
                     ]
         return visited
@@ -312,7 +312,7 @@ def _apply_redacted_tool_search_tools(item: dict[str, object], redacted_iter: It
     for tool in tools:
         if _is_object_mapping(tool) and _tool_search_tool_text(tool):
             rewritten_tools.append(
-                {  # mutable-ok: request tools must remain plain JSON dicts
+                {
                     **tool,
                     "description": next(redacted_iter),
                 }
@@ -391,7 +391,7 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
                 else:
                     _structured_redactions_apply(
                         input_value,
-                        ({"content": matched_redacted_input_text},),  # mutable-ok: one-shot redaction message
+                        ({"content": matched_redacted_input_text},),
                     )
             else:
                 return False
@@ -415,7 +415,7 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
 
 
 def _inspection_count(field: str, value: object) -> int:
-    return len(build_inspection_messages({field: value}))  # mutable-ok: one-shot field wrapper
+    return len(build_inspection_messages({field: value}))
 
 
 def _apply_redacted_input_without_messages(
@@ -514,7 +514,7 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
             continue
         if "_tool_index" in message and isinstance(message.get("content"), str):
             flattened.append(
-                {  # mutable-ok: fresh synthetic message, not stored in the original request
+                {
                     "role": message.get("role") or "tool",
                     "content": message["content"],
                 }

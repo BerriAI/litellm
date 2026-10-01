@@ -138,15 +138,15 @@ def _tool_search_function_tool(tool: Mapping[str, object]) -> ChatCompletionTool
     parameters: Final[dict[str, object]] = (
         dict(raw_parameters)
         if _is_object_mapping(raw_parameters)
-        else {  # mutable-ok: Chat Completions tool parameters
+        else {
             "type": "object",
-            "properties": {  # mutable-ok: JSON schema mapping
-                "query": {  # mutable-ok: JSON schema property
+            "properties": {
+                "query": {
                     "type": "string",
                     "description": "Search query for deferred tools.",
                 }
             },
-            "required": ["query"],  # mutable-ok: JSON schema array
+            "required": ["query"],
             "additionalProperties": False,
         }
     )
@@ -166,7 +166,7 @@ def _tool_search_function_tool(tool: Mapping[str, object]) -> ChatCompletionTool
 def _tool_search_output_messages(input_item: Mapping[str, object]) -> list[ChatCompletionToolMessage]:
     call_id: Final[str] = str(input_item.get("call_id") or "")
     if not call_id:
-        return []  # mutable-ok: empty drop result
+        return []
     found_tools: object | None = input_item.get("tools")
     if not isinstance(found_tools, list):
         found_tools = input_item.get("output")  # rebind-ok: choose the schema field before serialization
@@ -174,8 +174,8 @@ def _tool_search_output_messages(input_item: Mapping[str, object]) -> list[ChatC
         serialized_tools: Final[str] = json.dumps(found_tools, default=str)
         content: str = found_tools if isinstance(found_tools, str) else serialized_tools
     except (TypeError, ValueError):
-        content = str(found_tools or [])  # mutable-ok: fallback payload
-    return [  # mutable-ok: single tool message result
+        content = str(found_tools or [])
+    return [
         ChatCompletionToolMessage(
             role="tool",
             content=content,
@@ -1426,14 +1426,14 @@ class LiteLLMCompletionResponsesConfig:
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=cast(  # cast-ok: callee coerces the fields it reads
                     Mapping[str, str],
-                    {  # mutable-ok: adapter input consumed immediately
+                    {
                         **input_item,
                         "type": "function_call",
                         "name": TOOL_SEARCH_FUNCTION_NAME,
                         "arguments": (
                             input_item.get("arguments")
                             if isinstance(input_item.get("arguments"), str)
-                            else json.dumps(input_item.get("arguments") or {})  # mutable-ok: default JSON object
+                            else json.dumps(input_item.get("arguments") or {})
                         ),
                     },
                 )
@@ -2273,7 +2273,7 @@ class LiteLLMCompletionResponsesConfig:
         )
         responses_tools: Final[
             list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | dict[str, object]]
-        ] = []  # mutable-ok: preserves provider tool-call order
+        ] = []
         for tool in all_chat_completion_tools:
             if tool.type == "function":
                 function_definition = tool.function
@@ -2287,7 +2287,7 @@ class LiteLLMCompletionResponsesConfig:
                 elif tool_search_requested and tool_name == TOOL_SEARCH_FUNCTION_NAME:
                     responses_tools.append(
                         build_tool_search_call(
-                            {  # mutable-ok: helper input consumed immediately
+                            {
                                 "id": tool.id,
                                 "arguments": tool_arguments,
                             }

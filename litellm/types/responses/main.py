@@ -45,7 +45,7 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
 
 def build_tool_search_call(item: Mapping[str, object]) -> ResponseToolSearchCall:
     return ResponseToolSearchCall.model_validate(
-        {  # mutable-ok: validator payload consumed immediately
+        {
             **item,
             "call_id": item.get("call_id") or item.get("id"),
             "execution": item.get("execution") or "client",
@@ -58,12 +58,12 @@ def build_tool_search_call(item: Mapping[str, object]) -> ResponseToolSearchCall
 
 def _normalize_tool_search_arguments(arguments: object) -> object:
     if not isinstance(arguments, str):
-        return arguments if arguments is not None else {}  # mutable-ok: default JSON object
+        return arguments if arguments is not None else {}
     try:
         parsed: Final[object] = json.loads(arguments)
     except json.JSONDecodeError:
         return arguments
-    return parsed if parsed is not None else {}  # mutable-ok: default JSON object
+    return parsed if parsed is not None else {}
 
 
 def build_web_search_call(

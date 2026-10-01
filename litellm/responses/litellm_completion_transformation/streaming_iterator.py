@@ -185,10 +185,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._is_tool_search_call(fn_name, call_id):
             self._tool_search_call_ids.add(call_id)
             try:
-                arguments_obj: object = json.loads(arguments) if arguments else {}  # mutable-ok: default JSON object
+                arguments_obj: object = json.loads(arguments) if arguments else {}
             except json.JSONDecodeError:
                 arguments_obj = arguments
-            return {  # mutable-ok: dynamic event item fields consumed by the response event
+            return {
                 "type": "tool_search_call",
                 "id": call_id,
                 "call_id": call_id,

@@ -1285,7 +1285,7 @@ class OpenAIResponsesHandler(BaseTranslation):
     def _parsed_tool_search_arguments(arguments: str) -> object:
         try:
             if not arguments:
-                return {}  # mutable-ok: Responses tool-search arguments are JSON objects
+                return {}
             return json.loads(arguments)
         except json.JSONDecodeError:
             return arguments

@@ -160,7 +160,7 @@ def _merged_original(
         and original.get("execution") == "client"
         and len(flattened_group) == 1
         and _chat_tool_key(
-            next(iter(flattened_group), MappingProxyType[str, object]({}))  # mutable-ok: typed empty fallback
+            next(iter(flattened_group), MappingProxyType[str, object]({}))
         )
         == f"function:{TOOL_SEARCH_FUNCTION_NAME}"
     ):
@@ -184,7 +184,7 @@ def _rebuilt_tool_search(original: Tool, flattened: Tool, guardrailed: Tool) -> 
         for key, value in _function_fields(guardrailed).items()
         if _function_fields(flattened).get(key) != value
     }
-    return ({**original, **changed_function},)  # mutable-ok: json.dumps rejects MappingProxyType
+    return ({**original, **changed_function},)
 
 
 def merge_guardrailed_tools(

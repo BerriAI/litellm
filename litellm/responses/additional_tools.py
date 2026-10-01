@@ -83,7 +83,7 @@ def hoist_additional_tools(
         len(hoisted_tools),
         len(items),
     )
-    remaining_input: Final = [  # mutable-ok: JSON request payload
+    remaining_input: Final = [
         item for item in input if not _is_additional_tools_item(item)
     ]
     return HoistedAdditionalTools(input=remaining_input, tools=(*existing, *hoisted_tools), hoisted=hoisted_tools)
