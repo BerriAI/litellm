@@ -308,6 +308,7 @@ if TYPE_CHECKING:
         CachingHandlerResponse,
         LLMCachingHandler,
     )
+    from litellm.harness.types import Harness
     from litellm.integrations.custom_logger import CustomLogger
 
     # Type stubs for lazy-loaded functions and classes
@@ -385,6 +386,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.google_genai.transformation import (
         BaseGoogleGenAIGenerateContentConfig,
     )
+    from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
     from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
     from litellm.llms.base_llm.image_generation.transformation import (
         BaseImageGenerationConfig,
@@ -9881,6 +9883,37 @@ class ProviderConfigManager:
             return E2BSandboxConfig()
         if provider == SandboxProviders.OPENSANDBOX:
             return OpenSandboxSandboxConfig()
+        return None
+
+    @staticmethod
+    def get_provider_harness_config(harness: Harness) -> BaseHarnessConfig | None:
+        """
+        Get the agent-harness configuration (Claude Code, Codex, OpenCode, Deep Agents).
+        """
+        from litellm.harness.types import Harness as _Harness
+
+        if harness == _Harness.CLAUDE_CODE:
+            from litellm.llms.claude_code.harness.transformation import (
+                ClaudeCodeHarnessConfig,
+            )
+
+            return ClaudeCodeHarnessConfig()
+        if harness == _Harness.CODEX:
+            from litellm.llms.codex.harness.transformation import CodexHarnessConfig
+
+            return CodexHarnessConfig()
+        if harness == _Harness.OPENCODE:
+            from litellm.llms.opencode.harness.transformation import (
+                OpenCodeHarnessConfig,
+            )
+
+            return OpenCodeHarnessConfig()
+        if harness == _Harness.DEEPAGENTS:
+            from litellm.llms.deepagents.harness.transformation import (
+                DeepAgentsHarnessConfig,
+            )
+
+            return DeepAgentsHarnessConfig()
         return None
 
     @staticmethod

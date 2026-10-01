@@ -268,6 +268,31 @@ For MCP OAuth, an upstream may advertise dynamic client registration but refuse 
 
 </details>
 
+<details>
+<summary><b>Agents</b> - Run Claude Code, Codex, OpenCode or Deep Agents on any model (Python SDK)</summary>
+
+### Python SDK - Agents
+
+```python
+import litellm
+from litellm import Harness, sandbox
+
+result = litellm.agent(
+    Harness.CLAUDE_CODE,  # or Harness.CODEX, Harness.OPENCODE, Harness.DEEPAGENTS
+    "Find why tests/test_router.py is flaky and fix it.",
+    sandbox=sandbox.local("./repo"),
+    model="litellm_proxy/claude-sonnet-4-5",  # a model group on your AI Gateway
+)
+
+print(result.text, result.cost, [f.path for f in result.files])
+```
+
+Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call the agent makes goes through your AI Gateway, tagged `harness,claude_code`. Drop the `litellm_proxy/` prefix to call a provider directly. Install `starlette uvicorn` plus the agent's CLI (`claude`, `codex` or `opencode`), or `deepagents langchain-litellm` for Deep Agents.
+
+[**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
+
+</details>
+
 ### Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |

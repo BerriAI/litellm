@@ -5,6 +5,14 @@ description: >-
 
 test_paths:
   - reason: >-
+      litellm.agent() end-to-end suite. It drives the real claude, codex and opencode CLIs and
+      deepagents against a live LiteLLM AI Gateway, so it needs those binaries on PATH plus
+      LITELLM_PROXY_API_BASE / LITELLM_PROXY_API_KEY, and skips without them. Run manually
+      before changing litellm/harness; the mocked coverage runs in tests/unit/harness and
+      tests/unit/llms/*/harness
+    paths:
+      - tests/harness_e2e
+  - reason: >-
       The Rust/Python parity harness is run manually through its local CLI. Recorded replay,
       fixture generation, and harness checks are intentionally outside pull request CI
     paths:
