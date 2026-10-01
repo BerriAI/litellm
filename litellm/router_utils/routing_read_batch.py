@@ -93,7 +93,7 @@ class RoutingPrefetch:
         if request is None or redis_cache is None or _PREFETCH_SLOT in request.prefetched:
             return
         cooldown_keys: Final = tuple(
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in litellm_router_instance.get_model_ids()
+            CooldownCache.get_cooldown_cache_key(model_id) for model_id in deployment_ids(deployments)
         )
         usage_keys: Final = (
             () if usage_selector is None else tuple(itertools.chain(*usage_selector.usage_counter_keys(deployments)))
