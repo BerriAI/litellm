@@ -85,6 +85,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputText,
+    build_tool_search_call,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -2300,7 +2301,7 @@ class LiteLLMCompletionResponsesConfig:
                     responses_tools.append(web_search_call)
                 elif tool_search_requested and tool_name == TOOL_SEARCH_FUNCTION_NAME:
                     responses_tools.append(
-                        _tool_search_call_item(
+                        build_tool_search_call(
                             {  # mutable-ok: helper input consumed immediately
                                 "id": tool.id,
                                 "arguments": tool_arguments,

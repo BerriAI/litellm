@@ -3,6 +3,7 @@ import json
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.responses.main import ResponseToolSearchCall
 from litellm.types.utils import Choices, Message, ModelResponse
 
 
@@ -108,12 +109,32 @@ def test_tool_search_response_becomes_tool_search_call_item() -> None:
     )
 
     assert output == [
-        {
-            "type": "tool_search_call",
-            "id": "call_tool_search",
-            "call_id": "call_tool_search",
-            "status": "completed",
-            "execution": "client",
-            "arguments": {"query": "weather"},
-        }
+        ResponseToolSearchCall(
+            id="call_tool_search",
+            arguments={"query": "weather"},
+            call_id="call_tool_search",
+            execution="client",
+            status="completed",
+            type="tool_search_call",
+        )
     ]
+    assert output[0].model_dump() == {
+        "type": "tool_search_call",
+        "id": "call_tool_search",
+        "call_id": "call_tool_search",
+        "status": "completed",
+        "execution": "client",
+        "arguments": {"query": "weather"},
+        "created_by": None,
+    }
+
+
+def test_tool_search_response_is_accepted_by_responses_api_response() -> None:
+    response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="Find a weather tool.",
+        responses_api_request={"tools": [{"type": "tool_search", "execution": "client"}]},
+        chat_completion_response=_tool_search_response(),
+    )
+
+    assert response.output[-1].type == "tool_search_call"
+    assert response.output[-1].arguments == {"query": "weather"}
