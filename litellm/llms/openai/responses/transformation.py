@@ -22,7 +22,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai.chat.gpt_5_transformation import (
+    is_gpt_reasoning_series_name,
+    unsupported_reasoning_effort_message,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
@@ -138,8 +141,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _effort_level_is_disabled(model: str, level: str) -> bool:
-        """Whether the cost map explicitly turns this effort level off.
+        """Whether the model's cost-map row turns this effort level off.
 
+        The same row the chat gate reads, so a level the row refuses is refused on both wires
+        and a new model needs its row, not code. This surface stays opt-out for every level,
+        xhigh included: it never refused a level the row omits, and the codex rows omit xhigh.
         Azure overrides this so a bare deployment name reads the azure/ entry.
         """
         from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -252,26 +258,25 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         lookup_name: Final = self._model_map_lookup_name(model)
         if self._is_gpt_5_model(model=lookup_name):
             reasoning: Final = params.get("reasoning") or {}
-            effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
-            if isinstance(reasoning, dict) and isinstance(effort, str) and effort in ("none", "minimal", "low"):
-                if self._effort_level_is_disabled(lookup_name, effort):
-                    if drop_params or litellm.drop_params:
-                        remaining: Final = {  # mutable-ok: outgoing JSON reasoning object with one key removed
-                            key: value for key, value in reasoning.items() if key != "effort"
-                        }
-                        if remaining:
-                            params["reasoning"] = remaining
-                        else:
-                            params.pop("reasoning", None)
-                        effort = None
-                    else:
-                        raise litellm.UnsupportedParamsError(
-                            message=(
-                                f"reasoning.effort={effort} is not supported for {model}. "
-                                "To drop unsupported params set `litellm.drop_params = True`"
-                            ),
-                            status_code=400,
-                        )
+            requested_effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            if (
+                isinstance(reasoning, dict)
+                and isinstance(requested_effort, str)
+                and self._effort_level_is_disabled(lookup_name, requested_effort)
+            ):
+                if not (drop_params or litellm.drop_params):
+                    raise litellm.UnsupportedParamsError(
+                        message=unsupported_reasoning_effort_message("reasoning.effort", requested_effort, model),
+                        status_code=400,
+                    )
+                remaining: Final = reasoning.copy()
+                remaining.pop("effort", None)
+                if remaining:
+                    params["reasoning"] = remaining
+                else:
+                    params.pop("reasoning", None)
+            forwarded_reasoning: Final = params.get("reasoning")
+            effort: Final = forwarded_reasoning.get("effort") if isinstance(forwarded_reasoning, dict) else None
             supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
             effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
 

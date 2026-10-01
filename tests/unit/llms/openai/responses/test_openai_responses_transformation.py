@@ -1858,6 +1858,47 @@ class TestResponsesSurfaceSharesTheEffortRule:
         )
         assert ("top_p" in mapped) is top_p_survives
 
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_effort_levels_the_map_row_turns_off_are_dropped_or_refused(self, local_model_cost_map, level):
+        """Same row as the chat gate, read opt-out for every level. gpt-6.1-sol's row turns none
+        and minimal off: OpenAI lists low, medium, high, xhigh and max for it
+        (https://developers.openai.com/api/docs/models/gpt-6.1-sol, via #43910), and a local proxy
+        got OpenAI's 400 for none and minimal through /v1/responses on 2026-09-30."""
+        forwarded = litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is not False
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if forwarded:
+            kept = OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": level}},
+                model="gpt-6.1-sol",
+                drop_params=False,
+            )
+            assert kept["reasoning"] == {"effort": level}
+        else:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
+    def test_dropping_a_refused_effort_keeps_the_rest_of_the_reasoning_object(self, local_model_cost_map):
+        refused = next(
+            level
+            for level in ("none", "minimal", "low", "max")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": refused, "summary": "auto"}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert mapped["reasoning"] == {"summary": "auto"}
+
     def test_top_p_raises_without_drop_params(self, local_model_cost_map):
         with pytest.raises(litellm.UnsupportedParamsError):
             OpenAIResponsesAPIConfig().map_openai_params(

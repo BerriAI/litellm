@@ -343,11 +343,11 @@ def test_azure_gpt_6_astra_takes_the_reasoning_series_request_shape():
         model="gpt-6-astra",
         custom_llm_provider="azure",
         max_tokens=100,
-        reasoning_effort="max",
+        reasoning_effort="xhigh",
     )
     assert params["max_completion_tokens"] == 100
     assert "max_tokens" not in params
-    assert params["reasoning_effort"] == "max"
+    assert params["reasoning_effort"] == "xhigh"
 
 
 @pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
@@ -365,14 +365,48 @@ def test_azure_gpt6_astra_reasoning_effort_none_unlocks_temperature(config: Azur
     assert params["reasoning_effort"] == "none"
 
 
+def _azure_chat_row_forwards(row: dict, level: str) -> bool:
+    """Azure chat polarity: xhigh and none need an explicit true, every other level only has to not be false."""
+    flag = row.get(f"supports_{level}_reasoning_effort")
+    return flag is True if level in ("xhigh", "none") else flag is not False
+
+
 @pytest.mark.parametrize("model", ["azure/gpt-6-astra", "azure/us/gpt-6-astra"])
-def test_azure_gpt6_astra_rejects_reasoning_effort_minimal(config: AzureOpenAIGPT5Config, model: str):
-    """Foundry's gpt-6-astra lists none, low, medium, high, xhigh and max but not minimal."""
-    with pytest.raises(litellm.utils.UnsupportedParamsError):
-        config.map_openai_params(
-            non_default_params={"reasoning_effort": "minimal"},
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_azure_gpt6_astra_forwards_exactly_the_effort_levels_its_map_row_allows(
+    config: AzureOpenAIGPT5Config, model: str, level: str
+):
+    """The azure/ row is the whole contract for a Foundry deployment, max included: a live
+    Foundry gpt-6-astra answered reasoning_effort max with a 400 naming none, low, medium, high
+    and xhigh on 2026-09-05 (commit e79f3ec5205), so its row turns max and minimal off."""
+    forwarded = _azure_chat_row_forwards(litellm.model_cost[model], level)
+    dropped = config.map_openai_params(
+        non_default_params={"reasoning_effort": level},
+        optional_params={},
+        model=model,
+        drop_params=True,
+        api_version="2025-04-01-preview",
+    )
+    assert ("reasoning_effort" in dropped) is forwarded
+    if forwarded:
+        kept = config.map_openai_params(
+            non_default_params={"reasoning_effort": level},
             optional_params={},
             model=model,
             drop_params=False,
             api_version="2025-04-01-preview",
         )
+        assert kept["reasoning_effort"] == level
+    else:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": level},
+                optional_params={},
+                model=model,
+                drop_params=False,
+                api_version="2025-04-01-preview",
+            )
+
+
+def test_azure_gpt6_astra_row_turns_max_off_so_the_gate_test_covers_max():
+    assert litellm.model_cost["azure/gpt-6-astra"].get("supports_max_reasoning_effort") is False

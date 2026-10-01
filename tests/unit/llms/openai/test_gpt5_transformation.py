@@ -431,6 +431,49 @@ def test_gpt5_drops_reasoning_effort_minimal_when_requested(config: OpenAIConfig
     assert "reasoning_effort" not in params
 
 
+def _chat_row_forwards(row: dict, level: str) -> bool:
+    """Chat polarity: xhigh needs an explicit true, every other level only has to not be false."""
+    flag = row.get(f"supports_{level}_reasoning_effort")
+    return flag is True if level == "xhigh" else flag is not False
+
+
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_gpt6_1_sol_forwards_exactly_the_effort_levels_its_map_row_allows(config: OpenAIConfig, level: str):
+    """The map row is the whole contract, so a new GPT-6 model is gated by its row with no code
+    change. gpt-6.1-sol's row turns none and minimal off: OpenAI lists low, medium, high, xhigh
+    and max for it (https://developers.openai.com/api/docs/models/gpt-6.1-sol, via #43910), and a
+    local proxy got OpenAI's 400 for none and minimal on both endpoints on 2026-09-30."""
+    forwarded = _chat_row_forwards(litellm.model_cost["gpt-6.1-sol"], level)
+    dropped = config.map_openai_params(
+        non_default_params={"reasoning_effort": level},
+        optional_params={},
+        model="gpt-6.1-sol",
+        drop_params=True,
+    )
+    assert ("reasoning_effort" in dropped) is forwarded
+    if forwarded:
+        kept = config.map_openai_params(
+            non_default_params={"reasoning_effort": level},
+            optional_params={},
+            model="gpt-6.1-sol",
+            drop_params=False,
+        )
+        assert kept["reasoning_effort"] == level
+    else:
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            config.map_openai_params(
+                non_default_params={"reasoning_effort": level},
+                optional_params={},
+                model="gpt-6.1-sol",
+                drop_params=False,
+            )
+
+
+def test_gpt6_1_sol_row_turns_a_level_off_so_the_gate_test_is_not_vacuous():
+    row = litellm.model_cost["gpt-6.1-sol"]
+    assert any(row.get(f"supports_{level}_reasoning_effort") is False for level in ("none", "minimal", "low", "max"))
+
+
 def test_gpt5_minimal_dict_triggers_validation(config: OpenAIConfig):
     """Dict with effort='minimal' triggers minimal model-support validation."""
     with pytest.raises(litellm.utils.UnsupportedParamsError):

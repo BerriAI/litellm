@@ -6,15 +6,17 @@ and no flag can drop medium because medium has none. Every other entry answers t
 supports_*_reasoning_effort flags below, whose polarity mirrors how a request path reads that same
 flag. medium and high are unconditional for a reasoning model. minimal and low are opt-out:
 openai/chat/gpt_5_transformation.py refuses them only when the map says false. xhigh and max are
-opt-in. none is opt-out everywhere except the azure gpt-5 family, whose config raises
-UnsupportedParamsError without an explicit true.
+opt-in. none is opt-out everywhere except the azure gpt-5 family, whose config refuses it without an
+explicit true.
 
-xhigh is gated on the request path by the openai and azure gpt-5 configs. max is not gated there at
-all: outside the gpt-6-astra rows every entry carrying supports_max_reasoning_effort is Claude-family,
-and anthropic/chat/transformation.py gates max on the output_config path while its reasoning_effort
-path maps any level to a thinking budget. Making max opt-in is a deliberate trade, then, since an
-explicit flag is the only signal that the tier is a real one rather than litellm rounding the level
-to a budget, and a missing flag costs advisory metadata rather than a rejected request.
+xhigh is gated on the chat request path by the openai and azure gpt-5 configs, which refuse every other
+flagged level (none, minimal, low, max) only on an explicit false, as does the Responses path for all
+five. Advertising max opt-in while the request path refuses it only on a false is a deliberate trade:
+outside the gpt-6 rows every entry carrying supports_max_reasoning_effort is Claude-family, where
+anthropic/chat/transformation.py gates max on the output_config path while its reasoning_effort path
+maps any level to a thinking budget, so an explicit flag is the only signal that the tier is a real
+one rather than litellm rounding the level to a budget, and a missing flag costs advisory metadata
+rather than a rejected request.
 
 A deployment the map describes with no effort flags at all resolves to None rather than to the
 opt-out defaults. 689 of the map's 854 reasoning entries carry no flag, and the o-series, xai and
