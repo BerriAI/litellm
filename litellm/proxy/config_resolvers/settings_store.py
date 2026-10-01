@@ -13,6 +13,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
     Resolved,
     Section,
     SettingValue,
+    is_resource_list,
     resolve,
     rule_for,
 )
@@ -49,8 +50,14 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         self._deleted_runtime_keys: frozenset[str] = frozenset()
 
     def load_yaml(self, mapping: Mapping[str, JsonValue]) -> None:
-        self._yaml_values = MappingProxyType(dict(mapping))
+        self._yaml_values = MappingProxyType(
+            {key: value for key, value in mapping.items() if not is_resource_list(self._section, key)}
+        )
         self._clear_runtime()
+
+    def stored_value(self, key: str) -> SettingValue:
+        stored: Final = self._db_value(key)
+        return ABSENT if stored is None else stored
 
     def config_value(self, key: str) -> JsonValue:
         return self._yaml_values.get(key)

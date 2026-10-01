@@ -302,6 +302,17 @@ async def test_load_config_returns_and_binds_the_general_settings_store(tmp_path
     assert config_state["general_settings"]["max_file_size_mb"] == 5
 
 
+def test_settings_store_leaves_pass_through_endpoints_to_the_database() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"pass_through_endpoints": [{"path": "/config"}]})
+    store.apply_db_row("general_settings", {"pass_through_endpoints": [{"path": "/db"}]})
+
+    assert store["pass_through_endpoints"] == [{"path": "/db"}]
+    assert store.source("pass_through_endpoints") == "db"
+    assert store.stored_value("pass_through_endpoints") == [{"path": "/db"}]
+    assert store.rejected_writes({"pass_through_endpoints": [{"path": "/ui"}]}) == ()
+
+
 def test_settings_store_starts_with_an_unset_source() -> None:
     store: Final = SettingsStore("general_settings")
 
