@@ -99,12 +99,18 @@ def managed_inference_request(
     cli_model: str | None,
     path_model: object = None,
     query_model: object = None,
+    *,
+    auth: UserAPIKeyAuth | None = None,
+    require_model: bool = True,
+    model_group_alias: object = None,
 ) -> dict[str, object]:
     from litellm.proxy.auth.route_checks import RouteChecks
 
     if route in _MANAGED_REALTIME_ROUTES:
         model: Final = query_model or body.get("model")
         if not isinstance(model, str) or not model:
+            if not require_model:
+                return dict(body)  # mutable-ok: centralized auth hooks add request tags and budget metadata
             raise_identity_failure(
                 AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
             )
@@ -117,8 +123,32 @@ def managed_inference_request(
     endpoint_model: Final = path_model or (
         query_model if route.endswith(("/completions", "/embeddings", "/images/generations", "/images/edits")) else None
     )
-    effective: Final = resolve_inference_model(body.get("model"), settings, cli_model, endpoint_model, kind=kind)
+    from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_target
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+    )
+
+    aliased_body: Final = dict(body)  # mutable-ok: existing alias helpers rewrite their request copy
+    if auth is not None:
+        _update_model_if_team_alias_exists(aliased_body, auth)
+        _update_model_if_key_alias_exists(aliased_body, auth)
+    selected: Final = resolve_inference_model(aliased_body.get("model"), settings, cli_model, endpoint_model, kind=kind)
+    import litellm
+
+    aliased: Final = (
+        alias_target(selected, CallerAliases((), (litellm.model_alias_map, auth.aliases))) or selected
+        if isinstance(selected, str) and auth is not None
+        else selected
+    )
+    from litellm.router_utils.common_utils import resolve_model_group_alias
+
+    effective: Final = (
+        (resolve_model_group_alias(model_group_alias, aliased) or aliased) if isinstance(aliased, str) else aliased
+    )
     if not isinstance(effective, str) or not effective:
+        if not require_model:
+            return dict(body)  # mutable-ok: centralized auth hooks add request tags and budget metadata
         raise_identity_failure(
             AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
         )
@@ -256,6 +286,10 @@ async def prepare_agent_invocation(
     effective: Final = target if target is not None else registered
     pricing: Final = effective.litellm_params or MappingProxyType({})
     fixed_fee: Final = pricing.get("cost_per_query")
+    if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
+        raise_identity_failure(AgentIdentityFailure(message="The caller is not permitted to invoke this agent"))
+    auth.invoked_agent_id = effective.agent_id
+    auth.invoked_agent_policy = effective
     if (
         not effective.identity_managed
         and effective.litellm_budget_table is None
@@ -264,10 +298,6 @@ async def prepare_agent_invocation(
         and fixed_fee is None
     ):
         return
-    if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
-        raise_identity_failure(AgentIdentityFailure(message="The caller is not permitted to invoke this agent"))
-    auth.invoked_agent_id = effective.agent_id
-    auth.invoked_agent_policy = effective
     if (
         billable
         and auth.agent_id is None
@@ -304,3 +334,27 @@ async def prepare_agent_invocation(
             )
         )
     auth.agent_invocation_cost = fee
+
+
+def agent_invocation_policy(auth: UserAPIKeyAuth | None, registered: AgentResponse) -> AgentResponse:
+    admitted: Final = auth.invoked_agent_policy if auth is not None else None
+    if admitted is not None and auth is not None:
+        matching: Final = auth.invoked_agent_id == registered.agent_id == admitted.agent_id
+        captured_price: Final = (admitted.litellm_params or MappingProxyType({})).get(
+            "cost_per_query"
+        ) is None or auth.agent_invocation_cost is not None
+        if matching and captured_price:
+            return admitted
+        raise_identity_failure(
+            AgentIdentityFailure(code="policy_unavailable", message="Agent dispatch does not match its admission")
+        )
+    if (
+        registered.identity_managed
+        or registered.identity is not None
+        or registered.litellm_budget_table is not None
+        or (registered.litellm_params or MappingProxyType({})).get("cost_per_query") is not None
+    ):
+        raise_identity_failure(
+            AgentIdentityFailure(code="policy_unavailable", message="Agent dispatch requires a matching admission")
+        )
+    return registered

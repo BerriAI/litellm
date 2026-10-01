@@ -534,7 +534,8 @@ async def test_unmanaged_agent_invocation_retains_legacy_behavior(monkeypatch: p
     await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database))
     assert auth.managed_agent_policy is None
     assert auth.billing_agent_policy is None
-    assert auth.invoked_agent_id is None
+    assert auth.invoked_agent_id == "agent"
+    assert auth.invoked_agent_policy is not None
 
 
 @pytest.mark.asyncio
@@ -744,3 +745,38 @@ async def test_unmanaged_invocation_rejects_invalid_configured_fees(
     assert exc.value.status_code == 503
     assert "Agent invocation price is invalid" in str(exc.value.detail)
     assert auth.agent_invocation_cost is None
+
+
+@pytest.mark.parametrize("route", ("/realtime", "/v1/chat/completions", "/v1/files"))
+def test_ordinary_requests_without_models_keep_existing_validation(route: str) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+
+    assert managed_inference_request(route, {}, {}, None, require_model=False) == {}
+
+
+@pytest.mark.parametrize("state", (
+    {"identity_managed": True},
+    {"identity": BINDING},
+    {"litellm_budget_table": {"budget_id": "budget", "max_budget": 0.5}},
+    {"litellm_params": {"cost_per_query": 0.25}},
+))
+@pytest.mark.parametrize("has_auth", (False, True))
+def test_protected_agent_dispatch_requires_admission(state: dict[str, object], has_auth: bool) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import agent_invocation_policy
+
+    registered: Final = agent(**{"identity": None, "identity_managed": False, **state})
+    with pytest.raises(HTTPException, match="admission") as exc:
+        agent_invocation_policy(UserAPIKeyAuth() if has_auth else None, registered)
+    assert exc.value.status_code == 503
+
+
+def test_paid_agent_dispatch_requires_the_captured_fee() -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import agent_invocation_policy
+
+    policy: Final = agent(identity=None, identity_managed=False, litellm_params={"cost_per_query": 0.25})
+    auth: Final = UserAPIKeyAuth()
+    auth.invoked_agent_id = policy.agent_id
+    auth.invoked_agent_policy = policy
+    with pytest.raises(HTTPException, match="admission") as exc:
+        agent_invocation_policy(auth, policy)
+    assert exc.value.status_code == 503

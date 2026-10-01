@@ -183,3 +183,103 @@ async def test_route_a2a_model_read_through_recovers_agent_created_on_sibling_re
     assert call_kwargs["model"] == f"a2a/{agent_name}"
     assert call_kwargs["api_base"] == "http://sibling-db-agent.example.com"
     prisma_client.db.litellm_agentstable.find_unique.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override", ("api_key", "api_base", "user_config", "router_settings_override", "deployment", "no-router")
+)
+async def test_registered_agent_dispatch_owns_the_admitted_destination_and_fee(monkeypatch: pytest.MonkeyPatch, override: str) -> None:
+    from typing import Final
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.types.agents import AgentResponse
+
+    agent: Final = AgentResponse(
+        agent_id="paid",
+        agent_name="paid",
+        agent_card_params={"url": "https://registered.test/"},
+        litellm_params={"cost_per_query": 0.25},
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(agent)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    router: Final = _router_without_models()
+    if override == "deployment":
+        router.is_recognized_model.return_value = True
+    provider: Final = AsyncMock(return_value={"id": "reply"})
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    with patch("litellm.acompletion", provider):
+        await prepare_agent_invocation(auth, "paid", None)
+        pending: Final = await route_request(
+            data={
+                "model": "a2a/paid",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "cost_per_query": 99.0,
+                **(
+                    {override: {} if override in ("user_config", "router_settings_override") else "override"}
+                    if override not in ("deployment", "no-router")
+                    else {}
+                ),
+            },
+            llm_router=None if override == "no-router" else router,
+            user_model=None,
+            route_type="acompletion",
+            user_api_key_dict=auth,
+        )
+        assert await pending == {"id": "reply"}
+    provider.assert_awaited_once()
+    assert provider.call_args.kwargs["api_base"] == "https://registered.test/"
+    assert provider.call_args.kwargs["cost_per_query"] == 0.25
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("a2a/paid", "gpt-4o"))
+async def test_routing_overrides_cannot_dispatch_without_matching_agent_admission(
+    monkeypatch: pytest.MonkeyPatch, model: str,
+) -> None:
+    from typing import Final
+    from fastapi import HTTPException
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.types.agents import AgentResponse
+
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(AgentResponse(
+        agent_id="paid", agent_name="paid", agent_card_params={"url": "https://agent.test/"},
+        litellm_params={"cost_per_query": 0.25},
+    ))
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    if model == "gpt-4o":
+        await prepare_agent_invocation(auth, "paid", None)
+    provider: Final = Mock(return_value=None)
+    with patch("litellm.acompletion", provider), pytest.raises(HTTPException, match="admission") as exc:
+        await route_request(
+            data={"model": model, "api_base": "https://override.test/", "messages": [{"role": "user", "content": "Hi"}]},
+            llm_router=None, user_model=None, route_type="acompletion", user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 503
+    provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unregistered_direct_agent_keeps_explicit_endpoint_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Final
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+
+    monkeypatch.setattr(agent_registry, "global_agent_registry", agent_registry.AgentRegistry())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    provider: Final = AsyncMock(return_value={"id": "direct-reply"})
+    with patch("litellm.acompletion", provider):
+        pending: Final = await route_request(
+            data={"model": "a2a/direct", "api_base": "https://direct.test/", "messages": [{"role": "user", "content": "Hi"}]},
+            llm_router=None, user_model=None, route_type="acompletion",
+        )
+        assert await pending == {"id": "direct-reply"}
+    assert provider.call_args.kwargs["api_base"] == "https://direct.test/"
