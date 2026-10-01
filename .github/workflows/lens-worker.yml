@@ -36,11 +36,17 @@ jobs:
       - name: Build Lens worker
         run: docker build -f deploy/lens/Dockerfile -t lens-worker:${{ github.sha }} .
       - name: Verify standalone imports with a read-only filesystem
-        run: >-
-          docker run --rm --network none --read-only --cap-drop ALL
-          --security-opt no-new-privileges --entrypoint python
-          lens-worker:${{ github.sha }}
-          -c 'import os; import engine.worker; assert os.getuid() == 65532'
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --entrypoint python \
+            lens-worker:${{ github.sha }} -c '
+          import os
+          import engine.worker
+          from engine.trace_store import trace_store
+          assert os.getuid() == 65532
+          with trace_store() as store:
+              assert store.count() == 0
+          '
       - name: Publish versioned Lens worker
         if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
         env:
