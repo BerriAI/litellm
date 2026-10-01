@@ -2069,9 +2069,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         if pricing is None:
             return False
-        explicit_entry: Final = (
-            pricing[1] if self._custom_pricing_for(result) else _raw_cost_map_entry(pricing[0])
-        )
+        explicit_entry: Final = pricing[1] if self._custom_pricing_for(result) else _raw_cost_map_entry(pricing[0])
         return explicit_entry is not None and is_free_usage(usage, explicit_entry)
 
     def _custom_pricing_for(self, result: object) -> bool:
