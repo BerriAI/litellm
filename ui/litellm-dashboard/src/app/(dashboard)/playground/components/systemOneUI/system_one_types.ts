@@ -50,7 +50,7 @@ export interface SystemOneScoreAnswer {
 export type SystemOneAnswer = SystemOneNoulAnswer | SystemOneChoiceAnswer | SystemOneScoreAnswer;
 
 export interface SystemOneResponse {
-  model: string;
+  model?: string | null;
   answers: Record<string, SystemOneAnswer>;
   usage?: {
     input_tokens: number;

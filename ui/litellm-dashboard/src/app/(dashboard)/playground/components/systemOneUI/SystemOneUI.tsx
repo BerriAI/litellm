@@ -242,7 +242,13 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
         </section>
         <section className="grid content-start gap-4" aria-label="System One results">
           <SystemOneQuestionBreakdown payload={validation.payload} />
-          <SystemOneResponseView response={response} latencyMs={latencyMs} error={error} isLoading={isLoading} />
+          <SystemOneResponseView
+            response={response}
+            fallbackModel={validation.payload?.model}
+            latencyMs={latencyMs}
+            error={error}
+            isLoading={isLoading}
+          />
         </section>
       </div>
     </div>

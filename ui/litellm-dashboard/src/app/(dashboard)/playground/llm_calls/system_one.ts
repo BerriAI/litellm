@@ -90,11 +90,18 @@ function isSystemOneUsage(value: unknown): value is NonNullable<SystemOneRespons
   return isNonNegativeNumber(value.output_tokens);
 }
 
+function isOptionalModel(value: unknown): value is string | null | undefined {
+  if (value === undefined || value === null) {
+    return true;
+  }
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function isSystemOneResponse(value: unknown): value is SystemOneResponse {
   if (!isRecord(value)) {
     return false;
   }
-  if (typeof value.model !== "string" || value.model.trim().length === 0) {
+  if (!isOptionalModel(value.model)) {
     return false;
   }
   if (!isRecord(value.answers)) {

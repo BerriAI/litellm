@@ -82,6 +82,21 @@ describe("SystemOneUI integration", () => {
     });
   });
 
+  it("uses the requested model when the response omits it", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValueOnce(
+      createResponse({
+        answers: responseBody.answers,
+      }),
+    );
+    render(<SystemOneUI accessToken="session-key" />);
+
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("jev-latest")).toBeInTheDocument();
+    expect(screen.getByText("Selected choice")).toBeInTheDocument();
+  });
+
   it("keeps the preview usable when question values have invalid types", () => {
     render(<SystemOneUI accessToken="session-key" />);
 

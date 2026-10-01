@@ -9,6 +9,7 @@ import type { SystemOneAnswer, SystemOneResponse } from "./system_one_types";
 
 interface SystemOneResponseViewProps {
   response?: SystemOneResponse;
+  fallbackModel?: string;
   latencyMs?: number;
   error?: string;
   isLoading: boolean;
@@ -105,7 +106,13 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
   );
 }
 
-export default function SystemOneResponseView({ response, latencyMs, error, isLoading }: SystemOneResponseViewProps) {
+export default function SystemOneResponseView({
+  response,
+  fallbackModel,
+  latencyMs,
+  error,
+  isLoading,
+}: SystemOneResponseViewProps) {
   const [showRaw, setShowRaw] = useState(false);
 
   if (isLoading) {
@@ -139,13 +146,15 @@ export default function SystemOneResponseView({ response, latencyMs, error, isLo
     );
   }
 
+  const model = response.model ?? fallbackModel;
+
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="grid gap-1">
             <CardTitle>Calibrated probabilities</CardTitle>
-            <CardDescription>{response.model}</CardDescription>
+            {model && <CardDescription>{model}</CardDescription>}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {latencyMs !== undefined && <Badge variant="outline">{Math.round(latencyMs)} ms</Badge>}
