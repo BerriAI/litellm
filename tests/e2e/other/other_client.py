@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-from e2e_http import AnthropicHeaders, AuthHeaders, NoBody, ProbeResult, Result
+from e2e_http import AnthropicHeaders, AuthHeaders, NoBody, ProbeResult, Result, unwrap
 from idp import Keycloak, keycloak_from_env
 from models import (
     ChatBody,
@@ -27,6 +27,8 @@ from models import (
     ReadinessResponse,
     UserListParams,
     UserListResponse,
+    UserNewBody,
+    UserNewResponse,
 )
 from proxy_client import ProxyClient
 from pydantic import Field
@@ -101,6 +103,17 @@ class OtherClient:
             params=ModelsListParams(return_wildcard_routes=False),
             response_type=ModelsListResponse,
         )
+
+    def create_user(self, body: UserNewBody) -> str:
+        """POST /user/new as the master key; the row a JWT's `sub` resolves to."""
+        return unwrap(
+            self.proxy.transport.post(
+                "/user/new",
+                headers=self.proxy.management_headers(),
+                json=body,
+                response_type=UserNewResponse,
+            )
+        ).user_id
 
     def list_users_as(self, key: str) -> Result[UserListResponse]:
         """GET /user/list under `key`. Admin-only, so it doubles as the master

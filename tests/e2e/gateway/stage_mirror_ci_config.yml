@@ -6,6 +6,12 @@ general_settings:
     user_email_jwt_field: email
     team_ids_jwt_field: groups
     user_id_upsert: true
+    admin_allowed_routes:
+      - management_routes
+      - spend_tracking_routes
+      - global_spend_tracking_routes
+      - info_routes
+      - openai_routes
   proxy_config_reload_interval_seconds: 7
   store_prompts_in_spend_logs: true
   database_connection_pool_limit: 10
