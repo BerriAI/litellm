@@ -181,6 +181,44 @@ def test_arize_set_attributes():
     span.set_attribute.assert_any_call(SpanAttributes.LLM_TOKEN_COUNT_PROMPT, 40)
 
 
+def test_arize_records_zero_valued_sampling_params():
+    """A sampling param the caller set to 0 still has to reach the span.
+
+    temperature=0 is what you send for deterministic output, so dropping it
+    hides the single most common setting from the trace.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import ModelResponse
+
+    span = MagicMock()
+
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Basic Request Content"}],
+        "standard_logging_object": {
+            "model_parameters": {},
+            "metadata": {},
+            "call_type": "completion",
+        },
+        "optional_params": {"max_tokens": 0, "temperature": 0, "top_p": 0},
+        "litellm_params": {"custom_llm_provider": "openai"},
+    }
+
+    response_obj = ModelResponse(
+        usage={"total_tokens": 100, "completion_tokens": 60, "prompt_tokens": 40},
+        choices=[Choices(message={"role": "assistant", "content": "Basic Response Content"})],
+        model="gpt-4o",
+        id="chatcmpl-ID",
+    )
+
+    ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
+
+    span.set_attribute.assert_any_call("llm.request.temperature", 0)
+    span.set_attribute.assert_any_call("llm.request.top_p", 0)
+    span.set_attribute.assert_any_call("llm.request.max_tokens", 0)
+
+
 def test_arize_set_attributes_responses_api():
     """
     Test setting attributes for Responses API with mixed output (reasoning + message).
