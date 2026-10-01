@@ -2,7 +2,7 @@
 HTTP contract around them.
 
 The in-memory Prisma here follows the one in
-`tests/test_litellm/proxy/management_helpers/test_bulk_user_deletion.py`, extended with the budget
+`tests/unit/proxy/management_helpers/test_bulk_user_deletion.py`, extended with the budget
 table and the membership/budget relation the bulk budget writer needs.
 """
 
