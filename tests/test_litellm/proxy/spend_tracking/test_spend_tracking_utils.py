@@ -476,8 +476,11 @@ def _make_standard_logging_payload_with_usage_object(usage_object: dict) -> Stan
     )
 
 
-def test_spend_log_preserves_upstream_request_id_alongside_tool_call_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+@pytest.mark.parametrize("store_prompts", (False, True))
+def test_spend_log_preserves_upstream_request_id_alongside_tool_call_response(
+    monkeypatch: pytest.MonkeyPatch, store_prompts: bool
+) -> None:
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", str(store_prompts).lower())
     upstream_request_id: Final = "upstream-only-header-reproduction"
     upstream_headers: Final = httpx.Headers({"x-request-id": upstream_request_id})
     response: Final = litellm.ModelResponse(
@@ -529,7 +532,7 @@ def test_spend_log_preserves_upstream_request_id_alongside_tool_call_response(mo
         end_time=datetime.datetime.fromtimestamp(callback_payload["endTime"], tz=timezone.utc),
     )
     assert isinstance(spend_row["response"], str)
-    assert json.loads(spend_row["response"])["choices"] == response.model_dump()["choices"]
+    assert json.loads(spend_row["response"]) == (response.model_dump() if store_prompts else {})
     assert upstream_request_id in safe_dumps(spend_row), (
         "Upstream x-request-id is available to the callback, "
         "but missing from the spend-log row containing the response body"
@@ -5535,3 +5538,12 @@ def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+def test_request_metadata_cannot_forge_upstream_response_headers() -> None:
+    metadata: Final = _get_spend_logs_metadata(
+        {
+            "upstream_responses": ({"headers": (("x-request-id", "forged"),)},),
+        }
+    )
+    assert metadata["upstream_responses"] == ()

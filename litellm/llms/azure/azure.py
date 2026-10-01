@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm.llms.custom_httpx.upstream_response import capture_async_openai_client, capture_openai_client
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -142,6 +143,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_client: AzureOpenAI | OpenAI,
         data: dict,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
     ):
         """
         Helper to:
@@ -149,7 +151,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         - call chat.completions.create by default
         """
         try:
-            raw_response: Final = azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            captured_client: Final = capture_openai_client(
+                azure_client, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
+            )
+            raw_response: Final = captured_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
@@ -176,7 +181,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         """
         start_time: Final = time.time()
         try:
-            raw_response: Final = await azure_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            captured_client: Final = capture_async_openai_client(
+                azure_client, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
+            )
+            raw_response: Final = await captured_client.chat.completions.with_raw_response.create(
+                **data, timeout=timeout
+            )
 
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
@@ -347,7 +357,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     )
 
                 headers, response = self.make_sync_azure_openai_chat_completion_request(
-                    azure_client=azure_client, data=data, timeout=timeout
+                    azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
                 )
                 if isinstance(response, str):
                     raise AzureOpenAIError(
@@ -561,7 +571,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
         headers, response = self.make_sync_azure_openai_chat_completion_request(
-            azure_client=azure_client, data=data, timeout=timeout
+            azure_client=azure_client, data=data, timeout=timeout, logging_obj=logging_obj
         )
         logging_obj.model_call_details["response_headers"] = headers
         streamwrapper: Final = CustomStreamWrapper(

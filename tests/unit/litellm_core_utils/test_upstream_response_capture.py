@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
 from typing import Final
 
 import httpx
@@ -8,14 +9,8 @@ import openai
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.upstream_response_capture import (
-    CapturedUpstreamResponse,
-    UpstreamResponseCapture,
-    async_capture_explicit_response_headers,
-    async_capture_response_headers,
-    capture_explicit_response_headers,
-    capture_response_headers,
-)
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, MaskedHTTPStatusError
 from litellm.types.utils import ModelResponse
 
@@ -23,17 +18,29 @@ HEADERS: Final = (("x-request-id", "upstream-probe"), ("x-probe", "first"), ("x-
 CONTENT: Final = b'{"choices":[]}'
 
 
+def make_logging(stream: bool = False, attempt: str = "attempt") -> Logging:
+    return Logging(
+        model="header-probe",
+        messages=[],
+        stream=stream,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id=attempt,
+        function_id=attempt,
+    )
+
+
 class ProbeBody(httpx.SyncByteStream, httpx.AsyncByteStream):
-    def __init__(self, failure: httpx.ReadError | None = None) -> None:
-        self.failure: Final = failure
-        self.started = False
+    def __init__(self, capture: UpstreamResponseCapture, fail: bool = False) -> None:
+        self.capture: Final = capture
+        self.fail: Final = fail
         self.closed = False
 
     def __iter__(self) -> Iterator[bytes]:
-        self.started = True
+        assert self.capture.responses
         yield CONTENT
-        if self.failure is not None:
-            raise self.failure
+        if self.fail:
+            raise httpx.ReadError("body interrupted")
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self:
@@ -49,208 +56,152 @@ class ProbeBody(httpx.SyncByteStream, httpx.AsyncByteStream):
 @pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize("status", (200, 429))
 def test_sync_handler_captures_before_body_or_status_failure(stream: bool, status: int) -> None:
-    capture: Final = UpstreamResponseCapture()
-    body: Final = ProbeBody()
+    logging: Final = make_logging(stream)
+    body: Final = ProbeBody(logging.upstream_response_capture)
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, headers=HEADERS, stream=body, request=request)
+        return httpx.Response(status, headers=HEADERS, stream=body)
 
-    def verify_capture_before_body(response: httpx.Response) -> None:
-        assert not body.started
-        assert capture.responses == (CapturedUpstreamResponse("attempt", response.status_code, HEADERS),)
-
-    with httpx.Client(
-        transport=httpx.MockTransport(upstream),
-        event_hooks={"response": [capture_response_headers, verify_capture_before_body]},
-    ) as client:
+    with httpx.Client(transport=httpx.MockTransport(upstream)) as client:
         handler: Final = HTTPHandler(client=client)
-        with capture.bind("attempt"):
-            if status >= 400:
-                with pytest.raises(MaskedHTTPStatusError) as failure:
-                    handler.post("https://upstream.invalid/", stream=stream)
-                assert failure.value.response.status_code == status
-            else:
-                response: Final = handler.post("https://upstream.invalid/", stream=stream)
-                assert response.read() == CONTENT
-                response.close()
+        if status >= 400:
+            with pytest.raises(MaskedHTTPStatusError) as failure:
+                handler.post("https://upstream.invalid/", stream=stream, logging_obj=logging)
+            assert failure.value.response.status_code == status
+        else:
+            response: Final = handler.post("https://upstream.invalid/", stream=stream, logging_obj=logging)
+            assert response.read() == CONTENT
+            response.close()
     assert body.closed
-    assert capture.responses == (CapturedUpstreamResponse("attempt", status, HEADERS),)
+    assert logging.upstream_response_capture.snapshot() == (
+        {
+            "attempt_id": "attempt",
+            "status_code": status,
+            "headers": HEADERS,
+            "truncated": False,
+        },
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize("status", (200, 429))
 async def test_async_handler_captures_before_body_or_status_failure(stream: bool, status: int) -> None:
-    capture: Final = UpstreamResponseCapture()
-    body: Final = ProbeBody()
+    logging: Final = make_logging(stream)
+    body: Final = ProbeBody(logging.upstream_response_capture)
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(status, headers=HEADERS, stream=body, request=request)
+        return httpx.Response(status, headers=HEADERS, stream=body)
 
-    async def verify_capture_before_body(response: httpx.Response) -> None:
-        assert not body.started
-        assert capture.responses == (CapturedUpstreamResponse("attempt", response.status_code, HEADERS),)
-
-    handler: Final = AsyncHTTPHandler(
-        transport=httpx.MockTransport(upstream),
-        event_hooks={"response": [async_capture_response_headers, verify_capture_before_body]},
-    )
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
     try:
-        with capture.bind("attempt"):
-            if status >= 400:
-                with pytest.raises(MaskedHTTPStatusError) as failure:
-                    await handler.post("https://upstream.invalid/", stream=stream)
-                assert failure.value.response.status_code == status
-            else:
-                response: Final = await handler.post("https://upstream.invalid/", stream=stream)
-                assert await response.aread() == CONTENT
-                await response.aclose()
+        if status >= 400:
+            with pytest.raises(MaskedHTTPStatusError) as failure:
+                await handler.post("https://upstream.invalid/", stream=stream, logging_obj=logging)
+            assert failure.value.response.status_code == status
+        else:
+            response: Final = await handler.post("https://upstream.invalid/", stream=stream, logging_obj=logging)
+            assert await response.aread() == CONTENT
+            await response.aclose()
     finally:
         await handler.close()
     assert body.closed
-    assert capture.responses == (CapturedUpstreamResponse("attempt", status, HEADERS),)
-
-
-@pytest.mark.parametrize("stream", (False, True))
-def test_sync_body_read_failure_preserves_capture_and_exception(stream: bool) -> None:
-    capture: Final = UpstreamResponseCapture()
-    failure: Final = httpx.ReadError("upstream body interrupted")
-    body: Final = ProbeBody(failure)
-
-    def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers=HEADERS, stream=body, request=request)
-
-    with httpx.Client(
-        transport=httpx.MockTransport(upstream), event_hooks={"response": [capture_response_headers]}
-    ) as client:
-        with capture.bind("attempt"):
-            if stream:
-                with client.stream("POST", "https://upstream.invalid/") as response:
-                    assert not body.started
-                    with pytest.raises(httpx.ReadError) as stream_failure:
-                        response.read()
-                assert stream_failure.value is failure
-            else:
-                with pytest.raises(httpx.ReadError) as read_failure:
-                    client.post("https://upstream.invalid/")
-                assert read_failure.value is failure
-    assert body.closed
-    assert capture.responses == (CapturedUpstreamResponse("attempt", 200, HEADERS),)
+    assert logging.upstream_response_capture.snapshot() == (
+        {
+            "attempt_id": "attempt",
+            "status_code": status,
+            "headers": HEADERS,
+            "truncated": False,
+        },
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", (False, True))
-async def test_async_body_read_failure_preserves_capture_and_exception(stream: bool) -> None:
-    capture: Final = UpstreamResponseCapture()
-    failure: Final = httpx.ReadError("upstream body interrupted")
-    body: Final = ProbeBody(failure)
+async def test_body_failure_keeps_headers_and_closes_response() -> None:
+    logging: Final = make_logging()
+    body: Final = ProbeBody(logging.upstream_response_capture, fail=True)
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers=HEADERS, stream=body, request=request)
+        return httpx.Response(200, headers=HEADERS, stream=body)
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(upstream), event_hooks={"response": [async_capture_response_headers]}
-    ) as client:
-        with capture.bind("attempt"):
-            if stream:
-                async with client.stream("POST", "https://upstream.invalid/") as response:
-                    assert not body.started
-                    with pytest.raises(httpx.ReadError) as stream_failure:
-                        await response.aread()
-                assert stream_failure.value is failure
-            else:
-                with pytest.raises(httpx.ReadError) as read_failure:
-                    await client.post("https://upstream.invalid/")
-                assert read_failure.value is failure
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    try:
+        with pytest.raises(httpx.ReadError, match="body interrupted"):
+            await handler.post("https://upstream.invalid/", logging_obj=logging)
+    finally:
+        await handler.close()
     assert body.closed
-    assert capture.responses == (CapturedUpstreamResponse("attempt", 200, HEADERS),)
+    assert logging.upstream_response_capture.responses[0].headers == HEADERS
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("explicit", (False, True))
-async def test_shared_client_keeps_concurrent_captures_separate(explicit: bool) -> None:
+async def test_shared_client_keeps_concurrent_calls_and_unowned_calls_separate() -> None:
     count: Final = 12
-    started: Final = tuple(asyncio.Event() for _ in range(count))
+    ready: Final = tuple(asyncio.Event() for _ in range(count))
 
     async def upstream(request: httpx.Request) -> httpx.Response:
-        started[int(request.url.path.removeprefix("/"))].set()
-        for event in started:
-            await event.wait()
+        if request.url.path != "/unowned":
+            ready[int(request.url.path.removeprefix("/"))].set()
+            for event in ready:
+                await event.wait()
         return httpx.Response(200, headers={"x-request-id": request.url.path}, content=CONTENT)
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(upstream),
-        event_hooks={
-            "response": [async_capture_explicit_response_headers if explicit else async_capture_response_headers]
-        },
-    ) as client:
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
 
-        async def call(index: int) -> tuple[CapturedUpstreamResponse, ...]:
-            capture: Final = UpstreamResponseCapture()
-            marker: Final = str(index)
-            with capture.bind("incorrect-ambient-attempt" if explicit else marker):
-                response: Final = await client.get(
-                    f"https://upstream.invalid/{marker}",
-                    extensions=capture.request_extensions(marker) if explicit else None,
-                )
-            assert response.content == CONTENT
-            assert len(capture.responses) == 1
-            assert capture.responses[0].attempt_id == marker
-            assert dict(capture.responses[0].headers)["x-request-id"] == f"/{marker}"
-            return capture.responses
+    async def call(index: int) -> str:
+        logging: Final = make_logging(attempt=str(index))
+        await handler.post(f"https://upstream.invalid/{index}", logging_obj=logging)
+        await handler.post("https://upstream.invalid/unowned")
+        captured: Final = logging.upstream_response_capture.snapshot()
+        assert len(captured) == 1
+        assert captured[0]["attempt_id"] == str(index)
+        assert dict(captured[0]["headers"])["x-request-id"] == f"/{index}"
+        return captured[0]["attempt_id"]
 
+    try:
         captured: Final = await asyncio.gather(*(call(index) for index in range(count)))
-    assert len(frozenset(record[0].attempt_id for record in captured)) == count
+        assert len(frozenset(captured)) == count
+    finally:
+        await handler.close()
 
 
-def test_nested_attempts_restore_binding_and_snapshots_do_not_alias_responses() -> None:
+def test_capture_redacts_bounds_and_snapshots_do_not_alias() -> None:
     capture: Final = UpstreamResponseCapture()
-    response: Final = httpx.Response(429, headers=HEADERS)
-    with capture.bind("outer"):
-        capture_response_headers(response)
-        before_fallback: Final = capture.responses
-        with capture.bind("fallback"):
-            capture_response_headers(httpx.Response(200, headers=HEADERS))
-        capture_response_headers(response)
-    capture_response_headers(response)
+    response: Final = httpx.Response(
+        200,
+        headers=(
+            ("x-request-id", "visible"),
+            ("set-cookie", "secret"),
+            ("x-api-key", "secret"),
+            ("x-debug", "x" * 10000),
+            ("x-probe", "first"),
+            ("x-probe", "second"),
+        ),
+    )
+    capture.record("first", response)
+    snapshot: Final = capture.snapshot()
     response.headers.clear()
-    assert before_fallback == (CapturedUpstreamResponse("outer", 429, HEADERS),)
-    assert capture.responses == (
-        CapturedUpstreamResponse("outer", 429, HEADERS),
-        CapturedUpstreamResponse("fallback", 200, HEADERS),
-        CapturedUpstreamResponse("outer", 429, HEADERS),
+    for index in range(20):
+        capture.record(str(index), httpx.Response(429, headers={"x-request-id": str(index)}))
+    assert snapshot[0]["headers"] == (
+        ("x-request-id", "visible"),
+        ("set-cookie", "[REDACTED]"),
+        ("x-api-key", "[REDACTED]"),
+        ("x-debug", "x" * 512),
+        ("x-probe", "first"),
+        ("x-probe", "second"),
     )
-
-
-def test_explicit_owner_survives_redirect_without_going_on_the_wire() -> None:
-    capture: Final = UpstreamResponseCapture()
-    extensions: Final = capture.request_extensions("redirect")
-
-    def upstream(request: httpx.Request) -> httpx.Response:
-        assert set(extensions).isdisjoint(request.headers)
-        assert request.content == CONTENT
-        if request.url.path == "/start":
-            return httpx.Response(307, headers=(*HEADERS, ("location", "/finish")))
-        assert request.url.path == "/finish"
-        return httpx.Response(200, headers=HEADERS, content=CONTENT)
-
-    with httpx.Client(
-        transport=httpx.MockTransport(upstream),
-        event_hooks={"response": [capture_explicit_response_headers]},
-        follow_redirects=True,
-    ) as client:
-        response: Final = client.post("https://upstream.invalid/start", content=CONTENT, extensions=extensions)
-    assert response.content == CONTENT
-    assert capture.responses == (
-        CapturedUpstreamResponse("redirect", 307, tuple(response.history[0].headers.multi_items())),
-        CapturedUpstreamResponse("redirect", 200, tuple(response.headers.multi_items())),
-    )
+    assert snapshot[0]["truncated"]
+    assert len(capture.snapshot()) == 8
+    assert capture.snapshot()[-1]["attempt_id"] == "19"
+    assert all(item["truncated"] for item in capture.snapshot())
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True))
 async def test_litellm_chat_capture_survives_response_reconstruction(stream: bool) -> None:
-    capture: Final = UpstreamResponseCapture()
+    logging: Final = make_logging(stream)
+    capture: Final = logging.upstream_response_capture
     payload: Final = {
         "id": "chatcmpl-header-probe",
         "object": "chat.completion.chunk" if stream else "chat.completion",
@@ -274,35 +225,34 @@ async def test_litellm_chat_capture_survives_response_reconstruction(stream: boo
         api_key="experiment-key",
         base_url="https://upstream.invalid/v1",
         max_retries=0,
-        http_client=httpx.AsyncClient(
-            transport=httpx.MockTransport(upstream), event_hooks={"response": [async_capture_response_headers]}
-        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
     ) as client:
-        with capture.bind("chat"):
-            response: Final = await litellm.acompletion(
-                model="openai/header-probe",
-                messages=[{"role": "user", "content": "probe"}],
-                client=client,
-                stream=stream,
-                num_retries=0,
-            )
-            if stream:
-                chunks: Final = tuple([chunk async for chunk in response])
-                rebuilt: Final = litellm.stream_chunk_builder(chunks=list(chunks))
-                assert rebuilt is not None
-                assert rebuilt.choices[0].message.content == "captured"
-            else:
-                reconstructed: Final = ModelResponse.model_validate(response.model_dump())
-                assert reconstructed.choices[0].message.content == "captured"
+        response: Final = await litellm.acompletion(
+            model="openai/header-probe",
+            messages=[{"role": "user", "content": "probe"}],
+            client=client,
+            stream=stream,
+            litellm_logging_obj=logging,
+            num_retries=0,
+        )
+        if stream:
+            chunks: Final = tuple([chunk async for chunk in response])
+            rebuilt: Final = litellm.stream_chunk_builder(chunks=list(chunks))
+            assert rebuilt is not None
+            assert rebuilt.choices[0].message.content == "captured"
+        else:
+            reconstructed: Final = ModelResponse.model_validate(response.model_dump())
+            assert reconstructed.choices[0].message.content == "captured"
     assert len(capture.responses) == 1
-    assert capture.responses[0].attempt_id == "chat"
+    assert capture.responses[0].attempt_id == logging.litellm_call_id
     assert dict(capture.responses[0].headers)["x-request-id"] == dict(HEADERS)["x-request-id"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("stream", "native_stream"), ((False, True), (True, True), (True, False)))
 async def test_litellm_responses_capture_without_chat_wrapper(stream: bool, native_stream: bool) -> None:
-    capture: Final = UpstreamResponseCapture()
+    logging: Final = make_logging(stream)
+    capture: Final = logging.upstream_response_capture
     litellm.register_model(
         {
             "header-probe": {
@@ -335,36 +285,35 @@ async def test_litellm_responses_capture_without_chat_wrapper(stream: bool, nati
         )
         return httpx.Response(200, headers=HEADERS, content=content)
 
-    handler: Final = AsyncHTTPHandler(
-        transport=httpx.MockTransport(upstream), event_hooks={"response": [async_capture_response_headers]}
-    )
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
     try:
-        with capture.bind("responses"):
-            response: Final = await litellm.aresponses(
-                model="openai/header-probe",
-                input="probe",
-                api_key="experiment-key",
-                api_base="https://upstream.invalid/v1",
-                client=handler,
-                stream=stream,
-            )
-            if stream:
-                events: Final = tuple([event async for event in response])
-                assert events[-1].type == "response.completed"
-                assert events[-1].response.status == payload["status"]
-            else:
-                assert response.status == payload["status"]
+        response: Final = await litellm.aresponses(
+            model="openai/header-probe",
+            input="probe",
+            api_key="experiment-key",
+            api_base="https://upstream.invalid/v1",
+            client=handler,
+            stream=stream,
+            litellm_logging_obj=logging,
+        )
+        if stream:
+            events: Final = tuple([event async for event in response])
+            assert events[-1].type == "response.completed"
+            assert events[-1].response.status == payload["status"]
+        else:
+            assert response.status == payload["status"]
     finally:
         await handler.close()
     assert len(capture.responses) == 1
-    assert capture.responses[0].attempt_id == "responses"
+    assert capture.responses[0].attempt_id == logging.litellm_call_id
     assert dict(capture.responses[0].headers)["x-request-id"] == dict(HEADERS)["x-request-id"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True))
 async def test_litellm_messages_capture_without_openai_response_objects(stream: bool) -> None:
-    capture: Final = UpstreamResponseCapture()
+    logging: Final = make_logging(stream)
+    capture: Final = logging.upstream_response_capture
     litellm.register_model(
         {
             "header-probe": {
@@ -396,35 +345,33 @@ async def test_litellm_messages_capture_without_openai_response_objects(stream: 
         assert request.url.path == "/v1/messages"
         return httpx.Response(200, headers=HEADERS, content=wire_body)
 
-    handler: Final = AsyncHTTPHandler(
-        transport=httpx.MockTransport(upstream), event_hooks={"response": [async_capture_response_headers]}
-    )
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
     try:
-        with capture.bind("messages"):
-            response: Final = await litellm.anthropic.messages.acreate(
-                model="anthropic/header-probe",
-                messages=[{"role": "user", "content": "probe"}],
-                max_tokens=1,
-                api_key="experiment-key",
-                api_base="https://upstream.invalid",
-                client=handler,
-                stream=stream,
-            )
-            if stream:
-                chunks: Final = tuple([chunk async for chunk in response])
-                assert b"".join(chunks).decode() == wire_body
-            else:
-                assert response["content"] == payload["content"]
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="anthropic/header-probe",
+            messages=[{"role": "user", "content": "probe"}],
+            max_tokens=1,
+            api_key="experiment-key",
+            api_base="https://upstream.invalid",
+            client=handler,
+            stream=stream,
+            litellm_logging_obj=logging,
+        )
+        if stream:
+            chunks: Final = tuple([chunk async for chunk in response])
+            assert b"".join(chunks).decode() == wire_body
+        else:
+            assert response["content"] == payload["content"]
     finally:
         await handler.close()
     assert len(capture.responses) == 1
-    assert capture.responses[0].attempt_id == "messages"
+    assert capture.responses[0].attempt_id == logging.litellm_call_id
     assert dict(capture.responses[0].headers)["x-request-id"] == dict(HEADERS)["x-request-id"]
 
 
 @pytest.mark.asyncio
-async def test_cancelled_body_keeps_headers_and_closes_stream() -> None:
-    capture: Final = UpstreamResponseCapture()
+async def test_cancelled_body_retains_headers_and_closes_stream() -> None:
+    logging: Final = make_logging()
     started: Final = asyncio.Event()
     blocked: Final = asyncio.Event()
     closed: Final = asyncio.Event()
@@ -439,22 +386,16 @@ async def test_cancelled_body_keeps_headers_and_closes_stream() -> None:
             closed.set()
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers=HEADERS, stream=BlockedBody(), request=request)
+        return httpx.Response(200, headers=HEADERS, stream=BlockedBody())
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(upstream), event_hooks={"response": [async_capture_response_headers]}
-    ) as client:
-
-        async def consume() -> None:
-            with capture.bind("cancelled"):
-                async with client.stream("POST", "https://upstream.invalid/") as response:
-                    await response.aread()
-
-        task: Final = asyncio.create_task(consume())
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    try:
+        task: Final = asyncio.create_task(handler.post("https://upstream.invalid/", logging_obj=logging))
         await started.wait()
-        before_cancel: Final = capture.responses
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-    assert closed.is_set()
-    assert capture.responses == before_cancel == (CapturedUpstreamResponse("cancelled", 200, HEADERS),)
+        assert closed.is_set()
+        assert logging.upstream_response_capture.responses[0].headers == HEADERS
+    finally:
+        await handler.close()

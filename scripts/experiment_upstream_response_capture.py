@@ -1,19 +1,59 @@
 import asyncio
 import json
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
 
-from litellm.litellm_core_utils.upstream_response_capture import (
-    UpstreamResponseCapture,
-    async_capture_explicit_response_headers,
-    async_capture_response_headers,
-    capture_explicit_response_headers,
-    capture_response_headers,
-)
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseCapture as ResponseCapture
+
+
+@dataclass(frozen=True, slots=True)
+class Binding:
+    capture: ResponseCapture
+    attempt: str
+
+
+active_capture: Final[ContextVar[Binding | None]] = ContextVar("experiment_capture", default=None)
+
+
+class UpstreamResponseCapture(ResponseCapture):
+    @contextmanager
+    def bind(self, attempt_id: str) -> Generator[None, None, None]:
+        token: Final = active_capture.set(Binding(self, attempt_id))
+        try:
+            yield
+        finally:
+            active_capture.reset(token)
+
+    def request_extensions(self, attempt_id: str) -> Mapping[str, object]:
+        return MappingProxyType({"capture": Binding(self, attempt_id)})
+
+
+def capture_response_headers(response: httpx.Response) -> None:
+    binding: Final = active_capture.get()
+    if binding is not None:
+        binding.capture.record(binding.attempt, response)
+
+
+async def async_capture_response_headers(response: httpx.Response) -> None:
+    capture_response_headers(response)
+
+
+def capture_explicit_response_headers(response: httpx.Response) -> None:
+    binding: Final = response.request.extensions.get("capture")
+    if isinstance(binding, Binding):
+        binding.capture.record(binding.attempt, response)
+
+
+async def async_capture_explicit_response_headers(response: httpx.Response) -> None:
+    capture_explicit_response_headers(response)
 
 
 def retry_upstream(statuses: Iterator[int]) -> Callable[[httpx.Request], httpx.Response]:

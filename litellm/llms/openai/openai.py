@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.logging_utils import speech_request_body, track_
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.llms.custom_httpx.upstream_response import capture_async_openai_client, capture_openai_client
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -478,7 +479,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         start_time: Final = time.time()
         try:
-            raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            captured_client: Final = capture_async_openai_client(
+                openai_aclient, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
+            )
+            raw_response = await captured_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
             end_time = time.time()
 
             if hasattr(raw_response, "headers"):
@@ -519,7 +523,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         """
         raw_response = None
         try:
-            raw_response = openai_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
+            captured_client: Final = capture_openai_client(
+                openai_client, logging_obj.upstream_response_capture, logging_obj.litellm_call_id
+            )
+            raw_response = captured_client.chat.completions.with_raw_response.create(**data, timeout=timeout)
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)

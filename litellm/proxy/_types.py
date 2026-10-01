@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseMetadata
 from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
@@ -4104,6 +4105,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    upstream_responses: ReadOnly[NotRequired[tuple[UpstreamResponseMetadata, ...]]]
     actor_agent_id: ReadOnly[NotRequired[str | None]]
     target_agent_id: ReadOnly[NotRequired[str | None]]
     billing_agent_id: ReadOnly[NotRequired[str | None]]

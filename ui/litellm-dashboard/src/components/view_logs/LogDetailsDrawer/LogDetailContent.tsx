@@ -26,6 +26,7 @@ import { VectorStoreViewer } from "../VectorStoreViewer";
 import { CREDENTIAL_LABELS } from "../constants";
 import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
+import { UpstreamResponseHeaders } from "./UpstreamResponseHeaders";
 import { JsonViewer } from "./JsonViewer";
 import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
 import {
@@ -230,6 +231,8 @@ export function LogDetailContent({
           logEntry={logEntry}
         />
       )}
+
+      <UpstreamResponseHeaders data={metadata.upstream_responses} />
 
       {/* Guardrail Data */}
       {hasGuardrailData && (

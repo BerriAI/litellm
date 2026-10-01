@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.litellm_core_utils.upstream_response_capture import async_send_with_capture, send_with_capture
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -828,7 +829,13 @@ class AsyncHTTPHandler:
                 files=files,
                 content=request_content,
             )
-            response: Final = await self.client.send(req, stream=stream)
+            response: Final = await async_send_with_capture(
+                self.client,
+                req,
+                logging_obj.upstream_response_capture if logging_obj is not None else None,
+                logging_obj.litellm_call_id if logging_obj is not None else "",
+                stream,
+            )
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
@@ -846,6 +853,7 @@ class AsyncHTTPHandler:
                     headers=headers,
                     stream=stream,
                     content=content,
+                    logging_obj=logging_obj,
                 )
             finally:
                 await new_client.aclose()
@@ -1072,6 +1080,7 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        logging_obj: LiteLLMLoggingObject | None = None,
     ):
         """
         Making POST request for a single connection client.
@@ -1090,7 +1099,13 @@ class AsyncHTTPHandler:
             headers=headers,
             content=request_content,
         )
-        response: Final = await client.send(req, stream=stream)
+        response: Final = await async_send_with_capture(
+            client,
+            req,
+            logging_obj.upstream_response_capture if logging_obj is not None else None,
+            logging_obj.litellm_call_id if logging_obj is not None else "",
+            stream,
+        )
         response.raise_for_status()
         return response
 
@@ -1508,7 +1523,13 @@ class HTTPHandler:
                     files=files,
                     content=request_content,
                 )
-            response: Final = self.client.send(req, stream=stream)
+            response: Final = send_with_capture(
+                self.client,
+                req,
+                logging_obj.upstream_response_capture if logging_obj is not None else None,
+                logging_obj.litellm_call_id if logging_obj is not None else "",
+                stream,
+            )
             if stream:
                 _anchor_handler_to(response, self)
             response.raise_for_status()

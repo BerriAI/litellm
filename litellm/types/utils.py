@@ -49,6 +49,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import INTERNAL_KWARG_PREFIX
+from litellm.litellm_core_utils.upstream_response_capture import UpstreamResponseMetadata
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     CachedTokensDetails,
@@ -3558,6 +3559,7 @@ class ClassifierAudit(TypedDict, total=False):
 
 
 class StandardLoggingPayload(ClassifierAudit):
+    upstream_responses: ReadOnly[NotRequired[tuple[UpstreamResponseMetadata, ...]]]
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id

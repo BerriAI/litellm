@@ -1,12 +1,56 @@
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import Lock
-from types import MappingProxyType
 from typing import Final
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
+
+
+class UpstreamResponseMetadata(TypedDict):
+    attempt_id: ReadOnly[str]
+    status_code: ReadOnly[int | None]
+    headers: ReadOnly[tuple[tuple[str, str], ...]]
+    truncated: ReadOnly[bool]
+
+
+_MAX_RESPONSES: Final = 8
+_MAX_HEADERS: Final = 64
+_MAX_NAME: Final = 128
+_MAX_VALUE: Final = 512
+_SECRET_HEADERS: Final = frozenset(
+    (
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "set-cookie2",
+        "x-api-key",
+        "api-key",
+        "x-auth-token",
+        "x-amz-security-token",
+        "x-goog-api-key",
+    )
+)
+
+
+def _safe_header(name: str, value: str) -> tuple[str, str]:
+    normalized: Final = name.lower()
+    secret: Final = normalized in _SECRET_HEADERS or normalized.endswith(
+        ("-api-key", "-secret", "-token", "-authorization", "-cookie")
+    )
+    return normalized[:_MAX_NAME], "[REDACTED]" if secret else value[:_MAX_VALUE]
+
+
+def response_metadata(
+    attempt_id: str, status_code: int | None, headers: tuple[tuple[str, str], ...]
+) -> UpstreamResponseMetadata:
+    return UpstreamResponseMetadata(
+        attempt_id=attempt_id,
+        status_code=status_code,
+        headers=tuple(_safe_header(name, value) for name, value in headers[:_MAX_HEADERS]),
+        truncated=len(headers) > _MAX_HEADERS
+        or any(len(name) > _MAX_NAME or len(value) > _MAX_VALUE for name, value in headers[:_MAX_HEADERS]),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,64 +58,86 @@ class CapturedUpstreamResponse:
     attempt_id: str
     status_code: int
     headers: tuple[tuple[str, str], ...]
+    truncated: bool = False
 
 
 class UpstreamResponseCapture:
-    def __init__(self) -> None:
+    def __init__(self, responses: tuple[CapturedUpstreamResponse, ...] = (), dropped_responses: bool = False) -> None:
         self._lock: Final = Lock()
-        self._responses: tuple[CapturedUpstreamResponse, ...] = ()
+        self._responses = responses
+        self._dropped_responses = dropped_responses
+
+    def __deepcopy__(self, memo: dict[int, object]) -> "UpstreamResponseCapture":
+        with self._lock:
+            return UpstreamResponseCapture(self._responses, self._dropped_responses)
 
     @property
     def responses(self) -> tuple[CapturedUpstreamResponse, ...]:
         with self._lock:
             return self._responses
 
-    @contextmanager
-    def bind(self, attempt_id: str) -> Generator[None, None, None]:
-        token: Final = _active_capture.set(_CaptureBinding(self, attempt_id))
-        try:
-            yield
-        finally:
-            _active_capture.reset(token)
-
     def record(self, attempt_id: str, response: httpx.Response) -> None:
+        metadata: Final = response_metadata(attempt_id, response.status_code, tuple(response.headers.multi_items()))
         captured: Final = CapturedUpstreamResponse(
             attempt_id=attempt_id,
             status_code=response.status_code,
-            headers=tuple(response.headers.multi_items()),
+            headers=metadata["headers"],
+            truncated=metadata["truncated"],
         )
         with self._lock:
-            self._responses = (*self._responses, captured)
+            self._dropped_responses = self._dropped_responses or len(self._responses) >= _MAX_RESPONSES
+            self._responses = (*self._responses[-(_MAX_RESPONSES - 1) :], captured)
 
-    def request_extensions(self, attempt_id: str) -> Mapping[str, object]:
-        return MappingProxyType({_CAPTURE_EXTENSION: _CaptureBinding(self, attempt_id)})
-
-
-@dataclass(frozen=True, slots=True)
-class _CaptureBinding:
-    recorder: UpstreamResponseCapture
-    attempt_id: str
-
-
-_active_capture: Final[ContextVar[_CaptureBinding | None]] = ContextVar("upstream_response_capture", default=None)
-_CAPTURE_EXTENSION: Final = "litellm.upstream_response_capture"
-
-
-def capture_response_headers(response: httpx.Response) -> None:
-    binding: Final = _active_capture.get()
-    if binding is not None:
-        binding.recorder.record(binding.attempt_id, response)
+    def snapshot(self) -> tuple[UpstreamResponseMetadata, ...]:
+        with self._lock:
+            return tuple(
+                UpstreamResponseMetadata(
+                    attempt_id=item.attempt_id,
+                    status_code=item.status_code,
+                    headers=item.headers,
+                    truncated=item.truncated or self._dropped_responses,
+                )
+                for item in self._responses
+            )
 
 
-async def async_capture_response_headers(response: httpx.Response) -> None:
-    capture_response_headers(response)
+def send_with_capture(
+    client: httpx.Client,
+    request: httpx.Request,
+    capture: UpstreamResponseCapture | None,
+    attempt_id: str,
+    stream: bool,
+) -> httpx.Response:
+    if capture is None:
+        return client.send(request, stream=stream)
+    response: Final = client.send(request, stream=True)
+    for item in (*response.history, response):
+        capture.record(attempt_id, item)
+    try:
+        if not stream:
+            response.read()
+        return response
+    except BaseException:
+        response.close()
+        raise
 
 
-def capture_explicit_response_headers(response: httpx.Response) -> None:
-    binding: Final[object] = response.request.extensions.get(_CAPTURE_EXTENSION)
-    if isinstance(binding, _CaptureBinding):
-        binding.recorder.record(binding.attempt_id, response)
-
-
-async def async_capture_explicit_response_headers(response: httpx.Response) -> None:
-    capture_explicit_response_headers(response)
+async def async_send_with_capture(
+    client: httpx.AsyncClient,
+    request: httpx.Request,
+    capture: UpstreamResponseCapture | None,
+    attempt_id: str,
+    stream: bool,
+) -> httpx.Response:
+    if capture is None:
+        return await client.send(request, stream=stream)
+    response: Final = await client.send(request, stream=True)
+    for item in (*response.history, response):
+        capture.record(attempt_id, item)
+    try:
+        if not stream:
+            await response.aread()
+        return response
+    except BaseException:
+        await response.aclose()
+        raise
