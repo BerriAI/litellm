@@ -1,13 +1,14 @@
-CREATE TABLE IF NOT EXISTS {database}.agent_traces
+CREATE TABLE IF NOT EXISTS {database}.agent_traces_by_key
 (
     TeamId        LowCardinality(String),
+    ApiKeyHash    String,
     TraceId       String,
     StartTs       SimpleAggregateFunction(min, DateTime64(9)),
     EndTs         SimpleAggregateFunction(max, DateTime64(9)),
     ServiceName   SimpleAggregateFunction(any, LowCardinality(String)),
-    RootName      SimpleAggregateFunction(anyLast, String),
-    RootInput     SimpleAggregateFunction(anyLast, String),
-    RootStatus    SimpleAggregateFunction(anyLast, String),
+    RootName      SimpleAggregateFunction(anyLast, Nullable(String)),
+    RootInput     SimpleAggregateFunction(anyLast, Nullable(String)),
+    RootStatus    SimpleAggregateFunction(anyLast, Nullable(String)),
     SpanCount     SimpleAggregateFunction(sum, UInt64),
     AgentCount    SimpleAggregateFunction(sum, UInt64),
     LlmCount      SimpleAggregateFunction(sum, UInt64),
@@ -20,6 +21,5 @@ CREATE TABLE IF NOT EXISTS {database}.agent_traces
     RequestIds    SimpleAggregateFunction(groupArrayArray, Array(String))
 )
 ENGINE = AggregatingMergeTree
-PARTITION BY toDate(StartTs)
-ORDER BY (TeamId, TraceId)
-TTL toDateTime(StartTs) + INTERVAL {trace_retention_days} DAY
+ORDER BY (TeamId, ApiKeyHash, TraceId)
+SETTINGS non_replicated_deduplication_window = 1000

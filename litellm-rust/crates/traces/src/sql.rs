@@ -8,6 +8,34 @@ use crate::{Connection, Error};
 
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+pub enum ReadQuery {
+    ListTraces,
+    TraceSpans,
+    SpanDetail,
+    SpendByResponseIds,
+}
+
+impl ReadQuery {
+    pub fn parse(value: &str) -> Result<Self, Error> {
+        match value {
+            "list_traces" => Ok(Self::ListTraces),
+            "trace_spans" => Ok(Self::TraceSpans),
+            "span_detail" => Ok(Self::SpanDetail),
+            "spend_by_response_ids" => Ok(Self::SpendByResponseIds),
+            _ => Err(Error::InvalidQuery),
+        }
+    }
+
+    fn sql(&self) -> &'static str {
+        match self {
+            Self::ListTraces => include_str!("../query/list_traces.sql"),
+            Self::TraceSpans => include_str!("../query/trace_spans.sql"),
+            Self::SpanDetail => include_str!("../query/span_detail.sql"),
+            Self::SpendByResponseIds => include_str!("../query/spend_by_response_ids.sql"),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum Parameter {
@@ -111,4 +139,38 @@ pub async fn execute_read(
         return Err(Error::InvalidResponse);
     }
     String::from_utf8(body).map_err(|_| Error::InvalidResponse)
+}
+
+#[derive(Clone, Copy)]
+pub enum LensQuery {
+    Sample,
+    Content,
+    Evidence,
+}
+
+impl LensQuery {
+    pub fn parse(name: &str) -> Result<Self, Error> {
+        match name {
+            "sample" => Ok(Self::Sample),
+            "content" => Ok(Self::Content),
+            "evidence" => Ok(Self::Evidence),
+            _ => Err(Error::InvalidQuery),
+        }
+    }
+    pub fn sql(self) -> &'static str {
+        match self {
+            Self::Sample => include_str!("../query/lens_sample.sql"),
+            Self::Content => include_str!("../query/lens_content.sql"),
+            Self::Evidence => include_str!("../query/lens_evidence.sql"),
+        }
+    }
+}
+
+pub async fn execute_named_read(
+    client: &Client,
+    connection: &Connection,
+    query: ReadQuery,
+    parameters: &BTreeMap<String, Parameter>,
+) -> Result<String, Error> {
+    execute_read(client, connection, query.sql(), parameters).await
 }
