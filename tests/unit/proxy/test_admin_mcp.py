@@ -38,6 +38,8 @@ def management_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     @app.get("/user/info")
     async def user_info(request: Request) -> dict[str, object]:
         authorization: Final = request.headers.get("authorization", "")
+        if authorization == "Bearer team-key":
+            raise HTTPException(status_code=404, detail="User None not found")
         if authorization not in {"Bearer admin-a", "Bearer admin-b", "Bearer member"}:
             raise HTTPException(status_code=401)
         user_id: Final = authorization.removeprefix("Bearer ")
@@ -154,7 +156,9 @@ def test_invalid_flag_fails_startup(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
-@pytest.mark.parametrize("authorization,status", [(None, 401), ("Bearer invalid", 401), ("Bearer member", 403)])
+@pytest.mark.parametrize(
+    "authorization,status", [(None, 401), ("Bearer invalid", 401), ("Bearer member", 403), ("Bearer team-key", 403)]
+)
 def test_admin_endpoint_rejects_unauthorized_callers(
     management_app: FastAPI, authorization: str | None, status: int
 ) -> None:

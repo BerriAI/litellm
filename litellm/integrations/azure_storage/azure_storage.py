@@ -30,6 +30,14 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 from litellm.types.utils import StandardLoggingPayload
 
 AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
+_ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
+
+
+def adls_safe_file_name(payload_id: str | None) -> str:
+    """`=` padding and `/` in a base64 payload id are what the Data Lake service rejects, so the name drops the
+    padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the length, so ids from
+    that alphabet stay distinct; anything else is left as is."""
+    return f"{(payload_id or str(uuid.uuid4())).translate(_ADLS_SAFE_NAME)}.json"
 
 
 @cache
@@ -46,6 +54,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         build_credential_chain_token_provider: Callable[
             [], Callable[[], str]
         ] = _cached_credential_chain_token_provider,
+        clock: Callable[[], float] = time.time,
         **kwargs,
     ):
         try:
@@ -69,6 +78,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.azure_storage_endpoint_suffix: str = (
                 os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
             )
+            self._clock: Callable[[], float] = clock
             self._service_client = None
             # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
             self._service_client_timeout: float | None = None
@@ -182,7 +192,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
                 json_payload: Final = safe_dumps(payload) + "\n"  # Add newline for each log entry
                 payload_bytes: Final = json_payload.encode("utf-8")
-                filename: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+                filename: Final = adls_safe_file_name(payload.get("id"))
                 base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{filename}"
 
                 # Execute the 3-step upload process
@@ -331,7 +341,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         from azure.storage.filedatalake.aio import DataLakeServiceClient
 
         # expire old clients to recover from connection issues
-        if self._service_client_timeout and self._service_client and self._service_client_timeout > time.time():
+        if self._service_client_timeout and self._service_client and self._service_client_timeout <= self._clock():
             await self._service_client.close()
             self._service_client = None
         if not self._service_client:
@@ -339,7 +349,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
-            self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+            self._service_client_timeout = self._clock() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
         return self._service_client
 
     async def upload_to_azure_data_lake_with_azure_account_key(self, payload: StandardLoggingPayload):
@@ -368,7 +378,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 verbose_logger.debug("Created directory: %s", today)
 
             # Create a file client
-            file_name: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+            file_name: Final = adls_safe_file_name(payload.get("id"))
             file_client: Final = directory_client.get_file_client(file_name)
 
             # Create the file
