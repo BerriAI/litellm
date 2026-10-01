@@ -50,9 +50,11 @@ class SnowflakeEmbeddingConfig(SnowflakeBaseConfig, BaseEmbeddingConfig):
         litellm_params: dict,
     ) -> EmbeddingResponse:
         response_json: Final = raw_response.json()
-        # convert embeddings to 1d array
-        for item in response_json["data"]:
-            item["embedding"] = item["embedding"][0]
+        # convert embeddings to 1d array if nested
+        for item in response_json.get("data") or ():
+            embedding_val = item.get("embedding")
+            if isinstance(embedding_val, list) and len(embedding_val) > 0 and isinstance(embedding_val[0], list):
+                item["embedding"] = embedding_val[0]
         returned_response: Final = EmbeddingResponse(**response_json)
 
         returned_response.model = "snowflake/" + (returned_response.model or "")
