@@ -307,6 +307,38 @@ def test_arize_otel_v2_b3_non_openinference_callback_family(callback: str, gatew
         assert baggage == expected_baggage, attributes
 
 
+def test_arize_otel_v2_b3_langfuse_carries_metadata_baggage(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: LIT-9128 Langfuse OTel v2 preset omits request-metadata baggage")
+    marker: Final = "b3-langfuse-" + uuid.uuid4().hex
+
+    def upstream(request: Request) -> Reply:
+        body: Final = _json_object(request.body)
+        assert body == {
+            "messages": [{"role": "user", "content": "weather in Paris?"}],
+            "model": "gpt-4o-mini",
+            "tool_choice": {"type": "function", "function": {"name": "lookup_weather"}},
+            "tools": CHAT_TOOLS,
+        }, body
+        return _chat_response(marker)
+
+    callback_settings: Final[dict[str, JsonValue]] = {
+        "otel": {"exporter": "http/protobuf", "endpoint": "unused", "mapper_names": ["genai"]}
+    }
+    with _rig(
+        gateway,
+        tmp_path,
+        upstream,
+        callbacks=("langfuse_otel",),
+        callback_settings=callback_settings,
+        environment={"LANGFUSE_HOST": "http://127.0.0.1"},
+    ) as rig:
+        response: Final = _request(rig.proxy, rig.model, marker)
+        assert response.status_code == 200, response.text
+        assert _json_object(response.content) == _chat_caller_response(_chat_response(marker), rig.model), response.text
+        attributes: Final = _matching_genai_marker_span(rig.destination, marker)
+        assert attributes["litellm.metadata.trace_marker"] == marker, attributes
+
+
 def test_arize_otel_v2_b4_legacy_otel_is_unchanged(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "b4-" + uuid.uuid4().hex
 

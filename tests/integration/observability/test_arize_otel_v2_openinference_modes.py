@@ -16,6 +16,7 @@ from _openinference_support import (
     _chat_response,
     _json_messages,
     _json_object,
+    _llm_spans_through_markers,
     _matching_marker_span,
     _matching_output_value_span,
     _matching_span,
@@ -216,6 +217,24 @@ def test_arize_otel_v2_c5_yaml_allowlist_does_not_reach_preset_so_default_applie
         _assert_default_allowlist_attributes(attributes, marker)
 
 
+def test_arize_otel_v2_c5_yaml_allowlist_reaches_preset(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: LIT-9124 arize preset ignores callback_settings.otel.baggage_metadata_keys from config.yaml")
+    marker: Final = "c5-allowlist-" + uuid.uuid4().hex
+    with _rig(
+        gateway,
+        tmp_path,
+        _upstream(marker),
+        callback_settings={"otel": {"baggage_metadata_keys": ["requester_metadata.trace_marker"]}},
+        remove_environment=("LITELLM_OTEL_BAGGAGE_METADATA_KEYS",),
+        disabled_environment=("LITELLM_OTEL_BAGGAGE_METADATA_KEYS",),
+    ) as rig:
+        response: Final = _request(rig.proxy, rig.model, marker)
+        _assert_success_body(response, marker, rig.model)
+        attributes: Final = _matching_marker_span(rig.destination, marker)
+        assert _json_object(attributes["metadata"].encode()) == {"trace_marker": marker}, attributes
+        assert attributes["litellm.metadata.trace_marker"] == marker, attributes
+
+
 def test_arize_otel_v2_c6_content_capture_disabled(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "c6-" + uuid.uuid4().hex
     with _rig(
@@ -300,6 +319,40 @@ def test_arize_otel_v2_c8_request_callback_disable(gateway: Gateway, tmp_path: P
             headers={"x-litellm-disable-callbacks": "arize"},
         )
         _assert_success_body(disabled_response, disabled_marker, rig.model)
+
+
+def test_arize_otel_v2_c8_disabled_callback_exports_no_span(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: LIT-9049 x-litellm-disable-callbacks: arize still exports the OTel v2 span")
+    disabled_marker: Final = "c8-disabled-" + uuid.uuid4().hex
+    sentinel: Final = "c8-sentinel-" + uuid.uuid4().hex
+
+    def upstream(request: Request) -> Reply:
+        marker: Final = _chat_request_marker(request)
+        assert marker in (disabled_marker, sentinel), request
+        _assert_chat_request(request, messages=[{"role": "user", "content": marker}])
+        return _chat_response(marker)
+
+    with _rig(
+        gateway,
+        tmp_path,
+        upstream,
+        litellm_settings={"allow_dynamic_callback_disabling": True},
+        workers=1,
+    ) as rig:
+        disabled_response: Final = _request(
+            rig.proxy,
+            rig.model,
+            disabled_marker,
+            prompt=disabled_marker,
+            headers={"x-litellm-disable-callbacks": "arize"},
+        )
+        _assert_success_body(disabled_response, disabled_marker, rig.model)
+        sentinel_response: Final = _request(rig.proxy, rig.model, sentinel, prompt=sentinel)
+        _assert_success_body(sentinel_response, sentinel, rig.model)
+        spans: Final = _llm_spans_through_markers(rig.destination, (sentinel,))
+        assert not any(attributes.get("litellm.metadata.trace_marker") == disabled_marker for attributes in spans), (
+            spans
+        )
 
 
 @pytest.mark.parametrize("failure_status", (401, 500))

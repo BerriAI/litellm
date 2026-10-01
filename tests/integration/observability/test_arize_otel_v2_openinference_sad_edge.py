@@ -475,6 +475,41 @@ def test_arize_otel_v2_d3_malformed_tool_calls_are_normalized(shape: str, gatewa
     assert "Exception while exporting Span batch" not in proxy_log.read_text(), proxy_log.read_text()
 
 
+def test_arize_otel_v2_d3_non_dict_tool_call_is_not_a_caller_error(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: LIT-9125 non-dict tool_calls entry returns HTTP 400 with a server traceback")
+    marker: Final = "d3-non-dict-call-" + uuid.uuid4().hex
+
+    def upstream(request: Request) -> Reply:
+        _assert_chat_request(request, messages=[{"role": "user", "content": "weather in Paris?"}])
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": marker,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "tool_calls",
+                            "message": {"role": "assistant", "content": None, "tool_calls": ["not-a-call"]},
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+                }
+            ).encode()
+        )
+
+    with _rig(gateway, tmp_path, upstream) as rig:
+        response: Final = _call(rig.proxy, rig.model, marker)
+        assert response.status_code not in range(400, 500), response.text
+        assert "Traceback" not in response.text, response.text
+        assert "AttributeError" not in response.text, response.text
+        readiness: Final = rig.proxy.client.get("/health/readiness")
+        assert readiness.status_code == 200, readiness.text
+        assert _json_object(readiness.content) == {"status": "healthy", "db": "connected"}, readiness.text
+
+
 @pytest.mark.parametrize("shape", ("empty", "null", "missing"))
 def test_arize_otel_v2_e3_empty_or_missing_tool_calls_never_indexed(
     shape: str, gateway: Gateway, tmp_path: Path
