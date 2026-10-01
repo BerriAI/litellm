@@ -22,6 +22,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils.cooldown_cache import CooldownCache
+from litellm.router_utils.cooldown_handlers import deployment_ids
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -182,7 +183,7 @@ class RoutingReadBatch:
         `_async_get_cooldown_deployments`, with the strategy's tpm/rpm counters for
         `healthy_deployments` fetched in the same MGET and kept as `prefetched_usage`.
         """
-        model_ids: Final = litellm_router_instance.get_model_ids()
+        model_ids: Final = deployment_ids(healthy_deployments)
         cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         selector: Final = self.usage_selector
         usage_keys: Final = (
