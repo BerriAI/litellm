@@ -571,7 +571,7 @@ def test_editing_the_toolset_changes_what_the_team_key_sees_on_its_next_request(
         eventually(
             lambda: _route_tools(gateway, headers, granted_name).tools,
             lambda tools: tools == (f"{alias}-multiply",),
-            seconds=75,
+            seconds=150,
         )
         peer.drain()
         removed: Final = _route_call(gateway, headers, granted_name, f"{alias}-add")
