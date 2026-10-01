@@ -31,9 +31,9 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    let isCurrentRequest = true;
+    const controller = new AbortController();
     alertingSettingsCall(accessToken).then((data) => {
-      if (!isCurrentRequest) {
+      if (controller.signal.aborted) {
         return;
       }
       setResetFields(new Set());
@@ -41,19 +41,14 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     });
 
     return () => {
-      isCurrentRequest = false;
+      controller.abort();
     };
   }, [accessToken]);
 
   const handleInputChange = (fieldName: string, newValue: any) => {
-    setResetFields((previous) => {
-      if (!previous.has(fieldName)) {
-        return previous;
-      }
-      const next = new Set(previous);
-      next.delete(fieldName);
-      return next;
-    });
+    setResetFields((previous) =>
+      previous.has(fieldName) ? new Set([...previous].filter((name) => name !== fieldName)) : previous,
+    );
 
     const updatedSettings = alertingSettings.map((setting) =>
       setting.field_name === fieldName ? { ...setting, field_value: newValue } : setting,
@@ -73,16 +68,16 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    const configuredAlertingArgs: Record<string, unknown> = {};
-    alertingSettings.forEach((setting) => {
-      if (
-        setting.field_name !== "slack_alerting" &&
-        !resetFields.has(setting.field_name) &&
-        setting.field_value != null
-      ) {
-        configuredAlertingArgs[setting.field_name] = setting.field_value;
-      }
-    });
+    const configuredAlertingArgs: Record<string, unknown> = Object.fromEntries(
+      alertingSettings
+        .filter(
+          (setting) =>
+            setting.field_name !== "slack_alerting" &&
+            !resetFields.has(setting.field_name) &&
+            setting.field_value != null,
+        )
+        .map((setting) => [setting.field_name, setting.field_value]),
+    );
 
     const { slack_alerting, ...updatedAlertingArgs } = formValues;
     const alertingArgs = {
@@ -115,11 +110,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
     }
 
     try {
-      setResetFields((previous) => {
-        const next = new Set(previous);
-        next.add(fieldName);
-        return next;
-      });
+      setResetFields((previous) => new Set([...previous, fieldName]));
 
       const updatedSettings = alertingSettings.map((setting) =>
         setting.field_name === fieldName
