@@ -138,7 +138,7 @@ class AzureGuardrailBase:
 
         return chunks
 
-    def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
+    def get_user_prompt(self, messages: list[AllMessageValues]) -> str | None:
         """
         Get the last consecutive block of messages from the user.
 

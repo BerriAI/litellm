@@ -378,9 +378,7 @@ async def test_prompt_shield_scans_tuple_messages() -> None:
     prompt: Final = "synthetic tuple prompt"
     data: Final[dict[str, object]] = {"messages": ({"role": "user", "content": prompt},)}
     azure_response: Final = _shield_http_response(False)
-    azure_http_handler: Final = AsyncHTTPHandler(
-        transport=httpx.MockTransport(lambda _request: azure_response)
-    )
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
     guardrail.async_handler = azure_http_handler
 
     try:
@@ -424,9 +422,7 @@ async def test_prompt_shield_dispatches_to_subclass_get_user_prompt_override() -
         ]
     }
     azure_response: Final = _shield_http_response(False)
-    azure_http_handler: Final = AsyncHTTPHandler(
-        transport=httpx.MockTransport(lambda _request: azure_response)
-    )
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
     guardrail.async_handler = azure_http_handler
 
     try:
@@ -461,21 +457,26 @@ async def test_prompt_shield_subclass_can_call_get_user_prompt() -> None:
     guardrail: Final = RequiringPromptShield(
         guardrail_name="azure_prompt_shield",
         api_key="azure_prompt_shield_api_key",
-        api_base="azure_prompt_shield_api_base",
+        api_base="https://azure-content-safety.example",
     )
     prompt: Final = "synthetic direct method prompt"
     data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": prompt}]}
+    azure_response: Final = _shield_http_response(False)
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
+    guardrail.async_handler = azure_http_handler
 
-    with patch.object(guardrail.async_handler, "post", return_value=_shield_response(False)) as mock_post:
+    try:
         await guardrail.async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             cache=DualCache(),
             data=data,
             call_type="completion",
         )
+        request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(azure_response.request.read())
+    finally:
+        await azure_http_handler.close()
 
-    mock_post.assert_called_once()
-    assert mock_post.call_args.kwargs["json"]["userPrompt"] == prompt
+    assert request_body["userPrompt"] == prompt
 
 
 @pytest.mark.asyncio
@@ -483,17 +484,24 @@ async def test_prompt_shield_messages_less_embeddings_return_data_and_log_allow(
     guardrail: Final = _shield_guardrail()
     data: Final[dict[str, object]] = {"input": "synthetic embedding input", "metadata": {}}
 
-    with patch.object(guardrail.async_handler, "post") as mock_post:
+    def fail_on_azure_request(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("unexpected Azure request")
+
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(fail_on_azure_request))
+    guardrail.async_handler = azure_http_handler
+
+    try:
         result: Final = await guardrail.async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             cache=DualCache(),
             data=data,
             call_type="embedding",
         )
+    finally:
+        await azure_http_handler.close()
 
     entry: Final = _recorded_guardrail_info(data)
     assert entry["guardrail_response"] == "allow"
-    mock_post.assert_not_called()
     assert result is data
 
 
