@@ -103,7 +103,7 @@ class AzureOpenAIConfig(BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        supported_params: Final = [
+        return [
             "temperature",
             "n",
             "stream",
@@ -135,9 +135,6 @@ class AzureOpenAIConfig(BaseConfig):
             "prompt_cache_key",
             "store",
         ]
-        if litellm.OpenAIGPTConfig.supports_reasoning_effort_passthrough(model):
-            supported_params.append("reasoning_effort")
-        return supported_params
 
     @classmethod
     def requires_max_completion_tokens(cls, model: str) -> bool:

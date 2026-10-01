@@ -182,8 +182,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
-        if OpenAIGPTConfig.supports_reasoning_effort_passthrough(model):
-            model_specific_params.append("reasoning_effort")
         return base_params + model_specific_params
 
     @staticmethod
@@ -193,12 +191,6 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_for_check in litellm.open_ai_chat_completion_models
             or model_for_check in litellm.open_ai_text_completion_models
         )
-
-    @staticmethod
-    def supports_reasoning_effort_passthrough(model: str) -> bool:
-        raw_model: Final = model.split("responses/", 1)[1] if "responses/" in model else model
-        model_for_check: Final = raw_model.split("/", 1)[1] if "/" in raw_model else raw_model
-        return model_for_check.startswith(("gpt-4.1", "gpt-4o"))
 
     def _map_openai_params(
         self,
