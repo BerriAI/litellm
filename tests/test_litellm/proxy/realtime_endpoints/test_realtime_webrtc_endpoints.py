@@ -521,12 +521,109 @@ def test_realtime_calls_invalid_token_returns_401(proxy_app):
     assert "Invalid or expired token" in response.json().get("error", "")
 
 
+@pytest.mark.parametrize("handle_kind", ["codex", "live"])
+@pytest.mark.parametrize("provider", ["chatgpt", "openai"])
+def test_legacy_sdp_rejects_handle_ciphertext_before_oauth_dispatch(
+    proxy_app, monkeypatch, tmp_path, handle_kind, provider
+):
+    import base64
+    import hashlib
+
+    from litellm import Router
+    from litellm.llms.chatgpt.codex import CodexRealtimeCall
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy import proxy_server
+    from litellm.proxy.realtime_endpoints.call_sessions import encode_call
+    from litellm.proxy.realtime_endpoints.live import LiveHandle, encode_session
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-sdp-handle-salt")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", "auth.json")
+    (tmp_path / "auth.json").write_text(
+        json.dumps(
+            {"access_token": "test-sdp-oauth", "account_id": "test-sdp-account", "expires_at": time.time() + 3600}
+        )
+    )
+    owner = hashlib.sha256(b"Bearer restricted-key", usedforsecurity=False).hexdigest()
+    handle = (
+        encode_call(
+            CodexRealtimeCall(
+                call_id="rtc_allowed",
+                model="gpt-live-1-codex",
+                alias="allowed-voice",
+                owner=owner,
+                expires_at=time.time() + 3600,
+            )
+        )
+        if handle_kind == "codex"
+        else encode_session(
+            LiveHandle(
+                session_id="live_allowed",
+                alias="allowed-voice",
+                deployment={"model": "chatgpt/gpt-live-1-codex"},
+                owner=owner,
+                expires_at=time.time() + 3600,
+                policy={},
+            )
+        )
+    )
+    encoded = handle.removeprefix("rtc_litellm_").removeprefix("live_litellm_")
+    ciphertext = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(201, text="v=0\r\nanswer")
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    router = Router(
+        model_list=[
+            {
+                "model_name": "forbidden-voice",
+                "litellm_params": {
+                    "model": "chatgpt/gpt-live-1-codex" if provider == "chatgpt" else "openai/gpt-realtime"
+                },
+            }
+        ]
+    )
+
+    async def add_data(data, **kwargs):
+        return data
+
+    async def pre_call(user_api_key_dict, data, call_type):
+        return data
+
+    async def route(data, route_type, **kwargs):
+        assert route_type == "arealtime_calls"
+        return router.arealtime_calls(**data, client=client)
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", add_data)
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(pre_call_hook=AsyncMock(side_effect=pre_call), post_call_failure_hook=AsyncMock()),
+    )
+    response = TestClient(proxy_app).post(
+        "/v1/realtime/calls?model=forbidden-voice",
+        headers={"Authorization": f"Bearer {ciphertext}", "Content-Type": "application/sdp"},
+        content=b"v=0\r\noffer",
+    )
+    assert response.status_code == 401, [(r.url.path, r.headers.get("authorization")) for r in requests]
+    assert not requests
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("token_format", ["versioned", "legacy"])
 async def test_realtime_calls_success_with_valid_encrypted_token(
     proxy_app,
     mock_route_request_realtime_calls,
     mock_add_litellm_data,
     mock_pre_call_hook,
+    token_format,
 ):
     """POST /v1/realtime/calls returns 201 with valid encrypted token from client_secrets."""
     # Build a valid encrypted token (same format as client_secrets returns)
@@ -538,7 +635,7 @@ async def test_realtime_calls_success_with_valid_encrypted_token(
         team_id=None,
         expires_at=future_expires_at,
     )
-    encrypted_token = encrypt_value_helper(token_payload)
+    encrypted_token = encrypt_value_helper(token_payload if token_format == "versioned" else "fake_upstream_epk")
 
     client = TestClient(proxy_app)
     with (

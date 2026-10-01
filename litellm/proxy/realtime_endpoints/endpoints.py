@@ -427,6 +427,12 @@ async def proxy_realtime_calls(
 
     sdp_body: Final[bytes] = await request.body()
     decoded_payload: Final = _decode_realtime_token_payload(decrypted_token_value)
+    if decoded_payload is None and decrypted_token_value.lstrip().startswith(("{", "[")):
+        return Response(
+            content=json.dumps({"error": "Invalid or expired token"}),
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            media_type="application/json",
+        )
     if decoded_payload is not None:
         # Check token expiry
         expires_at: Final = decoded_payload.get("expires_at")

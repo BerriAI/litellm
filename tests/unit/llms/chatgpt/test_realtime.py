@@ -288,6 +288,29 @@ async def test_chatgpt_call_keeps_oauth_and_frameless_session(chatgpt_tokens, ap
 
 
 @pytest.mark.asyncio
+async def test_chatgpt_call_rejects_ephemeral_key_before_oauth_dispatch(chatgpt_tokens):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(201, text="v=0\r\n")
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(litellm.AuthenticationError):
+            await litellm.arealtime_calls(
+                model="chatgpt/gpt-live-1-codex",
+                openai_ephemeral_key="legacy-ephemeral-key",
+                sdp_body=b"v=0\r\n",
+                client=client,
+            )
+        assert not requests
+    finally:
+        await client.client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_openai_call_preserves_explicit_identity_headers():
     requests = []
 

@@ -7,6 +7,7 @@ from httpx import URL, QueryParams, Response
 from pydantic import TypeAdapter
 
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.realtime.handler import OpenAIRealtime
 from litellm.llms.openai.realtime.http_transformation import OpenAIRealtimeHTTPConfig
 from litellm.types.realtime import RealtimeQueryParams
@@ -258,6 +259,12 @@ class ChatGPTRealtimeHTTPConfig(OpenAIRealtimeHTTPConfig):
     def get_realtime_calls_headers(
         self, ephemeral_key: str
     ) -> dict[str, str]:  # mutable-ok: HTTP handler header contract
+        if ephemeral_key:
+            raise AuthenticationError(
+                message="ChatGPT realtime calls require an authenticated JSON or multipart offer",
+                llm_provider="chatgpt",
+                model="",
+            )
         return realtime_headers(self._params, MappingProxyType({}))
 
     def validate_environment(
