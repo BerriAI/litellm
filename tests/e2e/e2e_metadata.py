@@ -38,7 +38,8 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from enum import Enum
 from functools import reduce, wraps
-from types import TracebackType
+from itertools import chain
+from types import MappingProxyType, TracebackType
 from typing import Final, ParamSpec, TypeVar, cast
 
 import pytest
@@ -560,7 +561,7 @@ def step(label: str) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     return decorate
 
 
-_REPEATED: Final[dict[str, str]] = {"providers": "provider", "models": "model", "capabilities": "capability"}
+_REPEATED: Final = MappingProxyType({"providers": "provider", "models": "model", "capabilities": "capability"})
 
 
 def _declared_subject(args: tuple[object, ...]) -> Subject | None:
@@ -583,21 +584,23 @@ def subject_properties(item: pytest.Item) -> tuple[tuple[str, str], ...]:
     scalar field needs no edit. Empty fields emit nothing; the emitter is what
     guarantees every key exists in the JSON, with `providers` and `models` as
     `[]` when nothing was declared."""
-    marker = item.get_closest_marker("meta")
+    marker: Final = item.get_closest_marker("meta")
     if marker is None:
         return ()
-    subject = _declared_subject(marker.args)
+    subject: Final = _declared_subject(marker.args)
     if subject is None:
         return ()
-    fields: dict[str, object] = asdict(subject)
-    pairs: list[tuple[str, str]] = []
-    for name, value in fields.items():
-        repeated = _REPEATED.get(name)
-        if repeated is not None:
-            pairs.extend((repeated, _scalar(member)) for member in _members(value) or ())
-        elif value is not None and value != "":
-            pairs.append((name, _scalar(value)))
-    return tuple(pairs)
+    declared: Final[dict[str, object]] = asdict(subject)
+    return tuple(chain.from_iterable(_field_properties(name, value) for name, value in declared.items()))
+
+
+def _field_properties(name: str, value: object) -> tuple[tuple[str, str], ...]:
+    repeated: Final = _REPEATED.get(name)
+    if repeated is not None:
+        return tuple((repeated, _scalar(member)) for member in _members(value) or ())
+    if value is None or value == "":
+        return ()
+    return ((name, _scalar(value)),)
 
 
 def step_properties() -> tuple[tuple[str, str], ...]:
