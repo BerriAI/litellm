@@ -32,7 +32,8 @@ def main() -> int:
     parser.add_argument("--order-seed", type=int, default=int(os.environ.get("INTEGRATION_ORDER_SEED", "0")))
     parser.add_argument("--workers", type=int, default=int(os.environ.get("INTEGRATION_WORKERS", "1")))
     parser.add_argument("--list", action="store_true", help="print the group's test files and exit")
-    parser.add_argument("files", nargs="*", help="run only these files of the group")
+    parser.add_argument("--runxfail", action="store_true", help="run known-gap assertions without xfail handling")
+    parser.add_argument("files", nargs="*", help="run these files or pytest node IDs from the group")
     options: Final = parser.parse_intermixed_args()
     root: Final = Path(__file__).resolve().parents[2]
     group_files: Final = tuple(
@@ -43,7 +44,8 @@ def main() -> int:
     if options.list:
         print("\n".join(group_files))
         return 0
-    foreign: Final = sorted(set(options.files) - set(group_files))
+    requested_files: Final = frozenset(selector.split("::", 1)[0] for selector in options.files)
+    foreign: Final = sorted(requested_files - set(group_files))
     if foreign:
         parser.error(f"Not in the {options.group} group: {', '.join(foreign)}")
     selected: Final = tuple(options.files) or group_files
@@ -77,6 +79,7 @@ def main() -> int:
             f"--junitxml={output / 'junit.xml'}",
             "-o",
             "junit_family=xunit1",
+            *(("--runxfail",) if options.runxfail else ()),
             *(("-n", str(options.workers)) if options.workers > 1 else ()),
         ],
         cwd=root,
@@ -86,7 +89,7 @@ def main() -> int:
         return result
     evidence: Final = json.loads((output / "execution.json").read_text())
     collected_files: Final = {node.split("::", 1)[0] for node in evidence["collected"]}
-    empty: Final = tuple(path for path in selected if path not in collected_files)
+    empty: Final = tuple(path for path in sorted(requested_files or group_files) if path not in collected_files)
     if empty:
         sys.stderr.write(f"Selected integration files collected zero tests: {', '.join(empty)}\n")
         return 1
