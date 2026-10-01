@@ -3,18 +3,7 @@
 import type { components } from "@/lib/http/schema";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Aperture,
-  ArrowUpRight,
-  CheckCircle2,
-  Circle,
-  Info,
-  Layers3,
-  Pause,
-  Play,
-  Plus,
-  Settings2,
-} from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Circle, Info, Layers3, Pause, Play, Plus, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -186,18 +175,9 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
   };
 
   return (
-    <main className="w-full min-w-0 p-6 md:p-8 space-y-6">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Aperture aria-hidden="true" className="size-7" strokeWidth={1.75} />
-            <h1 className="text-2xl font-semibold tracking-tight">Lens</h1>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Understand your agent activity. Find patterns worth acting on.
-          </p>
-        </div>
-        {!readOnly && (
+    <section aria-label="Investigations" className="w-full min-w-0 space-y-6">
+      <header className="flex flex-wrap justify-end gap-4">
+        {!readOnly && !showEmpty && (
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setWorkerSetup(true)}>
               <Circle
@@ -229,6 +209,8 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
       )}
       {showEmpty && (
         <LensWelcome
+          accessToken={accessToken}
+          tracingEnabled={query.data?.tracing_enabled ?? false}
           connected={connected}
           readOnly={!!readOnly}
           onConnect={() => setWorkerSetup(true)}
@@ -794,6 +776,6 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           </div>
         </SheetContent>
       </Sheet>
-    </main>
+    </section>
   );
 }

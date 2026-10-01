@@ -1,18 +1,58 @@
+import Link from "next/link";
+import { isTracingNotEnabled, useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
 import { Aperture, ArrowUpRight, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
 
 export function LensWelcome({
+  accessToken,
+  tracingEnabled,
   connected,
   readOnly,
   onConnect,
   onCreate,
 }: {
+  accessToken: string;
+  tracingEnabled: boolean;
   connected: boolean;
   readOnly: boolean;
   onConnect: () => void;
   onCreate: () => void;
 }) {
+  const traces = useTraceAvailability(accessToken, tracingEnabled);
+  if (tracingEnabled && traces.isPending) {
+    return (
+      <p role="status" className="py-8 text-sm text-muted-foreground">
+        Checking for traces…
+      </p>
+    );
+  }
+  if (traces.error && !isTracingNotEnabled(traces.error)) {
+    return (
+      <div role="alert" className="py-8 text-sm">
+        <p>Could not check traces. {traces.error.message}</p>
+        <Button variant="outline" className="mt-4" onClick={() => void traces.refetch()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  if (!tracingEnabled || !traces.data || isTracingNotEnabled(traces.error)) {
+    return (
+      <section className="py-8">
+        <h2 className="text-lg font-semibold">Set up traces to start running investigations</h2>
+        {tracingEnabled && !traces.error && (
+          <p className="mt-2 text-sm text-muted-foreground">No agent traces received yet.</p>
+        )}
+        <Link
+          href={uiHref("lens/?tab=traces")}
+          className="mt-4 inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4"
+        >
+          Set up traces <ArrowUpRight aria-hidden="true" className="size-4" />
+        </Link>
+      </section>
+    );
+  }
   return (
     <section aria-labelledby="lens-welcome" className="overflow-hidden rounded-xl border bg-card">
       <div className="border-b bg-muted/20 px-6 py-10 sm:px-10">
@@ -34,12 +74,12 @@ export function LensWelcome({
             Use the agent traces or LLM requests already in LiteLLM. Lens needs their inputs and outputs to understand
             what happened.
           </p>
-          <a
-            href={uiHref("logs/")}
+          <Link
+            href={uiHref("lens/?tab=traces")}
             className="mt-auto inline-flex items-center gap-1 pt-3 text-sm font-medium underline-offset-4 hover:underline"
           >
-            View logs <ArrowUpRight aria-hidden="true" className="size-4" />
-          </a>
+            View traces <ArrowUpRight aria-hidden="true" className="size-4" />
+          </Link>
         </li>
         <li className="flex flex-col gap-3 p-6 sm:p-8">
           <span className="flex size-7 items-center justify-center rounded-full border text-xs font-medium">

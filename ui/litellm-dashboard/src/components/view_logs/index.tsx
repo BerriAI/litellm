@@ -4,7 +4,6 @@ import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "./AuditLogsPanel";
 import RequestLogsPanel from "./RequestLogsPanel";
-import AgentTracesPage from "./TraceView/AgentTracesPage";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
@@ -16,24 +15,20 @@ interface SpendLogsTableProps {
   premiumUser: boolean;
 }
 
-type LogsTabId = "request logs" | "agent traces" | "audit logs" | "deleted keys" | "deleted teams";
+type LogsTabId = "request logs" | "audit logs" | "deleted keys" | "deleted teams";
 
 interface LogsTab {
   id: LogsTabId;
   label: string;
-  isNew?: boolean;
 }
 
 const REQUEST_LOGS_TAB: LogsTab = { id: "request logs", label: "Request Logs" };
-const AGENT_TRACES_TAB: LogsTab = { id: "agent traces", label: "Agent Traces", isNew: true };
 const AUDIT_LOGS_TAB: LogsTab = { id: "audit logs", label: "Audit Logs" };
 const DELETED_KEYS_TAB: LogsTab = { id: "deleted keys", label: "Deleted Keys" };
 const DELETED_TEAMS_TAB: LogsTab = { id: "deleted teams", label: "Deleted Teams" };
 
 const tabContentClassName = (tabId: LogsTabId): string =>
-  tabId === REQUEST_LOGS_TAB.id || tabId === AGENT_TRACES_TAB.id
-    ? "flex min-h-0 flex-1 flex-col"
-    : "min-h-0 flex-1 overflow-y-auto";
+  tabId === REQUEST_LOGS_TAB.id ? "flex min-h-0 flex-1 flex-col" : "min-h-0 flex-1 overflow-y-auto";
 
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const [activeTab, setActiveTab] = useState<LogsTabId>(REQUEST_LOGS_TAB.id);
@@ -50,7 +45,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   const tabs: LogsTab[] = [
     REQUEST_LOGS_TAB,
-    AGENT_TRACES_TAB,
     ...(canViewAuditLogs ? [AUDIT_LOGS_TAB] : []),
     DELETED_KEYS_TAB,
     ...(canViewDeletedTeams ? [DELETED_TEAMS_TAB] : []),
@@ -68,8 +62,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
             isActive={activeTab === "request logs"}
           />
         );
-      case "agent traces":
-        return activeTab === "agent traces" ? <AgentTracesPage accessToken={accessToken} /> : null;
       case "audit logs":
         return (
           <AuditLogsPanel
@@ -99,11 +91,6 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           {tabs.map((tab) => (
             <TabsTrigger key={tab.id} value={tab.id} className="flex-none gap-1.5 px-0 text-[13px] font-normal">
               {tab.label}
-              {tab.isNew && (
-                <span className="rounded-sm border border-border px-1 text-[10px] leading-4 text-muted-foreground">
-                  New
-                </span>
-              )}
             </TabsTrigger>
           ))}
         </TabsList>

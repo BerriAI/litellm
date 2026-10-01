@@ -8,8 +8,7 @@ import { AgentTracesSection } from "./AgentTracesSection";
 const DEFAULT_RANGE_HOURS = 24;
 const TIME_FORMAT = "YYYY-MM-DDTHH:mm";
 
-/** Agent Traces: agent runs (developer view). Lives as the "Agent Traces" tab of the Logs page. */
-export default function AgentTracesPage({ accessToken }: { accessToken: string }) {
+export default function AgentTracesPage({ accessToken, isActive = true }: { accessToken: string; isActive?: boolean }) {
   const [rangeHours, setRangeHours] = useState(DEFAULT_RANGE_HOURS);
   const [live, setLive] = useState(true);
   const [anchor, setAnchor] = useState(() => moment());
@@ -30,7 +29,7 @@ export default function AgentTracesPage({ accessToken }: { accessToken: string }
     <div className="flex min-h-0 flex-1 flex-col pt-3">
       <AgentTracesSection
         accessToken={accessToken}
-        isActive
+        isActive={isActive}
         startTime={startTime}
         endTime={endTime}
         isCustomDate={false}
