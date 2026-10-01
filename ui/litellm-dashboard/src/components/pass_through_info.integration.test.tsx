@@ -121,6 +121,18 @@ describe("pass_through_info update payload", () => {
     expect(lastPayload().timeout).toBe(600);
   });
 
+  it("saves an endpoint whose stored timeout is null without a validation error", async () => {
+    const user = setup();
+    renderView(true, { ...endpoint, timeout: null });
+    await openEditForm(user);
+
+    await save(user);
+
+    await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
+    expect(screen.queryByText("Invalid input")).not.toBeInTheDocument();
+    expect(lastPayload().timeout).toBeUndefined();
+  });
+
   it("keeps the path from the loaded endpoint rather than the form", async () => {
     const user = setup();
     renderView();

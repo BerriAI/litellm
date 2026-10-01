@@ -104,7 +104,7 @@ interface PassThroughEndpoint {
   headers: Record<string, any>;
   include_subpath?: boolean;
   cost_per_request?: number;
-  timeout?: number;
+  timeout?: number | null;
   auth?: boolean;
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
@@ -160,7 +160,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       methods: initialEndpointData.methods || [],
       include_subpath: initialEndpointData.include_subpath || false,
       cost_per_request: initialEndpointData.cost_per_request,
-      timeout: initialEndpointData.timeout,
+      timeout: initialEndpointData.timeout ?? undefined,
       auth: initialEndpointData.auth || false,
       display_name: initialEndpointData.display_name ?? undefined,
       show_in_model_hub: initialEndpointData.show_in_model_hub ?? false,
