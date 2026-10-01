@@ -1,5 +1,6 @@
 import json
 import uuid
+from pathlib import Path
 from typing import Final, Literal
 
 import httpx
@@ -260,3 +261,142 @@ def test_ultrafast_long_context_prompt_bills_ultrafast_long_context_rates(
         body: Final = object_value(observation["body"])
         assert body.get("service_tier") == service_tier, body
         assert not set(LONG_CONTEXT_PRICING).intersection(body), body
+
+
+BUNDLED_COST_MAP: Final = (
+    Path(__file__).resolve().parents[3] / "litellm" / "model_prices_and_context_window_backup.json"
+)
+CUSTOM_STANDARD_INPUT_RATE: Final = 0.001
+CUSTOM_STANDARD_OUTPUT_RATE: Final = 0.002
+
+
+def _bundled_rate(model: str, field: str) -> float:
+    rate: Final = object_value(JSON_OBJECT.validate_json(BUNDLED_COST_MAP.read_bytes())[model])[field]
+    assert isinstance(rate, float) and rate > 0, f"{model}.{field} in {BUNDLED_COST_MAP.name}: {rate}"
+    return rate
+
+
+@pytest.mark.parametrize(
+    ("service_tier", "input_field", "output_field"),
+    (
+        ("ultrafast", "input_cost_per_token_ultrafast", "output_cost_per_token_ultrafast"),
+        (None, None, None),
+    ),
+    ids=("ultrafast", "standard"),
+)
+def test_custom_standard_rates_bill_served_ultrafast_tier_at_the_catalog_tier_rate(
+    gateway: Gateway, service_tier: str | None, input_field: str | None, output_field: str | None
+) -> None:
+    input_rate: Final = CUSTOM_STANDARD_INPUT_RATE if input_field is None else _bundled_rate("gpt-6-astra", input_field)
+    output_rate: Final = (
+        CUSTOM_STANDARD_OUTPUT_RATE if output_field is None else _bundled_rate("gpt-6-astra", output_field)
+    )
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"custom-standard-ultrafast-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(
+            scenario_id,
+            JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "chatcmpl-$UNIQUE_ID",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-6-astra",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1000, "completion_tokens": 100, "total_tokens": 1100},
+                    **({} if service_tier is None else {"service_tier": service_tier}),
+                },
+            ),
+        )
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="openai/gpt-6-astra",
+            api_key=scenario_id,
+            api_base=handle.api_base(),
+            input_cost_per_token=CUSTOM_STANDARD_INPUT_RATE,
+            output_cost_per_token=CUSTOM_STANDARD_OUTPUT_RATE,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "OK"}],
+                **({} if service_tier is None else {"service_tier": service_tier}),
+            },
+            key=scenario.key(),
+        )
+        assert response.status_code == 200, response.text
+        expected: Final = 1000 * input_rate + 100 * output_rate
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected, rel=1e-6), response.text
+        request_id: Final = string_value(object_value(response.json())["id"])
+        rows: Final = eventually(
+            lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert float(rows[0]["spend"]) == pytest.approx(expected, rel=1e-6), rows
+
+
+def test_custom_standard_rates_bill_catalog_ultrafast_long_context_rates(gateway: Gateway) -> None:
+    input_rate: Final = _bundled_rate("gpt-6-astra", "input_cost_per_token_above_272k_tokens_ultrafast")
+    output_rate: Final = _bundled_rate("gpt-6-astra", "output_cost_per_token_above_272k_tokens_ultrafast")
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"custom-standard-ultrafast-long-context-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(
+            scenario_id,
+            JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "chatcmpl-$UNIQUE_ID",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-6-astra",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": LONG_PROMPT_TOKENS,
+                        "completion_tokens": 100,
+                        "total_tokens": LONG_PROMPT_TOKENS + 100,
+                    },
+                    "service_tier": "ultrafast",
+                },
+            ),
+        )
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(
+            model="openai/gpt-6-astra",
+            api_key=scenario_id,
+            api_base=handle.api_base(),
+            input_cost_per_token=CUSTOM_STANDARD_INPUT_RATE,
+            output_cost_per_token=CUSTOM_STANDARD_OUTPUT_RATE,
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "long context ultrafast pricing"}],
+                "service_tier": "ultrafast",
+            },
+            key=scenario.key(),
+        )
+
+        assert response.status_code == 200, response.text
+        expected: Final = LONG_PROMPT_TOKENS * input_rate + 100 * output_rate
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected, rel=1e-6), response.text
+        request_id: Final = string_value(object_value(response.json())["id"])
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+                (request_id,),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert rows[0]["prompt_tokens"] == LONG_PROMPT_TOKENS
+        assert rows[0]["completion_tokens"] == 100
+        assert float(rows[0]["spend"]) == pytest.approx(expected, rel=1e-6), rows

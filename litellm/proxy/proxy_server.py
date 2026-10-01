@@ -427,6 +427,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     check_file_size_under_limit,
     get_form_data,
+    resolve_inference_model,
 )
 from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
@@ -499,9 +500,13 @@ from litellm.proxy.config_resolvers.alerting import (
 )
 from litellm.proxy.config_resolvers.changed_section_keys import changed_section_keys
 from litellm.proxy.config_resolvers.settings_rules import (
+    ABSENT,
     DbRow,
     Section,
+    SettingValue,
     coerce_bool,
+    is_absent,
+    is_resource_list,
 )
 from litellm.proxy.config_resolvers.settings_rules import (
     JsonValue as SettingsJsonValue,
@@ -536,6 +541,7 @@ from litellm.proxy.discovery_endpoints import (
     agent_skills_discovery_router,
     ui_discovery_endpoints_router,
 )
+from litellm.proxy.engine.endpoints import router as engine_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
@@ -713,6 +719,7 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy import tracing_endpoints
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -844,6 +851,7 @@ from litellm.secret_managers.main import (
     secret_manager_would_be_consulted,
     str_to_bool,
 )
+from litellm.tracing import TraceReceiver
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingArgs
 from litellm.types.llms.anthropic import (
     AnthropicMessagesRequest,
@@ -1520,6 +1528,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 _tagged.strategy._state_loaded = True
     asyncio.create_task(_adaptive_router_flusher_loop())
 
+    ## [Optional] Initialize agent tracing
+    asyncio.create_task(ProxyStartupEvent.init_tracing(general_settings))
+
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
 
@@ -1547,6 +1558,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         if not model_info_scheduler.running:
             model_info_scheduler.start()
+
+    if scheduler is not None and prisma_client is not None:
+        from litellm.proxy.management_endpoints.roi_calculator_endpoints import register_scheduled_sync
+
+        register_scheduled_sync(scheduler)
 
     # End of startup event
     yield
@@ -5206,6 +5222,8 @@ class _ConfigWithBaseline(dict[str, object]):
 
 _EMPTY_SETTINGS_MAPPING: Final[Mapping[str, SettingsJsonValue]] = MappingProxyType({})
 _SETTINGS_MAPPING: Final = TypeAdapter(dict[str, SettingsJsonValue])
+_SETTINGS_LIST: Final = TypeAdapter(list[SettingsJsonValue])
+_ENDPOINT_DICTS: Final = TypeAdapter(list[dict[str, object]])
 
 
 def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
@@ -5218,6 +5236,40 @@ def _get_field_default(field_info: FieldInfo) -> JsonValue:
     if field_info.default is PydanticUndefined:
         return None
     return cast(JsonValue, field_info.default)  # cast-ok: Pydantic field defaults are JSON values at runtime
+
+
+def _pass_through_endpoints_beside_db(db_endpoints: object, config_endpoints: object) -> list[SettingsJsonValue]:
+    stored: Final = db_endpoints if isinstance(db_endpoints, list) else ()
+    declared: Final = config_endpoints if isinstance(config_endpoints, list) else ()
+    db_paths: Final = frozenset(endpoint.get("path") for endpoint in stored if isinstance(endpoint, dict))
+    beside_db: Final = (
+        endpoint for endpoint in declared if not isinstance(endpoint, dict) or endpoint.get("path") not in db_paths
+    )
+    return _SETTINGS_LIST.validate_python((*stored, *beside_db))
+
+
+def _with_config_file_pass_through_endpoints(
+    section_config: object, resolved: Mapping[str, SettingsJsonValue], db_endpoints: SettingValue
+) -> Mapping[str, object]:
+    config_endpoints: Final = (
+        section_config.get("pass_through_endpoints") if isinstance(section_config, Mapping) else None
+    )
+    if config_endpoints is None and not isinstance(db_endpoints, list) and "pass_through_endpoints" not in resolved:
+        return resolved
+    return MappingProxyType(
+        {
+            **resolved,
+            "pass_through_endpoints": _pass_through_endpoints_beside_db(db_endpoints, config_endpoints),
+        }
+    )
+
+
+def _reload_settings_store(section: Section, store: SettingsStore, section_config: object) -> None:
+    serving_pass_throughs: Final = store.get("pass_through_endpoints")
+    store.load_yaml(_as_settings_mapping(section_config))
+    store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
+    if is_resource_list(section, "pass_through_endpoints") and serving_pass_throughs is not None:
+        store["pass_through_endpoints"] = serving_pass_throughs
 
 
 def _bind_general_settings_store(settings: SettingsStore) -> None:
@@ -5352,22 +5404,18 @@ class ProxyConfig:
         )
 
     def _load_yaml_settings_stores(self, config: Mapping[str, object]) -> None:
-        global config_passthrough_endpoints
         for section, store in self._settings_stores.items():
-            store.load_yaml(_as_settings_mapping(config.get(section)))
-            store.apply_db_row(section, _EMPTY_SETTINGS_MAPPING)
-        yaml_endpoints: Final = self.settings.config_value("pass_through_endpoints")
-        config_passthrough_endpoints = (
-            [dict(endpoint) for endpoint in yaml_endpoints if isinstance(endpoint, dict)]
-            if isinstance(yaml_endpoints, list)
-            else None
-        )
+            _reload_settings_store(section, store, config.get(section))
 
     def _config_with_resolved_settings(self, config: Mapping[str, object]) -> dict[str, object]:
         return {  # mutable-ok: get_config preserves the mutable mapping contract used by existing loaders
             **config,
             **{
-                section: dict(store.resolved())
+                section: dict(
+                    _with_config_file_pass_through_endpoints(
+                        config.get(section), store.resolved(), store.db_value("pass_through_endpoints")
+                    )
+                )
                 for section, store in self._settings_stores.items()
                 if isinstance(config.get(section), Mapping) or len(store) > 0
             },
@@ -6731,6 +6779,7 @@ class ProxyConfig:
 
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
+                config_passthrough_endpoints = general_settings["pass_through_endpoints"]
                 await initialize_pass_through_endpoints(
                     pass_through_endpoints=general_settings["pass_through_endpoints"],
                     config_file_path=config_file_path,
@@ -7746,14 +7795,12 @@ class ProxyConfig:
             self.settings.load_yaml(_as_settings_mapping(general_settings))
         cache_size_was_db: Final = self.settings.source("user_api_key_cache_max_size") == "db"
         previous_cleanup_schedule: Final = self._resolved_cleanup_schedule()
-        previous_pass_through_endpoints: Final = self.settings.get("pass_through_endpoints")
         self.settings.apply_db_row("general_settings", db_general_settings)
         _bind_general_settings_store(self.settings)
         await self._apply_general_settings_side_effects(
             db_general_settings,
             cache_size_was_db,
             previous_cleanup_schedule,
-            previous_pass_through_endpoints,
         )
 
     def _resolved_cleanup_schedule(self) -> tuple[object, ...]:
@@ -7767,11 +7814,10 @@ class ProxyConfig:
         db_values: Mapping[str, SettingsJsonValue],
         cache_size_was_db: bool,
         previous_cleanup_schedule: tuple[object, ...],
-        previous_pass_through_endpoints: SettingsJsonValue | None,
     ) -> None:
         effects: Final = (
             self._apply_alerting_settings,
-            partial(self._apply_pass_through_settings, previous_endpoints=previous_pass_through_endpoints),
+            self._apply_pass_through_settings,
             self._apply_boolean_settings,
             partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
             self._apply_store_model_in_db_setting,
@@ -7804,18 +7850,22 @@ class ProxyConfig:
         if "plugins" in db_values and self.settings.source("plugins") == "db":
             register_plugins_from_config(self.settings)
 
-    async def _apply_pass_through_settings(
-        self,
-        db_values: Mapping[str, SettingsJsonValue],
-        previous_endpoints: SettingsJsonValue | None,
-    ) -> None:
-        del db_values
-        resolved_endpoints: Final = self.settings.get("pass_through_endpoints")
-        if resolved_endpoints == previous_endpoints:
+    async def _apply_pass_through_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        db_endpoints: Final = db_values.get("pass_through_endpoints")
+        if isinstance(db_endpoints, list):
+            await self._serve_pass_through_endpoints(db_endpoints)
             return
-        await initialize_pass_through_endpoints(
-            pass_through_endpoints=resolved_endpoints if isinstance(resolved_endpoints, list) else []
+        if "pass_through_endpoints" not in self.settings:
+            self._publish_pass_through_endpoints(())
+
+    def _publish_pass_through_endpoints(self, db_endpoints: Sequence[SettingsJsonValue]) -> None:
+        self.settings["pass_through_endpoints"] = _pass_through_endpoints_beside_db(
+            list(db_endpoints), config_passthrough_endpoints
         )
+
+    async def _serve_pass_through_endpoints(self, db_endpoints: Sequence[SettingsJsonValue]) -> None:
+        self._publish_pass_through_endpoints(db_endpoints)
+        await initialize_pass_through_endpoints(pass_through_endpoints=_ENDPOINT_DICTS.validate_python(db_endpoints))
 
     async def _apply_boolean_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         for key in (
@@ -11310,6 +11360,39 @@ class ProxyStartupEvent:
             return connected_client
 
     @classmethod
+    async def init_tracing(cls, general_settings: dict, receiver: TraceReceiver | None = None) -> None:
+        """
+        Enable agent tracing (`POST/GET /v1/traces`) when configured:
+
+            general_settings:
+              tracing:
+                store: clickhouse
+        """
+        from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+
+        manager: Final = litellm.logging_callback_manager
+        for callback in manager.get_custom_loggers_for_type(ClickHouseSpendLogger):
+            manager.remove_callback_from_all_lists(callback)
+        tracing_endpoints.receiver = None
+        settings: Final = general_settings.get("tracing")
+        if not isinstance(settings, dict) or settings.get("store") != "clickhouse":
+            return
+        try:
+            tracing: Final = receiver if receiver is not None else TraceReceiver.from_env()
+            await tracing.start()
+        except (KeyError, OSError, RuntimeError, ValueError) as error:
+            verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
+            return
+        tracing_endpoints.receiver = tracing
+        spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
+        manager.add_litellm_callback(spend_logger)
+        manager.add_litellm_success_callback(spend_logger)
+        manager.add_litellm_failure_callback(spend_logger)
+        manager.add_litellm_async_success_callback(spend_logger)
+        manager.add_litellm_async_failure_callback(spend_logger)
+        verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
+
+    @classmethod
     def _init_dd_tracer(cls):
         """
         Initialize dd tracer - if `USE_DDTRACE=true` in .env
@@ -12351,13 +12434,7 @@ async def moderations(
             proxy_config=proxy_config,
         )
 
-        data["model"] = (
-            general_settings.get("moderation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model")  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
+        data["model"] = resolve_inference_model(data.get("model"), general_settings, user_model, kind="moderation")
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(
@@ -12611,13 +12688,7 @@ async def audio_transcriptions(
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             data["user"] = user_api_key_dict.user_id
 
-        data["model"] = (
-            general_settings.get("moderation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
-        )
-        if user_model:
-            data["model"] = user_model
+        data["model"] = resolve_inference_model(data.get("model"), general_settings, user_model, kind="moderation")
 
         router_model_names: Final = llm_router.model_names if llm_router is not None else []
 
@@ -17519,13 +17590,17 @@ def _serve_custom_ui_logo(candidate: str) -> Response | None:
 
 
 @app.get("/get_image", include_in_schema=False)
-async def get_image(theme: Literal["light", "dark"] | None = None):
+async def get_image(
+    theme: Literal["light", "dark"] | None = None,
+    variant: Literal["full", "monogram"] = "full",
+):
     """Get logo to show on admin UI"""
 
     # get current_dir
     current_dir: Final = os.path.dirname(os.path.abspath(__file__))
-    bundled_light_logo: Final = os.path.join(current_dir, "logo.jpg")
-    bundled_dark_logo: Final = os.path.join(current_dir, "logo_dark.png")
+    bundled_logo_stem: Final = "logo_monogram" if variant == "monogram" else "logo"
+    bundled_light_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}.png")
+    bundled_dark_logo: Final = os.path.join(current_dir, f"{bundled_logo_stem}_dark.png")
     default_site_logo: Final = (
         bundled_dark_logo if theme == "dark" and os.path.isfile(bundled_dark_logo) else bundled_light_logo
     )
@@ -17586,7 +17661,7 @@ async def get_image(theme: Literal["light", "dark"] | None = None):
     if safe_logo is not None:
         safe_logo_path, media_type = safe_logo
         return FileResponse(safe_logo_path, media_type=media_type)
-    return FileResponse(bundled_light_logo, media_type="image/jpeg")
+    return FileResponse(bundled_light_logo, media_type="image/png")
 
 
 @app.get("/get_favicon", include_in_schema=False)
@@ -18275,6 +18350,9 @@ async def update_config_general_settings(
     )
     await invalidate_config_param("general_settings")
     proxy_config.settings.apply_db_row("general_settings", general_settings)
+    if is_resource_list("general_settings", data.field_name):
+        stored_endpoints: Final = general_settings.get("pass_through_endpoints")
+        await proxy_config._serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
     asyncio.create_task(
         create_config_audit_log(
             "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
@@ -18426,6 +18504,20 @@ def _apply_webhook_role_gate(webhook_map, is_full_admin: bool):
     return {alert_type: "REDACTED" for alert_type in webhook_map}
 
 
+async def _declared_general_setting(
+    settings: SettingsStore, field_name: str, prisma_client: PrismaClient
+) -> SettingValue:
+    if is_resource_list("general_settings", field_name):
+        row: Final = await ConfigRepository(prisma_client, use_writer=True).table.find_first(
+            where={"param_name": "general_settings"}
+        )
+        stored: Final = row.param_value if row is not None and isinstance(row.param_value, Mapping) else {}
+        return stored.get(field_name, ABSENT) if stored.get(field_name) is not None else ABSENT
+    if field_name not in settings:
+        return ABSENT
+    return settings.config_value(field_name) if settings.owned_by_config(field_name) else settings[field_name]
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -18464,15 +18556,12 @@ async def get_config_general_settings(
         )
 
     settings: Final = proxy_config.settings
-    if field_name not in settings:
+    declared: Final = await _declared_general_setting(settings, field_name, prisma_client)
+    if is_absent(declared):
         raise HTTPException(
             status_code=400,
             detail={"error": f"Field name={field_name} is not set"},
         )
-
-    declared: Final = (
-        settings.config_value(field_name) if settings.owned_by_config(field_name) else settings[field_name]
-    )
     field_value = _redact_general_setting_value(
         field_name,
         declared,
@@ -18883,6 +18972,9 @@ async def delete_config_general_settings(
     )
     await invalidate_config_param("general_settings")
     proxy_config.settings.apply_db_row("general_settings", general_settings)
+    if is_resource_list("general_settings", data.field_name):
+        stored_endpoints: Final = general_settings.get("pass_through_endpoints")
+        await proxy_config._serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
     asyncio.create_task(
         create_config_audit_log(
             "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
@@ -19860,6 +19952,7 @@ app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
+app.include_router(tracing_endpoints.router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
@@ -19895,6 +19988,7 @@ app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
+app.include_router(engine_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(prompt_caching_requests_router)

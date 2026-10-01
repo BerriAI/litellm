@@ -3369,6 +3369,65 @@ def test_get_spend_logs_metadata_keeps_user_agent():
     assert _get_spend_logs_metadata(None)["user_agent"] is None
 
 
+@pytest.mark.parametrize(
+    "client_sent_oauth_token, custom_llm_provider, expected",
+    [
+        (True, "anthropic", True),
+        (True, "bedrock", False),
+        (True, "vertex_ai", False),
+        (False, "anthropic", False),
+        (None, "anthropic", None),
+    ],
+)
+def test_get_logging_payload_records_used_client_oauth_token_for_the_selected_provider(
+    client_sent_oauth_token: bool | None, custom_llm_provider: str, expected: bool | None
+):
+    """The client's OAuth bearer is only forwarded to an Anthropic deployment, so a request that
+    the router sent to Bedrock or Vertex paid with the configured key and must not read true."""
+    request_metadata = (
+        {"user_agent": "claude-cli/2.1.0"}
+        if client_sent_oauth_token is None
+        else {"user_agent": "claude-cli/2.1.0", "used_client_oauth_token": client_sent_oauth_token}
+    )
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "custom_llm_provider": custom_llm_provider,
+            "litellm_params": {"metadata": request_metadata},
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+    assert _get_spend_logs_metadata(None)["used_client_oauth_token"] is None
+
+
+@pytest.mark.parametrize(
+    "litellm_params, expected",
+    [
+        (
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_api_key_hash": "guardrail"}},
+            True,
+        ),
+        (
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}},
+            False,
+        ),
+    ],
+)
+def test_get_logging_payload_reads_used_client_oauth_token_from_the_bucket_the_proxy_stamped(
+    litellm_params: dict, expected: bool
+):
+    payload = get_logging_payload(
+        kwargs={"model": "claude-sonnet-5", "custom_llm_provider": "anthropic", "litellm_params": litellm_params},
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
     assert _redact_logged_api_key("bearer ") is None
@@ -5254,6 +5313,24 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
     )
 
 
+def test_failed_agent_request_keeps_registered_display_name():
+    agent_model: Final = "a2a_agent/Research Agent"
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": agent_model,
+            "call_type": "asend_message",
+            "litellm_params": {
+                "metadata": {"model_group": agent_model, "model_info": {"id": "registered-agent"}, "status": "failure"}
+            },
+        },
+        response_obj=ValueError("Agent action denied"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == agent_model
+    assert payload["status"] == "failure"
+    assert payload["model_id"] == "registered-agent"
+
 _CLI_SESSION_ALIAS: Final = "cli-session-alice"
 _CLI_SESSION_TOKEN: Final = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
 
@@ -5379,3 +5456,21 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
     assert result["autorouter_savings_estimate"] == recorded
     absent: Final = _get_spend_logs_metadata({"autorouter_savings_estimate": supplied})  # mutable-ok: legacy metadata helper accepts dicts
     assert absent["autorouter_savings_estimate"] is None
+
+
+@pytest.mark.parametrize("billing_agent", [None, "authenticated-agent"])
+def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_agent: str | None) -> None:
+    kwargs = {
+        "model": "gpt-4",
+        "litellm_params": {"metadata": {
+            "user_api_key": "test-key",
+            "agent_id": "header-selected-agent",
+            "billing_agent_id": billing_agent,
+        }},
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj={"id": "request"},
+        start_time=datetime.datetime.now(timezone.utc), end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["agent_id"] == "header-selected-agent"
+    assert payload["billing_agent_id"] == billing_agent
