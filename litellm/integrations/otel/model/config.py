@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Annotated, Any, Final
 
 from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import BaseSettings, EnvSettingsSource, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
@@ -121,8 +121,34 @@ class ExporterSpec(BaseModel):
     )
 
 
+class _EnvWithoutBareExcludedServices(EnvSettingsSource):
+    def __call__(self) -> dict[str, object]:
+        return {key: value for key, value in super().__call__().items() if key != "excluded_services"}
+
+
 class OpenTelemetryV2Config(BaseSettings):
     model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls: type[BaseSettings],
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[
+        PydanticBaseSettingsSource,
+        PydanticBaseSettingsSource,
+        PydanticBaseSettingsSource,
+        PydanticBaseSettingsSource,
+    ]:
+        return (
+            init_settings,
+            _EnvWithoutBareExcludedServices(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     # ----- single-destination shorthand, read from standard OTEL_* envs ----- #
     exporter: str = Field(
@@ -178,7 +204,7 @@ class OpenTelemetryV2Config(BaseSettings):
     )
     excluded_services: Annotated[frozenset[str], NoDecode] = Field(
         default_factory=frozenset,
-        validation_alias=AliasChoices("excluded_services", "LITELLM_OTEL_EXCLUDED_SERVICES"),
+        validation_alias=AliasChoices("LITELLM_OTEL_EXCLUDED_SERVICES"),
         description=(
             "Datastore services whose spans are withheld from key/team ``callback_vars`` "
             "OTel destinations (the operator's own exporters still receive them). Accepted "

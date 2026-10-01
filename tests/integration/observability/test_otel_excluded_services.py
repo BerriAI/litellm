@@ -287,12 +287,12 @@ def test_a_bare_excluded_services_env_var_is_ignored(
         traffic: Final = _drive(candidate, langfuse_vars)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
         _await_db_span(audit_sinks.tenant, tenant_trace, "redis")
-        _await_db_span(audit_sinks.tenant, tenant_trace, "postgresql")
         tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
-        systems: Final = _db_systems(tenant_spans)
-        assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
+        assert "redis" in _db_systems(tenant_spans), f"redis span missing at tenant: {_db_systems(tenant_spans)}"
+        _await_db_span(audit_sinks.tenant, None, "postgresql", since=tenant_start)
         _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
-        assert {"redis", "postgresql"} <= _db_systems(all_tenant), f"datastore spans missing at tenant: {systems}"
+        systems: Final = _db_systems(all_tenant)
+        assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
 
 
 @pytest.mark.timeout(180)
@@ -311,8 +311,10 @@ def test_the_documented_env_var_wins_over_a_bare_excluded_services(
     }
     with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
         tenant_start, _ = recorded_spans(audit_sinks.tenant)
-        _drive(candidate, langfuse_vars)
-        _await_db_span(audit_sinks.tenant, None, "postgresql")
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        _await_db_span(audit_sinks.tenant, None, "postgresql", since=tenant_start)
         _, tenant_spans = recorded_spans(audit_sinks.tenant, tenant_start)
         systems: Final = _db_systems(tenant_spans)
         assert "postgresql" in systems, f"postgresql spans missing at tenant: {systems}"

@@ -110,6 +110,22 @@ def test_excluded_services_from_env_csv(monkeypatch):
     assert OpenTelemetryV2Config().excluded_services == frozenset({"redis", "postgresql"})
 
 
+@pytest.mark.parametrize("name", ["EXCLUDED_SERVICES", "excluded_services", "Excluded_Services"])
+def test_a_bare_excluded_services_env_var_is_ignored(monkeypatch, name):
+    for env_name in ("LITELLM_OTEL_EXCLUDED_SERVICES", "EXCLUDED_SERVICES", "excluded_services", "Excluded_Services"):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv(name, "redis,postgres")
+    assert OpenTelemetryV2Config().excluded_services == frozenset()
+
+
+def test_the_documented_env_var_wins_over_a_bare_excluded_services(monkeypatch):
+    for env_name in ("LITELLM_OTEL_EXCLUDED_SERVICES", "EXCLUDED_SERVICES", "excluded_services", "Excluded_Services"):
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("EXCLUDED_SERVICES", "postgres")
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis")
+    assert OpenTelemetryV2Config().excluded_services == frozenset({"redis"})
+
+
 def test_excluded_services_config_wins_over_env(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis")
     assert OpenTelemetryV2Config(excluded_services=["postgres"]).excluded_services == frozenset({"postgresql"})
