@@ -360,13 +360,29 @@ def test_splitter_keeps_single_call_and_continuation_chunks_whole():
     assert _CombinedChunkSplitter._split_parallel_tool_calls(continuation) == (continuation,)
 
 
-def test_splitter_orders_pieces_by_arrival_and_groups_same_index():
+def test_splitter_orders_pieces_by_arrival():
     chunk = _tool_chunk(
         [
             _tool_call(1, "call_b", "Read", "{}"),
             _tool_call(0, "call_a", "Glob", "{}"),
-            _tool_call(0, None, None, ""),
         ]
     )
     pieces = _CombinedChunkSplitter._split_parallel_tool_calls(chunk)
-    assert [[c.index for c in p.choices[0].delta.tool_calls] for p in pieces] == [[1], [0, 0]]
+    assert [[c.index for c in p.choices[0].delta.tool_calls] for p in pieces] == [[1], [0]]
+
+
+def test_splitter_leaves_calls_that_still_need_arguments_whole():
+    """A later fragment could not be routed back to an earlier block (Greptile on #44079)."""
+    opening = _tool_chunk([_tool_call(0, "call_a", "Read", ""), _tool_call(1, "call_b", "Read", "")])
+    partial = _tool_chunk([_tool_call(0, "call_a", "Read", '{"file_path":'), _tool_call(1, "call_b", "Read", "{}")])
+    assert _CombinedChunkSplitter._split_parallel_tool_calls(opening) == (opening,)
+    assert _CombinedChunkSplitter._split_parallel_tool_calls(partial) == (partial,)
+
+
+def test_splitter_leaves_repeated_index_and_multi_choice_chunks_whole():
+    same_index = _tool_chunk([_tool_call(0, "call_a", "Read", "{}"), _tool_call(0, "call_a", "Read", "{}")])
+    assert _CombinedChunkSplitter._split_parallel_tool_calls(same_index) == (same_index,)
+
+    two_choices = _tool_chunk([_tool_call(0, "call_a", "Read", "{}"), _tool_call(1, "call_b", "Read", "{}")])
+    two_choices.choices.append(StreamingChoices(index=1, delta=Delta(content="x")))
+    assert _CombinedChunkSplitter._split_parallel_tool_calls(two_choices) == (two_choices,)

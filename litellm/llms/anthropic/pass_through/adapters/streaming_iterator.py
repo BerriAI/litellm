@@ -214,13 +214,22 @@ class _CombinedChunkSplitter:
         return pieces
 
     @staticmethod
-    def _split_parallel_tool_calls(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
-        """Return ``(chunk,)``, or one piece per tool call when a chunk opens several.
+    def _has_complete_arguments(tool_call: object) -> bool:
+        arguments: Final = _optional_attr(_optional_attr(tool_call, "function"), "arguments")
+        if not isinstance(arguments, str) or not arguments:
+            return False
+        try:
+            json.loads(arguments)
+        except ValueError:
+            return False
+        return True
 
-        Some providers send every parallel call in one chunk. The block translators
-        read only the first call's id and name and join all arguments, so the calls
-        would merge into one ``tool_use`` block. Pieces keep call order; entries that
-        share an ``index`` stay together. Argument continuations are left alone.
+    @staticmethod
+    def _split_parallel_tool_calls(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Return ``(chunk,)``, or one piece per call when a chunk carries several whole calls.
+
+        Only chunks where every call has its full JSON arguments are split. A later
+        argument fragment could not be routed back to an earlier block.
         """
         choices: Final = _optional_attr_sequence(chunk, "choices")
         if len(choices) != 1:
@@ -228,6 +237,8 @@ class _CombinedChunkSplitter:
         delta: Final = _optional_attr(choices[0], "delta")
         tool_calls: Final = _optional_attr_sequence(delta, "tool_calls")
         if sum(1 for call in tool_calls if _optional_attr(_optional_attr(call, "function"), "name")) < 2:
+            return (chunk,)
+        if not all(_CombinedChunkSplitter._has_complete_arguments(call) for call in tool_calls):
             return (chunk,)
 
         by_index: Final[dict[object, list[object]]] = {}
