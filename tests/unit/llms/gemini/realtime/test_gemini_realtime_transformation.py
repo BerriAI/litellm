@@ -1,13 +1,13 @@
 import json
 from collections.abc import Mapping
-from typing import cast
+from typing import Final, cast
 from unittest.mock import MagicMock
 
 import pytest
 
-
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 
 
@@ -2201,3 +2201,105 @@ def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
 
     assert input_details.get("web_search_requests") is None
     assert input_details.get("google_maps_grounding_requests") is None
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("behavior", ["NON_BLOCKING", "BLOCKING"])
+def test_live_tool_behavior_survives_setup(nested: bool, behavior: str) -> None:
+    config: Final = GeminiRealtimeConfig()
+    function: Final = {
+        "name": "lookup",
+        "description": "Lookup",
+        "behavior": behavior,
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+    }
+    tool: Final = {"type": "function", "function": function} if nested else {"type": "function", **function}
+    setup: Final = config.map_openai_params({}, {"tools": [tool, {"type": "function", "name": "ordinary"}]})
+    declarations: Final = setup["tools"][0]["function_declarations"]
+    assert declarations[0]["behavior"] == behavior
+    assert declarations[0]["name"] == "lookup"
+    assert declarations[0]["parameters"]["properties"]["query"]["type"].lower() == "string"
+    assert "behavior" not in declarations[1]
+
+
+@pytest.mark.parametrize("spelling", ["will_continue", "willContinue"])
+@pytest.mark.parametrize("continuation", [True, False])
+@pytest.mark.parametrize("scheduling", ["SILENT", "WHEN_IDLE", "INTERRUPT"])
+def test_live_tool_response_controls_survive_translation(spelling: str, continuation: bool, scheduling: str) -> None:
+    config: Final = GeminiRealtimeConfig()
+    config._tool_call_id_to_name["call-1"] = "lookup"
+    event: Final = {
+        "type": "conversation.item.create",
+        "item": {
+            "type": "function_call_output",
+            "call_id": "call-1",
+            "output": '{"value":7}',
+            spelling: continuation,
+            "scheduling": scheduling,
+        },
+    }
+    response: Final = json.loads(config._handle_conversation_item(event)[0])
+    assert response["toolResponse"]["functionResponses"] == [
+        {
+            "id": "call-1",
+            "name": "lookup",
+            "response": {"value": 7},
+            "willContinue": continuation,
+            "scheduling": scheduling,
+        }
+    ]
+
+
+def test_live_tool_output_data_is_not_protocol_metadata() -> None:
+    config: Final = GeminiRealtimeConfig()
+    config._tool_call_id_to_name["call-1"] = "lookup"
+    response: Final = json.loads(
+        config._handle_function_call_output(
+            {"call_id": "call-1", "output": '{"scheduling":"business data","willContinue":false}'}
+        )[0]
+    )
+    assert response["toolResponse"]["functionResponses"] == [
+        {"id": "call-1", "name": "lookup", "response": {"scheduling": "business data", "willContinue": False}}
+    ]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"scheduling": "INVALID"},
+        {"will_continue": "false"},
+        {"will_continue": False, "willContinue": True},
+    ],
+)
+def test_live_invalid_tool_controls_rejected(extra: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        GeminiRealtimeConfig()._handle_function_call_output({"call_id": "call-1", "output": "{}", **extra})
+
+
+@pytest.mark.parametrize("config_type", [GeminiRealtimeConfig, VertexAIRealtimeConfig])
+def test_live_partial_results_keep_call_identity(config_type: type[GeminiRealtimeConfig]) -> None:
+    config: Final = (
+        VertexAIRealtimeConfig(access_token="test-token", project="test-project", location="us-central1")
+        if config_type is VertexAIRealtimeConfig
+        else GeminiRealtimeConfig()
+    )
+    config._tool_call_id_to_name["call-1"] = "lookup"
+    for continuation in (True, True, False):
+        response: Final = json.loads(
+            config._handle_function_call_output(
+                {"call_id": "call-1", "output": "{}", "will_continue": continuation, "willContinue": continuation}
+            )[0]
+        )["toolResponse"]["functionResponses"][0]
+        assert response["name"] == "lookup"
+        assert response["willContinue"] is continuation
+        if config_type is GeminiRealtimeConfig:
+            assert response["id"] == "call-1"
+        else:
+            assert "id" not in response
+
+
+def test_live_invalid_tool_behavior_rejected() -> None:
+    with pytest.raises(ValueError, match="behavior"):
+        GeminiRealtimeConfig().map_openai_params(
+            {}, {"tools": [{"type": "function", "name": "lookup", "behavior": "INVALID"}]}
+        )

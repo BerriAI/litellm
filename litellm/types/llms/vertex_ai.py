@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -151,6 +152,7 @@ class FunctionDeclaration(TypedDict, total=False):
     description: str
     parameters: Schema | dict
     response: Schema
+    behavior: ReadOnly[Literal["BLOCKING", "NON_BLOCKING"]]
 
 
 class VertexAISearch(TypedDict, total=False):
