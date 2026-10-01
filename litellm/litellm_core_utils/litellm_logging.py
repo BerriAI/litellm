@@ -180,7 +180,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
+from litellm.utils import ProviderConfigManager, _get_base_model_from_metadata, executor, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -2084,8 +2084,6 @@ class Logging(LiteLLMLoggingBaseClass):
         custom_llm_provider: Final[object] = self.model_call_details.get("custom_llm_provider")
         if not isinstance(custom_llm_provider, str) or custom_llm_provider not in LlmProvidersSet:
             return False
-        from litellm.utils import ProviderConfigManager
-
         provider_config: Final = ProviderConfigManager.get_provider_model_info(
             model=self.model,
             provider=LlmProviders(custom_llm_provider),
