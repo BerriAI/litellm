@@ -89,10 +89,10 @@ module materially harder to understand.
 
 ## Tests
 
-Mirror this package under `tests/test_litellm/proxy/_experimental/mcp_server/`.
+Mirror this package under `tests/unit/proxy/_experimental/mcp_server/`.
 For regressions, extend the existing mapped test file instead of creating a new
 one. Use subdirectories that match the implementation path, such as
-`auth/test_token_exchange.py` for `auth/token_exchange.py` and
+`auth/test_token_endpoint_auth.py` for `auth/token_endpoint_auth.py` and
 `guardrail_translation/test_mcp_guardrail_handler.py` for
 `guardrail_translation/handler.py`.
 
