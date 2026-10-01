@@ -8,7 +8,7 @@ specifically focusing on metadata extraction and passing.
 import json
 import os
 from collections.abc import Callable, Mapping
-from typing import Final
+from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -22,6 +22,7 @@ from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -737,7 +738,7 @@ def _image_part() -> ChatCompletionImageObject:
     return {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
 
 
-GuardrailAnswer = Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]]
+GuardrailAnswer: TypeAlias = Callable[[Mapping[str, JsonValue]], Mapping[str, JsonValue]]
 
 
 def _guardrail_answering(answer: GuardrailAnswer) -> GenericGuardrailAPI:
@@ -833,6 +834,13 @@ async def _llm_bound_anthropic_messages(
     return data["messages"]
 
 
+async def _llm_bound_responses_input(guardrail: GenericGuardrailAPI, input_items: list[JsonValue]) -> object:
+    data: Final = await OpenAIResponsesHandler().process_input_messages(
+        data={"model": "gpt-5.6", "input": input_items}, guardrail_to_apply=guardrail
+    )
+    return data["input"]
+
+
 class TestEchoedRowsReachingTheLLM:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -887,6 +895,18 @@ class TestEchoedRowsReachingTheLLM:
         assert llm_bound == [
             {"role": "user", "content": [{"type": "text", "text": "my ssn is [SSN]"}, {"type": "text", "text": "ok"}]}
         ], "an unchanged echo of every content block row must leave the rewrite to texts"
+
+    @pytest.mark.asyncio
+    async def test_every_responses_input_text_row_echoed_applies_the_masked_texts(self) -> None:
+        guardrail: Final = _guardrail_answering(_echo_every_row_and_mask_texts)
+
+        llm_bound: Final = await _llm_bound_responses_input(
+            guardrail, [{"role": "user", "content": [{"type": "input_text", "text": f"my ssn is {_SSN}"}]}]
+        )
+
+        assert llm_bound == [{"role": "user", "content": [{"type": "input_text", "text": "my ssn is [SSN]"}]}], (
+            "an unchanged echo of every input_text row must leave the rewrite to texts"
+        )
 
     @pytest.mark.asyncio
     async def test_an_echoed_multipart_row_is_restored_to_the_callers_row(self) -> None:
