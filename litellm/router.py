@@ -2842,9 +2842,7 @@ class Router:
     def _prepare_fallback_hidden_params(
         fallback_response: object,
     ) -> tuple[dict[str, object], dict[str, object]]:
-        fallback_hidden_params: Final = {
-            key: value for key, value in get_hidden_params_dict(fallback_response).items() if key != "response_cost"
-        }
+        fallback_hidden_params: Final = get_hidden_params_dict(fallback_response)
         fallback_headers: Final = fallback_hidden_params.get("additional_headers")
         if not isinstance(fallback_headers, dict):
             return fallback_hidden_params, {}
@@ -2879,6 +2877,7 @@ class Router:
         cast(_HiddenParamsHost, fallback_item)._hidden_params = {
             **item_hidden_params,
             **fallback_hidden_params,
+            "response_cost": item_hidden_params.get("response_cost"),
             "additional_headers": {**item_headers, **fallback_headers},
         }
 
