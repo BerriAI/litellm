@@ -83,11 +83,12 @@ _LS_SCRIPT: Final = (
     'if [ -d "$f" ]; then printf "d/%s\\n" "$f"; else printf "f/%s\\n" "$f"; fi; fi; done'
 )
 _DELETE_SCRIPT: Final = '[ -e "$1" ] || [ -L "$1" ] || exit 3; rm -rf -- "$1"'
-# $1 = path. Prints its fully symlink-resolved absolute path (the path itself may not exist
-# yet, e.g. a file about to be written; then its parent directory is resolved).
+# $1 = path. Prints the symlink-resolved absolute path of its nearest existing ancestor (the
+# path itself when it exists). New files and new directories (`a/b/new.py`) resolve through
+# whatever part already exists, so a symlinked ancestor is still caught.
 _REALPATH_SCRIPT: Final = (
-    'p="$1"; if [ -e "$p" ] || [ -L "$p" ]; then realpath -- "$p"; '
-    'else d=$(realpath -- "$(dirname -- "$p")") && printf "%s/%s\\n" "$d" "$(basename -- "$p")"; fi'
+    'p="$1"; while [ ! -e "$p" ] && [ ! -L "$p" ]; do q=$(dirname -- "$p"); '
+    '[ "$q" = "$p" ] && exit 3; p="$q"; done; realpath -- "$p"'
 )
 _GREP_LINE: Final = re.compile(r"^(.+?):(\d+):(.*)$")
 _FILTER_MIDDLEWARE_NAME: Final = "LiteLLMHarnessToolFilter"
