@@ -13,7 +13,8 @@ import difflib
 import functools
 import hashlib
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.constants import HARNESS_MAX_DIFF_BYTES, HARNESS_SNAPSHOT_SKIP_DIRS
@@ -57,34 +58,45 @@ def _hash_entry(root: str, dirpath: str, filename: str) -> tuple[str, str] | Non
     return rel, digest
 
 
-def snapshot_local_sync(root: str) -> dict[str, str]:
-    """Hash every regular file under root. Symlinks are never followed."""
-    result: dict[str, str] = {}
+def _walk_entries(root: str) -> Iterator[tuple[str, str]]:
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in HARNESS_SNAPSHOT_SKIP_DIRS]
+        dirnames[:] = [  # mutable-ok: os.walk prunes only via in-place mutation of its dirnames list
+            d for d in dirnames if d not in HARNESS_SNAPSHOT_SKIP_DIRS
+        ]
         for filename in filenames:
             entry = _hash_entry(root, dirpath, filename)
             if entry is not None:
-                result[entry[0]] = entry[1]
-    return result
+                yield entry
 
 
-async def snapshot_local(root: str) -> dict[str, str]:
+def snapshot_local_sync(root: str) -> Mapping[str, str]:
+    """Hash every regular file under root. Symlinks are never followed."""
+    return MappingProxyType(dict(_walk_entries(root)))
+
+
+async def snapshot_local(root: str) -> Mapping[str, str]:
     """Async wrapper around snapshot_local_sync (runs in a worker thread)."""
     return await asyncio.to_thread(snapshot_local_sync, root)
 
 
-def diff_snapshots(before: Mapping[str, str], after: Mapping[str, str]) -> list[tuple[str, FileChangeKind]]:
+def _change_kind(path: str, before: Mapping[str, str], after: Mapping[str, str]) -> FileChangeKind | None:
+    if path not in before:
+        return "created"
+    if path not in after:
+        return "deleted"
+    if before[path] != after[path]:
+        return "modified"
+    return None
+
+
+def diff_snapshots(
+    before: Mapping[str, str], after: Mapping[str, str]
+) -> list[tuple[str, FileChangeKind]]:  # mutable-ok: public sandbox helper; callers compare against a list
     """Return (path, kind) for every changed file, sorted by path."""
-    changes: list[tuple[str, FileChangeKind]] = []
-    for path in sorted(set(before) | set(after)):
-        if path not in before:
-            changes.append((path, "created"))
-        elif path not in after:
-            changes.append((path, "deleted"))
-        elif before[path] != after[path]:
-            changes.append((path, "modified"))
-    return changes
+    kinds = ((path, _change_kind(path, before, after)) for path in sorted(frozenset(before) | frozenset(after)))
+    return [  # mutable-ok: public sandbox helper returns a list
+        (path, kind) for path, kind in kinds if kind is not None
+    ]
 
 
 def _as_text(data: bytes) -> str | None:
@@ -106,13 +118,7 @@ def unified_diff(path: str, old: str | None, new: str | None) -> str:
         fromfile=from_file,
         tofile=to_file,
     )
-    out: list[str] = []
-    for line in lines:
-        if line.endswith("\n"):
-            out.append(line)
-        else:
-            out.append(line + "\n" + _NO_NEWLINE_MARKER)
-    return "".join(out)
+    return "".join(line if line.endswith("\n") else line + "\n" + _NO_NEWLINE_MARKER for line in lines)
 
 
 async def _read_or_none(sandbox: Sandbox, path: str) -> bytes | None:
@@ -122,13 +128,13 @@ async def _read_or_none(sandbox: Sandbox, path: str) -> bytes | None:
         return None
 
 
-async def capture_text_contents(sandbox: Sandbox, paths_hashes: Mapping[str, str]) -> dict[str, bytes]:
+async def capture_text_contents(sandbox: Sandbox, paths_hashes: Mapping[str, str]) -> Mapping[str, bytes]:
     """Read small text files before a turn so "modified"/"deleted" diffs can be built.
 
     Each kept file is <= HARNESS_MAX_DIFF_BYTES; every byte read (kept or not) counts
     toward HARNESS_SNAPSHOT_MAX_TOTAL_BYTES, after which capture stops.
     """
-    captured: dict[str, bytes] = {}
+    captured: dict[str, bytes] = {}  # mutable-ok: async accumulator (awaits per read), frozen on return
     total = 0
     for path in sorted(paths_hashes):
         if total >= HARNESS_SNAPSHOT_MAX_TOTAL_BYTES:
@@ -139,7 +145,7 @@ async def capture_text_contents(sandbox: Sandbox, paths_hashes: Mapping[str, str
         total += len(data)
         if _as_text(data) is not None:
             captured[path] = data
-    return captured
+    return MappingProxyType(captured)
 
 
 async def _change_for(
@@ -169,7 +175,9 @@ async def build_file_changes(
     before: Mapping[str, str],
     after: Mapping[str, str],
     before_contents: Mapping[str, bytes] | None = None,
-) -> list[FileChange]:
+) -> list[FileChange]:  # mutable-ok: feeds the public Result.files list
     """FileChange per changed path. diff is None when it cannot be built as text."""
-    contents: Mapping[str, bytes] = before_contents or {}
-    return [await _change_for(sandbox, path, kind, contents) for path, kind in diff_snapshots(before, after)]
+    contents: Mapping[str, bytes] = before_contents or MappingProxyType({})
+    return [  # mutable-ok: feeds the public Result.files list
+        await _change_for(sandbox, path, kind, contents) for path, kind in diff_snapshots(before, after)
+    ]
