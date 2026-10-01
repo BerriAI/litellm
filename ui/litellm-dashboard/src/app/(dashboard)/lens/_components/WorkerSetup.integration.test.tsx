@@ -6,7 +6,7 @@ import { apiClient } from "@/components/networking";
 import { WorkerSetup } from "./WorkerSetup";
 
 vi.mock("@/components/networking", () => ({
-  apiClient: { get: vi.fn(), post: vi.fn(), put: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
   proxyBaseUrl: "https://gateway.example/proxy",
 }));
 
@@ -82,6 +82,21 @@ describe("Worker setup", () => {
     });
     expect(changed).toHaveBeenCalledOnce();
     expect(apiClient.post).not.toHaveBeenCalled();
+  });
+  it("requires revoking the current worker before setting up a replacement", async () => {
+    const user = userEvent.setup();
+    const changed = vi.fn();
+    vi.mocked(apiClient.delete).mockResolvedValue(true);
+    const props = { accessToken: "admin", onClose: vi.fn(), onChanged: changed };
+    const view = renderWithProviders(<WorkerSetup {...props} workers={[created.worker]} />);
+    expect(screen.queryByRole("button", { name: "Add worker" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Get install command" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Revoke access" }));
+    expect(apiClient.delete).toHaveBeenCalledWith("/lens/workers/worker", { accessToken: "admin" });
+    expect(changed).toHaveBeenCalledOnce();
+    view.rerender(<WorkerSetup {...props} workers={[{ ...created.worker, revoked: true }]} />);
+    expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
   });
   it("creates a restricted, budgeted key as part of setup and reuses it when registration is retried", async () => {
     const user = userEvent.setup();

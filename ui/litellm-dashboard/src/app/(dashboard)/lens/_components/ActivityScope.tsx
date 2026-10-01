@@ -39,9 +39,6 @@ export function RunList({ executions }: { executions: Sample["executions"] }) {
             {runTime(run.start_time)} ·{" "}
             {run.source === "traces" ? `${run.span_count} ${run.span_count === 1 ? "step" : "steps"}` : "LLM request"}
           </p>
-          <p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={run.trace_id}>
-            {run.trace_id}
-          </p>
         </div>
       ))}
     </div>
@@ -55,7 +52,6 @@ export function ActivityScope({
   mode = "scope",
   onPreviewReady,
   manualSelection = false,
-  onManualSelection,
   nameField,
 }: {
   value: ActivitySelection;
@@ -64,7 +60,6 @@ export function ActivityScope({
   mode?: "scope" | "activity";
   onPreviewReady?: (ready: boolean) => void;
   manualSelection?: boolean;
-  onManualSelection?: (manual: boolean) => void;
   nameField?: ReactNode;
 }) {
   const id = useId();
@@ -116,7 +111,7 @@ export function ActivityScope({
     lookback_hours: value.lookback_hours,
   };
   const discoveryOptions = {
-    queryKey: ["lens-activity-options", value.source, value.lookback_hours, accessToken],
+    queryKey: ["lens-activity-options", value.source, value.lookback_hours, asOf, accessToken],
     queryFn: () => load(discoveryScope),
     staleTime: 60000,
     enabled: validWindow,
@@ -303,39 +298,6 @@ export function ActivityScope({
                 onChange={(e) => onChange({ ...value, sample_percent: Number(e.target.value) })}
               />
             </label>
-            <p className="text-xs leading-5 text-muted-foreground">
-              {value.sample_size ? `Up to ${value.sample_size} matching runs. ` : ""}New activity is ready two minutes
-              after it finishes.
-            </p>
-            <details open={manualSelection || undefined}>
-              <summary className="cursor-pointer text-sm font-medium">More options</summary>
-              <label className="mt-4 grid gap-2 text-sm">
-                Maximum runs (optional)
-                <Input
-                  type="number"
-                  min="1"
-                  placeholder="No limit"
-                  value={value.sample_size ?? ""}
-                  onChange={(e) => onChange({ ...value, sample_size: e.target.value ? Number(e.target.value) : null })}
-                />
-              </label>
-              <label className="mt-4 flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={manualSelection}
-                  onChange={(e) => {
-                    onManualSelection?.(e.target.checked);
-                    onChange({ ...value, execution_ids: [] });
-                  }}
-                />
-                Choose individual runs
-              </label>
-              {manualSelection && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Only checked runs will be considered for your sample.
-                </p>
-              )}
-            </details>
           </>
         )}
         {manualSelection && !!value.execution_ids?.length && (
@@ -445,8 +407,8 @@ function MatchingActivity({
         )}
         {ready && data?.eligible === 0 && (
           <p className="py-4 text-sm text-muted-foreground">
-            No matches. Try removing a condition or check that your agent records this metadata. Very recent runs need
-            two minutes to settle.
+            No matches. Try removing a condition or check that your agent records this metadata. Recent trace updates
+            need two minutes to settle.
           </p>
         )}
         {ready &&

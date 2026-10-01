@@ -75,47 +75,63 @@ export function InvestigationExample({ onClose }: { onClose: () => void }) {
         if (!open) onClose();
       }}
     >
-      <DialogContent className="sm:max-w-2xl max-h-[90dvh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle className="text-xl">What an investigation finds</DialogTitle>
-          <DialogDescription>Example data. Your findings will link to your recorded activity.</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-5 py-2">
-          <div>
-            <p className="text-sm text-muted-foreground">Question</p>
-            <p className="mt-1 text-sm">Does the support agent recover when a tool fails?</p>
-          </div>
-          <div className="border-y py-5">
-            <h3 className="text-base font-semibold">Repeated lookups leave the customer without an answer</h3>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              In 3 of 20 reviewed runs, the agent retried the same failed order lookup and ended without explaining the
-              problem to the customer.
-            </p>
-          </div>
-          <div>
-            <h4 className="text-sm font-medium">Suggested improvement</h4>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              After repeated lookup failures, explain what happened and offer a handoff instead of retrying the same
-              call.
-            </p>
-          </div>
-          <details className="text-sm">
-            <summary className="cursor-pointer font-medium">View supporting evidence</summary>
-            <ol className="mt-3 space-y-3 border-l pl-4 text-muted-foreground">
-              <li>Customer: “Where is my order?”</li>
-              <li>Order lookup: “Service unavailable”</li>
-              <li>The same lookup fails twice more.</li>
-              <li>Agent: “I will check that for you.” No result or handoff follows.</li>
-            </ol>
-          </details>
-          <p className="text-xs text-muted-foreground">
-            Each finding includes linked runs and evidence. You can mark it resolved or explain why the behavior is
-            expected.
-          </p>
+      <DialogContent className="sm:max-w-2xl max-h-[90dvh] overflow-y-auto gap-0 p-0">
+        <div className="px-6 py-5 sm:px-8">
+          <DialogHeader>
+            <DialogTitle className="text-base">Example investigation</DialogTitle>
+            <DialogDescription>Does the support agent recover when a tool fails?</DialogDescription>
+          </DialogHeader>
         </div>
-        <DialogFooter>
-          <Button onClick={onClose}>Got it</Button>
-        </DialogFooter>
+        <div className="border-y px-6 py-6 sm:px-8">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            <span className="rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              Needs attention
+            </span>
+            <span className="text-muted-foreground">3 of 20 conversations</span>
+          </div>
+          <h3 className="mt-4 max-w-lg text-2xl font-semibold leading-8 tracking-tight">
+            Failed lookups leave customers without an answer
+          </h3>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">
+            The agent repeats the same failed order lookup, then ends the conversation without an answer or a handoff.
+          </p>
+          <div className="mt-6 border-l-2 border-border pl-4">
+            <p className="text-xs text-muted-foreground">After three failed lookups, the agent replies:</p>
+            <blockquote className="mt-2 text-base leading-6">“I will check that for you.”</blockquote>
+            <details className="group mt-3 text-sm">
+              <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 font-medium [&::-webkit-details-marker]:hidden">
+                See the trace <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+              </summary>
+              <ol className="mt-4 space-y-3 text-sm leading-6 text-muted-foreground">
+                <li>
+                  <span className="font-medium text-foreground">Customer</span> · Where is my order?
+                </li>
+                <li>
+                  <span className="font-medium text-foreground">Order lookup</span> · Service unavailable
+                </li>
+                <li>
+                  <span className="font-medium text-foreground">Two retries</span> · Same error, no new information
+                </li>
+                <li>
+                  <span className="font-medium text-foreground">Agent</span> · I will check that for you. Conversation
+                  ends.
+                </li>
+              </ol>
+            </details>
+          </div>
+          <div className="mt-6">
+            <h4 className="text-sm font-semibold">What to change</h4>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              After repeated failures, explain the problem and offer a handoff instead of retrying.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-4 px-6 py-4 sm:px-8">
+          <p className="text-xs text-muted-foreground">Illustrative data, not your agent’s results</p>
+          <Button variant="outline" onClick={onClose}>
+            Back to setup
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

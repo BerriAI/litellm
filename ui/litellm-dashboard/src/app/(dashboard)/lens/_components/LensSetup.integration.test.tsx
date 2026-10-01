@@ -36,21 +36,27 @@ beforeEach(() => {
   vi.mocked(apiClient.post).mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
 });
 describe("Lens setup", () => {
-  it("preserves check identity and disabled state when questions are reordered", async () => {
+  it("preserves check identity and disabled state when a check is edited", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderWithProviders(
       <LensSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
     );
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "What should we look out for?" }), {
-      target: { value: "Find incomplete reports\nFind repeated searches" },
+    fireEvent.change(screen.getByRole("textbox", { name: "Check 1" }), {
+      target: { value: "Find repetitive searches\nInclude retries that add no information" },
     });
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ checks: [settings.checks[1], settings.checks[0]] }));
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        checks: [
+          { ...settings.checks[0], instruction: "Find repetitive searches\nInclude retries that add no information" },
+          settings.checks[1],
+        ],
+      }),
+    );
   });
 
   it("rejects invalid metadata before reviewing the selection", async () => {
@@ -61,7 +67,7 @@ describe("Lens setup", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Choose a key and value for every condition, or remove it");
-    expect(screen.queryByRole("textbox", { name: "What should we look out for?" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Check 1" })).not.toBeInTheDocument();
   });
   it("previews identifiable matching runs and saves the same filter selection", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
@@ -85,7 +91,9 @@ describe("Lens setup", () => {
           }
         : { eligible: 0, executions: [] };
     });
-    renderWithProviders(<LensSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />);
+    renderWithProviders(
+      <LensSetup models={["analysis"]} defaultModel="analysis" accessToken="test" onClose={vi.fn()} onSave={save} />,
+    );
     fireEvent.change(screen.getByRole("textbox", { name: "Investigation name" }), {
       target: { value: "Research follow-up" },
     });
@@ -95,18 +103,22 @@ describe("Lens setup", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "Metadata value 1" }), { target: { value: "research" } });
     expect(await screen.findByText("1 matching run")).toBeInTheDocument();
     expect(screen.getByText("Research report")).toBeInTheDocument();
-    expect(screen.getByText("request-42")).toBeInTheDocument();
+    expect(screen.getByText(/2026-09-30/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await user.type(screen.getByRole("textbox", { name: "What should we look out for?" }), "Find incomplete reports");
+    await user.type(screen.getByRole("textbox", { name: "Check 1" }), "Find incomplete reports");
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Check 2" }), {
+      target: { value: "Find repeated searches\nInclude retries that add no information" },
+    });
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+    await user.click(screen.getByRole("button", { name: "Remove check 3" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
     expect(screen.getByText(/swarm: research/)).toBeInTheDocument();
     expect(screen.getByText("Research follow-up")).toBeVisible();
     expect(screen.getByText(/no count limit/)).toBeVisible();
     expect(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" })).not.toBeVisible();
-    await user.click(screen.getByRole("combobox", { name: "Analysis model" }));
-    await user.click(await screen.findByRole("option", { name: /analysis/ }));
+    expect(screen.getByText(/analysis · Runs once/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Run investigation" }));
     const expected = {
       name: "Research follow-up",
@@ -114,6 +126,10 @@ describe("Lens setup", () => {
       filters: [{ key: "swarm", value: "research" }],
       enabled: false,
       sample_size: null,
+      checks: [
+        expect.objectContaining({ instruction: "Find incomplete reports" }),
+        expect.objectContaining({ instruction: "Find repeated searches\nInclude retries that add no information" }),
+      ],
     };
     expect(save).toHaveBeenCalledWith(expect.objectContaining(expected));
   });
@@ -139,12 +155,12 @@ it("searches providers and saves custom history while preserving existing schedu
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.selectOptions(screen.getByRole("combobox", { name: "Review the last unit" }), "1");
   fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
-  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
-  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await user.click(screen.getByText("Advanced options"));
   await user.clear(screen.getByRole("combobox", { name: "Analysis model" }));
   await user.type(screen.getByRole("combobox", { name: "Analysis model" }), "OpenAI");
   expect(screen.queryByRole("option", { name: /Anthropic/ })).not.toBeInTheDocument();
   await user.click(await screen.findByRole("option", { name: /review.*JSON output supported/ }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "Save changes" }));
   const expected = { model: "review", lookback_hours: 3, interval_minutes: 15, enabled: false };
   expect(save).toHaveBeenCalledWith(expect.objectContaining(expected));
@@ -178,14 +194,12 @@ it("keeps the draft when readiness changes and blocks a run until the worker rec
   view.rerender(<LensSetup {...props} ready={false} />);
   expect(screen.getByRole("textbox", { name: "What should the agent be doing?" })).toHaveValue("Finish the report");
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
-  await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
   view.rerender(<LensSetup {...props} ready />);
-  expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
 });
 
-it.each(["empty", "error"])("blocks the review step when the preview is %s", async (state) => {
+it.each(["empty", "error"])("blocks saving when the preview is %s", async (state) => {
   if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
   else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
@@ -194,7 +208,7 @@ it.each(["empty", "error"])("blocks the review step when the preview is %s", asy
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   if (state === "error") expect(await screen.findByRole("button", { name: "Retry preview" })).toBeVisible();
   else expect(await screen.findByText(/No matches/)).toBeVisible();
 });
@@ -214,8 +228,7 @@ it("shows optional budget and repeat controls only under advanced options and sa
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
-  await user.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
   expect(screen.getByText(/Runs once/)).toBeVisible();
   await user.click(screen.getByText("Advanced options"));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" }), { target: { value: "8" } });
@@ -249,12 +262,43 @@ it("does not silently analyze everything after individual selection is enabled",
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  await user.click(screen.getByText("More options"));
+  await user.click(screen.getByText("Advanced options"));
   await user.click(screen.getByRole("checkbox", { name: "Choose individual runs" }));
-  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
-  expect(screen.queryByRole("combobox", { name: "Analysis model" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   await user.click(await screen.findByRole("checkbox", { name: "Select Example run" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
+  await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
+});
+
+it("refreshes agent suggestions when the first activity arrives", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
+    renderWithProviders(<LensSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
+    await vi.advanceTimersByTimeAsync(400);
+    await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
+    expect(await screen.findByText(/No recent matches/)).toBeVisible();
+    await user.keyboard("{Escape}");
+    vi.mocked(apiClient.post).mockResolvedValue({
+      eligible: 1,
+      selected: 1,
+      executions: [
+        {
+          id: "new-run",
+          name: "First support run",
+          service: "support-agent",
+          trace_id: "new-trace",
+          source: "traces",
+          start_time: "2026-10-01T12:00:00Z",
+          span_count: 2,
+        },
+      ],
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh matching activity" }));
+    expect(await screen.findByText("1 matching run")).toBeVisible();
+    await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
+    expect(await screen.findByRole("option", { name: "support-agent" })).toBeVisible();
+  } finally {
+    vi.useRealTimers();
+  }
 });

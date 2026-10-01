@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Check, ArrowRight, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
 
 export function LensWelcome({
@@ -28,6 +28,10 @@ export function LensWelcome({
   const canCreate = workerReady && !readOnly;
   const canConnect = tracesReady && !readOnly;
   const traceStatus = checking ? "Checking for traces…" : "Connect your agent and send a trace.";
+  const traceButtonClass = buttonVariants({
+    variant: tracesReady ? "ghost" : "default",
+    className: "col-start-2 w-fit sm:col-start-auto",
+  });
   return (
     <section aria-labelledby="lens-welcome" className="max-w-3xl py-4 sm:py-6">
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
@@ -46,10 +50,7 @@ export function LensWelcome({
             <h3 className="text-sm font-medium">Set up traces</h3>
             <p className="mt-1 text-sm text-muted-foreground">{tracesReady ? "Traces received" : traceStatus}</p>
           </div>
-          <Link
-            href={uiHref("lens/?tab=traces")}
-            className={`col-start-2 inline-flex h-9 w-fit items-center justify-center rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-ring sm:col-start-auto ${tracesReady ? "hover:bg-muted" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
-          >
+          <Link href={uiHref("lens/?tab=traces")} className={traceButtonClass}>
             {tracesReady ? "View traces" : "Set up traces"}
           </Link>
         </li>
@@ -80,7 +81,12 @@ export function LensWelcome({
             <h3 className="text-sm font-medium">Run an investigation</h3>
             <p className="mt-1 text-sm text-muted-foreground">Choose activity and what to look for.</p>
           </div>
-          <Button className="col-start-2 w-fit sm:col-start-auto" disabled={!canCreate} onClick={onCreate}>
+          <Button
+            className="col-start-2 w-fit sm:col-start-auto"
+            variant={workerReady ? "default" : "ghost"}
+            disabled={!canCreate}
+            onClick={onCreate}
+          >
             New investigation
           </Button>
         </li>

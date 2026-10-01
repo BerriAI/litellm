@@ -34,6 +34,7 @@ import { LensSetup } from "./LensSetup";
 import { LensRuns } from "./LensRuns";
 import { LensProgress, ScanDuration } from "./LensProgress";
 import { WorkerSetup } from "./WorkerSetup";
+import { useAnalysisKeyInfo } from "./AnalysisKeyDetails";
 import { isTracingNotEnabled, useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
 import { uiHref } from "@/utils/uiHref";
 import { ApiError } from "@/lib/http/client";
@@ -137,6 +138,10 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
   const missingSelection = !!selected && loaded;
   const lens = lenses.find((e) => e.id === selected);
   const connected = query.data?.workers?.some((w) => workerConnected(w, now)) ?? false;
+  const activeWorkers = query.data?.workers.filter((worker) => !worker.revoked) ?? [];
+  const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
+  const analysisAccess = useAnalysisKeyInfo(accessToken, defaultKeyId ?? undefined);
+  const defaultModel = analysisAccess.data?.models.length === 1 ? analysisAccess.data.models[0] : undefined;
   const traces = useTraceAvailability(accessToken, query.data?.tracing_enabled ?? false);
   const tracesReady = !!query.data?.tracing_enabled && traces.data === true && !traces.error;
   const ready = tracesReady && connected && !query.error;
@@ -645,6 +650,7 @@ export function LensView({ accessToken, readOnly = false }: { accessToken: strin
           ready={ready}
           mode={editing}
           initial={setupSettings()}
+          defaultModel={defaultModel}
           models={models.data?.data.map((m) => m.id) ?? []}
           modelDetails={modelDetails.data?.data ?? []}
           modelsLoading={models.isLoading}

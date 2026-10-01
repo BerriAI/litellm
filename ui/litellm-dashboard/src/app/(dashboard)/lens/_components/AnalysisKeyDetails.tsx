@@ -36,6 +36,15 @@ function budgetLabel(amount: number | null, duration?: string | null): string {
   return duration ? `${dollars} / ${periods[duration] ?? duration}` : `${dollars} total`;
 }
 
+export function useAnalysisKeyInfo(accessToken: string, keyId?: string) {
+  return useQuery({
+    queryKey: ["lens-key-info", accessToken, keyId],
+    enabled: !!keyId,
+    queryFn: async () =>
+      keyInfoSchema.parse(await apiClient.get("/key/info", { accessToken, query: { key: keyId } })).info,
+  });
+}
+
 export function AnalysisKeyDetails({
   accessToken,
   keyId,
@@ -45,11 +54,7 @@ export function AnalysisKeyDetails({
   keyId: string;
   showName?: boolean;
 }) {
-  const key = useQuery({
-    queryKey: ["lens-key-info", accessToken, keyId],
-    queryFn: async () =>
-      keyInfoSchema.parse(await apiClient.get("/key/info", { accessToken, query: { key: keyId } })).info,
-  });
+  const key = useAnalysisKeyInfo(accessToken, keyId);
   if (key.isLoading) return <p className="text-xs text-muted-foreground">Loading key permissions…</p>;
   if (key.error || !key.data)
     return (

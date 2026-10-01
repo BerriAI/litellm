@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { serverRootPath } from "@/lib/serverRootPath";
 import { apiClient, proxyBaseUrl } from "@/components/networking";
-import { CheckCircle2, Loader2, Plus } from "lucide-react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 import { workerConnected } from "./lensData";
 import { AnalysisKeyDetails } from "./AnalysisKeyDetails";
 import { Switch } from "@/components/ui/switch";
@@ -64,7 +64,6 @@ export function WorkerSetup({
     const timer = window.setInterval(() => setNow(Date.now()), 2000);
     return () => window.clearInterval(timer);
   }, []);
-  const [adding, setAdding] = useState(!workers.some((w) => !w.revoked));
   const [access, setAccess] = useState<AnalysisAccess>({ model: null, budget: "100" });
   const [useExisting, setUseExisting] = useState(false);
   const [preparedKey, setPreparedKey] = useState<string | null>(null);
@@ -78,7 +77,7 @@ export function WorkerSetup({
   const connected = created
     ? workers.some((w) => w.id === created.worker.id && workerConnected(w, now))
     : workers.some((w) => workerConnected(w, now));
-  const formVisible = adding || !!editingWorker;
+  const formVisible = !workers.some((w) => !w.revoked) || !!editingWorker;
   const createdTitle = connected ? "Analysis is ready" : "Install the analysis service";
   const formTitle = editingWorker ? "Analysis access" : "Enable investigations";
   const validAccess = useExisting
@@ -93,16 +92,9 @@ export function WorkerSetup({
       return;
     }
     setEditingWorker(null);
-    setAdding(false);
     setAnalysisKey(null);
   };
-  const addWorker = () => {
-    setAdding(true);
-    setUseExisting(false);
-    setPreparedKey(null);
-  };
   const editBilling = (worker: LensList["workers"][number]) => {
-    setAdding(false);
     setUseExisting(true);
     setCreated(null);
     setEditingWorker(worker.id);
@@ -140,6 +132,9 @@ export function WorkerSetup({
       setBusy(false);
     }
   };
+  const setupDescription = formVisible
+    ? "Lens needs a small service on your server to run investigations."
+    : "Worker status and model access";
   return (
     <Dialog
       open
@@ -151,11 +146,7 @@ export function WorkerSetup({
         <DialogHeader>
           <DialogTitle className="text-xl">{dialogTitle}</DialogTitle>
           <DialogDescription>
-            {created && connected
-              ? "You can now run investigations."
-              : formVisible
-                ? "Lens needs a small service on your server to run investigations."
-                : "Worker status and model access"}
+            {created && connected ? "You can now run investigations." : setupDescription}
           </DialogDescription>
         </DialogHeader>
         {formVisible && !created && (
@@ -281,6 +272,9 @@ export function WorkerSetup({
                     onClick={async () => {
                       try {
                         await apiClient.delete(`/lens/workers/${worker.id}`, { accessToken });
+                        setPreparedKey(null);
+                        setAnalysisKey(null);
+                        setUseExisting(false);
                         onChanged();
                       } catch (e) {
                         setError(e instanceof Error ? e.message : "Could not revoke worker");
@@ -292,11 +286,6 @@ export function WorkerSetup({
                 </div>
               </section>
             ))}
-        {!formVisible && !created && (
-          <Button variant="outline" onClick={addWorker}>
-            <Plus className="size-4" /> Add worker
-          </Button>
-        )}
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}

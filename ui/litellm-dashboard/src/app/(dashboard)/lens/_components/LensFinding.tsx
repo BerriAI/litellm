@@ -62,7 +62,7 @@ export function LensFinding({
               )}
               {finding.limitation && (
                 <details className="text-sm">
-                  <summary className="cursor-pointer font-medium">What this does and doesn’t tell us</summary>
+                  <summary className="cursor-pointer font-medium">Evidence limits</summary>
                   <p className="mt-3 leading-6 text-muted-foreground">{finding.limitation}</p>
                 </details>
               )}

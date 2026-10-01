@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,6 +36,10 @@ function validateSample(selection: ActivitySelection) {
     throw new Error("Choose a positive maximum or leave it blank for no limit");
 }
 
+function newCheck(instruction = ""): Settings["checks"][number] {
+  return { id: crypto.randomUUID(), instruction, enabled: true };
+}
+
 export function LensSetup({
   initial,
   mode = initial ? "edit" : "new",
@@ -42,6 +47,7 @@ export function LensSetup({
   modelDetails = [],
   modelsLoading = false,
   modelsError,
+  defaultModel,
   accessToken,
   ready = true,
   onClose,
@@ -53,6 +59,7 @@ export function LensSetup({
   modelDetails?: AnalysisModelInfo[];
   modelsLoading?: boolean;
   modelsError?: string;
+  defaultModel?: string;
   accessToken: string;
   ready?: boolean;
   onClose: () => void;
@@ -74,14 +81,16 @@ export function LensSetup({
   };
   const [selection, setSelection] = useState(initialSelection);
   const [context, setContext] = useState(initial?.context ?? "");
-  const [questions, setQuestions] = useState(initial?.checks?.map((c) => c.instruction).join("\n") ?? "");
-  const [model, setModel] = useState(initial?.model ?? "");
+  const [questions, setQuestions] = useState(() => (initial?.checks?.length ? initial.checks : [newCheck()]));
+  const [selectedModel, setModel] = useState<string | null>(initial?.model ?? null);
+  const model = selectedModel ?? defaultModel ?? "";
   const [budget, setBudget] = useState(initial?.monthly_budget ?? 100);
   const [repeat, setRepeat] = useState(mode === "edit" && !!initial?.enabled);
   const [interval, setInterval] = useState(initial?.interval_minutes ?? 30);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const suggestedName = questions.trim().split("\n")[0] || context.trim().split("\n")[0] || "Investigation";
+  const filledChecks = questions.filter((check) => check.instruction.trim());
+  const suggestedName = filledChecks[0]?.instruction.trim() || context.trim().split("\n")[0] || "Investigation";
   const title = name.trim() || suggestedName.slice(0, 100);
   const changeSelection = (next: ActivitySelection) => {
     const pool = (s: ActivitySelection) =>
@@ -97,9 +106,9 @@ export function LensSetup({
     if (step >= 2 && manualSelection && !selection.execution_ids?.length)
       throw new Error("Choose at least one run or turn off individual selection");
     validateSample(selection);
-    if (step >= 1 && !context.trim() && !questions.trim())
+    if (step >= 1 && !context.trim() && !filledChecks.length)
       throw new Error("Describe the expected behavior or what to look out for");
-    if (questions.split("\n").some((q) => q.trim() && q.trim().length < 3))
+    if (filledChecks.some((check) => check.instruction.trim().length < 3))
       throw new Error("Use at least three characters for each check");
   };
   const next = () => {
@@ -127,18 +136,7 @@ export function LensSetup({
         interval_minutes: interval,
         concurrency: initial?.concurrency ?? 8,
         filters: normalizeFilters(selection.filters ?? []),
-        checks: questions
-          .split("\n")
-          .map((q) => q.trim())
-          .filter(Boolean)
-          .map(
-            (instruction) =>
-              initial?.checks?.find((c) => c.instruction === instruction) ?? {
-                id: crypto.randomUUID(),
-                instruction,
-                enabled: true,
-              },
-          ),
+        checks: filledChecks.map((check) => ({ ...check, instruction: check.instruction.trim() })),
       };
       await onSave(settings);
     } catch (cause) {
@@ -154,13 +152,13 @@ export function LensSetup({
   const intervalRangeValid = interval >= 1 && interval <= 10080;
   const intervalValid = !repeat || (Number.isInteger(interval) && intervalRangeValid);
   const configurationValid = modelValid && budgetValid && intervalValid;
-  const canSave = !busy && canRun && configurationValid;
+  const runReady = canRun && previewReady;
+  const canSave = !busy && runReady && configurationValid;
   const createLabel = repeat ? "Run and monitor" : "Run investigation";
   const saveLabel = mode === "edit" ? "Save changes" : createLabel;
   const headings = [
     "Which activity should we investigate?",
     "What should Lens look for?",
-    "How much activity should we review?",
     mode === "edit" ? "Review changes" : "Ready to investigate",
   ];
   return (
@@ -178,14 +176,13 @@ export function LensSetup({
               [
                 "Start with an agent, or use filters to investigate any recorded activity.",
                 "Describe the expected behavior, the questions you have, or both.",
-                "Choose a time range and how much of it to review.",
-                "Your selected model reviews the activity through LiteLLM.",
+                "Review the selected activity, then start your investigation.",
               ][step]
             }
           </DialogDescription>
         </DialogHeader>
         <nav aria-label="Investigation setup" className="flex gap-2 text-xs">
-          {["Activity", "Expectations", "Sample", "Review"].map((label, index) => (
+          {["Activity", "Expectations", "Run"].map((label, index) => (
             <button
               key={label}
               disabled={index > step || busy}
@@ -223,7 +220,6 @@ export function LensSetup({
               mode={step === 0 ? "scope" : "activity"}
               onPreviewReady={setPreviewReady}
               manualSelection={manualSelection}
-              onManualSelection={setManualSelection}
             />
           )}
           {step === 1 && (
@@ -238,111 +234,160 @@ export function LensSetup({
                   placeholder="Answer the customer's question using verified sources and explain when information is missing."
                 />
               </label>
-              <label className="grid gap-2 text-sm font-medium">
-                What should we look out for?
-                <Textarea
-                  value={questions}
-                  onChange={(e) => setQuestions(e.target.value)}
-                  rows={4}
-                  placeholder="Repeated searches that do not add useful information.&#10;Answers that contradict the sources."
-                />
-              </label>
-              <p className="text-xs text-muted-foreground">One check per line. You can leave either field blank.</p>
-              <Button
-                variant="link"
-                className="h-auto px-0"
-                onClick={() => {
-                  if (!context.trim())
-                    setContext(
-                      "Answer the user's question using verified sources. Explain when information is missing.",
-                    );
-                  if (!questions.trim())
-                    setQuestions(
-                      "Find repeated work that adds no useful information.\nFind claims that contradict the available evidence.",
-                    );
-                }}
-              >
-                Use an example
-              </Button>
+              <fieldset className="space-y-3">
+                <legend className="mb-2 text-sm font-medium">What should we look out for?</legend>
+                {questions.map((check, index) => (
+                  <div key={check.id} className="flex items-start gap-2">
+                    <Textarea
+                      aria-label={`Check ${index + 1}`}
+                      value={check.instruction}
+                      onChange={(event) =>
+                        setQuestions(
+                          questions.map((item) =>
+                            item.id === check.id ? { ...item, instruction: event.target.value } : item,
+                          ),
+                        )
+                      }
+                      rows={2}
+                      placeholder="e.g. Repeated searches that add no useful information"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove check ${index + 1}`}
+                      onClick={() => setQuestions(questions.filter((item) => item.id !== check.id))}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" onClick={() => setQuestions([...questions, newCheck()])}>
+                  <Plus className="size-3.5" /> Add check
+                </Button>
+              </fieldset>
+              {(!context.trim() || !filledChecks.length) && (
+                <Button
+                  variant="link"
+                  className="h-auto px-0"
+                  onClick={() => {
+                    if (!context.trim())
+                      setContext(
+                        "Answer the user's question using verified sources. Explain when information is missing.",
+                      );
+                    if (!filledChecks.length)
+                      setQuestions([
+                        newCheck("Find repeated work that adds no useful information."),
+                        newCheck("Find claims that contradict the available evidence."),
+                      ]);
+                  }}
+                >
+                  Use an example
+                </Button>
+              )}
             </>
           )}
-          {step === 3 && (
+          {step === 2 && (
             <>
-              <div className="space-y-2 border-b pb-4 text-sm">
+              <div className="space-y-1 border-t pt-4 text-sm">
                 <p className="font-medium">{title}</p>
-                <p className="text-muted-foreground">
-                  {scopeLabel(selection)} · Last {durationLabel(selection.lookback_hours ?? 24, "hours")}
-                </p>
-                <p className="text-muted-foreground">
-                  {selection.sample_percent ?? 100}% sample
+                <p className="text-xs text-muted-foreground">
+                  {scopeLabel(selection)} · {selection.sample_percent ?? 100}% sample
                   {selection.sample_size ? `, up to ${selection.sample_size} runs` : ", no count limit"}
-                  {selection.execution_ids?.length ? ` · ${selection.execution_ids.length} manually selected` : ""}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {model && `${model} · `}
+                  {repeat ? `Repeats every ${durationLabel(interval, "minutes")}` : "Runs once"} · ${budget} monthly
+                  limit
                 </p>
               </div>
-              <div className="space-y-2">
-                <p className="text-sm font-medium">Analysis model</p>
-                <SearchSelect
-                  aria-label="Analysis model"
-                  options={analysisModelOptions(models, modelDetails)}
-                  value={model}
-                  onValueChange={(value) => setModel(value ?? "")}
-                  placeholder={modelsLoading ? "Loading models…" : "Choose a model"}
-                  disabled={modelsLoading}
-                  emptyText="No matching models configured on this gateway"
-                />
-                {modelsError && (
-                  <p role="alert" className="text-sm text-destructive">
-                    Could not load models: {modelsError}
-                  </p>
-                )}
-                {unsupported && (
-                  <p role="alert" className="text-sm text-destructive">
-                    Choose a chat model that supports JSON output.
-                  </p>
-                )}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {repeat ? `Repeats every ${durationLabel(interval, "minutes")}` : "Runs once"} · ${budget} monthly limit
-              </p>
-              <details>
+              <details open={!model || undefined}>
                 <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
-                <div className="mt-4 grid gap-5 sm:grid-cols-2">
-                  <label className="grid content-start gap-2 text-sm font-medium">
-                    Monthly limit (USD)
-                    <Input
-                      type="number"
-                      min="0.01"
-                      max="100000"
-                      step="1"
-                      value={budget}
-                      onChange={(e) => setBudget(Number(e.target.value))}
+                <div className="mt-4 space-y-5">
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Analysis model</p>
+                    <SearchSelect
+                      aria-label="Analysis model"
+                      options={analysisModelOptions(models, modelDetails)}
+                      value={model}
+                      onValueChange={(value) => setModel(value ?? "")}
+                      placeholder={modelsLoading ? "Loading models…" : "Choose a model"}
+                      disabled={modelsLoading}
+                      emptyText="No matching models configured on this gateway"
                     />
-                  </label>
-                  <div className="space-y-3">
+                    {modelsError && (
+                      <p role="alert" className="text-sm text-destructive">
+                        Could not load models: {modelsError}
+                      </p>
+                    )}
+                    {unsupported && (
+                      <p role="alert" className="text-sm text-destructive">
+                        Choose a chat model that supports JSON output.
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <label className="grid content-start gap-2 text-sm font-medium">
+                      Maximum runs (optional)
+                      <Input
+                        type="number"
+                        min="1"
+                        placeholder="No limit"
+                        value={selection.sample_size ?? ""}
+                        onChange={(event) =>
+                          setSelection({
+                            ...selection,
+                            sample_size: event.target.value ? Number(event.target.value) : null,
+                          })
+                        }
+                      />
+                    </label>
                     <label className="flex items-center gap-2 text-sm font-medium">
                       <input
                         type="checkbox"
-                        checked={repeat}
-                        onChange={(e) => setRepeat(e.target.checked)}
-                        className="size-4 rounded border-input accent-foreground"
+                        checked={manualSelection}
+                        onChange={(event) => {
+                          setManualSelection(event.target.checked);
+                          setSelection({ ...selection, execution_ids: [] });
+                        }}
                       />
-                      Repeat this investigation
+                      Choose individual runs
                     </label>
-                    {repeat && (
-                      <DurationInput
-                        label="Repeat every"
-                        value={interval}
-                        onChange={setInterval}
-                        base="minutes"
-                        max={10080}
+                  </div>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <label className="grid content-start gap-2 text-sm font-medium">
+                      Monthly limit (USD)
+                      <Input
+                        type="number"
+                        min="0.01"
+                        max="100000"
+                        step="1"
+                        value={budget}
+                        onChange={(e) => setBudget(Number(e.target.value))}
                       />
-                    )}
+                    </label>
+                    <div className="space-y-3">
+                      <label className="flex items-center gap-2 text-sm font-medium">
+                        <input
+                          type="checkbox"
+                          checked={repeat}
+                          onChange={(e) => setRepeat(e.target.checked)}
+                          className="size-4 rounded border-input accent-foreground"
+                        />
+                        Repeat this investigation
+                      </label>
+                      {repeat && (
+                        <DurationInput
+                          label="Repeat every"
+                          value={interval}
+                          onChange={setInterval}
+                          base="minutes"
+                          max={10080}
+                        />
+                      )}
+                    </div>
                   </div>
                 </div>
               </details>
-              <p className="text-xs leading-5 text-muted-foreground">
-                Analysis is charged to your worker&apos;s virtual key; its permissions and limits apply.
-              </p>
             </>
           )}
           {!ready && mode !== "edit" && (
@@ -360,10 +405,8 @@ export function LensSetup({
           <Button variant="outline" disabled={busy} onClick={() => (step ? setStep(step - 1) : onClose())}>
             {step ? "Back" : "Cancel"}
           </Button>
-          {step < 3 ? (
-            <Button disabled={step === 2 && !previewReady} onClick={next}>
-              Continue
-            </Button>
+          {step < 2 ? (
+            <Button onClick={next}>Continue</Button>
           ) : (
             <Button disabled={!canSave} onClick={() => void save()}>
               {busy ? "Saving…" : saveLabel}
