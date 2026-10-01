@@ -721,25 +721,59 @@ class TestAutoRouterBenchmarks:
         assert totals.saved_pct == -100.0
         assert totals.classifier_cost == 0.4
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("estimated_turns", [0, 4])
-    def test_recorded_savings_survive_when_historical_comparison_costs_are_missing(self, estimated_turns: int) -> None:
-        from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
-
+    async def test_historical_savings_without_recorded_baselines_compare_against_all_spend(
+        self, estimated_turns: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         row: Final = self.ROW.model_copy(
             update={
                 "savings_estimated_turns": estimated_turns,
                 "savings_estimated_actual_spend": 2.0 if estimated_turns else 0.0,
+                "savings_estimated_classifier_cost": None,
                 "savings_estimated_saved_spend": -0.5 if estimated_turns else 0.0,
             }
         )
-        totals: Final = _benchmark_totals(row)
-        assert totals.spend == 10.0
-        assert totals.savings_estimated_turns == estimated_turns
-        assert totals.saved_spend == 30.0
-        assert totals.baseline_spend is None
-        assert totals.savings_estimated_classifier_cost is None
-        assert totals.saved_pct is None
+        response: Final = await self._benchmarks(monkeypatch, rows=[row.model_dump()], model_list=[])
+        assert response.groups[0].model_dump(exclude={"router_name", "router_type", "tier_turns"}) == (
+            response.totals.model_dump()
+        )
+        totals: Final = response.totals
+        assert (totals.spend, totals.saved_spend, totals.baseline_spend, totals.saved_pct) == (10.0, 30.0, 40.0, 75.0)
+        assert (totals.savings_estimated_turns, totals.savings_estimated_actual_spend) == (40, 10.0)
+        assert totals.savings_estimated_classifier_cost == 0.4
         assert totals.saved_per_session == 7.5
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("router_type, saved", [("adaptive", 0.0), ("quality", 0.0), ("quality", 2.0)])
+    async def test_only_complexity_routers_enter_the_compared_totals(
+        self, router_type: str, saved: float, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        adaptive: Final = self.ROW.model_copy(
+            update={
+                "router_name": f"{router_type}-auto",
+                "router_type": router_type,
+                "turns": 10,
+                "spend": 3.0,
+                "saved_spend": saved,
+                "savings_estimated_turns": 0,
+                "savings_estimated_actual_spend": 0.0,
+                "savings_estimated_saved_spend": 0.0,
+                "classifier_cost": 0.0,
+                "classifier_cost_recorded_turns": 10,
+            }
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), adaptive.model_dump()], model_list=[]
+        )
+        unbaselined: Final = response.groups[1]
+        assert (unbaselined.saved_spend, unbaselined.baseline_spend, unbaselined.saved_pct) == (None, None, None)
+        assert (unbaselined.savings_estimated_turns, unbaselined.savings_estimated_classifier_cost) == (0, 0.0)
+        totals: Final = response.totals
+        assert (totals.turns, totals.spend) == (50, 13.0)
+        assert (totals.savings_estimated_turns, totals.savings_estimated_actual_spend) == (40, 10.0)
+        assert (totals.saved_spend, totals.baseline_spend, totals.saved_pct) == (30.0, 40.0, 75.0)
+        assert totals.savings_estimated_classifier_cost == 0.4
 
     def test_an_empty_window_folds_to_zeros(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -1138,8 +1172,10 @@ class TestAutoRouterSession:
             "saved_spend": 0.24,
             "savings_estimated_turns": 3 if estimated else 0,
             "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
-            "baseline_spend": pytest.approx(0.38) if turns == 3 else None,
-            "savings_estimated_baseline_spend": pytest.approx(0.38) if turns == 3 else None,
+            "baseline_spend": pytest.approx(spend + 0.24),
+            "savings_estimated_baseline_spend": (
+                pytest.approx(0.38 if turns == 3 else 0.10) if estimated else None
+            ),
             "baseline_model": "anthropic/claude-opus-5",
             "baseline_models": {"anthropic/claude-opus-5": 3},
         }

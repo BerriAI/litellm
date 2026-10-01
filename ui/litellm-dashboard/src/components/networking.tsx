@@ -115,7 +115,7 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
-import type { SpanDetail, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
+import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -2122,6 +2122,9 @@ export const agentTraceListCall = async ({
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
+export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
+  apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
+
 export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
@@ -2137,6 +2140,17 @@ export const agentTraceSpanCall = async (
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
     query: { trace_ref: traceRef || undefined },
+  });
+
+export const agentTraceSpanErrorCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  options: { traceRef?: string; cursor?: string | null },
+): Promise<SpanErrorPage> =>
+  apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
+    accessToken,
+    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined },
   });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
@@ -7614,6 +7628,11 @@ export interface ToolRow {
   created_by?: string;
   updated_by?: string;
   user_agent?: string;
+  user?: {
+    user_id: string;
+    user_email: string | null;
+    user_alias: string | null;
+  } | null;
   last_used_at?: string;
 }
 

@@ -87,3 +87,21 @@ def migration_lock(database_url: str) -> Generator[MigrationCoordinator, None, N
         f"Timed out waiting for another v2 migration resolver after {wait_seconds}s. "
         f"Check the running migration or increase {MIGRATION_LOCK_TIMEOUT_ENV_VAR}."
     )
+
+
+@contextmanager
+def held_migration_lock(connection: "psycopg.Connection[tuple[object, ...]]") -> Generator[bool, None, None]:
+    """A session-level, non-blocking hold of the migration coordinator lock on an autocommit
+    connection, for DDL that cannot run inside a transaction (`CREATE INDEX CONCURRENTLY`).
+    Yields whether the lock was acquired; a v2 resolver or another migration job's index build
+    holding it yields False. Released on exit."""
+    from psycopg.rows import class_row
+
+    with connection.cursor(row_factory=class_row(_LockResult)) as cursor:
+        row: Final = cursor.execute("SELECT pg_try_advisory_lock(%s) AS acquired", (MIGRATION_LOCK_KEY,)).fetchone()
+    acquired: Final = row is not None and row.acquired
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            connection.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))

@@ -408,7 +408,7 @@ def _frozen(pairs: Iterable[tuple[str, object]]) -> Mapping[str, object]:
 
 def _json_default(value: object) -> object:
     if isinstance(value, Mapping):
-        return dict(value)  # mutable-ok: the JSON encoder needs a dict view of a frozen mapping
+        return dict(value)
     return str(value)
 
 
@@ -483,7 +483,7 @@ def _v3_is_token_list(value: object) -> bool:
 
 
 def _v3_decode_tokens(tokens: Iterable[object]) -> str | None:
-    ids: Final = [token for token in tokens if isinstance(token, int)]  # mutable-ok: tiktoken decodes a list
+    ids: Final = [token for token in tokens if isinstance(token, int)]
     try:
         import tiktoken
 
@@ -540,7 +540,7 @@ def _v3_answer(request_data: Mapping[str, object], model: str | None) -> Mapping
     )
 
     translated: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=response)
-    re_keyed: Final = dict(translated, model=response.model or model)  # mutable-ok: adapter TypedDict re-keyed
+    re_keyed: Final = dict(translated, model=response.model or model)
     return _jsonable_dict(re_keyed)
 
 

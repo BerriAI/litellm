@@ -13596,6 +13596,63 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
     assert mock_audit.call_args.kwargs["team_alias"] == "list-audit"
 
 
+@pytest.mark.asyncio
+async def test_team_member_add_evicts_the_cached_team_roster(monkeypatch):
+    """Roster checks read the team through get_team_object, so a cached pre-add roster must be dropped."""
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_id = "team-roster-evict"
+    team_row = LiteLLM_TeamTable(team_id=team_id, team_alias="roster-evict", members_with_roles=[])
+    cache = UserApiKeyCache()
+    cache.set_cache(key=f"team_id:{team_id}", value=team_row)
+    cache.set_cache(key="team_alias:roster-evict", value=team_row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+
+    joined_user = LiteLLM_UserTable(user_id="joiner", max_budget=None, spend=0.0, models=[])
+    updated_team = MagicMock()
+    updated_team.model_dump.return_value = {"team_id": team_id, "members_with_roles": []}
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_row,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._validate_team_member_add_permissions",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._validate_and_populate_member_user_info",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._resolve_existing_member_user_ids",
+            new_callable=AsyncMock,
+            return_value=frozenset(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+            new_callable=AsyncMock,
+            return_value=(updated_team, [joined_user], []),
+        ),
+        patch("litellm.proxy.management_endpoints.team_endpoints._schedule_team_member_add_audit_logs"),
+    ):
+        await team_member_add(
+            data=TeamMemberAddRequest(team_id=team_id, member=Member(user_id="joiner", role="user")),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+        )
+
+    assert cache.get_cache(key=f"team_id:{team_id}") is None
+    assert cache.get_cache(key="team_alias:roster-evict") is None
+
+
 class _RecordingAuditLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -14612,15 +14669,17 @@ async def test_get_team_daily_activity_aggregated_scopes_and_flags(mock_db_clien
             )
 
             mock_aggregated.assert_called_once()
-            call_kwargs = mock_aggregated.call_args[1]
-            assert call_kwargs["api_key"] == ["user_key_1"]
-            assert call_kwargs["entity_id"] == [team_id]
+            repository, scope = mock_aggregated.call_args.args
+            call_kwargs = mock_aggregated.call_args.kwargs
+            assert repository is not None
+            assert scope.api_keys == ("user_key_1",)
+            assert scope.entity_ids == (team_id,)
             assert call_kwargs["entity_metadata_field"] == {
                 team_id: {"team_alias": "Test Team"}
             }
             assert call_kwargs["include_entity_breakdown"] is True
-            assert call_kwargs["timezone_offset_minutes"] == 480
-            assert call_kwargs["table_name"] == "litellm_dailyteamspend"
+            assert scope.timezone_offset_minutes == 480
+            assert scope.table.value == "litellm_dailyteamspend"
 
 
 @pytest.mark.asyncio

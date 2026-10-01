@@ -2574,19 +2574,18 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch,
     assert result is mock_response
 
     # Verify the helper was called with the right parameters
-    mock_get_daily_agg.assert_called_once_with(
-        prisma_client=mock_prisma_client,
-        table_name="litellm_dailyuserspend",
-        entity_id_field="user_id",
-        entity_id=None,  # global view: no user_id filter
-        entity_metadata_field=None,
-        start_date="2025-02-01",
-        end_date="2025-02-28",
-        model="gpt-4",
-        api_key=None,
-        timezone_offset_minutes=480,
-        include_current_utc_day=include_current_utc_day,
-    )
+    mock_get_daily_agg.assert_called_once()
+    repository, scope = mock_get_daily_agg.call_args.args
+    assert repository is not None
+    assert scope.table.value == "litellm_dailyuserspend"
+    assert scope.entity_id_field == "user_id"
+    assert scope.entity_ids is None
+    assert scope.start_date == "2025-02-01"
+    assert scope.end_date == "2025-02-28"
+    assert scope.model == "gpt-4"
+    assert scope.api_keys is None
+    assert scope.timezone_offset_minutes == 480
+    assert scope.include_current_utc_day is include_current_utc_day
 
 
 @pytest.mark.asyncio
@@ -2655,7 +2654,9 @@ async def test_get_user_daily_activity_aggregated_non_admin_cannot_view_other_us
 
         assert result is mock_response
         mock_get_daily_agg.assert_called_once()
-        assert mock_get_daily_agg.call_args.kwargs["entity_id"] == "regular-user-123"
+        repository, scope = mock_get_daily_agg.call_args.args
+        assert repository is not None
+        assert scope.entity_ids == ("regular-user-123",)
 
 
 @pytest.mark.asyncio
