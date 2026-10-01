@@ -25,7 +25,7 @@ from litellm.tracing import (
 from litellm.tracing.decode import InvalidOTLPPayloadError, encode_otlp_response
 from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
 
-router = APIRouter(tags=["agent tracing"])  # mutable-ok: FastAPI copies the mutable tags list
+router = APIRouter(tags=["agent tracing"])
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 
@@ -96,7 +96,7 @@ async def ingest_otlp_traces(
     except RuntimeError:
         raise HTTPException(
             status_code=503,
-            headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)},  # mutable-ok: FastAPI requires dict headers
+            headers={"Retry-After": str(OTLP_RETRY_AFTER_SECONDS)},
         )
     body, media_type = encode_otlp_response(content_type)
     return Response(content=body, media_type=media_type)

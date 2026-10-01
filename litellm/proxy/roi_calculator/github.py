@@ -298,7 +298,7 @@ async def _pages(
 
 
 async def _collect(items: AsyncIterator[_T]) -> tuple[_T, ...]:
-    collected: Final = [item async for item in items]  # mutable-ok: async iterables require an intermediate buffer
+    collected: Final = [item async for item in items]
     return tuple(collected)
 
 
