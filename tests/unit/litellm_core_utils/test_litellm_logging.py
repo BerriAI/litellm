@@ -3241,6 +3241,49 @@ def test_cold_storage_object_key_matches_the_key_s3_v2_writes_to(
     assert (written.s3_object_key, standard_metadata["cold_storage_object_key"]) == (expected_key, expected_key)
 
 
+def test_cold_storage_object_key_matches_the_key_s3_v2_writes_to_on_a_cache_hit(logging_obj: LitellmLogging):
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    start_time: Final = datetime.datetime(2026, 9, 29, 7, 14, 26, 37602)
+    with patch("asyncio.create_task"):
+        s3_logger: Final = S3Logger(s3_bucket_name="bucket", s3_region_name="us-east-1", s3_path="logs")
+
+    with (
+        patch.object(litellm, "cold_storage_custom_logger", "s3_v2"),
+        patch.object(litellm, "callbacks", [s3_logger]),
+    ):
+        payload: Final = get_standard_logging_object_payload(
+            kwargs={"model": "gpt-4o", "messages": [], "cache_hit": True},
+            init_response_obj=ModelResponse(id="msg_01"),
+            start_time=start_time,
+            end_time=start_time,
+            logging_obj=logging_obj,
+            status="success",
+        )
+
+    assert payload is not None
+    written: Final = s3_logger.create_s3_batch_logging_element(start_time, payload)
+    assert written is not None
+    assert payload["id"].startswith("msg_01_cache_hit"), payload["id"]
+    assert payload["metadata"]["cold_storage_object_key"] == written.s3_object_key
+
+
+def test_cold_storage_object_key_is_not_set_for_a_logger_that_cannot_read_objects_back():
+    from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    with (
+        patch.object(litellm, "cold_storage_custom_logger", "anthropic_cache_control_hook"),
+        patch.object(litellm, "callbacks", [AnthropicCacheControlHook()]),
+    ):
+        standard_metadata: Final = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+            metadata={}, start_time=datetime.datetime(2026, 9, 29, 7, 14, 26, 37602), response_id="msg_01"
+        )
+
+    assert standard_metadata["cold_storage_object_key"] is None
+
+
 @pytest.mark.asyncio
 async def test_e2e_generate_cold_storage_object_key_not_configured():
     """
