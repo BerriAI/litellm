@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Check, Circle, Copy } from "lucide-react";
+import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,9 @@ import { copyToClipboard } from "@/utils/dataUtils";
 
 import { agentTraceCall, getProxyBaseUrl } from "../../networking";
 import { DetailPane } from "./DetailPane";
+import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
+import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
@@ -80,7 +82,7 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
     <Button
       variant="outline"
       size="xs"
-      className="shrink-0 gap-1.5 rounded-[4px] font-mono text-[10px] shadow-none"
+      className="h-7 shrink-0 gap-1.5 rounded-md text-[12px] shadow-none"
       onClick={async () =>
         setCopied(await copyToClipboard(agentHandoffText(traceId, null, traceRef), "Command copied"))
       }
@@ -93,8 +95,13 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
 
 function Stat({ label, value, error = false }: { label: string; value: string; error?: boolean }) {
   return (
-    <span className={cn("shrink-0", error && "text-destructive")}>
-      <span className="text-muted-foreground/70">{label} </span>
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-[5px] border border-border bg-card px-1.5 py-px text-[12px] tabular-nums",
+        error && "border-destructive/40 bg-destructive/10 text-destructive",
+      )}
+    >
+      <span className={cn("text-muted-foreground", error && "text-destructive/80")}>{label} </span>
       {value}
     </span>
   );
@@ -104,29 +111,20 @@ function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
   const { summary } = trace;
   const failed = summary.error_count > 0;
   return (
-    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-card px-2">
+    <header className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border bg-card px-3 py-1.5">
       <button
         type="button"
         onClick={onBack}
-        className="grid size-7 shrink-0 place-items-center rounded-[4px] text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
         aria-label="Back to runs"
       >
         <ArrowLeft className="size-4" />
       </button>
-      <Circle className={cn("size-2 shrink-0 fill-current", failed ? "text-destructive" : "text-muted-foreground")} />
-      <h1 className="shrink-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
-      <span className="flex min-w-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
-        <span className="truncate">{summary.trace_id}</span>
-        <button
-          type="button"
-          aria-label="Copy trace ID"
-          className="shrink-0 hover:text-foreground"
-          onClick={() => void copyToClipboard(summary.trace_id, "Trace ID copied")}
-        >
-          <Copy className="size-3" />
-        </button>
-      </span>
-      <div className="flex min-w-0 items-center gap-4 font-mono text-[11px] text-foreground tabular-nums">
+      <span className="mx-1 h-[18px] w-px bg-border" />
+      <SpanIcon type="agent" error={failed} size="lg" />
+      <h1 className="min-w-0 truncate text-[14px] font-medium text-foreground">{traceDisplayName(summary)}</h1>
+      <IdChip value={summary.trace_id} label="Copy trace ID" showValue />
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <Stat label="duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="steps" value={summary.span_count.toLocaleString()} />
         <Stat label="cost" value={summary.spend == null ? "—" : formatCost(summary.spend)} />
@@ -209,14 +207,13 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
       className={cn(
         "grid min-h-0 flex-1",
         detailOpen
-          ? "grid-cols-1 grid-rows-2 lg:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)] lg:grid-rows-1 2xl:grid-cols-[minmax(0,2fr)_minmax(420px,1fr)]"
+          ? "grid-cols-1 grid-rows-2 lg:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] lg:grid-rows-1"
           : "grid-cols-1",
       )}
     >
       <SpanTree
         rows={rows}
-        spanCount={trace.summary.span_count}
-        totalMs={trace.summary.duration_ms}
+        summary={trace.summary}
         selectedId={selectedRow?.id ?? selectedId}
         hideFramework={state.hideFramework}
         onSelect={select}
@@ -226,7 +223,9 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
         onLoadMore={loadMore}
       />
       {detailOpen && (
-        <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
+        <div className="min-h-0 min-w-0 animate-slide-left motion-reduce:animate-none">
+          <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
+        </div>
       )}
     </div>
   );

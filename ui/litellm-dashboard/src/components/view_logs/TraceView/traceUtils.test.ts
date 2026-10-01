@@ -19,6 +19,7 @@ import {
   previewText,
   revealSpanInState,
   ROOT_KEY,
+  treeGuides,
 } from "./traceUtils";
 
 const swarm = swarmTrace as Trace;
@@ -265,5 +266,21 @@ describe("payload helpers", () => {
     expect(parseMessages('[{"role":"user","content":"hi"}]')).toEqual([{ role: "user", content: "hi" }]);
     expect(parseMessages('{"file_path":"/tmp/x"}')).toBeNull();
     expect(parseMessages("not json")).toBeNull();
+  });
+});
+
+describe("treeGuides", () => {
+  it("draws a rail only for ancestors that still have later siblings", () => {
+    const guides = treeGuides([0, 1, 2, 2, 1, 2, 3]);
+    expect(guides.map((g) => g.last)).toEqual([true, false, false, true, true, true, true]);
+    expect(guides[2].rails).toEqual([true]);
+    expect(guides[5].rails).toEqual([false]);
+    expect(guides[6].rails).toEqual([false, false]);
+  });
+
+  it("treats a sibling after a deeper subtree as continuing the branch", () => {
+    const guides = treeGuides([0, 1, 2, 3, 1]);
+    expect(guides[1].last).toBe(false);
+    expect(guides[3].rails).toEqual([true, false]);
   });
 });

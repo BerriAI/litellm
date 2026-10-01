@@ -312,3 +312,36 @@ export function previewText(preview: string): string {
 /** Trace display name; root spans without a name fall back to the service. */
 export const traceDisplayName = (summary: Pick<TraceSummary, "name" | "service">): string =>
   summary.name || summary.service || "(unnamed trace)";
+
+/* ------------------------------------------------------------------ */
+/*  Tree connector guides                                              */
+/* ------------------------------------------------------------------ */
+
+export interface TreeGuide {
+  /** Per ancestor level 1..depth-1: whether that ancestor has a later sibling, so its rail continues. */
+  rails: readonly boolean[];
+  /** Last child of its parent: the elbow ends here instead of continuing down. */
+  last: boolean;
+}
+
+interface GuideScan {
+  guides: readonly TreeGuide[];
+  /** `levels[d]` is true when a later row at depth d exists before any shallower row. */
+  levels: readonly boolean[];
+}
+
+/** Rail / elbow flags for each row from row depths alone, in one backward pass. */
+export function treeGuides(depths: readonly number[]): TreeGuide[] {
+  const scan = depths.reduceRight<GuideScan>(
+    ({ guides, levels }, depth) => {
+      const guide: TreeGuide = {
+        rails: Array.from({ length: Math.max(0, depth - 1) }, (_, k) => levels[k + 1] === true),
+        last: levels[depth] !== true,
+      };
+      const ancestors = Array.from({ length: depth }, (_, k) => levels[k] === true);
+      return { guides: [guide, ...guides], levels: [...ancestors, true] };
+    },
+    { guides: [], levels: [] },
+  );
+  return [...scan.guides];
+}

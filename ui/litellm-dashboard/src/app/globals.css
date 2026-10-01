@@ -64,6 +64,38 @@
 }
 
 @theme inline {
+  --animate-slide-left: slide-left 200ms cubic-bezier(0, 0, 0.2, 1) both;
+  --animate-view-fade-in: view-fade-in 100ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  --animate-slot-slide-in: slot-slide-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
+
+  @keyframes slide-left {
+    from {
+      opacity: 0;
+      transform: translateX(2rem) scaleX(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes view-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes slot-slide-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
   @keyframes scroll-fade-reveal-e {
     from {
       --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
@@ -141,6 +173,16 @@
   --sidebar-ring: oklch(0.707 0.022 261.325);
   --neutral-border: #dcddeb;
   --logo-surface: oklch(1 0 0);
+  --trace-text: #0f172a;
+  --trace-text-secondary: #334155;
+  --trace-key: #64748b;
+  --trace-duration: #475569;
+  --trace-border: #e2e8f0;
+  --trace-tab-active: #edf2f7;
+  --trace-human: #1380fa;
+  --trace-turn: #f2faff;
+  --trace-turn-border: #5fbef8;
+  --trace-ok: #acefc6;
 }
 
 .dark {
@@ -183,9 +225,29 @@
   --sidebar-border: oklch(0.187 0 0);
   --sidebar-ring: oklch(0.569 0 0);
   --neutral-border: var(--border);
+  --trace-text: #e2e8f0;
+  --trace-text-secondary: #cbd5e1;
+  --trace-key: #94a3b8;
+  --trace-duration: #94a3b8;
+  --trace-border: #273244;
+  --trace-tab-active: #1e293b;
+  --trace-human: #3b93fb;
+  --trace-turn: #0c2236;
+  --trace-turn-border: #2d7fb8;
+  --trace-ok: #1f6b45;
 }
 
 @theme inline {
+  --color-trace-text: var(--trace-text);
+  --color-trace-text-secondary: var(--trace-text-secondary);
+  --color-trace-key: var(--trace-key);
+  --color-trace-duration: var(--trace-duration);
+  --color-trace-border: var(--trace-border);
+  --color-trace-tab-active: var(--trace-tab-active);
+  --color-trace-human: var(--trace-human);
+  --color-trace-turn: var(--trace-turn);
+  --color-trace-turn-border: var(--trace-turn-border);
+  --color-trace-ok: var(--trace-ok);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
