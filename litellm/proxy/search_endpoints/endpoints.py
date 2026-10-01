@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -152,8 +153,17 @@ async def search(
                 valid_token=user_api_key_dict,
             )
 
+            if (
+                user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+                and not (user_api_key_dict.object_permission and user_api_key_dict.object_permission.search_tools)
+            ):
+                raise HTTPException(
+                    status_code=403, detail="Dashboard sessions require explicit search tool permissions"
+                )
+
             # Check team-level access if key is associated with a team
-            if user_api_key_dict.team_id:
+            if user_api_key_dict.team_id and user_api_key_dict.team_id != UI_SESSION_TOKEN_TEAM_ID:
                 from litellm.proxy.proxy_server import (
                     prisma_client,
                     proxy_logging_obj,

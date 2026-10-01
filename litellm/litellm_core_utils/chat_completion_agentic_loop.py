@@ -59,7 +59,9 @@ def _post_hook_overridden(callback: CustomLogger) -> bool:
 
 def _converted_stream_requested(kwargs: Mapping[str, object]) -> bool:
     return bool(
-        kwargs.get("_code_interpreter_interception_converted_stream") or kwargs.get(HEADROOM_CONVERTED_STREAM_KEY)
+        kwargs.get("_code_interpreter_interception_converted_stream")
+        or kwargs.get("_websearch_interception_converted_stream")
+        or kwargs.get(HEADROOM_CONVERTED_STREAM_KEY)
     )
 
 
