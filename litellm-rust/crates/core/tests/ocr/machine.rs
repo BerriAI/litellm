@@ -7,21 +7,22 @@ use std::{
 };
 
 use litellm_core::ocr::{
-    route::{OcrMachine, OcrOp, OcrProjection},
+    route::{OcrCall, OcrMachine, OcrOp},
     types::OcrDocumentInput,
 };
 use litellm_host::{
-    event::{CallEvent, WireRequest},
-    host::{Host, HostOp},
+    interceptors::{Interceptors, WireRequest},
     machine::{HostFailure, Machine, MachineStep},
+    protocol::{HostRequest, InterceptRequest},
 };
+use litellm_host_native::services::HostCallHandler;
 use litellm_llms::base_llm::ocr::transformation::OcrTransportConfig;
 use rstest::rstest;
 use tokio::{io::AsyncReadExt, net::TcpListener, sync::Notify};
 
-use super::{lifecycle::event_name, *};
+use super::*;
 
-/// Drives the machine by hand, answering every op through `host` except `before_send`,
+/// Drives the machine by hand, answering every op through `host` except `before_provider_request`,
 /// which `intercept` answers so a test can fail or cancel exactly there.
 async fn drive_until(
     host: &LocalOcrHost,
@@ -31,43 +32,46 @@ async fn drive_until(
     Vec<&'static str>,
     OcrMachine,
 ) {
-    let mut machine = ocr_machine(ocr_client());
+    let mut machine = ocr_route().machine(host.request().unwrap(), None);
     let mut ops = Vec::new();
     let outcome = loop {
         let op = match machine.resume().await {
-            Ok(MachineStep::Host(op)) => op,
-            Ok(MachineStep::Complete(response)) => break Ok(response),
+            Ok(MachineStep::Suspended(op)) => op,
+            Ok(MachineStep::Complete(response)) => break Ok(completed(response)),
             Err(error) => break Err(error),
         };
         let answer = match op {
-            HostOp::Project(reply) => {
-                ops.push("Project");
-                host.project()
-                    .await
-                    .map(|projection| reply.send(projection))
-                    .map_err(HostFailure::Error)
-            }
-            HostOp::Custom(op) => {
+            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => host
+                .result_ready(facts)
+                .await
+                .map(|()| reply.send(()))
+                .map_err(HostFailure::Error),
+            HostRequest::Stream(stream) => match stream {
+                litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
+                litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
+            },
+            HostRequest::HostCall(op) => {
                 ops.push(match op {
                     OcrOp::AcquireAzureAdToken(_) => "AcquireAzureAdToken",
                 });
-                host.custom_op(op).await.map_err(HostFailure::Error)
+                host.handle_host_call(op).await.map_err(HostFailure::Error)
             }
-            HostOp::BeforeSend { wire, reply, .. } => {
+            HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
+                wire, reply, ..
+            }) => {
                 ops.push("BeforeSend");
                 intercept(*wire).map(|wire| reply.send(wire))
             }
-            HostOp::Emit(event, reply) => {
-                let event = CallEvent::Machine(event);
-                ops.push(event_name(&event));
-                host.emit(&event)
+            HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
+                ops.push("response");
+                host.after_provider_response(raw)
                     .await
                     .map(|()| reply.send(()))
                     .map_err(HostFailure::Error)
             }
         };
         if let Err(failure) = answer {
-            break machine.interrupt(failure).await;
+            break machine.interrupt(failure).await.map(completed);
         }
     };
     (outcome, ops, machine)
@@ -81,10 +85,14 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
                 _ = stop.notified() => break,
                 step = machine.resume() => {
                     match step.unwrap() {
-                        MachineStep::Host(HostOp::Project(reply)) => reply.send(host.project().await.unwrap()),
-                        MachineStep::Host(HostOp::Custom(op)) => host.custom_op(op).await.unwrap(),
-                        MachineStep::Host(HostOp::BeforeSend { wire, reply, .. }) => reply.send(*wire),
-                        MachineStep::Host(HostOp::Emit(_, reply)) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::ResultReady { reply, .. })) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::HostCall(op)) => host.handle_host_call(op).await.unwrap(),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::BeforeProviderRequest { wire, reply, .. })) => reply.send(*wire),
+                        MachineStep::Suspended(HostRequest::Intercept(InterceptRequest::AfterProviderResponse { reply, .. })) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Stream(stream)) => match stream {
+                            litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
+                            litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
+                        },
                         MachineStep::Complete(_) => panic!("the stalled call completed"),
                     }
                 }
@@ -95,6 +103,7 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
     .expect("the call reached the stall point");
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn a_hand_driven_machine_performs_the_same_call() {
     let upstream = upstream([json_response(json!({
@@ -107,13 +116,14 @@ async fn a_hand_driven_machine_performs_the_same_call() {
 
     assert_eq!(outcome.unwrap().pages[0].markdown, "native");
     assert_eq!(received(&upstream).await.len(), 1);
-    assert_eq!(ops, ["Project", "BeforeSend", "response"]);
+    assert_eq!(ops, ["BeforeSend", "response"]);
     assert!(matches!(
         machine.resume().await,
         Err(Error::InvalidRequest(_))
     ));
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn a_path_document_is_read_by_core_without_a_host_operation() {
     let upstream = upstream([json_response(json!({
@@ -135,7 +145,7 @@ async fn a_path_document_is_read_by_core_without_a_host_operation() {
     std::fs::remove_dir_all(&dir).unwrap();
 
     assert_eq!(response.unwrap().pages[0].markdown, "path");
-    assert_eq!(ops, ["Project", "BeforeSend", "response"]);
+    assert_eq!(ops, ["BeforeSend", "response"]);
     assert_eq!(
         only_request(&upstream).await.json()["document"]["image_url"],
         "data:image/png;base64,YWJj"
@@ -143,7 +153,7 @@ async fn a_path_document_is_read_by_core_without_a_host_operation() {
 }
 
 #[rstest]
-#[case::failed(HostFailure::Error(Error::InvalidRequest("before_send failed".into())), "before_send failed")]
+#[case::failed(HostFailure::Error(Error::InvalidRequest("before_provider_request failed".into())), "before_provider_request failed")]
 #[case::cancelled(HostFailure::Cancelled(Error::InvalidRequest("cancelled".into())), "cancelled")]
 #[tokio::test]
 async fn a_before_send_failure_ends_the_call_without_reaching_transport(
@@ -159,7 +169,7 @@ async fn a_before_send_failure_ends_the_call_without_reaching_transport(
             .lock()
             .unwrap()
             .take()
-            .expect("before_send is asked once"))
+            .expect("before_provider_request is asked once"))
     })
     .await;
 
@@ -167,27 +177,36 @@ async fn a_before_send_failure_ends_the_call_without_reaching_transport(
         matches!(&outcome, Err(Error::InvalidRequest(actual)) if actual == message),
         "{outcome:?}"
     );
-    assert_eq!(ops, ["Project", "BeforeSend"]);
+    assert_eq!(ops, ["BeforeSend"]);
     assert!(machine.resume().await.is_err());
     assert!(received(&upstream).await.is_empty());
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn resuming_before_answering_keeps_the_pending_operation() {
-    let request = ocr_request("mistral/model", UNREACHABLE_BASE, json!({}));
-    let mut machine = ocr_machine(ocr_client());
-    let Ok(MachineStep::Host(HostOp::Project(reply))) = machine.resume().await else {
-        panic!("expected the projection op first");
+    let upstream = upstream([pages_response()]).await;
+    let request = ocr_request("mistral/model", &upstream.uri(), json!({}));
+    let mut machine = ocr_route().machine(
+        OcrCall {
+            request,
+            caller_token: false,
+        },
+        None,
+    );
+    let Ok(MachineStep::Suspended(HostRequest::Intercept(
+        InterceptRequest::BeforeProviderRequest { wire, reply, .. },
+    ))) = machine.resume().await
+    else {
+        panic!("expected the provider request hook");
     };
-
     assert!(machine.resume().await.is_err());
-    reply.send(OcrProjection {
-        request,
-        caller_token: false,
-    });
+    reply.send(*wire);
     assert!(matches!(
         machine.resume().await,
-        Ok(MachineStep::Host(HostOp::BeforeSend { .. }))
+        Ok(MachineStep::Suspended(HostRequest::Intercept(
+            InterceptRequest::AfterProviderResponse { .. }
+        )))
     ));
 }
 
@@ -215,6 +234,7 @@ impl litellm_auth::TokenProvider for PendingToken {
     }
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn interrupt_drops_provider_captures_before_returning() {
     let entered = Arc::new(Notify::new());
@@ -231,7 +251,7 @@ async fn interrupt_drops_provider_captures_before_returning() {
         },
     )));
     let host = LocalOcrHost::new(request);
-    let mut machine = ocr_machine(ocr_client());
+    let mut machine = ocr_route().machine(host.request().unwrap(), None);
 
     drive_until_notified(&mut machine, &host, &entered).await;
     assert!(!dropped.load(Ordering::SeqCst));
@@ -248,6 +268,7 @@ async fn interrupt_drops_provider_captures_before_returning() {
     );
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn interrupting_an_in_flight_provider_request_closes_its_connection() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -266,7 +287,7 @@ async fn interrupting_an_in_flight_provider_request_closes_its_connection() {
         while socket.read(&mut buffer).await.unwrap() != 0 {}
     });
     let host = LocalOcrHost::new(ocr_request("mistral/model", &base, json!({})));
-    let mut machine = ocr_machine(ocr_client());
+    let mut machine = ocr_route().machine(host.request().unwrap(), None);
 
     drive_until_notified(&mut machine, &host, &received).await;
     let cancelled = Error::InvalidRequest("cancelled".into());

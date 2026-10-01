@@ -27,11 +27,15 @@ class RecordingS3Sink:
     fail_attempts: int = 0
     fail_until: float = 0.0
     fail_status: int = 503
+    fail_code: str = "SinkFailure"
+    fail_body: bytes | None = None
     delay_seconds: float = 0.5
     lock: threading.Lock = field(default_factory=threading.Lock)
     in_flight: int = 0
     peak: int = 0
     attempts: int = 0
+    attempt_log: list[tuple[float, int]] = field(default_factory=list)  # mutable-ok: appended under lock per PUT
+    attempt_counts: dict[str, int] = field(default_factory=dict)  # mutable-ok: per-target PUT counts under lock
     store: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: GET reads must see writes from earlier PUTs
 
     def respond(self, request: Request) -> Reply:
@@ -44,19 +48,30 @@ class RecordingS3Sink:
         assert request.target.startswith(f"/{BUCKET}/{PREFIX}/"), request.target
         with self.lock:
             self.attempts += 1
-            if self.attempts <= self.fail_attempts or time.time() < self.fail_until:
-                return Reply(
-                    status=self.fail_status,
-                    body=b"<Error><Code>SinkFailure</Code></Error>",
-                    content_type="application/xml",
-                )
+            self.attempt_counts[request.target] = self.attempt_counts.get(request.target, 0) + 1
             self.in_flight += 1
             self.peak = max(self.peak, self.in_flight)
-            self.store[request.target] = request.body
+            self.attempt_log.append((time.time(), self.in_flight))
+            failing: Final = self.attempts <= self.fail_attempts or time.time() < self.fail_until
+            if not failing:
+                self.store[request.target] = request.body
         time.sleep(self.delay_seconds)
         with self.lock:
             self.in_flight -= 1
+        if failing:
+            return Reply(
+                status=self.fail_status,
+                body=self.fail_body
+                if self.fail_body is not None
+                else f"<Error><Code>{self.fail_code}</Code></Error>".encode(),
+                content_type="application/xml",
+            )
         return Reply()
+
+    def peak_between(self, start: float, end: float) -> int:
+        with self.lock:
+            samples: Final = tuple(in_flight for when, in_flight in self.attempt_log if start <= when < end)
+        return max(samples, default=0)
 
     def objects(self) -> Mapping[str, bytes]:
         with self.lock:
@@ -240,7 +255,13 @@ SURFACES: Final = ("chat", "chat_stream", "messages", "messages_stream", "respon
 
 
 def call_surface(
-    candidate: Gateway, surface: str, openai_model: str, anthropic_model: str, key: str, marker: str
+    candidate: Gateway,
+    surface: str,
+    openai_model: str,
+    anthropic_model: str,
+    key: str,
+    marker: str,
+    no_cache: bool = True,
 ) -> tuple[str, str | None]:
     """Drive one request through the given surface; return (client-visible response id, x-litellm-call-id)."""
     base: Final = str(candidate.client.base_url).rstrip("/")
@@ -249,7 +270,7 @@ def call_surface(
         reply: Final = openai.OpenAI(base_url=f"{base}/v1", api_key=key).chat.completions.create(
             model=openai_model,
             messages=[{"role": "user", "content": marker}],
-            extra_body={"cache": {"no-cache": True}},
+            extra_body={"cache": {"no-cache": True}} if no_cache else {},
         )
         return reply.id, None
 
@@ -258,7 +279,7 @@ def call_surface(
             model=openai_model,
             messages=[{"role": "user", "content": marker}],
             stream=True,
-            extra_body={"cache": {"no-cache": True}},
+            extra_body={"cache": {"no-cache": True}} if no_cache else {},
         )
         seen = ""
         async for chunk in stream:
@@ -283,7 +304,7 @@ def call_surface(
         response: Final = candidate.request(
             "POST",
             "/v1/responses",
-            {"model": openai_model, "input": marker, "cache": {"no-cache": True}},
+            {"model": openai_model, "input": marker, **({"cache": {"no-cache": True}} if no_cache else {})},
             key=key,
         )
         assert response.status_code == 200, response.text
@@ -338,6 +359,10 @@ def matched_ids(
     for payload in payloads:
         if payload["id"] in response_ids:
             landed.append(payload["id"])
+            continue
+        uncached: Final = str(payload["id"]).rsplit("_cache_hit", 1)[0]
+        if uncached in response_ids:
+            landed.append(str(payload["id"]))
             continue
         assert payload["litellm_call_id"] in call_ids, f"unmatched payload {payload['id']!r}"
         landed.append(str(payload["id"]))

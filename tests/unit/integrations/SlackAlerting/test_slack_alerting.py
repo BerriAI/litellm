@@ -394,6 +394,33 @@ def _slack_alerting_with_env_resolution() -> SlackAlerting:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_group, expected_prefix",
+    [
+        (Litellm_EntityType.TEAM_MEMBER, "Team Member Budget: Budget Crossed"),
+        (Litellm_EntityType.KEY, "Key Budget: Budget Crossed"),
+    ],
+)
+async def test_max_budget_alert_labels_team_member_budget(event_group, expected_prefix):
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+    slack_alerting.send_alert = AsyncMock()
+
+    await slack_alerting.budget_alerts(
+        type="max_budget_alert",
+        user_info=CallInfo(
+            spend=10.5,
+            max_budget=10.0,
+            token="hashed_key",
+            user_id="member_1",
+            team_id="team_a",
+            event_group=event_group,
+        ),
+    )
+
+    assert slack_alerting.send_alert.await_args.kwargs["message"].startswith(expected_prefix)
+
+
+@pytest.mark.asyncio
 async def test_send_alert_falls_back_to_alerting_webhook_url_env(monkeypatch):
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     monkeypatch.setenv("ALERTING_WEBHOOK_URL", "https://chat.example.com/hooks/abc")

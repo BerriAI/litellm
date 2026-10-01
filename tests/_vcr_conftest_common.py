@@ -1090,6 +1090,7 @@ def vcr_config_dict() -> dict:
         "decode_compressed_response": True,
         "record_mode": "new_episodes",
         "allow_playback_repeats": True,
+        "ignore_localhost": True,
         "match_on": (
             "method",
             "scheme",

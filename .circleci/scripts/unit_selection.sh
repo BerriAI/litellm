@@ -5,6 +5,7 @@ flag="${1:?usage: unit_selection.sh <codecov flag>}"
 
 legacy_flags=(
   caching-local
+  core-utils
   enterprise-package
   enterprise-routing
   integrations
@@ -32,6 +33,7 @@ legacy_flags=(
 legacy_paths() {
   case "$1" in
     caching-local) echo tests/unit/caching ;;
+    core-utils) echo tests/unit/litellm_core_utils ;;
     enterprise-package)
       echo tests/unit/enterprise/integrations
       echo tests/unit/enterprise/proxy/auth
@@ -42,6 +44,9 @@ legacy_paths() {
       echo tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py ;;
     enterprise-routing)
       echo tests/unit/google_genai
+      echo tests/unit/router_strategy
+      echo tests/unit/router_utils
+      echo tests/unit/proxy/common_utils/test_cache_aware_routing.py
       echo tests/unit/enterprise/enterprise_callbacks/send_emails
       echo tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
       echo tests/unit/enterprise/proxy/test_batch_retrieve_input_file_id.py
@@ -77,12 +82,14 @@ legacy_paths() {
       echo tests/unit/messages
       echo tests/unit/rag
       echo tests/unit/rerank_api
+      echo tests/unit/rust_bridge
       echo tests/unit/secret_managers
       echo tests/unit/vector_stores
       echo tests/unit/videos ;;
     proxy-db-auth-checks)
       echo tests/unit/proxy/auth/test_auth_checks.py
       echo tests/unit/proxy/auth/test_user_api_key_auth.py
+      echo tests/unit/proxy/test_credential_slot_registry.py
       echo tests/unit/proxy/test_deprecated_key_grace_period.py ;;
     proxy-db-budgets)
       echo tests/unit/proxy/auth/test_default_end_user_budget_simple.py
@@ -100,6 +107,7 @@ legacy_paths() {
       echo tests/unit/proxy/test_update_spend.py
       echo tests/unit/skills/test_skills_db.py ;;
     proxy-db-endpoints-and-responses)
+      echo tests/unit/proxy/lens
       echo tests/unit/proxy/auth/test_models_fallback_endpoint.py
       echo tests/unit/proxy/common_utils/test_check_batch_cost.py
       echo tests/unit/proxy/common_utils/test_check_responses_cost.py
@@ -141,8 +149,13 @@ legacy_paths() {
       echo tests/unit/proxy/test_proxy_server.py ;;
     proxy-db-proxy-utils) echo tests/unit/proxy/test_proxy_utils.py ;;
     proxy-extras) echo tests/unit/litellm_proxy_extras ;;
-    proxy-infra) echo tests/unit/gateway ;;
-    responses-caching-types) echo tests/unit/types ;;
+    proxy-infra)
+      echo tests/unit/gateway
+      echo tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+      echo tests/unit/proxy/roi_calculator ;;
+    responses-caching-types)
+      find tests/unit/responses -name 'test_*.py' -not -path 'tests/unit/responses/mcp/*'
+      echo tests/unit/types ;;
     *) echo "unit_selection.sh: unknown flag $1" >&2; exit 1 ;;
   esac
 }
