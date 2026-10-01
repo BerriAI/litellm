@@ -59,6 +59,7 @@ interface AgentTracesSectionProps {
   timeControls?: TimeControls;
   /** Called when a run opens / closes, so the page can hide its own header while a run fills the view. */
   onRunOpenChange?: (open: boolean) => void;
+  readOnly?: boolean;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -98,6 +99,7 @@ export function AgentTracesSection({
   isLiveTail,
   timeControls,
   onRunOpenChange,
+  readOnly = false,
 }: AgentTracesSectionProps) {
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
@@ -147,7 +149,13 @@ export function AgentTracesSection({
     checkTraces();
     openRun(trace);
   };
-  const setupProps = { accessToken, onOpenTrace: openSentTrace, onCheck: checkTraces, checking: traces.isFetching };
+  const setupProps = {
+    accessToken,
+    readOnly,
+    onOpenTrace: openSentTrace,
+    onCheck: checkTraces,
+    checking: traces.isFetching,
+  };
 
   if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
