@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -398,6 +398,41 @@ def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     handler.sync_guardrail_from_db(g)
 
     assert handler.get_source("collide") == "db"
+
+
+def test_sync_guardrail_from_db_keeps_the_loaded_guardrail_when_db_params_do_not_decrypt():
+    handler = InMemoryGuardrailHandler()
+    loaded = _make_guardrail("rotated")
+    handler.IN_MEMORY_GUARDRAILS["rotated"] = loaded
+    undecryptable = {
+        **loaded,
+        "litellm_params": {**dict(loaded["litellm_params"]), "api_key": "litellm_enc::sealed-under-the-new-key"},
+    }
+
+    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
+        synced = handler.sync_guardrail_from_db(undecryptable)
+
+    reinitialize.assert_not_called()
+    assert synced is loaded
+    assert handler.IN_MEMORY_GUARDRAILS["rotated"] is loaded
+
+
+def test_sync_guardrail_from_db_applies_an_edit_to_a_guardrail_loaded_with_an_undecryptable_value():
+    handler = InMemoryGuardrailHandler()
+    stale_params = {"guardrail": "g", "mode": "pre_call", "default_on": True, "api_key": "litellm_enc::stale"}
+    handler.IN_MEMORY_GUARDRAILS["stale"] = Guardrail(
+        guardrail_id="stale", guardrail_name="g", litellm_params=LitellmParams(**stale_params)
+    )
+    edited = Guardrail(
+        guardrail_id="stale",
+        guardrail_name="g",
+        litellm_params={**stale_params, "mode": "post_call", "default_on": False},
+    )
+
+    with patch.object(handler, "reinitialize_guardrail") as reinitialize:
+        handler.sync_guardrail_from_db(edited)
+
+    reinitialize.assert_called_once()
 
 
 def _db_litellm_params() -> dict:

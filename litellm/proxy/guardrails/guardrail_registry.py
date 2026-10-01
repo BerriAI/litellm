@@ -558,7 +558,8 @@ class GuardrailRegistry:
     async def rotate_guardrail_params_master_key(prisma_client: PrismaClient, new_master_key: str) -> int:
         """Re-encrypt every guardrail row's sensitive litellm_params under the key the proxy decrypts with after the
         rotation (LITELLM_SALT_KEY when set, otherwise new_master_key). Returns the number of rows rewritten."""
-        encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR) or new_master_key
+        salt_key: Final = os.environ.get(SALT_KEY_ENV_VAR)
+        encryption_key: Final = new_master_key if salt_key is None else salt_key
         rows: Final = await _guardrail_table(prisma_client).find_many()
         rotated = [  # mutable-ok: awaits in order
             await _rotate_guardrail_row(prisma_client, row, encryption_key) for row in rows
@@ -1011,12 +1012,29 @@ class InMemoryGuardrailHandler:
     def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
+        A loaded guardrail is kept when the DB row's params do not decrypt with the current key and the loaded ones do.
         This is the method to call during DB polling.
         """
         guardrail_id: Final = guardrail.get("guardrail_id")
         if not guardrail_id:
             verbose_proxy_logger.error("Cannot sync guardrail without guardrail_id")
             return None
+
+        existing: Final = self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
+        if (
+            existing is not None
+            and contains_encrypted_marker(guardrail.get("litellm_params"))
+            and not contains_encrypted_marker(
+                self._normalize_litellm_params_for_comparison(existing.get("litellm_params"))
+            )
+        ):
+            self._sources[guardrail_id] = "db"
+            verbose_proxy_logger.warning(
+                "Guardrail %s has litellm_params that do not decrypt with the current key; keeping the loaded version. "
+                "Restart the proxy if the master key was rotated.",
+                guardrail_id,
+            )
+            return existing
 
         if self._has_guardrail_params_changed(guardrail_id, guardrail):
             guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
