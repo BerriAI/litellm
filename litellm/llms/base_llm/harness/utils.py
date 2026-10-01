@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, Final, TypeAlias
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -21,14 +23,10 @@ def normalize_tool_name(native_name: str, mapping: Mapping[str, str]) -> str:
     return mapping.get(native_name, native_name)
 
 
-def native_tool_names(normalized: Sequence[str], mapping: Mapping[str, Sequence[str]]) -> list[str]:
+def native_tool_names(normalized: Sequence[str], mapping: Mapping[str, Sequence[str]]) -> Sequence[str]:
     """Native names for normalized tool names, de-duplicated, order kept."""
-    natives: list[str] = []
-    for name in normalized:
-        for native in mapping.get(name, (name,)):
-            if native not in natives:
-                natives.append(native)
-    return natives
+    expanded: Final = itertools.chain.from_iterable(mapping.get(name, (name,)) for name in normalized)
+    return list(dict.fromkeys(expanded))  # mutable-ok: public helper whose callers/tests compare against list literals
 
 
 def last_json_object(text: str) -> str | None:
@@ -65,21 +63,26 @@ def strict_json_schema(schema: JSONValue, depth: int = 0) -> JSONValue:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"output schema is nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
     if isinstance(schema, list):
-        return [strict_json_schema(entry, depth + 1) for entry in schema]
+        return [strict_json_schema(entry, depth + 1) for entry in schema]  # mutable-ok: JSON document output
     if not isinstance(schema, dict):
         return schema
-    result = {key: strict_json_schema(value, depth + 1) for key, value in schema.items()}
+    entries: Final = ((key, strict_json_schema(value, depth + 1)) for key, value in schema.items())
+    result = dict(entries)  # mutable-ok: JSON document; "default" is popped below
     if "$ref" in result:
-        return {"$ref": result["$ref"]}
+        return {"$ref": result["$ref"]}  # mutable-ok: JSONValue output is a plain JSON document
     result.pop("default", None)
     properties = result.get("properties")
     if result.get("type") == "object" or isinstance(properties, dict):
-        props = properties if isinstance(properties, dict) else {}
-        result = {**result, "properties": props, "required": list(props.keys()), "additionalProperties": False}
+        props = properties if isinstance(properties, dict) else {}  # mutable-ok: JSONValue object member
+        required: Final[list[JSONValue]] = list(props)  # mutable-ok: JSON array in the output schema
+        strict: Final[Mapping[str, JSONValue]] = MappingProxyType(
+            {"properties": props, "required": required, "additionalProperties": False}
+        )
+        result = {**result, **strict}  # mutable-ok: JSON document output
     return result
 
 
-def decode_json_line(line: bytes | str) -> dict[str, Any] | None:
+def decode_json_line(line: bytes | str) -> Mapping[str, Any] | None:
     """One JSONL line as a dict, or None for blank / non-JSON / non-object lines."""
     text = line.strip()
     if not text:
@@ -95,15 +98,19 @@ def stderr_tail_text(stderr_tail: Sequence[str]) -> str:
     return "\n".join(line for line in stderr_tail if line.strip())
 
 
-def read_skill_files(skill_dir: str) -> list[tuple[str, bytes]]:
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _walk_files(root: str) -> Iterator[str]:
+    for dirpath, _dirnames, filenames in os.walk(root):
+        yield from (os.path.join(dirpath, filename) for filename in sorted(filenames))
+
+
+def read_skill_files(skill_dir: str) -> tuple[tuple[str, bytes], ...]:
     """(relative path, bytes) for every file under a local skill folder."""
-    root = os.path.realpath(os.fspath(skill_dir))
+    root: Final = os.path.realpath(os.fspath(skill_dir))
     if not os.path.isfile(os.path.join(root, SKILL_MANIFEST)):
         raise ValueError(f"skill folder {skill_dir!r} has no {SKILL_MANIFEST}")
-    files: list[tuple[str, bytes]] = []
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for filename in sorted(filenames):
-            path = os.path.join(dirpath, filename)
-            with open(path, "rb") as fh:
-                files.append((os.path.relpath(path, root), fh.read()))
-    return files
+    return tuple((os.path.relpath(path, root), _read_bytes(path)) for path in _walk_files(root))
