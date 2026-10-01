@@ -1735,7 +1735,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         tool_calls = inputs.get("tool_calls")
         if tool_calls:
-            new_tool_calls = []
+            new_tool_calls: Final = []  # mutable-ok: replaces inputs["tool_calls"], which is a list
             for tool_call in tool_calls:
                 args = self._get_tool_call_arguments(tool_call)
                 if args is None:
@@ -1748,7 +1748,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         text=args,
                         output_parse_pii=self.output_parse_pii,
                         presidio_config=None,
-                        request_data=request_data or {},
+                        request_data=request_data or {},  # mutable-ok: check_pii takes the per-request dict
                     )
                 new_tool_calls.append(self._with_tool_call_arguments(tool_call, new_args))
             inputs["tool_calls"] = new_tool_calls
@@ -1778,7 +1778,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         function = tool_call.get("function")
         if not isinstance(function, dict):
             return tool_call
-        return {**tool_call, "function": {**function, "arguments": arguments}}
+        return {**tool_call, "function": {**function, "arguments": arguments}}  # mutable-ok: tool calls are plain dicts
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
