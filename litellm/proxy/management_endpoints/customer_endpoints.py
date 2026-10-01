@@ -496,6 +496,7 @@ async def new_end_user(
                 end_user_id=data.user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+                use_writer=True,
             )
         except Exception as e:  # noqa: BLE001  # best-effort cache refill after the committed customer create
             verbose_proxy_logger.warning("Failed to write through customer cache for %s: %s", data.user_id, e)
@@ -746,6 +747,7 @@ async def update_end_user(
                     end_user_id=data.user_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
+                    use_writer=True,
                 )
             except Exception as e:  # noqa: BLE001  # best-effort cache refill after the committed customer update
                 verbose_proxy_logger.warning("Failed to write through customer cache for %s: %s", data.user_id, e)

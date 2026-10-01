@@ -7170,6 +7170,47 @@ async def test_cache_end_user_row_does_not_cache_a_missing_row(end_user_registry
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_writer", "expected_models"),
+    ((False, ["old"]), (True, ["new"])),
+    ids=("default-reads-db", "writer-reads-writer-db"),
+)
+async def test_cache_end_user_row_uses_requested_database(
+    end_user_registry_skip_enabled,
+    use_writer: bool,
+    expected_models: list[str],
+) -> None:
+    from litellm.proxy.auth.auth_checks import cache_end_user_row
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=_end_user_db_row("eu-1", models=["old"])
+    )
+    mock_prisma_client.writer_db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=_end_user_db_row("eu-1", models=["new"])
+    )
+    cache: Final = UserApiKeyCache()
+
+    result: Final = await cache_end_user_row(
+        end_user_id="eu-1",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=cache,
+        use_writer=use_writer,
+    )
+    cached: Final = await cache.async_get_cache(key=end_user_cache_key("eu-1"), model_type=LiteLLM_EndUserTable)
+
+    assert result is not None
+    assert result.models == expected_models
+    assert cached == result
+    if use_writer:
+        mock_prisma_client.writer_db.litellm_endusertable.find_unique.assert_awaited_once()
+        mock_prisma_client.db.litellm_endusertable.find_unique.assert_not_awaited()
+    else:
+        mock_prisma_client.db.litellm_endusertable.find_unique.assert_awaited_once()
+        mock_prisma_client.writer_db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
 def _end_user_registry_row(user_id: str):
     """A row as the restricted-id registry query sees it: only ``user_id`` is read off it."""
     return SimpleNamespace(user_id=user_id)

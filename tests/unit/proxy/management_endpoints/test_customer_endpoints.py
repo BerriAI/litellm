@@ -1096,14 +1096,16 @@ def test_customer_new_invalidates_end_user_and_registry_caches(mock_prisma_clien
 
 
 def test_customer_new_writes_through_row_after_eviction(mock_prisma_client, mock_user_api_key_auth):
-    row = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["m1"])
-    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=row)
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=row)
+    created_row: Final = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["new"])
+    stale_row: Final = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["old"])
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=created_row)
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=stale_row)
+    mock_prisma_client.writer_db.litellm_endusertable.find_unique = AsyncMock(return_value=created_row)
 
     with _end_user_cache_doubles() as (recording_cache, _):
         response = client.post(
             "/customer/new",
-            json={"user_id": "c1", "models": ["m1"]},
+            json={"user_id": "c1", "models": ["new"]},
             headers={"Authorization": "Bearer k"},
         )
 
@@ -1113,7 +1115,9 @@ def test_customer_new_writes_through_row_after_eviction(mock_prisma_client, mock
         ("delete", "end_user_restricted_registry"),
         ("set", "end_user_id:c1"),
     ]
-    assert recording_cache.writes == [row]
+    assert recording_cache.writes == [created_row]
+    mock_prisma_client.writer_db.litellm_endusertable.find_unique.assert_awaited_once()
+    mock_prisma_client.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
 def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
@@ -1136,16 +1140,18 @@ def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_cl
 
 
 def test_customer_update_writes_through_row_after_eviction(mock_prisma_client, mock_user_api_key_auth):
-    existing_row = LiteLLM_EndUserTable(user_id="c1", blocked=False)
-    updated_row = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["m1"])
+    existing_row: Final = LiteLLM_EndUserTable(user_id="c1", blocked=False)
+    updated_row: Final = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["new"])
+    stale_row: Final = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["old"])
     mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=existing_row)
     mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated_row)
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=updated_row)
+    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=stale_row)
+    mock_prisma_client.writer_db.litellm_endusertable.find_unique = AsyncMock(return_value=updated_row)
 
     with _end_user_cache_doubles() as (recording_cache, _):
         response = client.post(
             "/customer/update",
-            json={"user_id": "c1", "models": ["m1"]},
+            json={"user_id": "c1", "models": ["new"]},
             headers={"Authorization": "Bearer k"},
         )
 
@@ -1156,12 +1162,14 @@ def test_customer_update_writes_through_row_after_eviction(mock_prisma_client, m
         ("set", "end_user_id:c1"),
     ]
     assert recording_cache.writes == [updated_row]
+    mock_prisma_client.writer_db.litellm_endusertable.find_unique.assert_awaited_once()
+    mock_prisma_client.db.litellm_endusertable.find_unique.assert_not_awaited()
 
 
 def test_customer_new_cache_write_through_failure_keeps_success_response(mock_prisma_client, mock_user_api_key_auth):
-    row = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["m1"])
+    row: Final = LiteLLM_EndUserTable(user_id="c1", blocked=False, models=["m1"])
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=row)
-    mock_prisma_client.db.litellm_endusertable.find_unique = AsyncMock(return_value=row)
+    mock_prisma_client.writer_db.litellm_endusertable.find_unique = AsyncMock(return_value=row)
 
     with _end_user_cache_doubles(fail_writes=True) as (recording_cache, _):
         response = client.post(

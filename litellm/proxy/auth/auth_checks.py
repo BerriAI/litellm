@@ -1724,7 +1724,7 @@ def _column_is_set(column: str) -> Mapping[str, object]:
 
 def _array_is_not_empty(column: str) -> Mapping[str, object]:
     """``column`` holds at least one element, as a plain dict for prisma's builder."""
-    return {column: {"is_empty": False}}  # mutable-ok: prisma's query builder isinstance-checks for dict
+    return {column: {"is_empty": False}}
 
 
 def _restricted_end_user_where() -> Mapping[str, object]:
@@ -1912,8 +1912,12 @@ async def cache_end_user_row(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
+    *,
+    use_writer: bool = False,
 ) -> LiteLLM_EndUserTable | None:
-    response: Final = await _dictable_table(EndUserRepository(prisma_client), "end_user").find_unique(
+    response: Final = await _dictable_table(
+        EndUserRepository(prisma_client, use_writer=use_writer), "end_user"
+    ).find_unique(
         where={"user_id": end_user_id},
         include={"litellm_budget_table": True, "object_permission": True},
     )
