@@ -507,7 +507,13 @@ class TestTeamModelCooldownAlternatives:
         )
 
 
-# --- the cooldown read covers the request's candidate deployments (#44050) ---
+_DEPLOYMENTS = (
+    ("group-a", "group-a-0"),
+    ("group-a", "group-a-1"),
+    ("group-b", "group-b-0"),
+    ("group-b", "group-b-1"),
+    ("group-b", "group-b-2"),
+)
 
 
 def _router() -> Router:
@@ -515,10 +521,9 @@ def _router() -> Router:
         {
             "model_name": group,
             "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://localhost:1"},
-            "model_info": {"id": f"{group}-{n}"},
+            "model_info": {"id": dep_id},
         }
-        for group, count in (("group-a", 2), ("group-b", 3))
-        for n in range(count)
+        for group, dep_id in _DEPLOYMENTS
     ]
     return Router(model_list=model_list)
 

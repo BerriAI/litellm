@@ -7215,7 +7215,13 @@ class Router:
         # would find an empty list and raise immediately.
         cooldown_ids = set(
             await _async_get_cooldown_deployments(
-                litellm_router_instance=self, parent_otel_span=None, model_ids=list(all_ids)
+                litellm_router_instance=self,
+                parent_otel_span=None,
+                model_ids=list(
+                    cast(  # cast-ok: all_ids holds the non-None ids built above
+                        "set[str]", all_ids
+                    )
+                ),
             )
         )
         remaining: Final = (all_ids - cooldown_ids) - excluded
@@ -8579,7 +8585,11 @@ class Router:
         unhealthy_deployments: Final = _get_cooldown_deployments(
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
-            model_ids=deployment_ids(_all_deployments),
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", _all_deployments
+                )
+            ),
         )
         unhealthy_set: Final = set(unhealthy_deployments)
         healthy_deployments: list = [d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set]
@@ -8609,7 +8619,11 @@ class Router:
         unhealthy_deployments: Final = await _async_get_cooldown_deployments(
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
-            model_ids=deployment_ids(_all_deployments),
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", _all_deployments
+                )
+            ),
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set: Final = set(unhealthy_deployments)
@@ -11496,12 +11510,7 @@ class Router:
 
     @staticmethod
     def _deployment_ids(deployments: Sequence[Mapping[str, object]]) -> frozenset[str]:
-        return frozenset(
-            str(model_info["id"])
-            for deployment in deployments
-            for model_info in (deployment.get("model_info"),)
-            if isinstance(model_info, Mapping) and model_info.get("id") is not None
-        )
+        return frozenset(deployment_ids(deployments))
 
     def has_model_id(self, candidate_id: str) -> bool:
         """
@@ -13049,7 +13058,11 @@ class Router:
             await _async_get_cooldown_deployments(
                 litellm_router_instance=self,
                 parent_otel_span=parent_otel_span,
-                model_ids=deployment_ids(healthy_deployments),
+                model_ids=deployment_ids(
+                    cast(  # cast-ok: router deployments are dicts carrying model_info
+                        "list[dict[str, object]]", healthy_deployments
+                    )
+                ),
             )
             if routing_read_batch is None
             else await routing_read_batch.async_get_cooldown_deployments(
@@ -14201,7 +14214,11 @@ class Router:
         cooldown_deployments: Final = _get_cooldown_deployments(
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
-            model_ids=deployment_ids(healthy_deployments),
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", healthy_deployments
+                )
+            ),
         )
         _pre_cooldown_deployments: Final = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
@@ -14391,7 +14408,11 @@ class Router:
         cooldown_deployments: Final = _get_cooldown_deployments(
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
-            model_ids=deployment_ids(pass_through_deployments),
+            model_ids=deployment_ids(
+                cast(  # cast-ok: router deployments are dicts carrying model_info
+                    "list[dict[str, object]]", pass_through_deployments
+                )
+            ),
         )
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,

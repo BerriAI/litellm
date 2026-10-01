@@ -489,9 +489,14 @@ def _set_cooldown_deployments(
     return False
 
 
-def deployment_ids(deployments: Iterable[Mapping[str, Any]]) -> list[str]:
+def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> list[str]:
     """Ids of the given deployments, so a cooldown lookup reads only those keys."""
-    return [dep_id for d in deployments if (dep_id := (d.get("model_info") or {}).get("id")) is not None]
+    return [
+        str(model_info["id"])
+        for deployment in deployments
+        for model_info in (deployment.get("model_info"),)
+        if isinstance(model_info, Mapping) and model_info.get("id") is not None
+    ]
 
 
 async def _async_get_cooldown_deployments(
