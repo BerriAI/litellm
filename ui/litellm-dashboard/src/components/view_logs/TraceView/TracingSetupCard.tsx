@@ -567,6 +567,7 @@ export function TracingSetupCard({
   onCheck,
   checking = false,
   readOnly = false,
+  canMintTracingKey = false,
 }: {
   detail: string | null;
   accessToken: string;
@@ -575,6 +576,7 @@ export function TracingSetupCard({
   onCheck?: () => void;
   checking?: boolean;
   readOnly?: boolean;
+  canMintTracingKey?: boolean;
 }) {
   const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
   const [framework, setFramework] = useState(FRAMEWORKS[0].id);
@@ -683,10 +685,12 @@ export function TracingSetupCard({
           </div>
 
           <Step title="Get a LiteLLM key">
-            {readOnly ? (
-              <p className="text-sm text-muted-foreground">Ask a proxy admin for a LiteLLM virtual key.</p>
-            ) : (
+            {canMintTracingKey && !readOnly ? (
               <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={setTracingKey} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Use any LiteLLM virtual key you already have, or ask a proxy admin for one.
+              </p>
             )}
           </Step>
 
