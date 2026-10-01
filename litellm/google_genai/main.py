@@ -200,7 +200,12 @@ class GenerateContentHelper:
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
         explicit_vertex_location: Final = VertexBase.explicit_vertex_ai_location(
-            MappingProxyType(litellm_params.model_dump(exclude_none=True))
+            MappingProxyType(
+                {
+                    key: getattr(litellm_params, key, None)
+                    for key in ("vertex_location", "vertex_ai_location")
+                }
+            )
         )
         vertex_location_params: Final = (
             MappingProxyType({"vertex_location": explicit_vertex_location})
