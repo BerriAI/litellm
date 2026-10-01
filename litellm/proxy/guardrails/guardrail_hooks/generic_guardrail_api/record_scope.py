@@ -16,7 +16,6 @@ DEFAULT_GUARDRAIL_INFORMATION_SCOPE: Final[GuardrailInformationScope] = "per_cal
 _SESSION_CACHE_MAX_ENTRIES: Final = 100_000
 _SESSION_CACHE_TTL_SECONDS: Final = 3600
 _REWRITABLE_KEYS: Final = ("texts", "images", "tools", "structured_messages")
-_NOT_SENT: Final[tuple[()]] = ()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _SCOPE_ADAPTER: Final[TypeAdapter[GuardrailInformationScope]] = TypeAdapter(
     GuardrailInformationScope, config=ConfigDict(title="guardrail_information_scope")
@@ -50,11 +49,15 @@ def _jsonable(value: object) -> object:
     return to_jsonable_python(value, fallback=repr, bytes_mode="base64")
 
 
+def _sent_value(sent: GenericGuardrailAPIInputs, key: str) -> object:
+    return sent.get(key) if key in sent else ()
+
+
 def returned_unchanged(sent: GenericGuardrailAPIInputs, returned: GenericGuardrailAPIInputs) -> bool:
     """The return builder always sets texts and sets other rewritable keys only when passing them through or
     rewriting them, so a key missing from ``returned`` is unchanged and missing texts were sent as ``[]``."""
     return all(
-        key not in returned or _jsonable(returned.get(key)) == _jsonable(sent.get(key, _NOT_SENT))
+        key not in returned or _jsonable(returned.get(key)) == _jsonable(_sent_value(sent, key))
         for key in _REWRITABLE_KEYS
     )
 
