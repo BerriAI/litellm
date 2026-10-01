@@ -2805,7 +2805,8 @@ async def _process_group_patch_operations(
     dropped.
     """
     update_data: Final[dict[str, object]] = {}
-    existing_metadata: Final = _json_object_fields(existing_team.metadata) or _NO_FIELDS
+    stored_metadata: Final[dict[str, object] | None] = existing_team.metadata
+    existing_metadata: Final = _json_object_fields(stored_metadata) or _NO_FIELDS
     pathless_resources: Final = tuple(
         resource for resource in map(_pathless_group_resource, patch_ops.Operations) if resource is not None
     )
