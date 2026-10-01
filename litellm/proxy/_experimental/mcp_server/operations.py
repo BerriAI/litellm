@@ -1115,6 +1115,7 @@ async def _get_tools_from_mcp_servers(
                     prefetched_creds=_prefetched_oauth_creds,
                 )
 
+            catalog_auth_header: Final = server_auth_header
             if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
                 server_auth_header = await _get_byok_credential(server, user_api_key_auth)
 
@@ -1131,6 +1132,7 @@ async def _get_tools_from_mcp_servers(
                     user_api_key_auth=user_api_key_auth,
                     oauth2_headers=oauth2_headers,
                     proxy_logging_obj=proxy_logging_obj,
+                    catalog_auth_header=catalog_auth_header,
                 )
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -2013,6 +2015,7 @@ async def _execute_mcp_tool(
     if mcp_server is None:
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
 
+    client_auth_header: Final = mcp_auth_header
     if mcp_server:
         standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get("mcp_server_cost_info")
         if litellm_logging_obj:
@@ -2087,7 +2090,12 @@ async def _execute_mcp_tool(
                 original_tool_name,
                 mcp_server,
                 listed_tools_caller_for(
-                    mcp_server, user_api_key_auth, mcp_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers
+                    mcp_server,
+                    user_api_key_auth,
+                    client_auth_header,
+                    mcp_server_auth_headers,
+                    raw_headers,
+                    oauth2_headers,
                 ),
             ),
         )
@@ -2139,6 +2147,7 @@ async def _execute_mcp_tool(
             arguments=arguments,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
+            catalog_auth_header=client_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
@@ -2207,7 +2216,7 @@ async def _execute_mcp_tool(
                     listed_tools_caller_for(
                         prefix_server,
                         user_api_key_auth,
-                        mcp_auth_header,
+                        client_auth_header,
                         mcp_server_auth_headers,
                         raw_headers,
                         oauth2_headers,
@@ -2615,8 +2624,12 @@ async def _handle_managed_mcp_tool(
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    *,
+    catalog_auth_header: str | None,
 ) -> CallToolResult | InputRequiredResult:
-    """Handle tool execution for managed server tools"""
+    """Handle tool execution for managed server tools. ``catalog_auth_header`` is the header the client
+    supplied, which keys the caller's catalog slot; ``mcp_auth_header`` may already be the resolved
+    BYOK credential."""
     # Import here to avoid circular import
     from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -2626,6 +2639,7 @@ async def _handle_managed_mcp_tool(
         arguments=arguments,
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
+        catalog_auth_header=catalog_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,

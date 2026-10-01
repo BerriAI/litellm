@@ -53,6 +53,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _obo_retry_applies,
     _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
+    listed_tools_caller_for,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -7322,7 +7323,54 @@ class TestMCPServerManager:
         assert listed is not None and listed.description == "everyone"
 
     @pytest.mark.asyncio
-    async def test_byok_stored_credential_lists_into_the_slot_tools_call_reads(self):
+    async def test_byok_listing_never_reads_the_credential_store(self):
+        """tools/list keys the caller's catalog slot by what the client supplied plus the caller's key.
+        Resolving the stored BYOK credential for that would fail every REST listing while the DB is
+        down and would seed a per-worker cache the next tools/call trusts over the store."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="byok-cold",
+            name="byok_cold",
+            transport=MCPTransport.http,
+            url="http://byok-cold",
+            is_byok=True,
+            auth_type=MCPAuth.api_key,
+        )
+        user = UserAPIKeyAuth(api_key="sk-litellm", user_id="byok-cold-user")
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager._fetch_tools_with_timeout = AsyncMock(
+            return_value=[MCPTool(name="turn", description="listed while db down", inputSchema={})]
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_user_credential",
+                AsyncMock(side_effect=RuntimeError("DB DOWN")),
+            ),
+        ):
+            await manager._get_tools_from_server(server=server, user_api_key_auth=user)
+
+        listed = manager.get_listed_tool(server, "turn", listed_tools_caller_for(server, user, None, None, None, None))
+        assert listed is not None and listed.description == "listed while db down"
+
+    @pytest.mark.parametrize(
+        ("list_header", "call_kwargs"),
+        [
+            pytest.param(
+                None, {"mcp_auth_header": "stored-secret", "catalog_auth_header": None}, id="execute-mcp-tool"
+            ),
+            pytest.param(None, {"mcp_auth_header": None}, id="responses-api"),
+            pytest.param("Bearer hdr", {"mcp_auth_header": "Bearer hdr"}, id="client-supplied-header"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_byok_tools_call_reads_the_slot_the_clients_own_header_listed(
+        self, list_header: str | None, call_kwargs: dict[str, str | None]
+    ):
+        """A REST listing records under the header the client sent (none here). tools/call then swaps the
+        stored credential in, either before reaching ``call_tool`` (``execute_mcp_tool``) or inside it (the
+        Responses API), and must still read that slot rather than one keyed by the credential."""
         from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
             byok_credential_cache_key,
             cache_byok_credential,
@@ -7337,20 +7385,40 @@ class TestMCPServerManager:
             url="http://byok-catalog",
             is_byok=True,
         )
+        manager.registry = {"byok-catalog": server}
         user = UserAPIKeyAuth(api_key="sk-litellm", user_id="byok-user")
-        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+        mock_client = AsyncMock()
+        mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
         manager._fetch_tools_with_timeout = AsyncMock(
             return_value=[MCPTool(name="turn", description="stored cred catalog", inputSchema={})]
         )
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
+        proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
+        proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
         cache_byok_credential("byok-user", "byok-catalog", "stored-secret")
         try:
-            await manager._get_tools_from_server(server=server, user_api_key_auth=user)
+            await manager._get_tools_from_server(server=server, mcp_auth_header=list_header, user_api_key_auth=user)
+            listed = manager.get_listed_tool(
+                server, "turn", listed_tools_caller_for(server, user, list_header, None, None, None)
+            )
+            assert listed is not None and listed.description == "stored cred catalog"
+
+            await manager.call_tool(
+                server_name="byok_catalog",
+                name="turn",
+                arguments={},
+                user_api_key_auth=user,
+                proxy_logging_obj=proxy_logging_obj,
+                **call_kwargs,
+            )
         finally:
             byok_credential_cache.delete_cache(byok_credential_cache_key("byok-user", "byok-catalog"))
 
-        call_side = ListedToolsCaller(user_api_key_auth=user, mcp_auth_header="stored-secret")
-        listed = manager.get_listed_tool(server, "turn", call_side)
-        assert listed is not None and listed.description == "stored cred catalog"
+        hook_kwargs = proxy_logging_obj._create_mcp_request_object_from_kwargs.call_args.args[0]
+        assert hook_kwargs["tool_description"] == "stored cred catalog"
 
     @pytest.mark.asyncio
     async def test_byok_supplied_header_lists_without_credential_validation(self):
@@ -7401,12 +7469,13 @@ class TestMCPServerManager:
         ],
     )
     @pytest.mark.asyncio
-    async def test_byok_listing_keys_the_catalog_by_the_stored_secret_but_never_sends_it_upstream(
+    async def test_byok_listing_keys_the_catalog_by_the_caller_and_never_touches_the_stored_secret(
         self, server_auth: dict[str, object]
     ):
-        """The stored BYOK secret keys the catalog slot tools/call reads, but tools/list sends upstream
-        exactly what the caller supplied (nothing here), so the static token, the M2M mint and
-        MCPJWTSigner all behave as they did before the catalog existed, whatever the auth_type."""
+        """The caller's key plus what the caller supplied (nothing here) keys the catalog slot tools/call
+        reads, even with the stored BYOK secret at hand in the cache, and tools/list sends upstream exactly
+        what the caller supplied, so the static token, the M2M mint and MCPJWTSigner all behave as they
+        did before the catalog existed, whatever the auth_type."""
         from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
             byok_credential_cache_key,
             cache_byok_credential,
@@ -7448,8 +7517,7 @@ class TestMCPServerManager:
         assert client_kwargs["mcp_auth_header"] is None, client_kwargs
         assert client_kwargs["extra_headers"] == {"Authorization": "Bearer signed-jwt"}
         signer_headers.assert_awaited_once()
-        call_side = ListedToolsCaller(user_api_key_auth=alice, mcp_auth_header="BYOK-ALICE-SECRET")
-        listed = manager.get_listed_tool(server, "echo", call_side)
+        listed = manager.get_listed_tool(server, "echo", ListedToolsCaller(user_api_key_auth=alice))
         assert listed is not None and listed.description == "listed catalog"
 
     @pytest.mark.parametrize(

@@ -28,7 +28,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import chain, groupby
-from types import MappingProxyType
+from types import EllipsisType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import ParseResult, urlparse
 
@@ -1346,18 +1346,14 @@ async def _resolve_byok_mcp_auth_header(
     return mcp_auth_header
 
 
-async def _byok_catalog_auth_header(
-    mcp_server: MCPServer,
-    user_api_key_auth: UserAPIKeyAuth | None,
+def _catalog_auth_header(
     mcp_auth_header: str | dict[str, str] | None,
+    catalog_auth_header: str | dict[str, str] | None | EllipsisType,
 ) -> str | dict[str, str] | None:
-    """Keys the caller's catalog slot the way tools/call will look it up; never sent upstream."""
-    if not mcp_server.is_byok or mcp_auth_header is not None:
-        return mcp_auth_header
-
-    from litellm.proxy._experimental.mcp_server.operations import _get_byok_credential
-
-    return await _get_byok_credential(mcp_server, user_api_key_auth)
+    """The header the client supplied, which keys the caller's catalog slot on both tools/list and
+    tools/call. A caller that already swapped a stored BYOK credential into ``mcp_auth_header`` passes
+    the client's value explicitly, since the stored credential must never be read to find the slot."""
+    return mcp_auth_header if catalog_auth_header is ... else catalog_auth_header
 
 
 def _client_forwarded_authorization_headers(
@@ -4479,6 +4475,8 @@ class MCPServerManager:
         oauth2_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
+        *,
+        catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
     ) -> Sequence[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -4486,6 +4484,8 @@ class MCPServerManager:
         Args:
             server (MCPServer): The server to query tools from
             mcp_auth_header: Optional auth header for MCP server
+            catalog_auth_header: The header the client supplied, keying the caller's catalog slot;
+                defaults to ``mcp_auth_header``
 
         Returns:
             List[MCPTool]: List of tools available on the server with prefixed names
@@ -4500,7 +4500,7 @@ class MCPServerManager:
         client = None
         listed_caller: Final = ListedToolsCaller(
             user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=await _byok_catalog_auth_header(server, user_api_key_auth, mcp_auth_header),
+            mcp_auth_header=_catalog_auth_header(mcp_auth_header, catalog_auth_header),
             raw_headers=raw_headers,
             oauth2_headers=oauth2_headers,
         )
@@ -6627,6 +6627,8 @@ class MCPServerManager:
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
         wire_compat: WireCompat = WireCompat.LEGACY,
+        *,
+        catalog_auth_header: str | None | EllipsisType = ...,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a tool with the given name and arguments
@@ -6638,6 +6640,8 @@ class MCPServerManager:
             user_api_key_auth: User authentication
             mcp_auth_header: MCP auth header (deprecated)
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            catalog_auth_header: The header the client supplied, keying the caller's catalog slot;
+                defaults to ``mcp_auth_header`` as received, before BYOK resolution
             proxy_logging_obj: Optional ProxyLogging object for hook integration
             litellm_logging_obj: Optional request logger the guardrail hooks record
                 their evaluations onto, so MCP guardrail activity reaches the
@@ -6649,6 +6653,7 @@ class MCPServerManager:
         """
         start_time: Final = datetime.datetime.now()
         mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
+        client_auth_header: Final = _catalog_auth_header(mcp_auth_header, catalog_auth_header)
 
         # Resolved before any hook runs so a missing BYOK credential (401) never
         # leaves during-hook side effects (audit logging, rate-limit bookkeeping)
@@ -6659,7 +6664,7 @@ class MCPServerManager:
             mcp_auth_header,
         )
         listed_caller: Final = listed_tools_caller_for(
-            mcp_server, user_api_key_auth, mcp_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers
+            mcp_server, user_api_key_auth, client_auth_header, mcp_server_auth_headers, raw_headers, oauth2_headers
         )
 
         #########################################################
