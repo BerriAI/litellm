@@ -488,5 +488,5 @@ class TestEnforceUserParamEdgeCases:
 
 
 if __name__ == "__main__":
-    # Run tests with: pytest tests/test_litellm/proxy/test_enforce_user_param.py -v
+    # Run tests with: pytest tests/unit/proxy/test_enforce_user_param.py -v
     pytest.main([__file__, "-v"])
