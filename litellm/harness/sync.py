@@ -19,10 +19,10 @@ from litellm.harness.options import HarnessOptions
 from litellm.harness.runtime import (
     AsyncEventStream,
     AsyncSession,
-    _arun,
-    _astream,
     aagent_resume,
     aagent_session,
+    arun_agent,
+    astream_agent,
 )
 from litellm.harness.sandbox.base import Sandbox
 from litellm.harness.types import (
@@ -232,7 +232,7 @@ def _run(
 ) -> Result:
     """Run one prompt to completion (blocking) and return the Result."""
     return run_sync(
-        _arun(
+        arun_agent(
             harness,
             prompt,
             sandbox=sandbox,
@@ -279,7 +279,7 @@ def _stream(
 ) -> EventStream:
     """Stream events for one prompt (sync iterator). Validation errors raise here."""
     _ensure_sync_context("agent")
-    inner = _astream(
+    inner = astream_agent(
         harness,
         prompt,
         sandbox=sandbox,
