@@ -104,7 +104,7 @@ class GetModelCostMap:
         cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
 
     @classmethod
-    def _get_backup_model_count(cls) -> int:
+    def backup_model_count(cls) -> int:
         """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
             backup: Final = cls.load_local_model_cost_map()
@@ -401,7 +401,7 @@ async def refetch_model_cost_map(
         return result
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=result.model_cost_map,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
+        backup_model_count=GetModelCostMap.backup_model_count(),
     ):
         return ModelCostMapReloadUnavailable(reason=f"model cost map from {url} failed integrity validation")
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
@@ -589,9 +589,9 @@ def _model_cost_replaced_since_import(fetch: _ImportFetch | None) -> bool:
     return fetch is not None and litellm.model_cost is not fetch.bundled
 
 
-def _entries_changed_since_import(fetch: _ImportFetch) -> dict[str, object]:
-    current: Final = fetch.bundled.copy()
-    return {key: value for key, value in current.items() if fetch.bundled_as_loaded.get(key) != value}
+def _entries_changed_since_import(fetch: _ImportFetch) -> Mapping[str, object]:
+    current: Final = tuple(fetch.bundled.items())
+    return MappingProxyType({key: value for key, value in current if fetch.bundled_as_loaded.get(key) != value})
 
 
 def _adopt_remote_model_cost_map(
@@ -623,7 +623,7 @@ def _adopt_remote_model_cost_map(
     _litellm_import_complete.wait()
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=result.model_cost_map,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),  # pyright: ignore[reportPrivateUsage]  # integrity cache
+        backup_model_count=GetModelCostMap.backup_model_count(),
     ):
         verbose_logger.warning(
             "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
@@ -635,12 +635,12 @@ def _adopt_remote_model_cost_map(
     if _model_cost_replaced_since_import(import_fetch):
         verbose_logger.debug("LiteLLM: litellm.model_cost was replaced after import; not adopting the remote map")
         return
-    edits: Final = _entries_changed_since_import(import_fetch) if import_fetch is not None else {}
+    edits: Final = _entries_changed_since_import(import_fetch) if import_fetch is not None else MappingProxyType({})
     finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
     _cost_map_source_info.source = "remote"
     _cost_map_source_info.fallback_reason = None
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
-    adopt_model_cost_map({**finalized, **edits})
+    adopt_model_cost_map({**finalized, **edits})  # mutable-ok: litellm.model_cost is a plain mutable dict by contract
 
 
 def _retry_remote_fetch_in_background(
@@ -810,7 +810,7 @@ def get_model_cost_map(
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=content,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
+        backup_model_count=GetModelCostMap.backup_model_count(),
     ):
         verbose_logger.warning(
             "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
