@@ -73,11 +73,11 @@ class Domain(str, Enum):
 
 
 class Route(str, Enum):
-    """The customer-facing HTTP surface the test DRIVES.
+    """The endpoint the test is checking.
 
-    Orthogonal to the suite directory: a reliability test in router/ and a
-    logging test in logging/ both drive `CHAT_COMPLETIONS`, which is why this is
-    per-test and not per-module.
+    Set it only when the endpoint is what the test is about: `/team/update` for
+    a team-update test, `/v1/messages` for a messages spend test. A budget or
+    rate-limit test whose chat call only triggers the block leaves it unset.
 
     "route" here means endpoint, matching litellm's own `LiteLLMRoutes`
     (litellm/proxy/_types.py). The coverage registry's `LlmCell.route` uses the
@@ -88,9 +88,6 @@ class Route(str, Enum):
     audio_transcriptions -> AUDIO, bedrock_native + google_native ->
     PASSTHROUGH. Those splits are wire detail, not a customer-facing surface,
     and `models` + `capabilities` already carry them.
-
-    The last four are ops surfaces: logging/, load/, other/ and ui/ have no LLM
-    route of their own and would otherwise have to lie.
     """
 
     CHAT_COMPLETIONS = "chat_completions"

@@ -6,7 +6,7 @@ import pytest
 from budget_client import BudgetClient
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -22,7 +22,6 @@ def _as_datetime(value: str) -> datetime:
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
         models=(MODEL,),
         mode=Mode.NONSTREAM,

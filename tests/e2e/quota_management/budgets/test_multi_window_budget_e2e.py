@@ -22,7 +22,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block, window_reset_at
 from e2e_http import StreamingResponse, require_successful_call
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import BudgetWindow
 
@@ -61,7 +61,6 @@ def _drive_to_block(client: BudgetClient, key: str) -> StreamingResponse:
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.OPENAI,),
         models=(CHEAP_OPENAI_MODEL,),
         mode=Mode.NONSTREAM,
@@ -103,7 +102,6 @@ def test_short_window_blocks_then_resets(client: BudgetClient, resources: Resour
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.OPENAI,),
         models=(CHEAP_OPENAI_MODEL,),
         mode=Mode.NONSTREAM,

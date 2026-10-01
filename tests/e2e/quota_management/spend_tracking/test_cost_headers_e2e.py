@@ -27,7 +27,7 @@ import pytest
 from cost_rows import approx_equal, cacheable_prefix, register_priced_model
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody
 from spend_e2e_client import SpendClient
@@ -64,7 +64,6 @@ class TestCostHeaders:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(BACKEND,),
             mode=Mode.NONSTREAM,

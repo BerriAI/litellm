@@ -126,7 +126,6 @@ class TestCacheCostAccounting:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(CACHE_WRITE_BACKEND,),
             capabilities=(Capability.PROMPT_CACHING,),
@@ -166,7 +165,6 @@ class TestCacheCostAccounting:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(CACHE_READ_BACKEND,),
             capabilities=(Capability.PROMPT_CACHING, Capability.REASONING),
@@ -240,7 +238,6 @@ class TestCacheCostAccounting:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(CACHE_READ_BACKEND,),
             capabilities=(Capability.PROMPT_CACHING,),

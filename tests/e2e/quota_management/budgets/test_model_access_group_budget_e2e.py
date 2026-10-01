@@ -106,7 +106,6 @@ class TestModelAccessGroupBudget:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(BACKEND,),
             mode=Mode.NONSTREAM,
@@ -127,7 +126,6 @@ class TestModelAccessGroupBudget:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(BACKEND,),
             mode=Mode.NONSTREAM,
@@ -149,7 +147,6 @@ class TestModelAccessGroupBudget:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(BACKEND,),
             mode=Mode.NONSTREAM,

@@ -17,7 +17,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import Success, require_successful_call
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage
 
@@ -92,7 +92,6 @@ class TestTeamMemberBudgetIsolation:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(MODEL,),
             mode=Mode.NONSTREAM,

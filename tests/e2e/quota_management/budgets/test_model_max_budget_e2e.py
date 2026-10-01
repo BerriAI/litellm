@@ -13,7 +13,7 @@ import pytest
 from budget_client import BudgetClient, is_budget_block, model_budget
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ModelBudgetEntry
 
@@ -34,7 +34,6 @@ def _call(client: BudgetClient, key: str, model: str):
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC, Provider.GEMINI),
         models=(CAPPED_MODEL, FREE_MODEL),
         mode=Mode.NONSTREAM,
@@ -74,7 +73,6 @@ def test_model_max_budget_isolates_per_model(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
         models=(FREE_MODEL,),
         mode=Mode.NONSTREAM,

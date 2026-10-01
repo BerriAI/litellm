@@ -273,7 +273,6 @@ def test_embedding_writes_nonzero_spend_row(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
         models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
@@ -318,7 +317,6 @@ def test_cache_hit_is_zero_cost_and_suffixed(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
         models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
@@ -355,7 +353,6 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.OPENAI,),
         models=(TRAFFIC_BACKEND,),
         mode=Mode.NONSTREAM,
@@ -381,7 +378,7 @@ def test_burst_of_concurrent_calls_loses_no_spend(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
+        route=Route.SPEND_REPORTING,
         providers=(Provider.GEMINI,),
         models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
@@ -443,7 +440,6 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
         models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
@@ -469,7 +465,6 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
         models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
@@ -516,7 +511,6 @@ def test_tag_spend_matches_sum_of_tagged_logs(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI,),
         models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,
@@ -578,7 +572,6 @@ def test_end_user_header_attributes_responses_row(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.GEMINI, Provider.ANTHROPIC),
         models=(GEMINI_MODEL, CLAUDE_MODEL),
         mode=Mode.NONSTREAM,
@@ -636,7 +629,6 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.OPENAI,),
         models=(OPENAI_BACKEND,),
         mode=Mode.NONSTREAM,
@@ -770,7 +762,7 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
+        route=Route.SPEND_REPORTING,
         providers=(Provider.GEMINI,),
         models=(GEMINI_MODEL,),
         mode=Mode.NONSTREAM,

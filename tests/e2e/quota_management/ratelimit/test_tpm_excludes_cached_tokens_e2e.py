@@ -24,7 +24,7 @@ from models import (
     TextBlock,
     Usage,
 )
-from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
 from quota_client import QuotaClient
 
 pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
@@ -105,7 +105,6 @@ class TestTpmExcludesCachedTokens:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(ANTHROPIC_MODEL,),
             capabilities=(Capability.PROMPT_CACHING,),

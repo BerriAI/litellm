@@ -97,7 +97,6 @@ def test_key_with_budget_duration_schedules_reset_at_creation(client: BudgetClie
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
         models=(MODEL,),
         mode=Mode.NONSTREAM,
@@ -123,7 +122,6 @@ def test_key_spend_blocks_at_cap(client: BudgetClient, resources: ResourceManage
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
         models=(MODEL,),
         mode=Mode.NONSTREAM,
@@ -168,7 +166,6 @@ def test_key_budget_reset_at_advances_after_window(client: BudgetClient, resourc
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
         models=(MODEL,),
         mode=Mode.NONSTREAM,
@@ -221,7 +218,6 @@ def test_multi_window_key_resets_each_window_independently(client: BudgetClient,
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
         models=(MODEL,),
         mode=Mode.NONSTREAM,
@@ -263,7 +259,6 @@ def test_team_member_budget_reset_at_advances(client: BudgetClient, resources: R
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
         models=(MODEL,),
         mode=Mode.NONSTREAM,

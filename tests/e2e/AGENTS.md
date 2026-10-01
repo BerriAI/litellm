@@ -140,7 +140,6 @@ Separate from the coverage registry and additive to it: `@meta(Subject(...))` fr
 @meta(
     Subject(
         domain=Domain.SPEND_BUDGETS,
-        route=Route.CHAT_COMPLETIONS,
         providers=(Provider.ANTHROPIC,),
         models=(CHEAP_ANTHROPIC_MODEL,),
         mode=Mode.NONSTREAM,
@@ -148,6 +147,8 @@ Separate from the coverage registry and additive to it: `@meta(Subject(...))` fr
 )
 def test_bare_key_blocks_over_its_own_budget(...) -> None: ...
 ```
+
+`route` is the endpoint the test is checking: `TEAM_MANAGEMENT` for a `/team/update` test, `SPEND_REPORTING` for a `/spend/logs` test, `MESSAGES` for a test of spend on `/v1/messages`. A test whose chat call only triggers the behavior under test, like the budget block above, leaves it unset, since its steps already name the call
 
 Every field is optional today (the backfill of the rest of the suite is a later PR) and every field is a closed enum, so a typo is a basedpyright error at the call site rather than a property that silently never appears. `providers`, `models` and `capabilities` are tuples even with one member, because one test node routinely drives several: the claude_code matrix runs haiku, sonnet and opus in a single body, and a spend test calls two providers on one key. Declare every provider and every model the test drives, fallbacks included. The three are independent sets with no positional pairing between them (one provider x three models is the common case), and each is deduped and sorted at declaration so the committed run artifacts diff cleanly. `models=("gpt-5.5")` is a str and not a tuple, so anything but a tuple raises a `TypeError` where the decorator runs and shows up as a collection error naming the file. `Subject` is serialized with `dataclasses.asdict`, so a new scalar field needs no serializer edit; empty fields emit no `<property>` at all. A declared model names the constant the test drives (`CHEAP_ANTHROPIC_MODEL`, the file's own `BACKEND`), never a copy of its value, so the property cannot claim one model while an env override runs another. `e2e_metadata` and its call sites never import litellm, only the stdlib, pytest and pydantic: `Provider` mirrors litellm's `LlmProviders` values instead of importing them, because tests/e2e is shipped to the runner image on its own and a `from litellm...` at module scope would make the litellm package a hard dependency of COLLECTING the suite. `TestProviderMirrorsLitellm` in `tests/code_coverage_tests/test_e2e_metadata.py` fails on drift wherever litellm is importable and skips where it is not, so adding a provider is one line in `e2e_metadata`
 

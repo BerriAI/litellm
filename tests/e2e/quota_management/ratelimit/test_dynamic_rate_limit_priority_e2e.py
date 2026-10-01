@@ -46,7 +46,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, KeyMetadata, LiteLLMParamsBody
 from quota_client import QuotaClient
@@ -161,7 +161,6 @@ class TestDynamicRateLimitPriority:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(BACKEND,),
             mode=Mode.NONSTREAM,
@@ -212,7 +211,6 @@ class TestDynamicRateLimitPriority:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(BACKEND,),
             mode=Mode.NONSTREAM,

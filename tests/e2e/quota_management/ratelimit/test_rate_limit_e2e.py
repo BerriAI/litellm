@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, unique_marker
 from e2e_http import StreamingResponse, require_successful_call
-from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody
 from quota_client import QuotaClient
@@ -180,7 +180,6 @@ class TestKeyRateLimits:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(CHEAP_ANTHROPIC_MODEL,),
             mode=Mode.NONSTREAM,
@@ -201,7 +200,6 @@ class TestKeyRateLimits:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(CHEAP_ANTHROPIC_MODEL,),
             mode=Mode.NONSTREAM,
@@ -229,7 +227,6 @@ class TestKeyRateLimits:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(CHEAP_ANTHROPIC_MODEL,),
             mode=Mode.NONSTREAM,
@@ -263,7 +260,6 @@ class TestKeyRateLimits:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC,),
             models=(CHEAP_ANTHROPIC_MODEL,),
             mode=Mode.NONSTREAM,

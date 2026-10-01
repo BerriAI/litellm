@@ -35,7 +35,7 @@ from cost_rows import (
 )
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import unwrap
-from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+from e2e_metadata import Capability, Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
@@ -101,7 +101,6 @@ class TestServiceTierPricing:
     @meta(
         Subject(
             domain=Domain.SPEND_BUDGETS,
-            route=Route.CHAT_COMPLETIONS,
             providers=(Provider.OPENAI,),
             models=(BACKEND,),
             capabilities=(Capability.REASONING,),
