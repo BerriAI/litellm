@@ -456,11 +456,11 @@ async def test_asend_message_streaming_triggers_callbacks():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", (False, True))
 @pytest.mark.parametrize("claimed_fee", (None, -1000.0, 0.0, 99.0))
-@pytest.mark.parametrize("admitted", (False, True))
-@pytest.mark.parametrize("configured_fee", (None, 0.25))
+@pytest.mark.parametrize("changed_after_admission", (False, True))
+@pytest.mark.parametrize("configured_fee", (None, 0.0, 0.25))
 async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing(
     monkeypatch: pytest.MonkeyPatch, stream: bool, claimed_fee: float | None,
-    admitted: bool, configured_fee: float | None
+    changed_after_admission: bool, configured_fee: float | None
 ) -> None:
     import json
     from typing import Final
@@ -471,6 +471,7 @@ async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.agent_endpoints import agent_registry
     from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
     from litellm.types.agents import AgentResponse
 
     await _reset_callbacks_and_settle_pending_logs()
@@ -482,13 +483,14 @@ async def test_chat_adapter_settles_the_admitted_agent_fee_without_model_pricing
         litellm_params={"cost_per_query": configured_fee} if configured_fee is not None else {},
     )
     registry: Final = agent_registry.AgentRegistry()
-    registry.register_agent(target.model_copy(update={"litellm_params": {"cost_per_query": 0.5}}) if admitted else target)
+    registry.register_agent(target)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
     auth: Final = UserAPIKeyAuth(user_role="proxy_admin")
-    if admitted:
-        auth.invoked_agent_policy = target
-        auth.invoked_agent_id = target.agent_id
-        auth.agent_invocation_cost = configured_fee or 0.0
+    await prepare_agent_invocation(auth, "fee-target", None)
+    assert auth.agent_invocation_cost == configured_fee
+    if changed_after_admission:
+        registry.deregister_agent(target.agent_name)
+        registry.register_agent(target.model_copy(update={"litellm_params": {"cost_per_query": 0.5}}))
 
     def reply(request: httpx.Request) -> httpx.Response:
         body: Final = json.loads(request.content)

@@ -222,7 +222,7 @@ async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
         raise litellm.BudgetExceededError(current_cost=spend, max_budget=budget, message="Agent budget exceeded")
 
 
-AGENT_INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
+_INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
@@ -254,11 +254,14 @@ async def prepare_agent_invocation(
     if target is None and registered_managed:
         raise_identity_failure(AgentIdentityFailure(message="Invoked agent no longer exists"))
     effective: Final = target if target is not None else registered
+    pricing: Final = effective.litellm_params or MappingProxyType({})
+    fixed_fee: Final = pricing.get("cost_per_query")
     if (
         not effective.identity_managed
         and effective.litellm_budget_table is None
         and auth.managed_agent_policy is None
         and auth.billing_agent_policy is None
+        and fixed_fee is None
     ):
         return
     if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
@@ -271,8 +274,6 @@ async def prepare_agent_invocation(
         and (effective.identity_managed or effective.litellm_budget_table is not None)
     ):
         auth.billing_agent_policy = effective
-    pricing: Final = effective.litellm_params or MappingProxyType({})
-    fixed_fee: Final = pricing.get("cost_per_query")
     billing_policy: Final = auth.billing_agent_policy
     bounded: Final = (
         billing_policy is not None
@@ -280,13 +281,13 @@ async def prepare_agent_invocation(
         and billing_policy.litellm_budget_table.max_budget is not None
     )
     try:
-        fee: Final = AGENT_INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)
+        fee: Final = _INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)
         unbounded_token_price: Final = (
             billable
             and bounded
             and fixed_fee is None
             and any(
-                AGENT_INVOCATION_COST.validate_python(pricing[field]) > 0
+                _INVOCATION_COST.validate_python(pricing[field]) > 0
                 for field in ("input_cost_per_token", "output_cost_per_token")
                 if pricing.get(field) is not None
             )

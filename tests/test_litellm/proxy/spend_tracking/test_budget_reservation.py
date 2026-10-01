@@ -417,8 +417,10 @@ async def test_release_unbound_budget_reservation_leaves_a_bound_one_to_its_call
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ("failed", "cancelled", "completed"))
+@pytest.mark.parametrize("budget_owner", ("agent", "key", "team"))
+@pytest.mark.parametrize("route", ("/a2a/target", "/v1/chat/completions"))
 async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_admission(
-    spend_counter_cache: DualCache, monkeypatch: pytest.MonkeyPatch, outcome: str
+    spend_counter_cache: DualCache, monkeypatch: pytest.MonkeyPatch, outcome: str, budget_owner: str, route: str
 ) -> None:
     import asyncio
 
@@ -442,13 +444,25 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
     registry.register_agent(target)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
 
+    token: Final = "fee-key" if budget_owner == "key" else None
+    team: Final = LiteLLM_TeamTable(team_id="fee-team", max_budget=0.5, spend=0.0) if budget_owner == "team" else None
+    counter_key: Final = (
+        caller.budget_counter_key if budget_owner == "agent"
+        else f"spend:key:{token}" if budget_owner == "key" else "spend:team:fee-team"
+    )
+
     async def admit() -> dict[str, object] | None:
-        auth: Final = UserAPIKeyAuth(agent_id="caller", user_role="proxy_admin")
-        auth.billing_agent_policy = caller
+        auth: Final = UserAPIKeyAuth(
+            agent_id="caller" if budget_owner == "agent" else None, user_role="proxy_admin",
+            token=token, max_budget=0.5 if budget_owner == "key" else None,
+            team_id=team.team_id if team is not None else None,
+        )
+        if budget_owner == "agent":
+            auth.billing_agent_policy = caller
         await prepare_agent_invocation(auth, "target", None)
         return await reserve_budget_for_request(
-            request_body={"method": "message/send"}, route="/a2a/target", llm_router=None,
-            valid_token=auth, team_object=None, user_object=None, prisma_client=None,
+            request_body={"method": "message/send", "model": "a2a/target"}, route=route, llm_router=None,
+            valid_token=auth, team_object=team, user_object=None, prisma_client=None,
             user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             fail_closed_budget_enforcement=True,
         )
@@ -459,22 +473,23 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
     assert all(result is None or isinstance(result, (dict, litellm.BudgetExceededError)) for result in results), results
     assert len(accepted) == 2, results
     assert len(rejected) == 6
-    assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.5)
+    assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.5)
     first: Final = accepted[0]
     if outcome == "completed":
         await proxy_server.increment_spend_counters(
-            token=None, team_id=None, user_id=None, response_cost=0.25,
-            billing_agent_id=caller.agent_id, billing_agent_counter_key=caller.budget_counter_key,
+            token=token, team_id=team.team_id if team is not None else None, user_id=None, response_cost=0.25,
+            billing_agent_id=caller.agent_id if budget_owner == "agent" else None,
+            billing_agent_counter_key=caller.budget_counter_key if budget_owner == "agent" else None,
             budget_reservation=first,
         )
         await reconcile_budget_reservation(first, actual_cost=0.25)
-        assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.5)
+        assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.5)
         with pytest.raises(litellm.BudgetExceededError):
             await admit()
     else:
         release: Final = release_budget_reservation_on_cancel if outcome == "cancelled" else release_budget_reservation
         await release(first)
         await release(first)
-        assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.25)
+        assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.25)
         assert await admit() is not None
-        assert await spend_counter_cache.async_get_cache(caller.budget_counter_key) == pytest.approx(0.5)
+        assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.5)
