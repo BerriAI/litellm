@@ -1324,9 +1324,7 @@ def responses(
         )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
-                {  # mutable-ok: callee pops keys off the dict it is given
-                    k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"
-                }
+                {k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"}
             )
         )
 

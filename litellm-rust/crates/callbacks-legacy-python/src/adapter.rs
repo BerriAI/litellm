@@ -2,8 +2,8 @@
 //! raises is answered with the same `Logging` calls, in the same order, as the Python
 //! `@client` path makes them.
 
+use crate::LoggingOperation;
 use litellm_host_python::PythonOwned;
-use litellm_types::Operation;
 
 use litellm_host::{
     interceptors::{RawResponse, RequestContext, WireRequest},
@@ -45,7 +45,7 @@ struct LoggedRequest {
 }
 
 pub struct LegacyLogging {
-    operation: Operation,
+    operation: LoggingOperation,
     call: PublicCall,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
@@ -56,6 +56,7 @@ pub struct LegacyLogging {
     stream: Option<DeliveredStream>,
     asynchronous: bool,
     internal: bool,
+    cache_key: Option<String>,
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
@@ -67,7 +68,12 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
 }
 
 impl LegacyLogging {
-    pub fn new(py: Python<'_>, operation: Operation, call: PublicCall, asynchronous: bool) -> Self {
+    pub fn new(
+        py: Python<'_>,
+        operation: LoggingOperation,
+        call: PublicCall,
+        asynchronous: bool,
+    ) -> Self {
         Self {
             operation,
             call,
@@ -80,37 +86,40 @@ impl LegacyLogging {
             stream: None,
             asynchronous,
             internal: false,
+            cache_key: None,
         }
     }
 
     fn call_type(&self) -> &'static str {
         match (self.operation, self.asynchronous) {
-            (Operation::Completion, false) => "completion",
-            (Operation::Completion, true) => "acompletion",
-            (Operation::Responses, false) => "responses",
-            (Operation::Responses, true) => "aresponses",
-            (Operation::Messages, _) => "anthropic_messages",
-            (Operation::Ocr, false) => "ocr",
-            (Operation::Ocr, true) => "aocr",
+            (LoggingOperation::Completion, false) => "completion",
+            (LoggingOperation::Completion, true) => "acompletion",
+            (LoggingOperation::Responses, false) => "responses",
+            (LoggingOperation::Responses, true) => "aresponses",
+            (LoggingOperation::Messages, _) => "anthropic_messages",
+            (LoggingOperation::Ocr, false) => "ocr",
+            (LoggingOperation::Ocr, true) => "aocr",
         }
     }
 
     fn input_description(&self) -> &'static str {
         match self.operation {
-            Operation::Completion => "Chat completions",
-            Operation::Responses => "Responses",
-            Operation::Messages => "Messages",
-            Operation::Ocr => "OCR document processing",
+            LoggingOperation::Completion => "Chat completions",
+            LoggingOperation::Responses => "Responses",
+            LoggingOperation::Messages => "Messages",
+            LoggingOperation::Ocr => "OCR document processing",
         }
     }
 
     fn stream_billing(&self) -> Option<PassThroughStream> {
         match self.operation {
-            Operation::Messages => Some(PassThroughStream {
+            LoggingOperation::Messages => Some(PassThroughStream {
                 url_route: "/v1/messages",
                 endpoint_type: "anthropic",
             }),
-            Operation::Completion | Operation::Responses | Operation::Ocr => None,
+            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
+                None
+            }
         }
     }
 
@@ -207,10 +216,10 @@ impl LegacyLogging {
                 logger.object(py),
                 billing.url_route,
                 billing.endpoint_type,
-                &self
-                    .request
-                    .as_ref()
-                    .map(|request| request.body.clone_ref(py)),
+                &self.request.as_ref().map_or_else(
+                    || self.call.kwargs().clone_ref(py),
+                    |request| request.body.clone_ref(py),
+                ),
                 &stream.chunks,
                 &self.start,
                 &self.end,
@@ -246,10 +255,10 @@ impl LegacyLogging {
             (
                 logger.object(py),
                 billing.endpoint_type,
-                &self
-                    .request
-                    .as_ref()
-                    .map(|request| request.body.clone_ref(py)),
+                &self.request.as_ref().map_or_else(
+                    || self.call.kwargs().clone_ref(py),
+                    |request| request.body.clone_ref(py),
+                ),
                 &stream.chunks,
                 error,
             ),
@@ -428,6 +437,40 @@ impl LegacyLogging {
         self.finalize(py)
     }
 
+    pub(crate) fn result_ready(
+        &mut self,
+        py: Python<'_>,
+        facts: &litellm_host::interceptors::ExecutionFacts,
+    ) -> PyResult<HookStep<Self, ()>> {
+        use litellm_host::interceptors::ResultSource;
+
+        let logger = self.logger()?.object(py);
+        let params = logger
+            .getattr("litellm_params")?
+            .cast_into::<PyDict>()?
+            .copy()?;
+        params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        crate::python::Logging::Update.call(
+            py,
+            (
+                &logger,
+                self.call.kwargs(),
+                &facts.provider.model,
+                logger.getattr("optional_params")?,
+                params,
+                &facts.provider.provider,
+            ),
+        )?;
+        let details = logger.getattr("model_call_details")?;
+        self.cache_key = match &facts.source {
+            ResultSource::Provider => None,
+            ResultSource::Cache { key } => Some(key.clone()),
+        };
+        details.set_item("cache_hit", self.cache_key.is_some())?;
+        details.set_item("cache_key", self.cache_key.as_deref())?;
+        Ok(HookStep::Ready(()))
+    }
+
     pub(crate) fn post_call(
         &mut self,
         py: Python<'_>,
@@ -485,9 +528,13 @@ impl LegacyLogging {
         self.dispatch_failure(py)
     }
 
-    pub(crate) fn stream_opened(&mut self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn stream_opened(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
         if self.stream_billing().is_none() {
             return Err(missing_state());
+        }
+        if let Some(key) = &self.cache_key {
+            head.bind(py).set_item("cache_key", key)?;
+            head.bind(py).set_item("cache_hit", true)?;
         }
         Streaming::Opened.call(py, (self.logger()?.object(py),))?;
         self.stream = Some(DeliveredStream {
@@ -603,16 +650,16 @@ kwargs = {'logger': logger, 'document': document}
     }
 
     #[rstest]
-    #[case::sync_completion(litellm_types::Operation::Completion, false, "completion")]
-    #[case::async_completion(litellm_types::Operation::Completion, true, "acompletion")]
-    #[case::sync_responses(litellm_types::Operation::Responses, false, "responses")]
-    #[case::async_responses(litellm_types::Operation::Responses, true, "aresponses")]
-    #[case::sync_messages(litellm_types::Operation::Messages, false, "anthropic_messages")]
-    #[case::async_messages(litellm_types::Operation::Messages, true, "anthropic_messages")]
-    #[case::sync_ocr(litellm_types::Operation::Ocr, false, "ocr")]
-    #[case::async_ocr(litellm_types::Operation::Ocr, true, "aocr")]
+    #[case::sync_completion(crate::LoggingOperation::Completion, false, "completion")]
+    #[case::async_completion(crate::LoggingOperation::Completion, true, "acompletion")]
+    #[case::sync_responses(crate::LoggingOperation::Responses, false, "responses")]
+    #[case::async_responses(crate::LoggingOperation::Responses, true, "aresponses")]
+    #[case::sync_messages(crate::LoggingOperation::Messages, false, "anthropic_messages")]
+    #[case::async_messages(crate::LoggingOperation::Messages, true, "anthropic_messages")]
+    #[case::sync_ocr(crate::LoggingOperation::Ocr, false, "ocr")]
+    #[case::async_ocr(crate::LoggingOperation::Ocr, true, "aocr")]
     fn operation_selects_the_legacy_setup_and_deployment_hook_contract(
-        #[case] operation: litellm_types::Operation,
+        #[case] operation: crate::LoggingOperation,
         #[case] asynchronous: bool,
         #[case] expected: &str,
     ) {
@@ -1048,12 +1095,12 @@ check = lambda: None
     }
 
     #[rstest]
-    #[case::completion(litellm_types::Operation::Completion, "Chat completions")]
-    #[case::responses(litellm_types::Operation::Responses, "Responses")]
-    #[case::messages(litellm_types::Operation::Messages, "Messages")]
-    #[case::ocr(litellm_types::Operation::Ocr, "OCR document processing")]
+    #[case::completion(crate::LoggingOperation::Completion, "Chat completions")]
+    #[case::responses(crate::LoggingOperation::Responses, "Responses")]
+    #[case::messages(crate::LoggingOperation::Messages, "Messages")]
+    #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
-        #[case] operation: litellm_types::Operation,
+        #[case] operation: crate::LoggingOperation,
         #[case] description: &str,
     ) {
         Python::initialize();
@@ -1723,10 +1770,12 @@ assert logger.calls[1][1] is response
         Python::attach(|py| {
             let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None");
             let mut logging = LegacyLogging {
-                operation: litellm_types::Operation::Messages,
+                operation: crate::LoggingOperation::Messages,
                 ..logged(py, &locals, true)
             };
-            logging.on_stream_open(py).unwrap();
+            logging
+                .on_stream_open(py, &pyo3::types::PyDict::new(py).into_any().unbind())
+                .unwrap();
             logging
                 .on_stream_chunk(py, &local(&locals, "first").unbind())
                 .unwrap();

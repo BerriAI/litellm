@@ -1,9 +1,13 @@
 use litellm_host::interceptors::RawResponse;
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use std::time::Duration;
 
 use litellm_core::chat_completions::{Error, types::ChatCompletionsRequest};
 use litellm_http::transport::Error as TransportError;
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;
@@ -310,7 +314,13 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         &events[..],
         [
             CallEvent::Started { .. },
-            CallEvent::Execution(_),
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
             CallEvent::Succeeded { .. }
         ]
     ));

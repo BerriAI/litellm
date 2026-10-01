@@ -32,7 +32,7 @@ def _with_ptu_hours(metrics: SpendMetrics, capacity: PTUCapacity) -> SpendMetric
 
 
 def _model_group_with_ptu_hours(bucket: MetricWithMetadata, capacity: PTUCapacity) -> MetricWithMetadata:
-    api_key_breakdown: Final = {  # mutable-ok: pydantic serializes a dict[...] field only from a plain dict
+    api_key_breakdown: Final = {
         api_key: key_bucket.model_copy(
             update=MappingProxyType({"metrics": _with_ptu_hours(key_bucket.metrics, capacity)})
         )
@@ -57,7 +57,7 @@ def _day_with_ptu_hours(
     )
     if not priced:
         return day
-    model_groups: Final = {  # mutable-ok: pydantic serializes a dict[...] field only from a plain dict
+    model_groups: Final = {
         **day.breakdown.model_groups,
         **priced,
     }
@@ -82,7 +82,7 @@ def attach_ptu_hours(
     A model group the resolver has no sizing row for keeps ``ptu_hours`` at zero.
     """
     days: Final = tuple(_day_with_ptu_hours(day, capacity_for_model_group) for day in response.results)
-    results: Final = list(days)  # mutable-ok: pydantic serializes a list[...] field only from a plain list
+    results: Final = list(days)
     return response.model_copy(
         update=MappingProxyType(
             {

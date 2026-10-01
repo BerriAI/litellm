@@ -13,6 +13,8 @@ from datetime import date, datetime, time, timezone
 from types import MappingProxyType
 from typing import Final
 
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import ModelInfo
 from litellm.types.utils import AzureSpillover, CustomPricingLiteLLMParams, MirroredPricingParams
@@ -145,13 +147,25 @@ PTU_MODEL_INFO_FIELDS: Final = (
 )
 
 
+def _is_mapping(
+    value: object,
+) -> TypeIs[Mapping[object, object]]:  # guard-ok: isinstance decides it, keys and values stay object
+    return isinstance(value, Mapping)
+
+
+def is_model_info_mapping(
+    value: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: model_info is a str-keyed JSON object from config.yaml or the db
+    return isinstance(value, Mapping)
+
+
 def parsed_ptu_shares(raw: object) -> Mapping[str, int] | None:
     """``ptu_shares`` as team id -> whole PTUs, else None when empty or any entry is unusable.
 
     A share is a count of reserved units, so it has to be a positive integer; ``bool`` is
     excluded because it is an ``int`` subclass and ``True`` would read as one PTU.
     """
-    if not isinstance(raw, Mapping) or not raw:
+    if not _is_mapping(raw) or not raw:
         return None
     entries: Final = tuple(
         (team_id, share)

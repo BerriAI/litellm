@@ -53,6 +53,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials
+from litellm.types.mcp_server.mcp_server_manager import PinnedMCPTool
 
 if TYPE_CHECKING:
     from prisma import models as prisma_db_models
@@ -412,7 +413,6 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})
     if "tool_name_to_description" in data_dict:
         data_dict["tool_name_to_description"] = safe_dumps(data_dict["tool_name_to_description"] or {})
-
     # mcp_access_groups is already List[str], no serialization needed
 
     # On create, force is_byok so a False value is always written to the DB. On
@@ -514,22 +514,16 @@ def _db_transaction_manager(prisma_client: PrismaClient) -> _UserEnvVarsTransact
 
 
 def _identifier_where(value: str, exclude_server_id: str | None) -> "prisma_db_types.LiteLLM_MCPServerTableWhereInput":
-    own_row_guard: Final = (
-        ({"NOT": [{"server_id": exclude_server_id}]},)  # mutable-ok: prisma where-inputs must be plain dicts
-        if exclude_server_id is not None
-        else ()
-    )
+    own_row_guard: Final = ({"NOT": [{"server_id": exclude_server_id}]},) if exclude_server_id is not None else ()
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
-        "AND": [  # mutable-ok: prisma where-inputs must be plain dicts
+        "AND": [
             {
-                "OR": [  # mutable-ok: prisma where-inputs must be plain dicts
+                "OR": [
                     {"server_name": {"equals": value, "mode": "insensitive"}},
                     {"alias": {"equals": value, "mode": "insensitive"}},
                 ]
             },
-            {
-                "OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]
-            },  # mutable-ok: prisma where-inputs must be plain dicts
+            {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]},
             *own_row_guard,
         ]
     }
@@ -1118,7 +1112,7 @@ async def _update_mcp_server_row(
         table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
     ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
         return await table.update(
-            where={"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+            where={"server_id": server_id},
             data=data_dict,
         )
 
@@ -1715,7 +1709,7 @@ async def list_server_user_credentials(
     """Every user's stored credential for one server, typed but without the secret, for admins."""
     rows: Final = await _db_find_user_credential_rows(
         prisma_client,
-        {"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+        {"server_id": server_id},
     )
     return tuple(_server_user_credential_item(row) for row in rows)
 
@@ -2137,6 +2131,28 @@ async def approve_mcp_server(
             "reviewed_at": now,
             "updated_by": touched_by,
         },
+    )
+    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
+
+
+async def set_mcp_server_pinned_tools(
+    prisma_client: PrismaClient,
+    server_id: str,
+    pinned_tools: Mapping[str, PinnedMCPTool] | None,
+    touched_by: str,
+) -> LiteLLM_MCPServerTable | None:
+    """Replace the server's pinned catalog; ``None`` unpins. Only this write path sets the pin."""
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    if await _db_find_mcp_server_row(prisma_client, server_id) is None:
+        return None
+    snapshot: Final = {name: tool.model_dump() for name, tool in (pinned_tools or {}).items()}
+    updated: Final = await _db_update_mcp_server_row(
+        prisma_client,
+        server_id,
+        {"pinned_tools": safe_dumps(snapshot), "updated_by": touched_by},
     )
     table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
     decrypt_global_env_var_values(table.env_vars)

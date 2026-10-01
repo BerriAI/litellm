@@ -1,7 +1,7 @@
 import enum
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
@@ -15,6 +15,7 @@ from pydantic import (
     Json,
     JsonValue,
     PositiveInt,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
@@ -27,7 +28,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.types.agents import AgentCaller
+from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
@@ -46,6 +47,7 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.carried_budget_state import (
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
@@ -86,9 +88,15 @@ from .types_utils.utils import get_instance_fn, validate_custom_validate_return_
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.tracing import TraceReceiver
+
     Span = _Span | Any
 else:
     Span = Any
+
+
+class ProxyLifespanState(TypedDict):
+    tracing_receiver: ReadOnly["TraceReceiver | None"]
 
 
 class ReconcileOutcome(NamedTuple):
@@ -518,6 +526,19 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
+        "/lens",
+        "/lens/{lens_id}",
+        "/lens/{lens_id}/runs",
+        "/lens/{lens_id}/runs/{job_id}",
+        "/lens/{lens_id}/executions/{execution_id}",
+        "/lens/{lens_id}/cancel",
+        "/lens/{lens_id}/findings/{finding_id}",
+        "/lens/preview/sample",
+        "/lens/workers/register",
+        "/lens/workers/{worker_id}",
+        "/v1/traces",
+        "/v1/traces/{trace_id}",
+        "/v1/traces/{trace_id}/spans/{span_id}",
     ]
 
     anthropic_routes = [
@@ -567,6 +588,7 @@ class LiteLLMRoutes(enum.Enum):
         "/agents",
         "/a2a/{agent_id}",
         "/a2a/{agent_id}/message/send",
+        "/v1/a2a/{agent_id}/message/send",
         "/a2a/{agent_id}/message/stream",
         "/a2a/{agent_id}/.well-known/agent-card.json",
     )
@@ -894,7 +916,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
-        # handler calls _verify_team_access, which admits only a proxy admin, an
+        # handler asks TeamAccess.allows for TEAM_OR_ORG_ADMIN: a proxy admin, an
         # org admin for the team, or an admin of this team.
         #
         # team_id is a free-form string, so it spells these with the same path
@@ -2238,6 +2260,12 @@ class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
 class DeleteTeamRequest(LiteLLMPydanticObjectBase):
     team_ids: list[str]  # required
 
+    @field_validator("team_ids")
+    @classmethod
+    def distinct_team_ids(cls, team_ids: Sequence[str]) -> list[str]:
+        """One delete per team: a repeated id would otherwise write its tombstone and audit row twice."""
+        return list(dict.fromkeys(team_ids))
+
 
 class BlockTeamRequest(LiteLLMPydanticObjectBase):
     team_id: str  # required
@@ -3302,6 +3330,8 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # metadata or JWT claims, so it cannot be forged to gain the team-inherited MCP grant union
     # or to escape the caller-Authorization egress scrub. exclude=True keeps it out of serialization.
     mcp_admitted_user_subject: bool = Field(default=False, exclude=True)
+    requires_fresh_policy: bool = Field(default=False, exclude=True)
+    mcp_explicit_grants_only: bool = Field(default=False, exclude=True)
     # team_id -> that team's mcp_rpm_limit map, for a keyless admitted subject that reaches MCP
     # servers through several teams at once and therefore has no single team_id for the limiter to
     # key off. Server-only and stripped from validated input for the same reason as the marker
@@ -3315,6 +3345,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # single-owner so its meaning stays trustworthy.
     mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
+    authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -3326,6 +3357,13 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "user id."
         ),
     )
+    invoked_agent_id: str | None = Field(default=None, exclude=True)
+    invoked_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
+    agent_invocation_cost: float | None = Field(default=None, exclude=True)
+    billing_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
+    _managed_delegation_verified: bool = PrivateAttr(default=False)
+    managed_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
+    managed_agent_context: ManagedAgentContext | None = Field(default=None, exclude=True)
     agent_caller: AgentCaller | None = Field(
         default=None,
         exclude=True,
@@ -3363,11 +3401,20 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # path via post-construction assignment. Strip it from any validated input (constructor
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
+        values.pop("requires_fresh_policy", None)
+        values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_id", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
+        values.pop("authenticated_by_custom_auth", None)
         values.pop("agent_caller", None)
+        values.pop("managed_agent_context", None)
+        values.pop("managed_agent_policy", None)
+        values.pop("invoked_agent_id", None)
+        values.pop("invoked_agent_policy", None)
+        values.pop("agent_invocation_cost", None)
+        values.pop("billing_agent_policy", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
             if isinstance(values.get("api_key"), str):
@@ -3916,6 +3963,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
             "S3_LOG_PROMPTS_ONLY",
+            "S3_PARTITION_GRANULARITY",
         ],
     )
 
@@ -4018,7 +4066,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     pointfive: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="pointfive",
         ui_callback_name="PointFive",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
@@ -4033,7 +4081,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     zerobus: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="zerobus",
         ui_callback_name="Databricks Zerobus",
-        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+        litellm_callback_params=[
             "ZEROBUS_WORKSPACE_URL",
             "ZEROBUS_SERVER_ENDPOINT",
             "ZEROBUS_CLIENT_ID",
@@ -4063,6 +4111,11 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    actor_agent_id: ReadOnly[NotRequired[str | None]]
+    target_agent_id: ReadOnly[NotRequired[str | None]]
+    billing_agent_id: ReadOnly[NotRequired[str | None]]
+    agent_execution_mode: ReadOnly[NotRequired[str | None]]
+    verified_human_user_id: ReadOnly[NotRequired[str | None]]
     autorouter_baseline_observation: ReadOnly[str | None]
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
@@ -4109,6 +4162,7 @@ class SpendLogsMetadata(TypedDict):
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
+    used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
 
 
 class SpendLogsPayload(TypedDict):
@@ -4126,6 +4180,7 @@ class SpendLogsPayload(TypedDict):
     model_id: str | None
     model_group: str | None
     mcp_namespaced_tool_name: str | None
+    billing_agent_id: ReadOnly[NotRequired[str | None]]
     agent_id: str | None
     api_base: str
     user: str
@@ -5048,6 +5103,7 @@ class JWTAuthBuilderResult(TypedDict):
     org_id: str | None
     team_membership: LiteLLM_TeamMembership | None
     jwt_claims: dict  # Decoded JWT token claims (avoids re-decoding)
+    managed_agent_context: ReadOnly[NotRequired[ManagedAgentContext | None]]
     agent_id: ReadOnly[str | None]
 
 

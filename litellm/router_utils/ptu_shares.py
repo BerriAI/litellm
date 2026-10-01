@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Generic, TypeVar
 
-from litellm.litellm_core_utils.ptu_pricing import parsed_ptu_shares, ptu_terms
+from litellm.litellm_core_utils.ptu_pricing import is_model_info_mapping, parsed_ptu_shares, ptu_terms
 from litellm.llms.azure.ptu_capacity import PTUCapacity, deployment_ptu_capacity, is_azure_deployment
 
 _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
@@ -36,7 +36,7 @@ class PTUShareFilterResult(Generic[_DeploymentT]):
 
 def _deployment_shares(deployment: Mapping[str, object]) -> Mapping[str, int] | None:
     model_info: Final = deployment.get("model_info")
-    if not isinstance(model_info, Mapping):
+    if not is_model_info_mapping(model_info):
         return None
     return parsed_ptu_shares(model_info.get("ptu_shares"))
 
@@ -166,7 +166,7 @@ def model_group_ptu_capacity(deployments: Sequence[Mapping[str, object]]) -> PTU
         (
             capacity
             for deployment in deployments
-            if isinstance(model_info := deployment.get("model_info"), Mapping)
+            if is_model_info_mapping(model_info := deployment.get("model_info"))
             and ptu_terms(model_info) is not None
             and (capacity := deployment_ptu_capacity(deployment)) is not None
         ),
@@ -182,7 +182,7 @@ def ptu_capacity_warning(model_name: str, deployment: Mapping[str, object]) -> s
     provider only ever used the flat-cost rollup, which needs no sizing.
     """
     model_info: Final = deployment.get("model_info")
-    if not isinstance(model_info, Mapping) or ptu_terms(model_info) is None:
+    if not is_model_info_mapping(model_info) or ptu_terms(model_info) is None:
         return None
     if deployment_ptu_capacity(deployment) is not None:
         return None
