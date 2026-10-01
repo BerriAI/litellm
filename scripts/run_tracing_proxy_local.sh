@@ -17,7 +17,10 @@ model_list: []
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   tracing:
-    store: clickhouse
+    store:
+      type: clickhouse
+      url: os.environ/CLICKHOUSE_URL
+      retention_days: 14
 EOF
 
 export LITELLM_MASTER_KEY=sk-local-tracing
@@ -25,7 +28,6 @@ export LITELLM_SALT_KEY=sk-local-tracing-salt-key
 export DATABASE_URL=postgresql://litellm:litellm@127.0.0.1:15432/litellm
 export STORE_MODEL_IN_DB=True
 export CLICKHOUSE_URL=http://default:local-tracing@127.0.0.1:18123
-export CLICKHOUSE_READER_URL="$CLICKHOUSE_URL"
 export CLICKHOUSE_DATABASE=litellm
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 

@@ -1,4 +1,4 @@
-use litellm_config::{Config, Error, Flag, NumberOrString};
+use litellm_config::{Config, Error, Flag, NumberOrString, TracingStoreSettings};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
@@ -111,6 +111,30 @@ fn loads_and_redacts_the_master_key(#[case] key: &str) {
 fn missing_general_settings_has_no_master_key() {
     let config = Config::from_yaml("model_list: []").unwrap();
     assert!(config.general_settings.master_key.is_none());
+}
+
+#[test]
+fn tracing_settings_are_typed_and_redact_the_url() {
+    let config = Config::from_yaml(
+        "general_settings:\n  tracing:\n    store:\n      type: clickhouse\n      url: https://writer:password@example.com\n      database: analytics\n      retention_days: 7\n",
+    )
+    .unwrap();
+    let tracing = config.general_settings.tracing.as_ref().unwrap();
+    let Some(TracingStoreSettings::ClickHouse(store)) = tracing.store.as_ref() else {
+        panic!("expected ClickHouse tracing store")
+    };
+    assert_eq!(
+        store.url.as_ref().unwrap().expose(),
+        "https://writer:password@example.com"
+    );
+    assert_eq!(store.database.as_deref(), Some("analytics"));
+    assert_eq!(store.retention_days, Some(7));
+    assert!(!format!("{config:?}").contains("password"));
+}
+
+#[test]
+fn tracing_settings_reject_removed_reader_configuration() {
+    assert!(Config::from_yaml("general_settings:\n  tracing:\n    store:\n      type: clickhouse\n      reader_url: http://localhost:8123\n").is_err());
 }
 
 #[rstest]

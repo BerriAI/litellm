@@ -109,8 +109,8 @@ async fn schema_supports_span_rollups_and_spend_joins(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let span = serde_json::from_value(serde_json::json!({
         "Timestamp": timestamp, "TraceId": "trace-1", "SpanId": "span-1", "ParentSpanId": "",
@@ -257,7 +257,7 @@ async fn insert_rejects_unknown_columns_even_if_url_requests_skipping_them(
         "{}?input_format_skip_unknown_fields=1",
         database.url
     ))?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let row = BTreeMap::from([
         (
             "Timestamp".to_owned(),
@@ -291,7 +291,7 @@ async fn retried_trace_insert_does_not_inflate_rollup(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let row: BTreeMap<String, serde_json::Value> = serde_json::from_value(serde_json::json!({
         "Timestamp": time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64,
         "TraceId": "retried-trace", "SpanId": "span-1", "ParentSpanId": "",
@@ -326,7 +326,7 @@ async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let rows = vec![
         serde_json::from_value(serde_json::json!({
@@ -370,7 +370,7 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let day_start = time::OffsetDateTime::now_utc()
         .replace_time(time::Time::MIDNIGHT)
         .unix_timestamp_nanos() as i64;
@@ -417,7 +417,7 @@ async fn spend_deduplication_preserves_subsecond_requests_and_retries(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let now_ms = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
     let base_start_time = now_ms / 1000 * 1000;
     let first_start_time = base_start_time + 100;
@@ -469,7 +469,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 30, 30).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 30).await?;
     let tables = read_json(
         &database,
         "SELECT name FROM system.tables WHERE database = 'trace_test' \
@@ -499,7 +499,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
     assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 1);
-    ensure_schema(&database.client, &writer, "trace_test", 14, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let response = read_json(
@@ -531,7 +531,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 0);
     assert_eq!(table_rows(&database, "spend_logs").await?, 0);
     let mutation_count = mutation_rows(&database).await?;
-    ensure_schema(&database.client, &writer, "trace_test", 14, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     assert_eq!(mutation_rows(&database).await?, mutation_count);
     Ok(())
 }
@@ -550,7 +550,7 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     let writer = Connection::writer(&url)?;
     let result = tokio::time::timeout(
         Duration::from_secs(35),
-        ensure_schema(&client, &writer, "trace_test", 7, 14),
+        ensure_schema(&client, &writer, "trace_test", 7),
     )
     .await;
     server.abort();
@@ -559,16 +559,11 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
 }
 
 #[rstest]
-#[case::empty("", 7, 14)]
-#[case::sql("db; DROP DATABASE default", 7, 14)]
-#[case::trace_retention("traces", 0, 14)]
-#[case::spend_retention("traces", 7, 0)]
-fn schema_rejects_invalid_configuration(
-    #[case] database: &str,
-    #[case] traces: u32,
-    #[case] spend: u32,
-) {
-    assert!(schema_statements(database, traces, spend).is_err());
+#[case::empty("", 7)]
+#[case::sql("db; DROP DATABASE default", 7)]
+#[case::retention("traces", 0)]
+fn schema_rejects_invalid_configuration(#[case] database: &str, #[case] retention_days: u32) {
+    assert!(schema_statements(database, retention_days).is_err());
 }
 
 #[rstest]
@@ -579,7 +574,7 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
     use litellm_traces::{LensQuery, Parameter};
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     for (key, text) in [("one", "timeout"), ("two", "success")] {
         insert_rows(&database, "otel_traces", vec![serde_json::from_value(serde_json::json!({
@@ -686,7 +681,7 @@ async fn lens_request_sample_does_not_trust_caller_tags(
     use litellm_traces::{LensQuery, Parameter};
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64 / 1_000_000;
     for (id, internal) in [("external", false), ("internal", true)] {
         let row = serde_json::from_value(serde_json::json!({
@@ -755,7 +750,6 @@ async fn lens_selection_pages_without_losing_or_repeating_runs(
         &Connection::writer(&database.url)?,
         "trace_test",
         7,
-        14,
     )
     .await?;
     execute_write(&database, "INSERT INTO trace_test.spend_logs (request_id,team_id,start_time,end_time) SELECT toString(number),'team',now64(3)-INTERVAL 5 MINUTE,now64(3)-INTERVAL 5 MINUTE FROM numbers(1001)").await?;
@@ -836,7 +830,6 @@ async fn lens_content_keeps_output_visible_after_long_input(
         &Connection::writer(&database.url)?,
         "trace_test",
         7,
-        14,
     )
     .await?;
     insert_rows(&database, "spend_logs", vec![serde_json::from_value(serde_json::json!({
@@ -902,7 +895,7 @@ async fn trace_error_previews_preserve_paginated_diagnostics(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let rows = (0..span_count)
         .map(|index| {
@@ -992,7 +985,7 @@ async fn duplicate_span_preview_matches_diagnostic(
 ) -> TestResult {
     let database = database?;
     let writer = Connection::writer(&database.url)?;
-    ensure_schema(&database.client, &writer, "trace_test", 7, 14).await?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let message = "a".repeat(200);
     let rows = [

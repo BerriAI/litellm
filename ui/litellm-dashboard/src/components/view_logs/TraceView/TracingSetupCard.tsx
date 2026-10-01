@@ -231,9 +231,10 @@ export const otlpEndpoints = (proxyUrl: string): readonly (readonly [string, str
 export const PROXY_CONFIG_SNIPPET = [
   "general_settings:",
   "  tracing:",
-  "    store: clickhouse",
-  "",
-  "# env: CLICKHOUSE_URL (writer) and CLICKHOUSE_READER_URL (read-only user)",
+  "    store:",
+  "      type: clickhouse",
+  "      url: os.environ/CLICKHOUSE_URL",
+  "      retention_days: 14",
 ].join("\n");
 
 function CodeBlock({
