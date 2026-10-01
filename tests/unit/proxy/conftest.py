@@ -8,11 +8,34 @@ from collections.abc import Iterator
 from typing import Dict
 
 import pytest
+from prisma.errors import ClientNotConnectedError
 
 
 import litellm
 import litellm.proxy.proxy_server
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
+
+
+class StubClientNotConnectedError(ClientNotConnectedError):
+    pass
+
+
+class DisconnectedPrisma:
+    """Mimics prisma-client-py after disconnect(): ``is_connected()`` is False
+    and the ``_engine`` property raises ``ClientNotConnectedError``."""
+
+    def is_connected(self) -> bool:
+        return False
+
+    @property
+    def _engine(self) -> None:
+        raise StubClientNotConnectedError()
+
+
+@pytest.fixture
+def disconnected_prisma() -> DisconnectedPrisma:
+    """A stand-in for a Prisma client wedged in the disconnected state."""
+    return DisconnectedPrisma()
 
 
 # Top-level assignments of these types are the ones importlib.reload(litellm)
