@@ -1448,7 +1448,7 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     def _converted_text_blocks(self, message: ChatCompletionSystemMessage) -> tuple[ChatCompletionTextObject, ...]:
-        content: Final = message["content"]
+        content: Final = message.get("content")
         if isinstance(content, str):
             return (self._converted_text_block(content, message.get("cache_control")),) if content else ()
         parts: Final[Sequence[object]] = content or ()
@@ -1483,13 +1483,14 @@ class AmazonConverseConfig(BaseConfig):
         for message in hoisted:
             if message["role"] != "system":
                 continue
-            if isinstance(message["content"], str) and message["content"]:
-                system_content_blocks.append(SystemContentBlock(text=message["content"]))
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                system_content_blocks.append(SystemContentBlock(text=content))
                 cache_block = self.get_cache_point_block(message, block_type="system", model=model)
                 if cache_block:
                     system_content_blocks.append(cache_block)
-            elif isinstance(message["content"], list):
-                for m in message["content"]:
+            elif isinstance(content, list):
+                for m in content:
                     if m.get("type") == "text" and m.get("text"):
                         system_content_blocks.append(SystemContentBlock(text=m["text"]))
                         cache_block = self.get_cache_point_block(m, block_type="system", model=model)

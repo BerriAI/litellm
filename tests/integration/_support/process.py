@@ -144,7 +144,7 @@ def _lost_port_race(launch: _Launch) -> bool:
 
 def _wait_until_ready(launch: _Launch) -> None:
     with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
-        deadline: Final = time.monotonic() + 70
+        deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
         while launch.process.poll() is None:
             try:
                 if client.get("/health/readiness", timeout=2).status_code == 200:
