@@ -3557,7 +3557,16 @@ class ClassifierAudit(TypedDict, total=False):
     originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
 
 
+class SpendLoggingContext(TypedDict):
+    event_id: ReadOnly[str]
+    request_id: ReadOnly[str]
+    response_id: ReadOnly[str]
+    call_id: ReadOnly[str]
+    pricing_known: ReadOnly[bool]
+
+
 class StandardLoggingPayload(ClassifierAudit):
+    spend_context: ReadOnly[NotRequired[SpendLoggingContext]]
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id

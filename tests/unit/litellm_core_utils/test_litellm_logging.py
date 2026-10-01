@@ -9150,3 +9150,46 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("additional_cost", [0.0, 0.25])
+@pytest.mark.parametrize("status", ["success", "failure"])
+def test_unknown_model_price_stays_unknown_when_other_charges_are_logged(
+    additional_cost: float, status: Literal["success", "failure"]
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+    logging_obj: Final = LitellmLogging(
+        model="spend-test-unpriced",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="unpriced-call",
+        function_id="unpriced-function",
+    )
+    logging_obj.update_environment_variables(
+        model="spend-test-unpriced",
+        user="",
+        optional_params={},
+        litellm_params={"metadata": {"standard_logging_guardrail_information": [{"guardrail_cost": additional_cost}]}},
+        custom_llm_provider="openai",
+    )
+    response: Final = ModelResponse(
+        model="spend-test-unpriced", usage=litellm.Usage(prompt_tokens=1, completion_tokens=1)
+    )
+    cost: Final = logging_obj._response_cost_calculator(result=response)
+    if status == "failure":
+        logging_obj.record_assembled_response_for_failure(response)
+    payload: Final = get_standard_logging_object_payload(
+        {"response_cost": cost, **logging_obj.model_call_details},
+        response,
+        now,
+        now,
+        logging_obj,
+        status,
+    )
+    assert payload is not None
+    assert payload["response_cost"] == additional_cost
+    assert payload["spend_context"]["pricing_known"] is False

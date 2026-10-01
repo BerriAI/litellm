@@ -5474,3 +5474,78 @@ def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+@pytest.mark.parametrize("cost", [None, 0.0, 0.000001])
+def test_spend_context_preserves_unknown_pricing_without_changing_spend(cost: float | None) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging, get_standard_logging_object_payload
+
+    now: Final = datetime.datetime(2025, 1, 1, tzinfo=timezone.utc)
+    logging: Final = Logging(
+        model="spend-test-model",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=now,
+        litellm_call_id="call",
+        function_id="function",
+    )
+    kwargs: Final = {
+        "model": "spend-test-model",
+        "response_cost": cost,
+        "litellm_call_id": "call",
+        "messages": [],
+        "litellm_params": {"metadata": {"user_api_key": "key", "spend_context": {"pricing_known": True}}},
+    }
+    response: Final = {"id": "provider-response"}
+    standard: Final = get_standard_logging_object_payload(kwargs, response, now, now, logging, "success")
+    assert standard is not None
+    stored: Final = get_logging_payload({**kwargs, "standard_logging_object": standard}, response, now, now)
+    context: Final = standard["spend_context"]
+    assert context["pricing_known"] is (cost is not None)
+    assert standard["response_cost"] == (cost or 0.0)
+    assert stored["spend"] == cost
+    assert json.loads(stored["metadata"])["spend_context"] == context
+    assert context["request_id"] == stored["request_id"] == response["id"]
+    assert context["call_id"] == kwargs["litellm_call_id"]
+
+
+def test_cache_hits_share_log_ids_across_sinks_and_keep_separate_request_identities() -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging, get_standard_logging_object_payload
+
+    now: Final = datetime.datetime(2025, 1, 1, tzinfo=timezone.utc)
+    response: Final = {"id": "cached-provider-response"}
+    loggers: Final = tuple(
+        Logging(
+            model="spend-test-model",
+            messages=[],
+            stream=False,
+            call_type="acompletion",
+            start_time=now,
+            litellm_call_id=call_id,
+            function_id=call_id,
+        )
+        for call_id in ("first-cache-hit", "second-cache-hit")
+    )
+
+    def logged_id(logging: Logging) -> str:
+        kwargs: Final = {
+            "model": "spend-test-model",
+            "cache_hit": True,
+            "response_cost": 0.0,
+            "litellm_call_id": logging.litellm_call_id,
+            "messages": [],
+            "litellm_params": {"metadata": {"user_api_key": "key"}},
+        }
+        standard: Final = get_standard_logging_object_payload(kwargs, response, now, now, logging, "success")
+        rebuilt: Final = get_standard_logging_object_payload(kwargs, response, now, now, logging, "success")
+        assert standard is not None and rebuilt is not None
+        stored: Final = get_logging_payload({**kwargs, "standard_logging_object": standard}, response, now, now)
+        assert standard["id"] == rebuilt["id"] == stored["request_id"]
+        assert standard["spend_context"]["response_id"] == response["id"]
+        assert standard["spend_context"]["pricing_known"] is True
+        assert standard["response_cost"] == stored["spend"] == 0.0
+        assert json.loads(stored["metadata"])["spend_context"] == standard["spend_context"]
+        return standard["id"]
+
+    assert len(frozenset(logged_id(logging) for logging in loggers)) == len(loggers)
