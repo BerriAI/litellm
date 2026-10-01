@@ -63,15 +63,15 @@ _OUTPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset(
 _TOOL_SEARCH_TOOL_TEXT_KEYS: Final[tuple[str, ...]] = ("description",)
 
 
-def _is_object_list(value: object) -> TypeGuard[list[object]]:
+def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: narrows raw JSON lists
     return isinstance(value, list)
 
 
-def _is_object_dict(value: object) -> TypeGuard[dict[str, object]]:
+def _is_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: narrows raw JSON objects
     return isinstance(value, dict)
 
 
-def _is_object_mapping(value: object) -> TypeGuard[Mapping[str, object]]:
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[str, object]]:  # guard-ok: narrows raw JSON mappings
     return isinstance(value, Mapping)
 
 
@@ -127,7 +127,7 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
         return [{"role": "user", "content": input_value}]
     if not _is_object_list(input_value):
         return []
-    messages: list[dict[str, object]] = []
+    messages: list[dict[str, object]] = []  # mutable-ok: accumulated inspection messages
     for item in input_value:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
@@ -305,7 +305,7 @@ def _apply_redacted_input_item(item: dict[str, object], redacted_iter: Iterator[
 
 
 def _apply_redacted_tool_search_tools(item: dict[str, object], redacted_iter: Iterator[str]) -> None:
-    rewritten_tools: list[object] = []
+    rewritten_tools: list[object] = []  # mutable-ok: request tools must remain a JSON list
     tools: Final[object] = item["tools"]
     if not _is_object_list(tools):
         return
@@ -389,7 +389,10 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
                 if isinstance(input_value, str):
                     _apply_redacted_string_input(data, matched_redacted_input_text)
                 else:
-                    _structured_redactions_apply(input_value, ({"content": matched_redacted_input_text},))
+                    _structured_redactions_apply(
+                        input_value,
+                        ({"content": matched_redacted_input_text},),  # mutable-ok: one-shot redaction message
+                    )
             else:
                 return False
         elif input_count:
@@ -412,7 +415,7 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
 
 
 def _inspection_count(field: str, value: object) -> int:
-    return len(build_inspection_messages({field: value}))
+    return len(build_inspection_messages({field: value}))  # mutable-ok: one-shot field wrapper
 
 
 def _apply_redacted_input_without_messages(

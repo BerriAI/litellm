@@ -38,7 +38,6 @@ from itertools import accumulate, chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
 
-from openai.types.responses import ResponseInputItemParam
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -315,7 +314,7 @@ def _provenance_unit_bounds(
     raw_input: Sequence[object],
     solo_conversions: Sequence[Sequence[object]],
 ) -> tuple[tuple[int, int], ...]:
-    trailing_roles: list[str | None] = []
+    trailing_roles: list[str | None] = []  # mutable-ok: indexed provenance scratch state
     previous_role: str | None = None
     for messages in solo_conversions:
         role = _last_message_role(messages)
@@ -337,14 +336,14 @@ def _input_item_provenance(
         return None
     solo_conversions: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=cast("ResponseInputParam", [cast("ResponseInputItemParam", item)]),
+            input=[item],  # pyright: ignore[reportArgumentType]  # every item is a validated Mapping
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
         )
         for item in raw_input
     )
     full_conversion: Final = tuple(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=cast("ResponseInputParam", list(raw_input)),
+            input=list(raw_input),  # pyright: ignore[reportArgumentType]  # every item is a validated Mapping
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
         )
     )
@@ -356,7 +355,7 @@ def _input_item_provenance(
         if end - start == 1
         else tuple(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=cast("ResponseInputParam", list(raw_input[start:end])),
+                input=list(raw_input[start:end]),  # pyright: ignore[reportArgumentType]  # every item is a validated Mapping
                 responses_api_request=_EMPTY_RESPONSES_REQUEST,
             )
         )

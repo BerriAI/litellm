@@ -15,6 +15,7 @@ from typing import (
     Literal,
     Protocol,
     TypeAlias,
+    TypeGuard,
     cast,
     runtime_checkable,
 )
@@ -120,6 +121,10 @@ def _is_tool_search_tool(tool: Mapping[str, object]) -> bool:
     return tool.get("type") == TOOL_SEARCH_FUNCTION_NAME and tool.get("execution") == "client"
 
 
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[str, object]]:  # guard-ok: narrows raw JSON mappings
+    return isinstance(value, Mapping)
+
+
 def _has_tool_search_function_name_collision(tools: ResponseTools) -> bool:
     return any(
         tool.get("type") == "function" and tool.get("name") == TOOL_SEARCH_FUNCTION_NAME
@@ -131,9 +136,9 @@ def _has_tool_search_function_name_collision(tools: ResponseTools) -> bool:
 def _tool_search_function_tool(tool: Mapping[str, object]) -> ChatCompletionToolParam:
     raw_parameters: Final[object] = tool.get("parameters")
     parameters: Final[dict[str, object]] = (
-        dict(cast("Mapping[str, object]", raw_parameters))  # mutable-ok: Chat Completions tool parameters
-        if isinstance(raw_parameters, Mapping)
-        else {  # mutable-ok: default Chat Completions schema
+        dict(raw_parameters)
+        if _is_object_mapping(raw_parameters)
+        else {  # mutable-ok: Chat Completions tool parameters
             "type": "object",
             "properties": {  # mutable-ok: JSON schema mapping
                 "query": {  # mutable-ok: JSON schema property
