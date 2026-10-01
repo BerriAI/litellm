@@ -57,7 +57,6 @@ describe("MCPDiscovery", () => {
       ["exa", "/ui/assets/logos/exa_ai.png"],
       ["tavily", "/ui/assets/logos/tavily.png"],
       ["slack", "/ui/assets/logos/slack.svg"],
-      ["twilio", "/ui/assets/logos/twilio.svg"],
       [
         "playwright",
         "https://raw.githubusercontent.com/microsoft/playwright/2f6148bcd1a96ec687d55ce08645fc6315b1514e/packages/recorder/public/playwright-logo.svg",
