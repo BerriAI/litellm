@@ -123,6 +123,7 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       false,
+      undefined,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -153,6 +154,7 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       false,
+      undefined,
     );
   });
 

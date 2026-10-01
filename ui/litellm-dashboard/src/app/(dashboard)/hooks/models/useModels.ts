@@ -42,6 +42,7 @@ export const useModelsInfo = (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly: boolean = false,
+  blocked?: boolean,
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -62,6 +63,8 @@ export const useModelsInfo = (
         ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
         ...(accessGroup && { accessGroup }),
         ...(wildcardOnly && { wildcardOnly: "true" }),
+        // `blocked !== undefined` (not truthiness): false is a meaningful filter value.
+        ...(blocked !== undefined && { blocked }),
       },
     }),
     queryFn: async () =>
@@ -80,6 +83,7 @@ export const useModelsInfo = (
         modelName,
         accessGroup,
         wildcardOnly,
+        blocked,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });
