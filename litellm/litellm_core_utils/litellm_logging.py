@@ -3965,7 +3965,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-        cache_hit: object | None = None,
+        cache_hit: bool | None = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
