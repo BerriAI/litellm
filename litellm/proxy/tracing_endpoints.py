@@ -28,47 +28,42 @@ from litellm.tracing.types import SpanDetail, Trace, TracePage, TraceScope
 router = APIRouter(tags=["agent tracing"])  # mutable-ok: FastAPI copies the mutable tags list
 
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
-_ADMIN_ROLES: Final = (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
-
-
-def tenant_for(user_api_key_dict: UserAPIKeyAuth) -> Tenant:
-    return Tenant(
-        team_id=user_api_key_dict.team_id or "",
-        api_key_hash=user_api_key_dict.token or "",
-        org_id=user_api_key_dict.org_id or "",
-    )
-
-
-def scope_for(user_api_key_dict: UserAPIKeyAuth) -> TraceScope:
-    """Admins see everything; team members see their team; team-less keys see their own traces."""
-    if user_api_key_dict.user_role in _ADMIN_ROLES:
-        return TraceScope(team_ids=(), api_key_hash="")
-    if user_api_key_dict.team_id:
-        return TraceScope(team_ids=(user_api_key_dict.team_id,), api_key_hash="")
-    if not user_api_key_dict.token:
-        raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-    return TraceScope(team_ids=("",), api_key_hash=user_api_key_dict.token)
 
 
 @dataclass(frozen=True, slots=True)
 class TraceAccessContext:
-    auth: UserAPIKeyAuth
     receiver: TraceReceiver | None
+    read_scope: TraceScope | None
+    write_tenant: Tenant | None
 
     def reader(self) -> tuple[TraceReceiver, TraceScope]:
-        return require_receiver(self.receiver), scope_for(self.auth)
+        tracing: Final = require_receiver(self.receiver)
+        if self.read_scope is None:
+            raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
+        return tracing, self.read_scope
 
     def writer(self) -> tuple[TraceReceiver, Tenant]:
-        if self.auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+        if self.write_tenant is None:
             raise HTTPException(status_code=403, detail="Not allowed to ingest agent traces")
-        return require_receiver(self.receiver), tenant_for(self.auth)
+        return require_receiver(self.receiver), self.write_tenant
 
 
 async def provide_trace_access(
     auth: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)],
 ) -> TraceAccessContext:
-    return TraceAccessContext(auth=auth, receiver=tracing)
+    tenant: Final = Tenant(team_id=auth.team_id or "", api_key_hash=auth.token or "", org_id=auth.org_id or "")
+    match auth.user_role:
+        case LitellmUserRoles.PROXY_ADMIN:
+            return TraceAccessContext(tracing, TraceScope(team_ids=(), api_key_hash=""), tenant)
+        case LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+            return TraceAccessContext(tracing, TraceScope(team_ids=(), api_key_hash=""), None)
+        case _ if auth.team_id:
+            return TraceAccessContext(tracing, TraceScope(team_ids=(auth.team_id,), api_key_hash=""), tenant)
+        case _ if auth.token:
+            return TraceAccessContext(tracing, TraceScope(team_ids=("",), api_key_hash=auth.token), tenant)
+        case _:
+            return TraceAccessContext(tracing, None, tenant)
 
 
 async def _read_otlp_body(request: Request) -> bytes:

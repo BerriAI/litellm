@@ -18,44 +18,63 @@ from litellm.proxy.tracing_lifespan import TracingState, tracing_lifespan
 from litellm.rust_bridge.traces import TraceStorage
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.store import ClickHouseTraceStore
+from litellm.tracing.types import TraceScope
 
 TEAM_KEY = UserAPIKeyAuth(
     token="hashed-key", team_id="team-research", org_id="org-1", user_role=LitellmUserRoles.INTERNAL_USER
 )
 
 
-# ---------------------------------------------------------------- scope / tenant
+@pytest.mark.parametrize(
+    ("auth", "scope", "can_write"),
+    (
+        pytest.param(
+            UserAPIKeyAuth(token="admin-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN),
+            TraceScope(team_ids=(), api_key_hash=""),
+            True,
+            id="admin",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(token="view-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            TraceScope(team_ids=(), api_key_hash=""),
+            False,
+            id="view-only-admin",
+        ),
+        pytest.param(
+            TEAM_KEY,
+            TraceScope(team_ids=("team-research",), api_key_hash=""),
+            True,
+            id="team-key",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER),
+            TraceScope(team_ids=("",), api_key_hash="hashed-key"),
+            True,
+            id="teamless-key",
+        ),
+    ),
+)
+def test_trace_read_and_write_permissions(
+    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, scope: TraceScope, can_write: bool
+) -> None:
+    client.app.dependency_overrides[user_api_key_auth] = lambda: auth
 
+    read: Final = client.get("/v1/traces?start_ms=1&end_ms=2")
+    assert read.status_code == 200, read.text
+    receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None)
 
-def test_scope_for_admin_sees_everything():
-    for role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-        auth = UserAPIKeyAuth(token="k", team_id="team-a", user_role=role)
-        assert tracing_endpoints.scope_for(auth) == {"team_ids": (), "api_key_hash": ""}
-
-
-def test_scope_for_team_key_sees_its_team():
-    assert tracing_endpoints.scope_for(TEAM_KEY) == {"team_ids": ("team-research",), "api_key_hash": ""}
-
-
-def test_scope_for_teamless_key_sees_only_its_own_traces():
-    auth = UserAPIKeyAuth(token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER)
-    assert tracing_endpoints.scope_for(auth) == {"team_ids": ("",), "api_key_hash": "hashed-key"}
-
-
-def test_scope_for_no_team_no_token_is_forbidden():
-    with pytest.raises(HTTPException) as e:
-        tracing_endpoints.scope_for(UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER))
-    assert e.value.status_code == 403
-
-
-def test_tenant_for_comes_from_auth():
-    tenant = tracing_endpoints.tenant_for(TEAM_KEY)
-    assert (tenant.team_id, tenant.api_key_hash, tenant.org_id) == ("team-research", "hashed-key", "org-1")
-    blank = tracing_endpoints.tenant_for(UserAPIKeyAuth())
-    assert (blank.team_id, blank.api_key_hash, blank.org_id) == ("", "", "")
-
-
-# ---------------------------------------------------------------- endpoints
+    write: Final = client.post("/v1/traces", json={})
+    assert write.status_code == (200 if can_write else 403), write.text
+    if not can_write:
+        receiver.ingest.assert_not_awaited()
+        return
+    receiver.ingest.assert_awaited_once()
+    tenant: Final = receiver.ingest.await_args.kwargs["tenant"]
+    assert (tenant.team_id, tenant.api_key_hash, tenant.org_id) == (
+        auth.team_id or "",
+        auth.token or "",
+        auth.org_id or "",
+    )
 
 
 @pytest.fixture
