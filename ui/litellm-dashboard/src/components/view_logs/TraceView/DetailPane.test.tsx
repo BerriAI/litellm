@@ -39,7 +39,8 @@ const llmFields: SpanFields = {
   model: "claude-sonnet-4-5",
   input_tokens: 659,
   output_tokens: 60,
-  litellm_request_id: "chatcmpl-abc",
+  litellm_request_id: "provider-response",
+  spend_log_id: "chatcmpl-abc",
 };
 const failedToolFields: SpanFields = {
   span_id: "tool1",

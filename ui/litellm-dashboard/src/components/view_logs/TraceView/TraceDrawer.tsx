@@ -11,7 +11,7 @@ import { copyToClipboard } from "@/utils/dataUtils";
 
 import { agentTraceCall, getProxyBaseUrl } from "../../networking";
 import { DetailPane } from "./DetailPane";
-import { formatCost } from "./AgentTracesTable";
+import { formatSpend } from "./traceUtils";
 import { SpanTree } from "./SpanTree";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
@@ -129,7 +129,7 @@ function RunHeader({ trace, onBack }: { trace: Trace; onBack: () => void }) {
       <div className="flex min-w-0 items-center gap-4 font-mono text-[11px] text-foreground tabular-nums">
         <Stat label="duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="steps" value={summary.span_count.toLocaleString()} />
-        <Stat label="cost" value={summary.spend == null ? "—" : formatCost(summary.spend)} />
+        <Stat label="cost" value={formatSpend(summary)} />
         {failed && <Stat label="failed" value={summary.error_count.toLocaleString()} error />}
       </div>
       <div className="ml-auto">

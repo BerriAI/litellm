@@ -11,6 +11,8 @@ import {
   errorSource,
   firstErrorSpan,
   fmtMs,
+  formatCost,
+  formatSpend,
   GROUP_PAGE_SIZE,
   groupRowId,
   isFrameworkSpan,
@@ -265,5 +267,21 @@ describe("payload helpers", () => {
     expect(parseMessages('[{"role":"user","content":"hi"}]')).toEqual([{ role: "user", content: "hi" }]);
     expect(parseMessages('{"file_path":"/tmp/x"}')).toBeNull();
     expect(parseMessages("not json")).toBeNull();
+  });
+});
+
+
+describe("trace spend", () => {
+  it("keeps known zero distinct from unavailable and tiny positive costs", () => {
+    expect(formatSpend({ spend: null })).toBe("Unavailable");
+    expect(formatCost(0)).toBe("$0.00");
+    expect(formatCost(0.000001)).toBe("<$0.0001");
+  });
+
+  it("labels incomplete spend as a subtotal with call coverage", () => {
+    expect(formatSpend({
+      spend: null,
+      spend_details: { status: "partial", subtotal: 0.25, priced_calls: 1, expected_calls: 2 },
+    })).toBe("$0.25 partial (1/2 calls priced)");
   });
 });

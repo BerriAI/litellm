@@ -312,3 +312,20 @@ export function previewText(preview: string): string {
 /** Trace display name; root spans without a name fall back to the service. */
 export const traceDisplayName = (summary: Pick<TraceSummary, "name" | "service">): string =>
   summary.name || summary.service || "(unnamed trace)";
+
+export const formatCost = (cost: number): string => {
+  if (cost === 0) return "$0.00";
+  if (cost > 0 && cost < 0.0001) return "<$0.0001";
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
+};
+
+export const formatSpend = (value: { spend?: number | null; spend_details?: { subtotal: number; status: string; priced_calls: number; expected_calls: number } }): string => {
+  if (value.spend != null) return formatCost(value.spend);
+  const details = value.spend_details;
+  if (details?.status === "partial") {
+    return `${formatCost(details.subtotal)} partial (${details.priced_calls}/${details.expected_calls} calls priced)`;
+  }
+  return "Unavailable";
+};
+

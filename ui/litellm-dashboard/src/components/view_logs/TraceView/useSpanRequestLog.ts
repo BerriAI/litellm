@@ -31,7 +31,7 @@ export function useSpanRequestLog(
       accessToken,
       ...spanLogWindow(spanStartMs),
       page: 1,
-      page_size: 1,
+      page_size: 2,
       params: { request_id: requestId },
     };
     const response = await uiSpendLogsCall(logsOptions);
@@ -41,7 +41,8 @@ export function useSpanRequestLog(
     queryKey: ["logs", "spanRequest", requestId, spanStartMs, accessToken],
     queryFn: fetchLog,
     enabled: enabled && requestId !== null,
-    staleTime: Infinity,
+    staleTime: 5_000,
+    refetchInterval: (query) => query.state.data === null && query.state.dataUpdateCount < 12 ? 5_000 : false,
   };
   return useQuery(queryOptions);
 }

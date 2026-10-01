@@ -1115,6 +1115,11 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    from litellm.integrations.clickhouse.clickhouse_spend_logger import ClickHouseSpendLogger
+
+    for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(ClickHouseSpendLogger):
+        await callback.aclose()
+        litellm.logging_callback_manager.remove_callback_from_all_lists(callback)
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:
@@ -11372,6 +11377,7 @@ class ProxyStartupEvent:
 
         manager: Final = litellm.logging_callback_manager
         for callback in manager.get_custom_loggers_for_type(ClickHouseSpendLogger):
+            await callback.aclose()
             manager.remove_callback_from_all_lists(callback)
         tracing_endpoints.receiver = None
         settings: Final = general_settings.get("tracing")
@@ -11379,18 +11385,23 @@ class ProxyStartupEvent:
             return
         try:
             tracing: Final = receiver if receiver is not None else TraceReceiver.from_env()
-            await tracing.start()
         except (KeyError, OSError, RuntimeError, ValueError) as error:
             verbose_proxy_logger.warning("Agent tracing unavailable: %s", error)
             return
-        tracing_endpoints.receiver = tracing
-        spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage)
+
+        async def prepare() -> None:
+            await tracing.start()
+            tracing_endpoints.receiver = tracing
+
+        tracing.store.spend_fallback = tracing_endpoints.postgres_trace_spend_fallback
+        spend_logger: Final = ClickHouseSpendLogger(storage=tracing.store.storage, prepare=prepare)
         manager.add_litellm_callback(spend_logger)
         manager.add_litellm_success_callback(spend_logger)
         manager.add_litellm_failure_callback(spend_logger)
         manager.add_litellm_async_success_callback(spend_logger)
         manager.add_litellm_async_failure_callback(spend_logger)
-        verbose_proxy_logger.info("Agent tracing enabled (store=clickhouse)")
+        await spend_logger.flush_queue()
+        verbose_proxy_logger.info("Agent tracing spend writer started (store=clickhouse)")
 
     @classmethod
     def _init_dd_tracer(cls):

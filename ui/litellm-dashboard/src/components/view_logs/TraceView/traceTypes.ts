@@ -7,7 +7,22 @@
 export type SpanType = "agent" | "llm" | "tool" | "chain" | "framework";
 export type SpanStatus = "ok" | "error" | "unset";
 
+export interface SpendDetails {
+  sources: ("clickhouse" | "postgres_fallback")[];
+  status: "complete" | "partial" | "unavailable";
+  subtotal: number;
+  matched_calls: number;
+  priced_calls: number;
+  expected_calls: number;
+  reasons: string[];
+}
+
 export interface Span {
+  spend_source?: "clickhouse" | "postgres_fallback" | null;
+  spend_fallback_reason?: "clickhouse_unavailable" | "clickhouse_rows_missing" | null;
+  spend_log_id?: string | null;
+  litellm_call_id?: string | null;
+  spend_reason?: string | null;
   span_id: string;
   parent_span_id: string | null;
   name: string;
@@ -26,6 +41,7 @@ export interface Span {
   output_tokens: number;
   litellm_request_id: string | null;
   spend?: number | null;
+  spend_details?: SpendDetails;
 }
 
 /** One distinct agent in a trace. 200 invocations of `researcher` = one node. */
@@ -37,6 +53,7 @@ export interface AgentNode {
   tool_calls: number;
   duration_ms: number;
   spend?: number | null;
+  spend_details?: SpendDetails;
 }
 
 export interface TraceSummary {
@@ -59,6 +76,7 @@ export interface TraceSummary {
   output_tokens: number;
   models: string[];
   spend?: number | null;
+  spend_details?: SpendDetails;
 }
 
 export interface Trace {

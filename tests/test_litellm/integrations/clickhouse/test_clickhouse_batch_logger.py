@@ -1,81 +1,142 @@
-"""
-Tests for the CustomBatchLogger-based ClickHouse base logger.
-"""
-
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+import threading
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.integrations.clickhouse import clickhouse_batch_logger as module
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 
 
-class _TestLogger(ClickHouseBatchLogger):
-    table = "test_table"
-
-
-def _logger(insert: AsyncMock) -> _TestLogger:
-    storage = MagicMock()
-    storage.insert_rows = insert
-    return _TestLogger(storage=storage)
+class SpendWriter(ClickHouseBatchLogger):
+    table = "spend_logs"
 
 
 @pytest.mark.asyncio
-async def test_flush_splits_into_batches_and_empties_queue():
-    insert = AsyncMock()
-    logger = _logger(insert)
-    logger.batch_size = 2
-    logger.log_queue.extend([{"i": i} for i in range(5)])
+async def test_shutdown_delivers_all_accepted_rows_in_bounded_batches() -> None:
+    insert: Final = AsyncMock()
+    writer: Final = SpendWriter(storage=MagicMock(insert_rows=insert), batch_size=2)
+    writer.enqueue(tuple({"request_id": str(i)} for i in range(5)))
 
-    await logger.flush_queue()
+    await writer.aclose()
 
-    assert [len(c.args[1]) for c in insert.await_args_list] == [2, 2, 1]
-    assert all(c.args[0] == "test_table" for c in insert.await_args_list)
-    assert logger.log_queue == []
-    assert logger.rows_written == 5
-
-
-@pytest.mark.asyncio
-async def test_first_enqueued_row_flushes_after_synchronous_construction():
-    flushed = asyncio.Event()
-
-    async def insert_rows(table: str, rows: list[dict[str, int]]) -> None:
-        assert table == "test_table"
-        assert rows == [{"i": 1}]
-        flushed.set()
-
-    logger = _logger(AsyncMock(side_effect=insert_rows))
-    logger.flush_interval = 0.01
-
-    logger.enqueue([{"i": 1}])
-    await asyncio.wait_for(flushed.wait(), timeout=1)
-    if logger._flush_task is not None:
-        logger._flush_task.cancel()
+    batches: Final = tuple(call.args[1] for call in insert.await_args_list)
+    assert tuple(len(batch) for batch in batches) == (2, 2, 1)
+    assert tuple(row["request_id"] for batch in batches for row in batch) == tuple(str(i) for i in range(5))
+    assert writer.rows_written == 5
+    assert writer.rows_dropped == writer.buffered_rows == writer.buffered_bytes == 0
 
 
 @pytest.mark.asyncio
-async def test_is_full_signals_backpressure():
-    logger = _logger(AsyncMock())
-    with patch.object(module, "CLICKHOUSE_MAX_BUFFERED_ROWS", 3):
-        logger.log_queue.extend([{}, {}])
-        assert logger.is_full() is False
-        logger.log_queue.append({})
-        assert logger.is_full() is True
+async def test_failed_batch_keeps_its_retry_identity_when_new_rows_arrive() -> None:
+    insert: Final = AsyncMock(side_effect=[RuntimeError("offline"), None, None])
+    writer: Final = SpendWriter(storage=MagicMock(insert_rows=insert), flush_interval=60)
+    writer.enqueue(({"request_id": "first"},))
+    await writer.flush_queue()
+    writer.enqueue(({"request_id": "second"},))
+
+    await writer.flush_queue()
+    await writer.aclose()
+
+    calls: Final = insert.await_args_list
+    assert calls[0].args == calls[1].args
+    assert calls[2].args[1] == ({"request_id": "second"},)
+    assert writer.rows_written == 2 and writer.rows_dropped == 0
 
 
 @pytest.mark.asyncio
-async def test_failed_insert_is_requeued_then_dropped():
-    insert = AsyncMock(side_effect=RuntimeError("clickhouse down"))
-    logger = _logger(insert)
-    logger.log_queue.extend([{"request_id": "a"}, {"request_id": "b"}])
+async def test_retry_exhaustion_counts_lost_rows() -> None:
+    writer: Final = SpendWriter(
+        storage=MagicMock(insert_rows=AsyncMock(side_effect=RuntimeError("offline"))), max_retries=2
+    )
+    writer.enqueue(({"request_id": "a"}, {"request_id": "b"}))
+    await writer.flush_queue()
+    assert writer.buffered_rows == 2
+    await writer.flush_queue()
+    await writer.aclose()
+    assert writer.rows_dropped == 2 and writer.rows_written == 0 and writer.buffered_rows == 0
 
-    with patch.object(module, "CLICKHOUSE_MAX_RETRIES", 2):
-        await logger.flush_queue()
-        assert len(logger.log_queue) == 2  # kept for retry
-        await logger.flush_queue()
 
-    assert insert.await_count == 2
-    assert logger.rows_dropped == 2
-    assert logger.rows_written == 0
-    assert logger.log_queue == []
+@pytest.mark.asyncio
+async def test_capacity_includes_inflight_rows_and_shutdown_reports_cancellation() -> None:
+    entered: Final = threading.Event()
+
+    async def insert_rows(*args: object) -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    writer: Final = SpendWriter(storage=MagicMock(insert_rows=insert_rows), batch_size=1, max_rows=3)
+    writer.enqueue(({"request_id": "inflight"},))
+    assert await asyncio.to_thread(entered.wait, 2)
+    writer.enqueue(tuple({"request_id": str(i)} for i in range(3)))
+    assert writer.buffered_rows == 3
+    assert writer.rows_dropped == 1
+    assert writer.is_full()
+
+    await writer.aclose(timeout=0.05)
+
+    assert writer.rows_dropped == 4
+    assert writer.rows_written == writer.buffered_rows == writer.buffered_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_byte_limit_rejects_oversized_rows_without_losing_small_rows() -> None:
+    insert: Final = AsyncMock()
+    writer: Final = SpendWriter(
+        storage=MagicMock(insert_rows=insert), max_row_bytes=40, max_bytes=80, max_batch_bytes=60
+    )
+    writer.enqueue(({"value": "x" * 100}, {"value": "a" * 15}, {"value": "b" * 15}, {"value": "c" * 15}))
+    assert writer.buffered_bytes <= 80
+    assert writer.rows_dropped == 2
+
+    await writer.aclose()
+
+    assert writer.rows_written == 2
+    assert tuple(call.args[1] for call in insert.await_args_list) == (({"value": "a" * 15}, {"value": "b" * 15}),)
+
+
+def test_synchronous_submission_does_not_require_a_running_event_loop() -> None:
+    insert: Final = AsyncMock()
+    writer: Final = SpendWriter(storage=MagicMock(insert_rows=insert))
+    writer.enqueue(({"request_id": "sync"},))
+    asyncio.run(writer.aclose())
+    assert insert.await_args.args[1] == ({"request_id": "sync"},)
+    assert writer.rows_written == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_flush_preserves_inflight_batch_for_retry() -> None:
+    entered: Final = threading.Event()
+    attempts: Final = AsyncMock()
+
+    async def insert_rows(*args: object) -> None:
+        await attempts(*args)
+        if attempts.await_count == 1:
+            entered.set()
+            await asyncio.Event().wait()
+
+    writer: Final = SpendWriter(storage=MagicMock(insert_rows=insert_rows), flush_interval=60)
+    writer.enqueue(({"request_id": "event"},))
+    flush: Final = asyncio.create_task(writer.flush_queue())
+    assert await asyncio.to_thread(entered.wait, 2)
+    flush.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await flush
+    await writer.flush_queue()
+    await writer.aclose()
+    assert attempts.await_args_list[0].args == attempts.await_args_list[1].args
+    assert writer.rows_written == 1 and writer.rows_dropped == 0
+
+
+@pytest.mark.asyncio
+async def test_storage_startup_failure_buffers_rows_until_recovery() -> None:
+    prepare: Final = AsyncMock(side_effect=[RuntimeError("starting"), None])
+    insert: Final = AsyncMock()
+    writer: Final = SpendWriter(storage=MagicMock(insert_rows=insert), prepare=prepare, flush_interval=60)
+    writer.enqueue(({"request_id": "early"},))
+    await writer.flush_queue()
+    insert.assert_not_awaited()
+    assert writer.buffered_rows == 1
+    await writer.flush_queue()
+    await writer.aclose()
+    assert writer.rows_written == 1 and writer.rows_dropped == 0
