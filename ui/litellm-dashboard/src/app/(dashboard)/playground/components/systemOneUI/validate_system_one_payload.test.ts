@@ -1,0 +1,173 @@
+import { describe, expect, it } from "vitest";
+import { SYSTEM_ONE_PRESETS } from "./system_one_presets";
+import { validateSystemOnePayload } from "./validate_system_one_payload";
+
+const requestWith = (fields: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    state: "A support request",
+    questions: { category: { type: "choice", instructions: "Route the message", criteria: { support: "Help" } } },
+    ...fields,
+  });
+
+describe("validateSystemOnePayload", () => {
+  it("rejects empty input", () => {
+    expect(validateSystemOnePayload(" ").issues).toContainEqual({
+      path: "root",
+      message: "Payload cannot be empty.",
+      severity: "error",
+    });
+  });
+
+  it("reports JSON syntax errors", () => {
+    expect(validateSystemOnePayload("{").issues[0]?.path).toBe("syntax");
+  });
+
+  it("requires an object root", () => {
+    expect(validateSystemOnePayload("[]").issues[0]?.path).toBe("root");
+  });
+
+  it("requires the state key while accepting null state", () => {
+    expect(validateSystemOnePayload(requestWith({ state: undefined })).issues).toContainEqual(
+      expect.objectContaining({ path: "state", severity: "error" }),
+    );
+    expect(validateSystemOnePayload(requestWith({ state: null })).isValid).toBe(true);
+  });
+
+  it.each([null, "", 123])("requires a non-empty string model when present: %s", (model) => {
+    expect(validateSystemOnePayload(requestWith({ model })).issues).toContainEqual(
+      expect.objectContaining({ path: "model", severity: "error" }),
+    );
+  });
+
+  it("requires questions", () => {
+    expect(validateSystemOnePayload(JSON.stringify({ state: null })).issues).toContainEqual(
+      expect.objectContaining({ path: "questions", severity: "error" }),
+    );
+  });
+
+  it.each([null, [], "questions", {}])("requires a non-empty questions object: %s", (questions) => {
+    expect(validateSystemOnePayload(requestWith({ questions })).issues).toContainEqual(
+      expect.objectContaining({ path: "questions", severity: "error" }),
+    );
+  });
+
+  it.each([null, [], "question"])("requires each question to be an object: %s", (question) => {
+    expect(validateSystemOnePayload(requestWith({ questions: { invalid: question } })).issues).toContainEqual(
+      expect.objectContaining({ path: "questions.invalid", severity: "error" }),
+    );
+  });
+
+  it("requires a supported question type", () => {
+    expect(
+      validateSystemOnePayload(requestWith({ questions: { invalid: { type: "other", instructions: "Do this" } } }))
+        .issues,
+    ).toContainEqual(expect.objectContaining({ path: "questions.invalid.type", severity: "error" }));
+  });
+
+  it("requires instructions", () => {
+    expect(validateSystemOnePayload(requestWith({ questions: { category: { type: "noul" } } })).issues).toContainEqual(
+      expect.objectContaining({ path: "questions.category.instructions", severity: "error" }),
+    );
+  });
+
+  it.each([undefined, null, [], "criteria"])("requires choice criteria as an object: %s", (criteria) => {
+    expect(
+      validateSystemOnePayload(
+        requestWith({ questions: { category: { type: "choice", instructions: "Route", criteria } } }),
+      ).issues,
+    ).toContainEqual(expect.objectContaining({ path: "questions.category.criteria", severity: "error" }));
+  });
+
+  it.each([{}, Object.fromEntries(Array.from({ length: 256 }, (_, index) => [`option-${index}`, "Description"]))])(
+    "requires between 1 and 255 choice criteria",
+    (criteria) => {
+      expect(
+        validateSystemOnePayload(
+          requestWith({ questions: { category: { type: "choice", instructions: "Route", criteria } } }),
+        ).issues,
+      ).toContainEqual(expect.objectContaining({ path: "questions.category.criteria", severity: "error" }));
+    },
+  );
+
+  it("accepts 1 and 255 choice criteria", () => {
+    const one = { first: "First option" };
+    const twoHundredFiftyFiveOptions = Object.fromEntries(
+      Array.from({ length: 255 }, (_, index) => [`option-${index}`, "Option"]),
+    );
+    expect(
+      validateSystemOnePayload(
+        requestWith({ questions: { category: { type: "choice", instructions: "Route", criteria: one } } }),
+      ).isValid,
+    ).toBe(true);
+    expect(
+      validateSystemOnePayload(
+        requestWith({
+          questions: { category: { type: "choice", instructions: "Route", criteria: twoHundredFiftyFiveOptions } },
+        }),
+      ).isValid,
+    ).toBe(true);
+  });
+
+  it.each([null, {}, "criteria"])("requires score criteria as an array: %s", (criteria) => {
+    expect(
+      validateSystemOnePayload(
+        requestWith({ questions: { urgency: { type: "score", instructions: "Rate urgency", criteria } } }),
+      ).issues,
+    ).toContainEqual(expect.objectContaining({ path: "questions.urgency.criteria", severity: "error" }));
+  });
+
+  it("requires at least two score levels", () => {
+    expect(
+      validateSystemOnePayload(
+        requestWith({ questions: { urgency: { type: "score", instructions: "Rate urgency", criteria: ["Low"] } } }),
+      ).issues,
+    ).toContainEqual(expect.objectContaining({ path: "questions.urgency.criteria", severity: "error" }));
+  });
+
+  it("warns about more than ten score levels without invalidating the request", () => {
+    const result = validateSystemOnePayload(
+      requestWith({
+        questions: {
+          urgency: {
+            type: "score",
+            instructions: "Rate urgency",
+            criteria: Array.from({ length: 11 }, () => "Level"),
+          },
+        },
+      }),
+    );
+    expect(result.isValid).toBe(true);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ path: "questions.urgency.criteria", severity: "warning" }),
+    );
+  });
+
+  it("accepts a score question with two levels", () => {
+    expect(
+      validateSystemOnePayload(
+        requestWith({
+          questions: { urgency: { type: "score", instructions: "Rate urgency", criteria: ["Low", "High"] } },
+        }),
+      ).isValid,
+    ).toBe(true);
+  });
+
+  it.each([null, [], "criteria"])("requires optional noul criteria to be an object: %s", (criteria) => {
+    expect(
+      validateSystemOnePayload(
+        requestWith({ questions: { escalation: { type: "noul", instructions: "Escalate?", criteria } } }),
+      ).issues,
+    ).toContainEqual(expect.objectContaining({ path: "questions.escalation.criteria", severity: "error" }));
+  });
+
+  it("allows omitted noul criteria", () => {
+    expect(
+      validateSystemOnePayload(requestWith({ questions: { escalation: { type: "noul", instructions: "Escalate?" } } }))
+        .isValid,
+    ).toBe(true);
+  });
+
+  it.each(SYSTEM_ONE_PRESETS)("validates the $name preset", ({ payload }) => {
+    expect(validateSystemOnePayload(JSON.stringify(payload)).isValid).toBe(true);
+  });
+});
