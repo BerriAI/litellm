@@ -669,38 +669,53 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         reasoning_content: str | None,
         pending_reasoning_item: dict[str, Any] | None,
     ) -> tuple[list[Any], int]:
-        """Build one Choices per content block on a ResponseOutputMessage.
+        """Build ONE Choices for a ResponseOutputMessage, merging all of its content
+        blocks into a single message.
 
-        The first emitted choice carries the pending reasoning (content + items);
-        any subsequent content blocks emit choices with reasoning fields cleared,
-        matching the flush semantics of the original inline loop.
+        Chat Completions choices carry one message each; a Responses message with
+        several output-text blocks (observed from providers that stream multiple
+        text parts per turn) must still collapse to one choice, because
+        Chat-Completions-only clients read choices[0] exclusively. Emitting one
+        choice per content block hid tool_calls on any later block from those
+        clients (#33931 multi-block report). Text blocks are joined and their
+        annotations concatenated, index-shifted to the position they fall at in
+        the merged text.
         """
         from litellm.types.utils import Choices, Message
 
-        new_choices: Final[list[Any]] = []
-        current_index = starting_index
-        carry_reasoning_content = reasoning_content
-        carry_reasoning_item = pending_reasoning_item
+        merged_text_parts: Final[list[str]] = []
+        merged_annotations: Final[list[Any]] = []
+        offset = 0
         for content in item.content:
-            response_text = getattr(content, "text", "")
+            response_text = getattr(content, "text", "") or ""
             raw_annotations = getattr(content, "annotations", None)
             annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(raw_annotations)
-            reasoning_items_for_msg = cast(
-                list[ChatCompletionReasoningItem] | None,
-                ([carry_reasoning_item] if carry_reasoning_item is not None else None),
-            )
-            msg = Message(
-                role=item.role,
-                content=response_text or "",
-                reasoning_content=carry_reasoning_content,
-                annotations=annotations,
-                reasoning_items=reasoning_items_for_msg,
-            )
-            new_choices.append(Choices(message=msg, finish_reason="stop", index=current_index))
-            carry_reasoning_content = None
-            carry_reasoning_item = None
-            current_index += 1
-        return new_choices, current_index
+            if annotations:
+                for annotation in annotations:
+                    url_citation = annotation.get("url_citation")
+                    if isinstance(url_citation, dict):
+                        shifted_citation = dict(url_citation)
+                        for index_field in ("start_index", "end_index"):
+                            current = shifted_citation.get(index_field)
+                            if isinstance(current, int):
+                                shifted_citation[index_field] = current + offset
+                        annotation = {**annotation, "url_citation": shifted_citation}
+                    merged_annotations.append(annotation)
+            merged_text_parts.append(response_text)
+            offset += len(response_text)
+
+        reasoning_items_for_msg = cast(
+            list[ChatCompletionReasoningItem] | None,
+            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
+        )
+        msg = Message(
+            role=item.role,
+            content="".join(merged_text_parts),
+            reasoning_content=reasoning_content,
+            annotations=merged_annotations or None,
+            reasoning_items=reasoning_items_for_msg,
+        )
+        return [Choices(message=msg, finish_reason="stop", index=starting_index)], starting_index + 1
 
     @staticmethod
     def _merge_accumulated_tool_calls_into_choices(

@@ -3137,19 +3137,30 @@ def _build_message_plus_tool_call_response(
     )
 
 
-def _make_output_message(text, message_id="msg_bug18401"):
+def _make_output_message(text, message_id="msg_bug18401", extra_texts=()):
     from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
-    return ResponseOutputMessage(
-        id=message_id,
-        content=[
+    content = [
+        ResponseOutputText(
+            annotations=[],
+            text=text,
+            type="output_text",
+            logprobs=[],
+        )
+    ]
+    for extra_text in extra_texts:
+        content.append(
             ResponseOutputText(
                 annotations=[],
-                text=text,
+                text=extra_text,
                 type="output_text",
                 logprobs=[],
             )
-        ],
+        )
+
+    return ResponseOutputMessage(
+        id=message_id,
+        content=content,
         role="assistant",
         status="completed",
         type="message",
@@ -3297,6 +3308,33 @@ def test_multiple_message_items_tool_calls_collapse_onto_last():
     tool_calls = second_choice.message.tool_calls
     assert tool_calls is not None and len(tool_calls) == 1
     assert tool_calls[0]["id"] == "call_after_second"
+
+
+def test_multiblock_message_plus_function_call_merged_into_choice_zero():
+    """Regression (Greptile P1 flagged on #33931): a SINGLE ResponseOutputMessage with
+    multiple output-text content blocks must still collapse its accumulated tool_calls
+    onto choices[0], not a later choice. Chat Completions clients only read choices[0];
+    before this fix a two-block message followed by a function_call produced two choices
+    and attached the tool call to the last one, hiding it from choices[0]-only clients."""
+    result = _build_message_plus_tool_call_response(
+        output_items=[
+            _make_output_message("First block.", extra_texts=["Second block."]),
+            _make_function_tool_call(
+                call_id="call_paris",
+                name="get_weather",
+                arguments='{"location": "Paris"}',
+            ),
+        ]
+    )
+
+    assert len(result.choices) == 1, (
+        f"a single message item must still collapse to one choice, got {len(result.choices)}"
+    )
+    choice = result.choices[0]
+    assert choice.finish_reason == "tool_calls"
+    tool_calls = choice.message.tool_calls
+    assert tool_calls is not None and len(tool_calls) == 1
+    assert tool_calls[0]["id"] == "call_paris"
 
 
 def test_streaming_text_plus_function_call_lands_on_choice_index_zero():
