@@ -1886,6 +1886,45 @@ class TestResponsesSurfaceSharesTheEffortRule:
                     drop_params=False,
                 )
 
+    @pytest.mark.parametrize(
+        ("flags", "level", "forwarded"),
+        [
+            ({}, "none", True),
+            ({"supports_none_reasoning_effort": False}, "none", False),
+            ({"supports_none_reasoning_effort": True}, "none", True),
+            ({"supports_minimal_reasoning_effort": False}, "minimal", False),
+            ({"supports_max_reasoning_effort": False}, "max", False),
+            ({}, "xhigh", True),
+            ({"supports_xhigh_reasoning_effort": False}, "xhigh", False),
+            ({"supports_none_reasoning_effort": False}, "medium", True),
+        ],
+    )
+    def test_the_row_flags_alone_decide_whether_a_level_is_forwarded(
+        self, local_model_cost_map, monkeypatch, flags, level, forwarded
+    ):
+        """Same model name, rewritten row: this surface reads every level opt-out, xhigh included,
+        so the gate flips with the flags alone. The chat test module pins the real row's facts."""
+        real_row = litellm.model_cost["gpt-6.1-sol"]
+        without_flags = {
+            field: value
+            for field, value in real_row.items()
+            if not (field.startswith("supports_") and field.endswith("_reasoning_effort"))
+        }
+        monkeypatch.setitem(litellm.model_cost, "gpt-6.1-sol", {**without_flags, **flags})
+        dropped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level}},
+            model="gpt-6.1-sol",
+            drop_params=True,
+        )
+        assert ("reasoning" in dropped) is forwarded
+        if not forwarded:
+            with pytest.raises(litellm.UnsupportedParamsError):
+                OpenAIResponsesAPIConfig().map_openai_params(
+                    response_api_optional_params={"reasoning": {"effort": level}},
+                    model="gpt-6.1-sol",
+                    drop_params=False,
+                )
+
     def test_dropping_a_refused_effort_keeps_the_rest_of_the_reasoning_object(self, local_model_cost_map):
         refused = next(
             level
