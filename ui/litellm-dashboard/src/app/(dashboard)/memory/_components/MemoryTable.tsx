@@ -12,6 +12,7 @@ import { getMemoryTableColumns } from "./MemoryTableColumns";
 interface MemoryTableProps {
   data: MemoryRow[];
   isLoading: boolean;
+  isError?: boolean;
   rowCount: number;
   pagination: PaginationState;
   onPaginationChange: OnChangeFn<PaginationState>;
@@ -46,6 +47,7 @@ function MemoryEmptyState({ hasActiveSearch }: { hasActiveSearch: boolean }) {
 export function MemoryTable({
   data,
   isLoading,
+  isError,
   rowCount,
   pagination,
   onPaginationChange,
@@ -73,6 +75,7 @@ export function MemoryTable({
       onPaginationChange={onPaginationChange}
       rowCount={rowCount}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading memories…"
       noDataMessage={<MemoryEmptyState hasActiveSearch={hasActiveSearch} />}
       size="compact"

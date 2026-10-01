@@ -45,7 +45,6 @@ describe("SearchToolView", () => {
   const defaultProps = {
     searchTool: mockSearchTool,
     onBack: vi.fn(),
-    isEditing: false,
     accessToken: "test-token",
     availableProviders: mockAvailableProviders,
   };

@@ -1,10 +1,9 @@
 "use client";
 
-import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 
-import { DataTable } from "@/components/shared/DataTable";
+import { DataTable, useUrlTableState, type UrlTableStateOptions } from "@/components/shared/DataTable";
 import { modelHubCall, PromptSpec } from "@/components/networking";
 
 import { getPromptTableColumns } from "./PromptTableColumns";
@@ -19,7 +18,12 @@ interface PromptTableProps {
   isAdmin: boolean;
 }
 
-const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
+const TABLE_STATE_OPTIONS: UrlTableStateOptions<never> = {
+  sortFields: ["prompt_id", "created_at", "updated_at"],
+  defaultSort: { id: "created_at", desc: true },
+  defaultPageSize: 25,
+  filterColumns: [],
+};
 
 function EmptyState() {
   return (
@@ -41,7 +45,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
   accessToken,
   isAdmin,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
+  const { sorting, onSortingChange, pagination, onPaginationChange } = useUrlTableState(TABLE_STATE_OPTIONS);
   const [modelHubData, setModelHubData] = useState<Map<string, ModelGroupInfo>>(new Map());
 
   useEffect(() => {
@@ -74,13 +78,15 @@ const PromptTable: React.FC<PromptTableProps> = ({
     <DataTable
       data={promptsList}
       paginationMode="client"
+      pagination={pagination}
+      onPaginationChange={onPaginationChange}
       columns={columns}
       getRowId={(prompt, index) =>
         prompt.prompt_id ? `${prompt.prompt_id}::${prompt.environment || "development"}` : String(index)
       }
       sortingMode="client"
       sorting={sorting}
-      onSortingChange={setSorting}
+      onSortingChange={onSortingChange}
       isLoading={isLoading}
       loadingMessage="Loading prompts…"
       noDataMessage={<EmptyState />}
