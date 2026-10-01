@@ -217,3 +217,45 @@ def test_compress_keeps_part_level_cache_control_row_verbatim():
     assert result["messages"][0] == pinned
     assert result["messages"][2] != stale_log
     assert len(result["cache"]) >= 1
+
+
+def test_trailing_cache_control_alone_does_not_protect_whole_conversation():
+    """Claude Code marks the live turn every request. That trailing write marker
+    must not pin the entire history as a cached prefix (#42939)."""
+    messages = [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "tool", "tool_call_id": "t1", "content": "large file body"},
+        {"role": "user", "content": "live instruction", "cache_control": {"type": "ephemeral"}},
+    ]
+
+    protected = sorted(get_protected_indices(messages))
+
+    assert protected == [1, 3]
+    assert 0 not in protected
+    assert 2 not in protected
+
+
+def test_trailing_cache_control_defers_to_earlier_breakpoint():
+    """System (or mid-history) breakpoint stays the prefix end; the trailing
+    live-turn marker is ignored so mid-history after that earlier breakpoint
+    remains compressible (#42939)."""
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}
+            ],
+        },
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "tool", "tool_call_id": "t1", "content": "large file body"},
+        {"role": "user", "content": "live instruction", "cache_control": {"type": "ephemeral"}},
+    ]
+
+    protected = sorted(get_protected_indices(messages))
+
+    # System (0) from the earlier breakpoint + last assistant (2) + last user (4).
+    assert protected == [0, 2, 4]
+    assert 1 not in protected
+    assert 3 not in protected

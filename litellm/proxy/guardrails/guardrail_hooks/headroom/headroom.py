@@ -807,6 +807,14 @@ class HeadroomGuardrail(CustomGuardrail):
         protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
+            # Match the other early returns: leave a breadcrumb when compression
+            # is a no-op so Cost Optimization / DEBUG is not left with a silent
+            # "0 tokens compressed" and no explanation (#42939).
+            verbose_proxy_logger.debug(
+                "Headroom: nothing compressible (protected=%s/%s); skipping compression",
+                len(protected_indices),
+                len(messages),
+            )
             return inputs
 
         model: Final = self.headroom_model or request_data.get("model")
