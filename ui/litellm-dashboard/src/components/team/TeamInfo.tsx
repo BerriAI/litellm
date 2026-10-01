@@ -71,7 +71,6 @@ import { modelMaxBudgetUpdate, StoredModelMaxBudget } from "../key_team_helpers/
 import {
   computeTeamModelBadges,
   modelsFieldForTeamUpdate,
-  normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
   TeamModelBadge,
   TeamModelBadgeKind,

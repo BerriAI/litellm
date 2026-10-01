@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { computeTeamModelBadges, modelsFieldForTeamUpdate, normalizeTeamModelSelection, TeamAccessGroupModelGrant } from "./teamModelAccess";
+import {
+  computeTeamModelBadges,
+  modelsFieldForTeamUpdate,
+  normalizeTeamModelSelection,
+  TeamAccessGroupModelGrant,
+} from "./teamModelAccess";
 
 const GRANTS: TeamAccessGroupModelGrant[] = [
   { access_group_id: "ag-1", access_group_name: "shared", models: ["haiku", "gpt-4o-mini"] },
@@ -84,7 +89,6 @@ describe("computeTeamModelBadges", () => {
     ]);
   });
 });
-
 
 describe("modelsFieldForTeamUpdate", () => {
   it("omits models when the field is not dirty", () => {
