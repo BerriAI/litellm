@@ -4490,7 +4490,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
         "max_file_size_mb": 7,
         "max_parallel_requests": 3,
         "alerting": ["config"],
-        "pass_through_endpoints": [{"path": "/db"}],
+        "pass_through_endpoints": [{"path": "/db"}, {"path": "/config"}],
         "maximum_spend_logs_cleanup_batch_size": 10,
     }
     assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 1}

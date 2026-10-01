@@ -7748,7 +7748,6 @@ async def _boot_db_backed_proxy(
     proxy_config: Final = proxy_server.ProxyConfig()
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_config)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
     monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
@@ -7761,6 +7760,7 @@ async def _boot_db_backed_proxy(
 
     await proxy_config.load_config(router=None, config_file_path=str(config_path))
     monkeypatch.setattr(proxy_server, "prisma_client", config_table)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
     return _DbBackedProxy(proxy_config, str(config_path), config_table)
 
 
@@ -7864,6 +7864,7 @@ async def test_a_deleted_db_pass_through_stops_serving_on_the_next_db_sync(tmp_p
         db_pass_through_endpoints=[
             {"id": "db-gone", "path": "/db-gone", "target": "http://db-upstream.test/api", "auth": False}
         ],
+        master_key="sk-pass-through-master",
     )
     await _run_db_sync_cycle(proxy)
     served_before, _ = await _send_through_proxy("/db-gone", {})
@@ -7982,7 +7983,6 @@ async def test_config_pass_through_serves_right_after_boot(tmp_path, monkeypatch
     assert [str(request.url) for request in upstream_requests] == ["http://config-upstream.test/api"]
 
 
-
 @pytest.mark.asyncio
 async def test_config_pass_through_resolves_an_os_environ_target(tmp_path, monkeypatch):
     monkeypatch.setenv("LIT_PASS_THROUGH_TEST_UPSTREAM", "http://env-upstream.test/api")
@@ -8028,3 +8028,84 @@ async def test_a_settings_write_keeps_the_config_file_pass_throughs(tmp_path, mo
     saved_general_settings: Final = yaml.safe_load(open(proxy.config_path))["general_settings"]
     assert saved_general_settings["max_parallel_requests"] == 7
     assert [endpoint["path"] for endpoint in saved_general_settings["pass_through_endpoints"]] == ["/cfg-kept"]
+
+
+@pytest.mark.asyncio
+async def test_a_config_reload_keeps_config_pass_throughs_open_next_to_db_ones(tmp_path, monkeypatch):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-open", "target": "http://config-upstream.test/api", "auth": False, "forward_headers": True}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-only", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+
+    await proxy.proxy_config.get_config(config_file_path=proxy.config_path)
+    response, upstream_requests = await _send_through_proxy("/cfg-open", {"Authorization": "Bearer caller-jwt"})
+
+    assert response.status_code == 200
+    assert [request.headers.get("authorization") for request in upstream_requests] == ["Bearer caller-jwt"]
+
+
+@pytest.mark.asyncio
+async def test_ui_create_keeps_the_stored_pass_throughs_when_models_are_not_stored_in_the_db(tmp_path, monkeypatch):
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_endpoints
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-only", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-stored", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        store_model_in_db=False,
+    )
+
+    await create_pass_through_endpoints(
+        data=PassThroughGenericEndpoint(path="/ui-made", target="http://ui-upstream.test/api", auth=False),
+        request=MagicMock(spec=Request),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+
+    assert [endpoint["path"] for endpoint in proxy.config_table.rows["general_settings"]["pass_through_endpoints"]] == [
+        "/db-stored",
+        "/ui-made",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_stored_pass_through_field_stops_serving_its_routes_right_away(tmp_path, monkeypatch):
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import delete_config_general_settings
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-kept", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-gone", "path": "/db-gone", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    served_before, _ = await _send_through_proxy("/db-gone", {})
+
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(config_type="general_settings", field_name="pass_through_endpoints"),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+    served_after, db_upstream = await _send_through_proxy("/db-gone", {})
+    config_after, _ = await _send_through_proxy("/cfg-kept", {})
+
+    assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 401, 200)
+    assert db_upstream == []

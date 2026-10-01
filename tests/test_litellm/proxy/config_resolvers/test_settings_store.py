@@ -309,7 +309,6 @@ def test_settings_store_leaves_pass_through_endpoints_to_the_database() -> None:
 
     assert store["pass_through_endpoints"] == [{"path": "/db"}]
     assert store.source("pass_through_endpoints") == "db"
-    assert store.stored_value("pass_through_endpoints") == [{"path": "/db"}]
     assert store.rejected_writes({"pass_through_endpoints": [{"path": "/ui"}]}) == ()
 
 

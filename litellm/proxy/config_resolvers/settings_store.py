@@ -55,10 +55,6 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         )
         self._clear_runtime()
 
-    def stored_value(self, key: str) -> SettingValue:
-        stored: Final = self._db_value(key)
-        return ABSENT if stored is None else stored
-
     def config_value(self, key: str) -> JsonValue:
         return self._yaml_values.get(key)
 

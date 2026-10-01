@@ -5238,15 +5238,32 @@ def _get_field_default(field_info: FieldInfo) -> JsonValue:
     return cast(JsonValue, field_info.default)  # cast-ok: Pydantic field defaults are JSON values at runtime
 
 
+def _pass_through_endpoints_beside_db(db_endpoints: object, config_endpoints: object) -> list[SettingsJsonValue]:
+    stored: Final = db_endpoints if isinstance(db_endpoints, list) else ()
+    declared: Final = config_endpoints if isinstance(config_endpoints, list) else ()
+    db_paths: Final = frozenset(endpoint.get("path") for endpoint in stored if isinstance(endpoint, dict))
+    beside_db: Final = (
+        endpoint for endpoint in declared if not isinstance(endpoint, dict) or endpoint.get("path") not in db_paths
+    )
+    return _SETTINGS_LIST.validate_python((*stored, *beside_db))
+
+
 def _with_config_file_pass_through_endpoints(
     section_config: object, resolved: Mapping[str, SettingsJsonValue]
 ) -> Mapping[str, object]:
     config_endpoints: Final = (
         section_config.get("pass_through_endpoints") if isinstance(section_config, Mapping) else None
     )
-    if config_endpoints is None or resolved.get("pass_through_endpoints"):
+    if config_endpoints is None:
         return resolved
-    return MappingProxyType({**resolved, "pass_through_endpoints": config_endpoints})
+    return MappingProxyType(
+        {
+            **resolved,
+            "pass_through_endpoints": _pass_through_endpoints_beside_db(
+                resolved.get("pass_through_endpoints"), config_endpoints
+            ),
+        }
+    )
 
 
 def _bind_general_settings_store(settings: SettingsStore) -> None:
@@ -7828,15 +7845,16 @@ class ProxyConfig:
         db_endpoints: Final = db_values.get("pass_through_endpoints")
         if isinstance(db_endpoints, list):
             await self._serve_pass_through_endpoints(db_endpoints)
+            return
+        self._publish_pass_through_endpoints(())
+
+    def _publish_pass_through_endpoints(self, db_endpoints: Sequence[SettingsJsonValue]) -> None:
+        self.settings["pass_through_endpoints"] = _pass_through_endpoints_beside_db(
+            list(db_endpoints), config_passthrough_endpoints
+        )
 
     async def _serve_pass_through_endpoints(self, db_endpoints: Sequence[SettingsJsonValue]) -> None:
-        db_paths: Final = frozenset(endpoint.get("path") for endpoint in db_endpoints if isinstance(endpoint, dict))
-        config_endpoints_beside_db: Final = (
-            endpoint for endpoint in config_passthrough_endpoints or () if endpoint.get("path") not in db_paths
-        )
-        self.settings["pass_through_endpoints"] = _SETTINGS_LIST.validate_python(
-            (*db_endpoints, *config_endpoints_beside_db)
-        )
+        self._publish_pass_through_endpoints(db_endpoints)
         await initialize_pass_through_endpoints(pass_through_endpoints=_ENDPOINT_DICTS.validate_python(db_endpoints))
 
     async def _apply_boolean_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
@@ -18476,9 +18494,13 @@ def _apply_webhook_role_gate(webhook_map, is_full_admin: bool):
     return {alert_type: "REDACTED" for alert_type in webhook_map}
 
 
-def _declared_general_setting(settings: SettingsStore, field_name: str) -> SettingValue:
+async def _declared_general_setting(
+    settings: SettingsStore, field_name: str, prisma_client: PrismaClient
+) -> SettingValue:
     if is_resource_list("general_settings", field_name):
-        return settings.stored_value(field_name)
+        row: Final = await _config_param_table(prisma_client).find_first(where={"param_name": "general_settings"})
+        stored: Final = row.param_value if row is not None and isinstance(row.param_value, Mapping) else {}
+        return stored.get(field_name, ABSENT) if stored.get(field_name) is not None else ABSENT
     if field_name not in settings:
         return ABSENT
     return settings.config_value(field_name) if settings.owned_by_config(field_name) else settings[field_name]
@@ -18522,7 +18544,7 @@ async def get_config_general_settings(
         )
 
     settings: Final = proxy_config.settings
-    declared: Final = _declared_general_setting(settings, field_name)
+    declared: Final = await _declared_general_setting(settings, field_name, prisma_client)
     if is_absent(declared):
         raise HTTPException(
             status_code=400,

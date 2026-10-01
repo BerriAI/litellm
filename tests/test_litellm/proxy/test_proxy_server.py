@@ -8113,10 +8113,6 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
 async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_entry_on_the_same_path(
     db_methods: list[str] | None, yaml_methods: list[str] | None
 ):
-    """The auth check matches pass-through entries by path only and lets any
-    matching ``auth: false`` entry through, so a DB ``auth: true`` entry can only
-    lock down a YAML-declared path if the YAML entry is dropped from the merged
-    list, whatever ``methods`` either entry declares."""
     from litellm.proxy._types import ProxyException
     from litellm.proxy.proxy_server import ProxyConfig
 
