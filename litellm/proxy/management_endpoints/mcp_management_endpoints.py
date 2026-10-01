@@ -184,6 +184,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
+        granted_toolset_ids,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -3332,18 +3333,15 @@ if MCP_AVAILABLE:
     ):
         """Return toolsets the calling key is allowed to access."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-        op: Final = user_api_key_dict.object_permission
-        # mcp_toolsets=None or [] both mean "not restricted by toolsets".
-        # For admins: either value → no restriction → return all.
-        # For non-admins: either value → no toolsets explicitly granted → return nothing.
-        # (An admin whose DB row has mcp_toolsets=[] should still see all toolsets.)
-        raw_toolsets: Final = getattr(op, "mcp_toolsets", None) if op else None
-        if not raw_toolsets:
-            if is_admin:
+        if _user_has_admin_view(user_api_key_dict):
+            op: Final = user_api_key_dict.object_permission
+            if op is None or not op.mcp_toolsets:
                 return await list_mcp_toolsets(prisma_client)
+            return await list_mcp_toolsets(prisma_client, toolset_ids=op.mcp_toolsets)
+        granted: Final = await granted_toolset_ids(user_api_key_dict)
+        if not granted:
             return []
-        return await list_mcp_toolsets(prisma_client, toolset_ids=raw_toolsets)
+        return await list_mcp_toolsets(prisma_client, toolset_ids=sorted(granted))
 
     @router.get(
         "/toolset/{toolset_id}",
@@ -3355,15 +3353,13 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        # Non-admin keys may only fetch toolsets they've been explicitly granted.
-        if not _user_has_admin_view(user_api_key_dict):
-            op: Final = user_api_key_dict.object_permission
-            granted: Final = getattr(op, "mcp_toolsets", None) if op else None
-            if granted is None or toolset_id not in granted:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "API key does not have access to this toolset."},
-                )
+        if not _user_has_admin_view(user_api_key_dict) and toolset_id not in await granted_toolset_ids(
+            user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "API key does not have access to this toolset."},
+            )
         toolset: Final = await get_mcp_toolset(prisma_client, toolset_id)
         if toolset is None:
             raise HTTPException(

@@ -8201,7 +8201,7 @@ class TestGatewaySessionAdmission:
         assert not any(k.lower() == "authorization" for k in (raw_headers or {}))
 
 
-def _make_team(team_id, mcp_servers, *, org_id=None, tool_perms=None, members=("sso-user",)):
+def _make_team(team_id, mcp_servers, *, org_id=None, tool_perms=None, members=("sso-user",), toolsets=None):
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LiteLLM_TeamTable, Member
 
     return LiteLLM_TeamTable(
@@ -8210,7 +8210,10 @@ def _make_team(team_id, mcp_servers, *, org_id=None, tool_perms=None, members=("
         members_with_roles=[Member(user_id=u, role="user") for u in members],
         access_group_ids=[],
         object_permission=LiteLLM_ObjectPermissionTable(
-            object_permission_id=f"op-{team_id}", mcp_servers=mcp_servers, mcp_tool_permissions=tool_perms
+            object_permission_id=f"op-{team_id}",
+            mcp_servers=mcp_servers,
+            mcp_tool_permissions=tool_perms,
+            mcp_toolsets=toolsets,
         ),
     )
 
@@ -8270,6 +8273,64 @@ class TestUserSubjectTeamUnion:
         with self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]):
             result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
         assert set(result) == {"srv1", "srv2", "srv3"}
+
+    async def test_toolsets_of_a_team_that_dropped_the_user_from_its_roster_are_not_granted(self):
+        """The user's cached team list still names team-revoked, but its live roster no longer lists
+        the user, so its toolset is withheld exactly as its servers are on the aggregate /mcp."""
+        from litellm.proxy._experimental.mcp_server.ui_session_utils import granted_toolset_ids
+
+        teams = {
+            "team-kept": _make_team("team-kept", [], toolsets=["ts-kept"]),
+            "team-revoked": _make_team("team-revoked", [], toolsets=["ts-revoked"], members=("someone-else",)),
+        }
+        auth = _make_admitted_subject("sso-user")
+        with self._patch(teams_by_id=teams, user_teams=["team-kept", "team-revoked"]):
+            granted = await granted_toolset_ids(auth)
+        assert granted == {"ts-kept"}
+
+    async def test_a_pinned_toolset_narrows_every_source_to_the_toolset_servers_and_tools(self):
+        """On /toolset/{name}/mcp the admitted subject carries mcp_toolset_id; team-a's grant on srv1 and
+        srv2 with every tool collapses to the toolset's srv1 and its one tool, and team-b's srv3 drops."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        teams = {"team-a": _make_team("team-a", ["srv1", "srv2"]), "team-b": _make_team("team-b", ["srv3"])}
+        auth = _make_admitted_subject("sso-user")
+        pinned = auth.model_copy(update={"mcp_toolset_id": "ts-1"})
+        resolve = AsyncMock(return_value={"srv1": ["add"]})
+        with (
+            self._patch(teams_by_id=teams, user_teams=["team-a", "team-b"]),
+            patch.object(global_mcp_server_manager, "resolve_toolset_tool_permissions", resolve),
+        ):
+            servers = await MCPRequestHandler.resolve_admitted_subject_servers(pinned)
+            tools = await MCPRequestHandler.resolve_admitted_subject_tools("srv1", pinned)
+            unpinned_servers = await MCPRequestHandler.resolve_admitted_subject_servers(auth)
+            unpinned_tools = await MCPRequestHandler.resolve_admitted_subject_tools("srv1", auth)
+        assert servers == ["srv1"]
+        assert tools == ["add"]
+        assert set(unpinned_servers) == {"srv1", "srv2", "srv3"}
+        assert unpinned_tools is None
+        assert {call.kwargs["toolset_ids"][0] for call in resolve.await_args_list} == {"ts-1"}
+
+    async def test_a_fresh_policy_pinned_toolset_bypasses_the_toolset_permission_cache(self):
+        """A session admitted under requires_fresh_policy reads the pinned toolset from the writer, so a
+        tool revoked from the toolset is gone on the very next request (Devin Review 4150024092)."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        teams = {"team-a": _make_team("team-a", ["srv1", "srv2"])}
+        auth = _make_admitted_subject("sso-user")
+        auth.requires_fresh_policy = True
+        pinned = auth.model_copy(update={"mcp_toolset_id": "ts-1"})
+        resolve = AsyncMock(return_value={"srv1": ["add"]})
+        with (
+            self._patch(teams_by_id=teams, user_teams=["team-a"]),
+            patch.object(global_mcp_server_manager, "resolve_toolset_tool_permissions", resolve),
+        ):
+            servers = await MCPRequestHandler.resolve_admitted_subject_servers(pinned)
+            tools = await MCPRequestHandler.resolve_admitted_subject_tools("srv1", pinned)
+        assert servers == ["srv1"]
+        assert tools == ["add"]
+        assert resolve.await_args_list
+        assert all(call.kwargs == {"toolset_ids": ["ts-1"], "requires_fresh_policy": True} for call in resolve.await_args_list)
 
     async def test_key_based_caller_uses_single_team_only(self):
         """A key-based caller (api_key set) with a team_id sees ONLY that team, even though the

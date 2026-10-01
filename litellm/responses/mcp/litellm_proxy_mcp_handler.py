@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from mcp.types import Tool as MCPTool
 
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import GrantedToolsetIds
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
 else:
@@ -223,7 +224,9 @@ class LiteLLM_Proxy_MCP_Handler:
                     mcp_servers=all_server_ids,
                     mcp_tool_permissions=tool_permissions,
                 )
-            return user_api_key_auth.model_copy(update={"object_permission": updated_op})
+            return user_api_key_auth.model_copy(
+                update={"object_permission": updated_op, "mcp_explicit_grants_only": True}
+            )
         except Exception as _e:
             verbose_logger.debug("Could not apply toolset permissions: %s", _e)
             return user_api_key_auth
@@ -237,6 +240,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        granted_toolsets: "GrantedToolsetIds | None" = None,
     ) -> tuple[list[MCPTool], list[str]]:
         """
         Get available tools from the MCP server manager.
@@ -279,23 +283,19 @@ class LiteLLM_Proxy_MCP_Handler:
                     if prisma_client is not None:
                         toolset = await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name)
                         if toolset is not None:
-                            # Access control: only allow if the key explicitly grants this toolset.
                             if user_api_key_auth is not None:
+                                from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+                                    granted_toolset_ids,
+                                )
                                 from litellm.proxy.management_endpoints.common_utils import (
                                     _user_has_admin_view,
                                 )
 
-                                is_admin = _user_has_admin_view(user_api_key_auth)
-                                if not is_admin:
-                                    op = user_api_key_auth.object_permission
-                                    granted = getattr(op, "mcp_toolsets", None) if op else None
-                                    # None means no grants configured → deny (consistent with
-                                    # fetch_mcp_toolsets which returns [] for unconfigured keys)
-                                    if granted is None or toolset.toolset_id not in granted:
-                                        verbose_logger.debug(
-                                            "Key does not have access to toolset '%s', skipping.", name
-                                        )
-                                        continue
+                                if not _user_has_admin_view(user_api_key_auth) and toolset.toolset_id not in (
+                                    await (granted_toolsets or granted_toolset_ids)(user_api_key_auth)
+                                ):
+                                    verbose_logger.debug("Key does not have access to toolset '%s', skipping.", name)
+                                    continue
                             resolved_toolset_ids.append(toolset.toolset_id)
                             # Don't add to resolved_mcp_servers — toolset scope
                             # restricts via object_permission, not server name filter.
