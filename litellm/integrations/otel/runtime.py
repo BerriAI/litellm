@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 @cache
-def _otel_runtime() -> "tuple[Callable[[str], AbstractContextManager[Span | None]], Callable[..., None]] | None":
+def _otel_runtime() -> "tuple[Callable[..., AbstractContextManager[Span | None]], Callable[..., None]] | None":
     """Resolve the SDK-backed hooks once and cache the outcome, absence included.
 
     CPython never caches a failed import, so without this memoization every call
@@ -32,7 +32,7 @@ def _otel_runtime() -> "tuple[Callable[[str], AbstractContextManager[Span | None
 
 
 @contextmanager
-def phase_span(name: str) -> "Iterator[Span | None]":
+def phase_span(name: str, *, redact_content: bool = False) -> "Iterator[Span | None]":
     """Run a request phase inside a live active span so its DB/service calls nest.
 
     Yields ``None`` (a plain no-op) when the OTel SDK is unavailable or V2 is not
@@ -42,7 +42,7 @@ def phase_span(name: str) -> "Iterator[Span | None]":
     if runtime is None:
         yield None
         return
-    with runtime[0](name) as span:
+    with runtime[0](name, redact_content=redact_content) as span:
         yield span
 
 

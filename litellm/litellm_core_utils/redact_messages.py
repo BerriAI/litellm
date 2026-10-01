@@ -11,7 +11,8 @@ import asyncio
 import copy
 import inspect
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -20,13 +21,19 @@ from litellm.litellm_core_utils.classifier_logging import without_classifier_aud
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    iter_client_callback_metadata_dicts,
+)
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
     redact_vertex_ai_metadata_from_logged_object,
 )
 from litellm.secret_managers.main import str_to_bool
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import (
+    StandardCallbackDynamicParams,
+    StandardLoggingPayloadErrorInformation,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -183,6 +190,100 @@ def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[
     return _redact_standard_logging_object(payload)
 
 
+_REDACTED_ERROR_FIELDS: Final = ("error_message", "traceback")
+
+_MESSAGE_REDACTION_ENABLE_HEADERS: Final = (
+    "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
+    "x-litellm-enable-message-redaction",  # new header
+)
+
+
+def _is_non_empty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value)
+
+
+def redact_error_information(
+    error_information: StandardLoggingPayloadErrorInformation,
+) -> StandardLoggingPayloadErrorInformation:
+    """
+    Return a copy of ``StandardLoggingPayloadErrorInformation`` with the fields that can
+    quote the prompt (``error_message``, ``traceback``) replaced by ``REDACTED_BY_LITELLM``
+    when they are non-empty strings. Every other field is carried over unchanged.
+    """
+    redacted_fields: Final = MappingProxyType(
+        {
+            field: REDACTED_BY_LITELLM
+            for field in _REDACTED_ERROR_FIELDS
+            if _is_non_empty_str(error_information.get(field))
+        }
+    )
+    return cast(  # cast-ok: same TypedDict shape as the input, two fields narrowed to the sentinel
+        StandardLoggingPayloadErrorInformation,
+        {**error_information, **redacted_fields},  # mutable-ok: callers pop/update keys on the fresh payload dict
+    )
+
+
+def _request_turn_off_message_logging(request_data: Mapping[str, object]) -> object:
+    """``turn_off_message_logging`` resolves like ``initialize_standard_callback_dynamic_params``:
+    the top-level value when present, else the first client-metadata slot carrying it."""
+    return (
+        request_data["turn_off_message_logging"]
+        if "turn_off_message_logging" in request_data
+        else next(
+            (
+                slot["turn_off_message_logging"]
+                for _, slot in iter_client_callback_metadata_dicts(dict(request_data))
+                if "turn_off_message_logging" in slot
+            ),
+            None,
+        )
+    )
+
+
+def request_opts_into_message_redaction(headers: Mapping[str, str], request_data: Mapping[str, object]) -> bool:
+    """Opt-in signals only: usable at auth time before the key's
+    ``allow_client_message_redaction_opt_out`` permission is known, so the disable
+    header and the global flag are deliberately not consulted."""
+    return (
+        any(bool(headers.get(header)) for header in _MESSAGE_REDACTION_ENABLE_HEADERS)
+        or _request_turn_off_message_logging(request_data) is True
+    )
+
+
+def should_redact_failed_request(request_data: Mapping[str, object]) -> bool:
+    """
+    Message-redaction decision for proxy ``async_post_call_failure_hook`` callbacks, which
+    only receive ``request_data`` (the Logging object is popped before hooks run).
+    ``litellm_metadata`` is included only when present so
+    ``get_metadata_variable_name_from_kwargs`` resolves ``metadata`` for chat routes.
+    """
+    dynamic_param: Final = _request_turn_off_message_logging(request_data)
+    litellm_params: Final = MappingProxyType(
+        {
+            key: request_data.get(key)
+            for key in ("metadata", "litellm_metadata")
+            if key == "metadata" or key in request_data
+        }
+    )
+    return should_redact_message_logging(
+        {  # mutable-ok: the model_call_details shape the decision helper reads
+            "litellm_params": litellm_params,
+            "standard_callback_dynamic_params": {  # mutable-ok: dynamic-params slot the helper reads
+                "turn_off_message_logging": dynamic_param
+            },
+        }
+    )
+
+
+def maybe_redact_error_information(
+    error_information: StandardLoggingPayloadErrorInformation,
+    request_data: Mapping[str, object],
+) -> StandardLoggingPayloadErrorInformation:
+    if should_redact_failed_request(request_data):
+        return redact_error_information(error_information)
+    return error_information
+
+
 def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, object]:
     standard_logging_object: Final = copy.deepcopy(without_classifier_audit(payload))
     redacted_str: Final = REDACTED_BY_LITELLM
@@ -207,6 +308,16 @@ def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, 
         else:
             # For other formats (empty dict, None, etc.), use simple text format
             standard_logging_object["response"] = {"text": redacted_str}
+
+    if standard_logging_object.get("error_str"):
+        standard_logging_object["error_str"] = redacted_str
+    error_information: Final = standard_logging_object.get("error_information")
+    if isinstance(error_information, Mapping):
+        standard_logging_object["error_information"] = redact_error_information(
+            cast(  # cast-ok: same TypedDict shape as the input mapping
+                StandardLoggingPayloadErrorInformation, error_information
+            )
+        )
     return standard_logging_object
 
 
@@ -272,6 +383,8 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
     if isinstance(standard_logging_object, Mapping):
         model_call_details["standard_logging_object"] = _redact_standard_logging_object(standard_logging_object)
+    if isinstance(model_call_details.get("traceback_exception"), str) and model_call_details["traceback_exception"]:
+        model_call_details["traceback_exception"] = REDACTED_BY_LITELLM
     redact_vertex_ai_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
@@ -352,13 +465,8 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
         # User explicitly disabled redaction via header
         return False
 
-    possible_enable_headers: Final = [
-        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
-        "x-litellm-enable-message-redaction",  # new header
-    ]
-
     is_redaction_enabled_via_header = False
-    for header in possible_enable_headers:
+    for header in _MESSAGE_REDACTION_ENABLE_HEADERS:
         if bool(request_headers.get(header, False)):
             is_redaction_enabled_via_header = True
             break

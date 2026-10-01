@@ -262,3 +262,79 @@ def test_mlflow_end_span_or_trace_works_with_mlflow_2x_client():
             span=child_span, outputs="out", end_time_ns=1, status="OK"
         )
         assert client.ended_spans == [("req-2", "span-2")]
+
+def _failure_modules():
+    modules = _mock_mlflow_modules()
+
+    class RecordingSpanEvent:
+        calls = []
+
+        def __init__(self, name, attributes):
+            self.name = name
+            self.attributes = attributes
+
+        @classmethod
+        def from_exception(cls, exception):
+            cls.calls.append(exception)
+            return cls("exception-from-exception", {"exception.message": str(exception)})
+
+    RecordingSpanEvent.calls = []
+    modules["mlflow.entities"].SpanEvent = RecordingSpanEvent
+    modules["_span_event_cls"] = RecordingSpanEvent
+    return modules
+
+
+def test_mlflow_failure_event_redacts_exception_when_gated(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    modules = _failure_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        span = MagicMock()
+        mlflow_logger._start_span_or_trace = MagicMock(return_value=span)
+        mlflow_logger._end_span_or_trace = MagicMock()
+        mlflow_logger._extract_and_set_chat_attributes = MagicMock()
+
+        secret = "secret-prompt-marker"
+        mlflow_logger._handle_failure(
+            kwargs={"litellm_call_id": "x", "exception": Exception(f"boom {secret}")},
+            response_obj=None,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow(),
+        )
+
+        event = span.add_event.call_args.args[0]
+        assert event.attributes == {
+            "exception.type": "Exception",
+            "exception.message": "redacted-by-litellm",
+            "exception.stacktrace": "redacted-by-litellm",
+        }
+        assert modules["_span_event_cls"].calls == []
+
+
+def test_mlflow_failure_event_uses_from_exception_when_not_gated(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    modules = _failure_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        span = MagicMock()
+        mlflow_logger._start_span_or_trace = MagicMock(return_value=span)
+        mlflow_logger._end_span_or_trace = MagicMock()
+        mlflow_logger._extract_and_set_chat_attributes = MagicMock()
+
+        exc = Exception("boom secret-prompt-marker")
+        mlflow_logger._handle_failure(
+            kwargs={"litellm_call_id": "x", "exception": exc},
+            response_obj=None,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow(),
+        )
+
+        assert modules["_span_event_cls"].calls == [exc]

@@ -4,12 +4,16 @@ import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, cast
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
+from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER,
+    EMPTY_MAPPING,
+    REDACTED_BY_LITELLM,
+)
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -24,6 +28,7 @@ from litellm.types.utils import (
     StandardAuditLogPayload,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
+    StandardLoggingPayloadErrorInformation,
 )
 
 if TYPE_CHECKING:
@@ -60,6 +65,22 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
     re.MULTILINE,
 )
+
+
+def _redacted_failure_error_fields(standard_logging_object: Mapping[str, object]) -> dict[str, object]:
+    from litellm.litellm_core_utils.redact_messages import redact_error_information
+
+    fields: Final[dict[str, object]] = {}  # mutable-ok: merged into the standard_logging_object copy below
+    if standard_logging_object.get("error_str"):
+        fields["error_str"] = REDACTED_BY_LITELLM
+    error_information: Final = standard_logging_object.get("error_information")
+    if isinstance(error_information, Mapping):
+        fields["error_information"] = redact_error_information(
+            cast(  # cast-ok: same TypedDict shape as the input mapping
+                StandardLoggingPayloadErrorInformation, error_information
+            )
+        )
+    return fields
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
@@ -900,7 +921,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This method handles two features:
         1. turn_off_message_logging: When True, redacts messages and responses (unless the callback
-           redacts them itself, see `redacts_messages_itself`)
+           redacts them itself, see `redacts_messages_itself`), and redacts `error_str`,
+           `error_information`'s message/traceback and `traceback_exception` independent of
+           `redacts_messages_itself`
         2. standard_logging_payload_excluded_fields: Removes specified fields entirely
 
         Return a modified copy of the provided logging payload.
@@ -960,6 +983,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict: Final = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
+        if turn_off_message_logging:
+            standard_logging_object_copy.update(_redacted_failure_error_fields(standard_logging_object_copy))
+
         params: Final = model_call_details.get("litellm_params")
         request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
         redacted_params: Final = (
@@ -967,9 +993,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict)
             else EMPTY_MAPPING
         )
+        redacted_failure_fields: Final = (
+            MappingProxyType({"traceback_exception": REDACTED_BY_LITELLM})
+            if turn_off_message_logging and model_call_details.get("traceback_exception")
+            else EMPTY_MAPPING
+        )
         return {
             **model_call_details,
             **redacted_params,
+            **redacted_failure_fields,
             "standard_logging_object": standard_logging_object_copy,
         }
 
