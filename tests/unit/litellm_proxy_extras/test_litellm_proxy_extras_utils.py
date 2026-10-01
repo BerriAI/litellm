@@ -2,7 +2,9 @@ import glob
 import os
 import re
 import sys
+import threading
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -1024,3 +1026,143 @@ class TestJWTKeyMappingCascade:
                 f"{path} must declare onDelete: Cascade on the JWT key mapping "
                 "relation (issue #33702)"
             )
+
+
+
+class TestBuildRequestLogIndexes:
+    """The migration job hands the index build the direct database URL and the schema
+    the migrations target, waits for it, and reports its result."""
+
+    @pytest.fixture
+    def builds(self):
+        return []
+
+    @pytest.fixture
+    def build(self, builds):
+        def record(database_url: str, schema: str) -> bool:
+            builds.append((database_url, schema))
+            return True
+
+        return record
+
+    def test_the_build_gets_the_direct_url_without_prisma_params_and_the_prisma_schema(self, monkeypatch, builds, build):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@pooler:6543/db?schema=tenant&pgbouncer=true")
+        monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@primary:5432/db?connection_limit=1")
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == [("postgresql://u:p@primary:5432/db", "tenant")]
+
+    def test_the_build_defaults_to_the_database_url_and_the_public_schema(self, monkeypatch, builds, build):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == [("postgresql://u:p@primary:5432/db", "public")]
+
+    def test_a_build_that_leaves_indexes_missing_is_reported_so_the_job_reruns(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=lambda url, schema: False) is False
+
+    def test_without_a_database_url_nothing_is_built(self, monkeypatch, builds, build):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds == []
+
+
+class TestStartRequestLogIndexBuild:
+    """A serving proxy that ran the migrations starts the index build on a daemon thread
+    and goes on to serve while it runs."""
+
+    def test_the_build_runs_on_a_daemon_thread_that_does_not_hold_up_the_caller(self):
+        release: Final = threading.Event()
+        builds: Final[list[str]] = []  # mutable-ok: the builder thread hands back the thread it ran on
+
+        def build() -> bool:
+            assert release.wait(5), "the caller never came back from start_request_log_index_build"
+            builds.append(threading.current_thread().name)
+            return True
+
+        thread: Final = ProxyExtrasDBManager.start_request_log_index_build(build=build)
+
+        assert builds == [], "the build ran before start_request_log_index_build returned"
+        assert thread.daemon is True
+        release.set()
+        thread.join(5)
+        assert builds == ["litellm-request-log-indexes"]
+
+
+class TestRunMigrationJob:
+    """`run_migration_job` is `setup_database` followed by the index build, each step's
+    result deciding whether the job reports success."""
+
+    @pytest.fixture
+    def calls(self):
+        return []
+
+    @pytest.fixture
+    def setup(self, calls):
+        def record(result: bool):
+            def setup_database(use_migrate: bool, use_v2_resolver: bool) -> bool:
+                calls.append(("setup", use_migrate, use_v2_resolver))
+                return result
+
+            return setup_database
+
+        return record
+
+    @pytest.fixture
+    def build(self, calls):
+        def record(result: bool):
+            def build_request_log_indexes() -> bool:
+                calls.append(("build",))
+                return result
+
+            return build_request_log_indexes
+
+        return record
+
+    def test_the_job_builds_the_indexes_after_the_migrations_succeed(self, calls, setup, build):
+        assert ProxyExtrasDBManager.run_migration_job(True, False, setup=setup(True), build=build(True)) is True
+
+        assert calls == [("setup", True, False), ("build",)]
+
+    def test_the_job_fails_without_building_when_the_migrations_fail(self, calls, setup, build):
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(False), build=build(True)) is False
+
+        assert calls == [("setup", True, True)]
+
+    def test_the_job_fails_when_an_index_could_not_be_built(self, calls, setup, build):
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(True), build=build(False)) is False
+
+        assert calls == [("setup", True, True), ("build",)]
+
+
+class TestMigrationJobOwnedDrift:
+    JOB_INDEXES = (
+        "-- CreateIndex\n"
+        'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id");\n'
+        "\n-- CreateIndex\n"
+        'CREATE INDEX "LiteLLM_SpendLogs_api_key_startTime_idx" ON "LiteLLM_SpendLogs"("api_key", "startTime");\n'
+    )
+
+    def test_a_plain_spend_logs_table_only_loses_the_migration_job_indexes(self):
+        filtered = ProxyExtrasDBManager._filter_migration_job_owned_drift(
+            _PARTITIONED_DRIFT_SQL + self.JOB_INDEXES, partitioned=False
+        )
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in filtered
+        assert "LiteLLM_SpendLogs_api_key_startTime_idx" not in filtered
+        assert 'PRIMARY KEY ("request_id")' in filtered
+
+    def test_a_partitioned_spend_logs_table_also_loses_its_partitioning_artifacts(self):
+        filtered = ProxyExtrasDBManager._filter_migration_job_owned_drift(
+            _PARTITIONED_DRIFT_SQL + self.JOB_INDEXES, partitioned=True
+        )
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in filtered
+        assert 'PRIMARY KEY ("request_id")' not in filtered
+        assert "LiteLLM_SpendLogs_legacy" not in filtered
+        assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in filtered
