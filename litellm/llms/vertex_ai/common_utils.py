@@ -1,3 +1,5 @@
+import itertools
+import json
 import re
 from collections.abc import Mapping
 from copy import deepcopy
@@ -647,7 +649,82 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
+_MAX_UNION_MERGE_BRANCHES: Final = 64
+_MAX_UNION_MERGE_PROPERTIES: Final = 256
+_MAX_UNION_MERGE_VARIANTS: Final = 512
+
+
+def _extract_union_variants(definition: object) -> tuple[object, ...]:
+    if isinstance(definition, dict) and tuple(definition.keys()) == ("anyOf",):
+        variants: Final = definition.get("anyOf")
+        if isinstance(variants, list) and variants:
+            return tuple(variants)
+    return (definition,)
+
+
+def _merge_property_definitions(definitions: tuple[object, ...]) -> object:
+    expanded: Final = tuple(
+        itertools.chain.from_iterable(_extract_union_variants(definition) for definition in definitions)
+    )
+    seen_keys: Final[set[str]] = set()  # mutable-ok: O(N) deduplication key set
+    unique: Final = tuple(
+        variant
+        for key, variant in ((json.dumps(v, sort_keys=True, default=str), v) for v in expanded)
+        if key not in seen_keys and not seen_keys.add(key)
+    )
+    if len(unique) == 1:
+        return unique[0]
+    return {"anyOf": list(unique)}
+
+
+def _merge_object_union_root(
+    schema: dict[str, object],  # mutable-ok: Vertex schema must stay a plain dict
+) -> dict[str, object]:  # mutable-ok: Vertex schema must stay a plain dict
+    branches: Final = schema.get("anyOf")
+    if not isinstance(branches, list) or not branches or len(branches) > _MAX_UNION_MERGE_BRANCHES:
+        return schema
+
+    if not all(isinstance(branch, dict) and branch.get("type") == "object" for branch in branches):
+        return schema
+
+    property_sources: Final = tuple(
+        branch["properties"] for branch in branches if isinstance(branch.get("properties"), dict)
+    )
+    grouped_defs: Final[dict[str, list[object]]] = {}  # mutable-ok: single-pass O(N) property grouping
+    for source in property_sources:
+        for name, defn in source.items():
+            grouped_defs.setdefault(name, []).append(defn)
+
+    all_defs: Final = tuple(itertools.chain.from_iterable(grouped_defs.values()))
+    total_variants: Final = sum(len(_extract_union_variants(defn)) for defn in all_defs)
+    if len(grouped_defs) > _MAX_UNION_MERGE_PROPERTIES or total_variants > _MAX_UNION_MERGE_VARIANTS:
+        return schema
+
+    properties: Final = {name: _merge_property_definitions(tuple(defs)) for name, defs in grouped_defs.items()}
+    required_sets: Final = tuple(
+        frozenset(branch["required"]) if isinstance(branch.get("required"), list) else frozenset()
+        for branch in branches
+    )
+    shared_required: Final = frozenset.intersection(*required_sets)
+    carried: Final = {key: value for key, value in schema.items() if key not in ("anyOf", "required")}
+    merged: Final = {
+        **carried,
+        "type": "object",
+        "properties": properties,
+    }
+    ordered_required: Final = [name for name in properties if name in shared_required]
+
+    if not ordered_required:
+        return merged
+
+    return {**merged, "required": ordered_required}
+
+
+def _build_vertex_schema(
+    parameters: dict,
+    add_property_ordering: bool = False,
+    enforce_object_root: bool = False,
+):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
@@ -657,6 +734,7 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
         parameters: dict - the json schema to build from
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
+        enforce_object_root: bool - whether to merge a root union of object branches into a single object.
     Returns:
         parameters: dict - the input parameters, modified in place
     """
@@ -690,12 +768,13 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # Postprocessing
     # Filter out fields that don't exist in Schema
 
-    parameters = filter_schema_fields(parameters, valid_schema_fields)
+    filtered: Final = filter_schema_fields(parameters, valid_schema_fields)
+    rooted: Final = _merge_object_union_root(filtered) if enforce_object_root else filtered
 
     if add_property_ordering:
-        set_schema_property_ordering(parameters)
+        set_schema_property_ordering(rooted)
 
-    return parameters
+    return rooted
 
 
 def _build_json_schema(parameters: dict) -> dict:

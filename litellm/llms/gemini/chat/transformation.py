@@ -77,6 +77,9 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
     def get_config(cls):
         return super().get_config()
 
+    def _should_enforce_tool_parameters_object_root(self) -> bool:
+        return False
+
     def is_model_gemini_audio_model(self, model: str) -> bool:
         return "tts" in model
 
