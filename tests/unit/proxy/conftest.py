@@ -159,7 +159,6 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "llm_router",
 )
 
-_MODULE_GLOBAL_MISSING = object()
 _proxy_module_globals_snapshot = pytest.StashKey[Dict[str, object]]()
 
 
@@ -168,8 +167,9 @@ def pytest_runtest_setup(item):
     from litellm.proxy import proxy_server
 
     item.stash[_proxy_module_globals_snapshot] = {
-        name: getattr(proxy_server, name, _MODULE_GLOBAL_MISSING)
+        name: vars(proxy_server)[name]
         for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
+        if name in vars(proxy_server)
     }
     yield
 
@@ -182,12 +182,11 @@ def pytest_runtest_teardown(item, nextitem):
         return
     from litellm.proxy import proxy_server
 
-    for name, value in snapshot.items():
-        if value is _MODULE_GLOBAL_MISSING:
-            if hasattr(proxy_server, name):
-                delattr(proxy_server, name)
-        else:
-            setattr(proxy_server, name, value)
+    for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE:
+        if name in snapshot:
+            setattr(proxy_server, name, snapshot[name])
+        elif name in vars(proxy_server):
+            delattr(proxy_server, name)
 
 
 @pytest.fixture
