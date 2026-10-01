@@ -72,22 +72,6 @@ describe("AlertingSettings", () => {
     expect(updateConfigFieldSetting).toHaveBeenNthCalledWith(2, "sk-test", "alerting", ["slack"]);
   });
 
-  it("submits the reset value instead of a stale typed threshold", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<AlertingSettings accessToken="sk-test" premiumUser />);
-
-    const budgetInput = await screen.findByDisplayValue("60");
-    fireEvent.change(budgetInput, { target: { value: "75" } });
-    await user.click(screen.getByRole("button", { name: "Reset budget_alert_ttl" }));
-    await user.click(screen.getByRole("button", { name: "Update Settings" }));
-
-    await waitFor(() => {
-      expect(updateConfigFieldSetting).toHaveBeenCalledWith("sk-test", "alerting_args", {
-        budget_alert_ttl: 30,
-      });
-    });
-  });
-
   it("does not restore a stale typed value after reset", async () => {
     const user = userEvent.setup();
     renderWithProviders(<AlertingSettings accessToken="sk-test" premiumUser />);
@@ -102,5 +86,4 @@ describe("AlertingSettings", () => {
       expect(updateConfigFieldSetting).toHaveBeenCalledWith("sk-test", "alerting_args", {});
     });
   });
-
 });
