@@ -194,25 +194,51 @@ export function MessageCard({ message, model }: { message: TraceMessage; model: 
   );
 }
 
-/** One-line card for a tool's result: tile, name, then the result text; red when the tool failed. */
+const LONG_RESULT_CHARS = 120;
+
+/** Tool result card: one line by default; long or multiline results expand in place. Red when the tool failed. */
 export function ToolResultCard({ name, result, failed = false }: { name: string; result: string; failed?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const expandable = result.length > LONG_RESULT_CHARS || result.includes("\n");
+  const tone = failed ? "text-destructive" : "text-trace-duration";
   return (
-    <article className={cn(HEADER, "rounded-[4px] shadow-[0_1px_1px_0_rgba(16,24,40,0.02)]")}>
-      <RoleTile role="tool" failed={failed} />
-      <span className="flex shrink-0 items-center gap-1.5">
-        <span className={cn(LABEL, failed && "text-destructive")}>{name}</span>
-        <CopyButton value={name} label={`Copy ${name} name`} iconOnly className={INLINE_COPY} />
-      </span>
-      <span
-        className={cn(
-          "min-w-0 truncate text-[13px] leading-[1.2] tracking-[-0.26px]",
-          failed ? "text-destructive" : "text-trace-duration",
-        )}
-        title={result}
+    <article className="flex flex-col">
+      <div
+        className={cn(HEADER, open ? "rounded-t-[4px]" : "rounded-[4px]", "shadow-[0_1px_1px_0_rgba(16,24,40,0.02)]")}
       >
-        {result || "No output"}
-      </span>
-      <CopyButton value={result} label={`Copy ${name} result`} iconOnly className={CARD_COPY} />
+        <RoleTile role="tool" failed={failed} />
+        <span className="flex shrink-0 items-center gap-1.5">
+          <span className={cn(LABEL, failed && "text-destructive")}>{name}</span>
+          <CopyButton value={name} label={`Copy ${name} name`} iconOnly className={INLINE_COPY} />
+        </span>
+        {expandable ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-label={`${open ? "Collapse" : "Expand"} ${name} result`}
+            onClick={() => setOpen((prev) => !prev)}
+            className={cn("flex min-w-0 cursor-pointer items-center gap-1 text-left", tone)}
+          >
+            <FoldChevron open={open} className="size-3 shrink-0" />
+            {!open && <span className="min-w-0 truncate text-[13px] leading-[1.2]">{result}</span>}
+          </button>
+        ) : (
+          <span className={cn("min-w-0 truncate text-[13px] leading-[1.2] tracking-[-0.26px]", tone)}>
+            {result || "No output"}
+          </span>
+        )}
+        <CopyButton value={result} label={`Copy ${name} result`} iconOnly className={CARD_COPY} />
+      </div>
+      {open && (
+        <pre
+          className={cn(
+            "max-h-80 overflow-auto rounded-b-[4px] border-[0.67px] border-t-0 border-trace-card-border bg-trace-chip px-3 py-2 font-mono text-[12px] leading-[1.5] break-words whitespace-pre-wrap",
+            tone,
+          )}
+        >
+          {result}
+        </pre>
+      )}
     </article>
   );
 }

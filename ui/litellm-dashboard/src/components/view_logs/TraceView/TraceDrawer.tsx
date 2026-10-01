@@ -142,7 +142,18 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
 }
 
 /** Tree + detail pane for one loaded run, with J/K/arrow keyboard navigation. */
-function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessToken: string; initialSpanId?: string }) {
+const SPAN_KEYS = { down: ["j", "J", "ArrowDown"], up: ["k", "K", "ArrowUp"] } as const;
+const EMBEDDED_SPAN_KEYS = { down: ["ArrowDown"], up: ["ArrowUp"] } as const;
+
+interface RunBodyProps {
+  trace: Trace;
+  accessToken: string;
+  initialSpanId?: string;
+  embedded: boolean;
+}
+
+function RunBody({ trace, accessToken, initialSpanId, embedded }: RunBodyProps) {
+  const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
   const initial = useMemo(() => initialRunSelection(trace, initialSpanId), [trace, initialSpanId]);
   const [state, setState] = useState<SpanTreeState>(initial.state);
   const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
@@ -186,11 +197,11 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
         setDetailOpen(false);
         return;
       }
-      if (["j", "J", "ArrowDown"].includes(event.key)) {
+      if ((spanKeys.down as readonly string[]).includes(event.key)) {
         event.preventDefault();
         const next = rows[Math.min(rows.length - 1, index + 1)];
         if (next) select(next.id);
-      } else if (["k", "K", "ArrowUp"].includes(event.key)) {
+      } else if ((spanKeys.up as readonly string[]).includes(event.key)) {
         event.preventDefault();
         const next = rows[Math.max(0, index - 1)];
         if (next) select(next.id);
@@ -204,7 +215,7 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup]);
+  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup, spanKeys]);
 
   return (
     <div
@@ -225,6 +236,7 @@ function RunBody({ trace, accessToken, initialSpanId }: { trace: Trace; accessTo
         onToggleSpan={toggleSpan}
         onToggleGroup={toggleGroup}
         onLoadMore={loadMore}
+        embedded={embedded}
       />
       {detailOpen && (
         <div className="min-h-0 min-w-0 animate-slide-left motion-reduce:animate-none">
@@ -295,7 +307,13 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
       data-testid="run-view"
     >
       <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
-      <RunBody key={trace.summary.trace_id} trace={trace} accessToken={accessToken} initialSpanId={initialSpanId} />
+      <RunBody
+        key={trace.summary.trace_id}
+        trace={trace}
+        accessToken={accessToken}
+        initialSpanId={initialSpanId}
+        embedded={embedded}
+      />
     </div>
   );
 }

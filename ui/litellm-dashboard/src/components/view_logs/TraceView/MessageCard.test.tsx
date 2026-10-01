@@ -2,11 +2,29 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { MessageCard, Section } from "./MessageCard";
+import { MessageCard, Section, ToolResultCard } from "./MessageCard";
 
 vi.mock("./spanProvider", () => ({ useSpanProvider: () => null }));
 
 const LONG_QUERY = "Find every invoice for the customer that was billed twice. ".repeat(3).trim();
+
+describe("ToolResultCard", () => {
+  it("expands a multiline result to its full text and keeps short results on one line", async () => {
+    const user = userEvent.setup();
+    const result = "line one\nline two\nTraceback: boom";
+    const { unmount } = render(<ToolResultCard name="read_file" result={result} failed />);
+    const toggle = screen.getByRole("button", { name: "Expand read_file result" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: "Collapse read_file result" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText((_, el) => el?.tagName === "PRE" && el.textContent === result)).toBeVisible();
+
+    unmount();
+    render(<ToolResultCard name="ls" result="No files found" />);
+    expect(screen.getByText("No files found")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /^(Expand|Collapse) ls result$/ })).not.toBeInTheDocument();
+  });
+});
 
 describe("MessageCard", () => {
   it("folds the card body from the role tile and restores it", async () => {

@@ -280,9 +280,10 @@ const blockText = (block: unknown): string | null => {
 
 const NON_TEXT_BLOCKS: ReadonlySet<unknown> = new Set(["reasoning", "function_call", "tool_use", "tool_call"]);
 
-const isKnownBlock = (block: unknown): boolean =>
-  blockText(block) !== null ||
-  (typeof block === "object" && block !== null && NON_TEXT_BLOCKS.has(Reflect.get(block, "type")));
+const blockType = (block: unknown): unknown =>
+  typeof block === "object" && block !== null ? Reflect.get(block, "type") : undefined;
+
+const isKnownBlock = (block: unknown): boolean => blockText(block) !== null || NON_TEXT_BLOCKS.has(blockType(block));
 
 /** Block-list content (reasoning / function_call / text blocks) as its text; unknown content unchanged. */
 export function messageText(content: string): string {
@@ -357,26 +358,21 @@ export interface TreeGuide {
   stem: boolean;
 }
 
-interface GuideScan {
-  guides: readonly TreeGuide[];
-  /** `levels[d]` is true when a later row at depth d exists before any shallower row. */
-  levels: readonly boolean[];
-  nextDepth: number;
-}
-
 /** Rail / elbow / stem flags for each row from row depths alone, in one backward pass. */
 export function treeGuides(depths: readonly number[]): TreeGuide[] {
-  const scan = depths.reduceRight<GuideScan>(
-    ({ guides, levels, nextDepth }, depth) => {
+  const levels: boolean[] = [];
+  return depths
+    .map((depth, i) => ({ depth, i }))
+    .reverse()
+    .map(({ depth, i }) => {
       const guide: TreeGuide = {
         rails: Array.from({ length: Math.max(0, depth - 1) }, (_, k) => levels[k + 1] === true),
         last: levels[depth] !== true,
-        stem: nextDepth > depth,
+        stem: (depths[i + 1] ?? -1) > depth,
       };
-      const ancestors = Array.from({ length: depth }, (_, k) => levels[k] === true);
-      return { guides: [guide, ...guides], levels: [...ancestors, true], nextDepth: depth };
-    },
-    { guides: [], levels: [], nextDepth: -1 },
-  );
-  return [...scan.guides];
+      levels.length = depth;
+      levels[depth] = true;
+      return guide;
+    })
+    .reverse();
 }

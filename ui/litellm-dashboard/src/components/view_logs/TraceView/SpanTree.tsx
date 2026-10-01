@@ -24,6 +24,8 @@ interface SpanTreeProps {
   onToggleSpan: (id: string) => void;
   onToggleGroup: (id: string) => void;
   onLoadMore: (groupId: string) => void;
+  /** Inside the side drawer J/K switch runs, so spans move with the arrow keys. */
+  embedded?: boolean;
 }
 
 const rowClass = (selected: boolean): string =>
@@ -306,6 +308,7 @@ export function SpanTree({
   onToggleSpan,
   onToggleGroup,
   onLoadMore,
+  embedded = false,
 }: SpanTreeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const guides = useMemo(() => treeGuides(rows.map((row) => row.depth)), [rows]);
@@ -369,9 +372,20 @@ export function SpanTree({
         </div>
       </div>
       <div className="flex h-8 shrink-0 items-center gap-3 border-t border-border px-3.5 text-[11px] text-muted-foreground">
-        <span>
-          <Kbd>J</Kbd>/<Kbd>K</Kbd> move
-        </span>
+        {embedded ? (
+          <>
+            <span>
+              <Kbd>↑</Kbd>/<Kbd>↓</Kbd> step
+            </span>
+            <span>
+              <Kbd>J</Kbd>/<Kbd>K</Kbd> trace
+            </span>
+          </>
+        ) : (
+          <span>
+            <Kbd>J</Kbd>/<Kbd>K</Kbd> move
+          </span>
+        )}
         <span>
           <Kbd>←</Kbd>/<Kbd>→</Kbd> fold
         </span>

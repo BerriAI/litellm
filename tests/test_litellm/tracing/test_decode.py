@@ -255,6 +255,29 @@ def test_long_message_history_drops_middle_messages_and_stays_valid_json():
     assert kept + len(messages) - 2 == 12
 
 
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "system", "content": "s" * 2000}, {"role": "user", "content": "short question"}],
+        [{"role": "user", "content": "a" * 900}, {"role": "assistant", "content": "b" * 900}],
+        [
+            {"role": "system", "content": "s" * 900},
+            {"role": "user", "content": "middle"},
+            {"role": "user", "content": "q" * 900},
+        ],
+    ],
+    ids=["huge-first-message", "two-messages", "huge-first-and-last"],
+)
+def test_oversized_message_arrays_are_shortened_not_cut(messages):
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        out = decode._truncate_payload(json.dumps(messages))
+    assert len(out.encode()) <= 400
+    kept = json.loads(out)
+    assert kept[0]["role"] == messages[0]["role"]
+    assert kept[-1]["role"] == messages[-1]["role"]
+    assert all(isinstance(m["content"], str) for m in kept)
+
+
 # ---------------------------------------------------------------- status / exceptions
 
 

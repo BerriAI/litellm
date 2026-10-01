@@ -10,9 +10,12 @@ Pure functions, no I/O. Two steps:
 
 import json
 from collections.abc import Mapping
+from itertools import accumulate
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES, OTLP_MAX_BODY_BYTES
 from litellm.rust_bridge.traces import DecodedSpan
@@ -56,32 +59,64 @@ def _truncate(value: str) -> str:
     return f"{kept}…[truncated {size - OTLP_MAX_ATTRIBUTE_VALUE_BYTES} bytes]"
 
 
-def _fits(value: str) -> bool:
-    return len(value.encode("utf-8")) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+def _size(value: str) -> int:
+    return len(value.encode("utf-8"))
+
+
+class _ElisionMarker(TypedDict):
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+def _elided(count: int) -> str:
+    marker: Final[_ElisionMarker] = {"role": "system", "content": f"…[{count} earlier messages truncated]"}
+    return json.dumps(marker)
+
+
+def _with_content(message: Mapping[str, JsonValue], content: str) -> str:
+    return json.dumps(MappingProxyType({**message, "content": content}), default=lambda proxy: proxy.copy())
+
+
+def _shrunk_message(message: Mapping[str, JsonValue], budget: int) -> str:
+    """One message cut to `budget` bytes by shortening its text content, so the array stays valid JSON."""
+    content: Final = message.get("content")
+    text: Final = content if isinstance(content, str) else json.dumps(content)
+    overhead: Final = _size(_with_content(message, ""))
+    kept: Final = text.encode("utf-8")[: max(0, budget - overhead - 64)].decode("utf-8", "ignore")
+    return _with_content(message, f"{kept}…[truncated {_size(text) - _size(kept)} bytes]")
+
+
+def _newest_that_fit(encoded: tuple[str, ...], budget: int) -> int:
+    """How many trailing messages fit in `budget` bytes (comma separators included), scanning newest first."""
+    sizes: Final = tuple(_size(m) + 1 for m in reversed(encoded))
+    totals: Final = tuple(accumulate(sizes))
+    return next((count for count, total in enumerate(totals) if total > budget), len(totals))
 
 
 def _truncate_payload(value: str) -> str:
-    """Message arrays drop their oldest middle messages to stay valid JSON; anything else is byte-truncated."""
-    if _fits(value) or not value.startswith("["):
+    """Message arrays keep the first message, an elision marker and the newest messages that fit.
+
+    The result is always valid JSON: if even those don't fit, the first and last messages are shortened.
+    Anything that isn't a message array is byte-truncated as before.
+    """
+    if _size(value) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES or not value.startswith("["):
         return _truncate(value)
     try:
         messages: Final = _MESSAGE_LIST.validate_json(value)
     except ValidationError:
         return _truncate(value)
-    head: Final = messages[:1]
-    fitting: Final = next(
-        (
-            candidate
-            for keep in range(len(messages) - 1, 0, -1)
-            if _fits(candidate := json.dumps((*head, _elided(len(messages) - 1 - keep), *messages[-keep:])))
-        ),
-        None,
-    )
-    return fitting if fitting is not None else _truncate(value)
-
-
-def _elided(count: int) -> dict[str, str]:
-    return {"role": "system", "content": f"…[{count} earlier messages truncated]"}
+    if len(messages) < 2:
+        return _truncate(value)
+    encoded: Final = tuple(json.dumps(m) for m in messages)
+    marker_budget: Final = _size(_elided(len(messages))) + 1
+    budget: Final = OTLP_MAX_ATTRIBUTE_VALUE_BYTES - 2 - _size(encoded[0]) - 1 - marker_budget
+    kept: Final = min(_newest_that_fit(encoded[1:], budget), len(messages) - 2)
+    if kept > 0:
+        tail: Final = encoded[len(encoded) - kept :]
+        return "[" + ", ".join((encoded[0], _elided(len(messages) - 1 - kept), *tail)) + "]"
+    half: Final = (OTLP_MAX_ATTRIBUTE_VALUE_BYTES - marker_budget - 4) // 2
+    middle: Final = (_elided(len(messages) - 2),) if len(messages) > 2 else ()
+    return "[" + ", ".join((_shrunk_message(messages[0], half), *middle, _shrunk_message(messages[-1], half))) + "]"
 
 
 def decode_otlp(

@@ -16,8 +16,14 @@ const KEY_STEP = 32;
 
 const viewportWidth = (): number => (typeof window === "undefined" ? 1440 : window.innerWidth);
 
-export const clampDrawerWidth = (width: number, viewport: number): number =>
-  Math.round(Math.min(Math.max(width, MIN_WIDTH), Math.max(MIN_WIDTH, viewport - MIN_LEFT_GAP)));
+/** At least 700px when the screen allows, never wider than the screen minus a 100px strip of list (or the full screen). */
+export const clampDrawerWidth = (width: number, viewport: number): number => {
+  const max = Math.max(Math.min(MIN_WIDTH, viewport), viewport - MIN_LEFT_GAP);
+  return Math.round(Math.min(Math.max(width, Math.min(MIN_WIDTH, max)), max));
+};
+
+const prefersReducedMotion = (): boolean =>
+  typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 
 const readStoredWidth = (): number | null => {
   try {
@@ -145,6 +151,7 @@ export function RunDrawer({ trace, runs, accessToken, onSelect }: RunDrawerProps
   const shown = trace ?? lastShown;
   const closing = trace === null && shown !== null;
   if (trace !== null && exitedKey !== null) setExitedKey(null);
+  if (closing && exitedKey !== runKey(shown) && prefersReducedMotion()) setExitedKey(runKey(shown));
 
   const index = trace === null ? -1 : runs.findIndex((run) => runKey(run) === runKey(trace));
   const step = useCallback(
