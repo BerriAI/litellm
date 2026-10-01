@@ -289,3 +289,84 @@ def test_thinking_then_signature_chunk_does_not_crash_stream():
 
     assert "message_stop" in sse
     assert "Done" in sse
+
+
+def _tool_call(index, call_id=None, name=None, arguments=""):
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    return ChatCompletionDeltaToolCall(
+        id=call_id,
+        index=index,
+        type="function",
+        function=Function(name=name, arguments=arguments),
+    )
+
+
+def _tool_chunk(tool_calls, finish_reason=None):
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", tool_calls=tool_calls),
+                finish_reason=finish_reason,
+            )
+        ]
+    )
+
+
+def _sse_events(raw: str):
+    events = []
+    for block in raw.split("\n\n"):
+        for line in block.splitlines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: ") :]))
+    return events
+
+
+def test_parallel_tool_calls_in_one_chunk_become_separate_blocks():
+    """Several calls in one chunk must yield one tool_use block each (#44029)."""
+    chunk = _tool_chunk(
+        [
+            _tool_call(0, "call_a", "Read", '{"file_path": "a.md"}'),
+            _tool_call(1, "call_b", "Read", '{"file_path": "b.md"}'),
+            _tool_call(2, "call_c", "Glob", '{"pattern": "*.yml"}'),
+        ]
+    )
+    wrapper = AnthropicStreamWrapper(completion_stream=iter([chunk]), model="mistral-small")
+    raw = "".join(b.decode() if isinstance(b, bytes) else b for b in wrapper.anthropic_sse_wrapper())
+    events = _sse_events(raw)
+
+    starts = [e["content_block"] for e in events if e["type"] == "content_block_start"]
+    tool_starts = [b for b in starts if b["type"] == "tool_use"]
+    assert [(b["name"]) for b in tool_starts] == ["Read", "Read", "Glob"]
+    assert len({b["id"] for b in tool_starts}) == 3
+
+    inputs = [
+        e["delta"]["partial_json"]
+        for e in events
+        if e["type"] == "content_block_delta" and e["delta"]["type"] == "input_json_delta"
+    ]
+    assert [json.loads(x) for x in inputs] == [
+        {"file_path": "a.md"},
+        {"file_path": "b.md"},
+        {"pattern": "*.yml"},
+    ]
+
+
+def test_splitter_keeps_single_call_and_continuation_chunks_whole():
+    single = _tool_chunk([_tool_call(0, "call_a", "Read", "{}")])
+    continuation = _tool_chunk([_tool_call(0, None, None, '"x"')])
+    assert _CombinedChunkSplitter._split_parallel_tool_calls(single) == (single,)
+    assert _CombinedChunkSplitter._split_parallel_tool_calls(continuation) == (continuation,)
+
+
+def test_splitter_orders_pieces_by_arrival_and_groups_same_index():
+    chunk = _tool_chunk(
+        [
+            _tool_call(1, "call_b", "Read", "{}"),
+            _tool_call(0, "call_a", "Glob", "{}"),
+            _tool_call(0, None, None, ""),
+        ]
+    )
+    pieces = _CombinedChunkSplitter._split_parallel_tool_calls(chunk)
+    assert [[c.index for c in p.choices[0].delta.tool_calls] for p in pieces] == [[1], [0, 0]]

@@ -214,6 +214,35 @@ class _CombinedChunkSplitter:
         return pieces
 
     @staticmethod
+    def _split_parallel_tool_calls(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Return ``(chunk,)``, or one piece per tool call when a chunk opens several.
+
+        Some providers send every parallel call in one chunk. The block translators
+        read only the first call's id and name and join all arguments, so the calls
+        would merge into one ``tool_use`` block. Pieces keep call order; entries that
+        share an ``index`` stay together. Argument continuations are left alone.
+        """
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1:
+            return (chunk,)
+        delta: Final = _optional_attr(choices[0], "delta")
+        tool_calls: Final = _optional_attr_sequence(delta, "tool_calls")
+        if sum(1 for call in tool_calls if _optional_attr(_optional_attr(call, "function"), "name")) < 2:
+            return (chunk,)
+
+        by_index: Final[dict[object, list[object]]] = {}
+        for position, call in enumerate(tool_calls):
+            call_index = _optional_attr(call, "index")
+            by_index.setdefault(position if call_index is None else call_index, []).append(call)
+        if len(by_index) < 2:
+            return (chunk,)
+
+        pieces: Final = tuple(copy.deepcopy(chunk) for _ in by_index)
+        for piece, calls in zip(pieces, by_index.values()):
+            piece.choices[0].delta.tool_calls = copy.deepcopy(calls)
+        return pieces
+
+    @staticmethod
     def _normalize_reasoning_fields(fields: "dict[str, Any]") -> "dict[str, Any]":
         """Collapse signature-less ``thinking_blocks`` into ``reasoning_content``.
 
@@ -270,9 +299,10 @@ class _CombinedChunkSplitter:
             self._sync_iter = iter(self._stream)
         chunk: Final = next(self._sync_iter)  # propagates StopIteration when exhausted
         self._buffer.extend(
-            split_chunk
+            tool_chunk
             for combined_chunk in self._split(chunk)
             for split_chunk in self._split_by_payload_kind(combined_chunk)
+            for tool_chunk in self._split_parallel_tool_calls(split_chunk)
         )
         return self._buffer.popleft()
 
@@ -286,9 +316,10 @@ class _CombinedChunkSplitter:
             self._async_iter = self._stream.__aiter__()
         chunk: Final = await self._async_iter.__anext__()  # propagates StopAsyncIteration
         self._buffer.extend(
-            split_chunk
+            tool_chunk
             for combined_chunk in self._split(chunk)
             for split_chunk in self._split_by_payload_kind(combined_chunk)
+            for tool_chunk in self._split_parallel_tool_calls(split_chunk)
         )
         return self._buffer.popleft()
 
