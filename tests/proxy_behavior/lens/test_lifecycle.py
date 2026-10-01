@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 from collections.abc import AsyncIterator
@@ -11,10 +12,11 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from litellm import Router
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.engine import endpoints
 from litellm.proxy.engine.models import Check, Coverage, EngineSettings, ModelRequest, Progress, Result, RunRequest
+from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -57,7 +59,11 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         checks=(Check(id="retries", instruction="Find unrecovered retries"),),
     )
     engine: Final = await endpoints.create_engine(settings, admin)
-    registration: Final = await endpoints.register_worker(endpoints.WorkerName(name="Test analyzer"), admin)
+    key: Final = await generate_key_fn(GenerateKeyRequest(models=["lens-test-analysis"]), admin, None)
+    key_id: Final = hashlib.sha256(key.key.encode()).hexdigest()
+    registration: Final = await endpoints.register_worker(
+        endpoints.WorkerName(name="Test analyzer", analysis_key_id=key_id), admin
+    )
     credentials: Final = HTTPAuthorizationCredentials(scheme="Bearer", credentials=registration.token)
     worker: Final = await endpoints.worker_auth(credentials)
     try:
@@ -70,8 +76,12 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         listing: Final = await endpoints.list_engines(admin)
         assert engine.id in tuple(e.id for e in listing.engines)
         assert worker.id in tuple(w.id for w in listing.workers)
-        claimed: Final = await endpoints.claim_candidate(engine, worker, datetime.now(timezone.utc))
-        assert claimed is not None
+        claims: Final = await asyncio.gather(
+            *(endpoints.claim_candidate(engine, worker, datetime.now(timezone.utc)) for _ in range(8))
+        )
+        winners: Final = tuple(claim for claim in claims if claim is not None)
+        assert len(winners) == 1
+        claimed: Final = winners[0]
         assert claimed.job.worker_id == worker.id
         assert (
             await endpoints.claim_candidate(
@@ -124,6 +134,10 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         assert cancelled.jobs[0].status == "cancelled"
         assert await endpoints.cancel_engine(engine.id, admin) == cancelled
         assert await endpoints.revoke_worker(worker.id, admin)
+        assert await endpoints.repository().set_worker_billing(worker.id, key_id) is None
+        with pytest.raises(HTTPException) as revoked_billing:
+            await endpoints.set_worker_billing(worker.id, endpoints.WorkerBilling(analysis_key_id=key_id), admin)
+        assert revoked_billing.value.status_code == 409
         with pytest.raises(HTTPException) as revoked:
             await endpoints.worker_auth(credentials)
         assert revoked.value.status_code == 401
@@ -134,3 +148,6 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_EngineRun" WHERE engine_id=$1', engine.id)
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_Engine" WHERE id=$1', engine.id)
         await lens_database.db.execute_raw('DELETE FROM "LiteLLM_EngineWorker" WHERE id=$1', worker.id)
+        await lens_database.db.execute_raw(
+            'DELETE FROM "LiteLLM_VerificationToken" WHERE token=$1', hashlib.sha256(key.key.encode()).hexdigest()
+        )

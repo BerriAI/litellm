@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Input } from "@/components/ui/input";
 import { serverRootPath } from "@/lib/serverRootPath";
 import { apiClient, proxyBaseUrl } from "@/components/networking";
+import { AnalysisKey } from "./AnalysisKey";
 import type { EngineList, WorkerCreated } from "./engineData";
 
 export const LENS_WORKER_IMAGE =
@@ -21,11 +22,17 @@ export function workerSetupCommand(address: string, token: string): string {
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
   return [
     "docker run -d --restart unless-stopped --read-only --cap-drop ALL",
+    "  --tmpfs /tmp:rw,noexec,nosuid,size=1g",
     "  --security-opt no-new-privileges --platform linux/amd64 --add-host host.docker.internal:host-gateway",
     `  -e ${quote("LITELLM_URL=" + address)}`,
     `  -e ${quote("LENS_WORKER_TOKEN=" + token)}`,
     `  ${LENS_WORKER_IMAGE}`,
   ].join(" \\\n");
+}
+
+function workerStatus(worker: EngineList["workers"][number], now: number): string {
+  if (!worker.analysis_key_id) return "Billing key required";
+  return now - Date.parse(worker.last_seen) < 120000 ? "Connected · ready to analyze" : "Not connected";
 }
 
 export function WorkerSetup({
@@ -44,19 +51,37 @@ export function WorkerSetup({
     const timer = window.setInterval(() => setNow(Date.now()), 15000);
     return () => window.clearInterval(timer);
   }, []);
+  const [analysisKey, setAnalysisKey] = useState<string | null>(null);
+  const [editingWorker, setEditingWorker] = useState<string | null>(null);
   const [address, setAddress] = useState(initialProxyAddress);
   const [copied, setCopied] = useState(false);
   const [created, setCreated] = useState<WorkerCreated | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const actionLabel = editingWorker ? "Save billing key" : "Generate setup command";
+  const editBilling = (worker: EngineList["workers"][number]) => {
+    setCreated(null);
+    setEditingWorker(worker.id);
+    setAnalysisKey(worker.analysis_key_id ?? null);
+  };
   const createWorker = async () => {
     setBusy(true);
     setError("");
     try {
+      if (editingWorker) {
+        await apiClient.put(`/engine/workers/${editingWorker}/billing-key`, {
+          accessToken,
+          body: { analysis_key_id: analysisKey },
+        });
+        setEditingWorker(null);
+        setAnalysisKey(null);
+        onChanged();
+        return;
+      }
       setCreated(
         await apiClient.post<WorkerCreated>("/engine/workers/register", {
           accessToken,
-          body: { name: "Lens analyzer" },
+          body: { name: "Lens analyzer", analysis_key_id: analysisKey },
         }),
       );
       onChanged();
@@ -80,13 +105,31 @@ export function WorkerSetup({
             Lens reads your agents’ logs and finds issues in the background. Run its analyzer once with Docker.
           </DialogDescription>
         </DialogHeader>
-        <label className="grid gap-2 text-sm">
-          Your LiteLLM deployment URL
-          <Input value={address} onChange={(event) => setAddress(event.target.value)} />
-        </label>
-        <p className="text-xs text-muted-foreground">
-          The analyzer connects to this deployment to read logs and save findings.
-        </p>
+        {!editingWorker && (
+          <>
+            <label className="grid gap-2 text-sm">
+              Your LiteLLM deployment URL
+              <Input value={address} onChange={(event) => setAddress(event.target.value)} />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              The analyzer connects to this deployment to read logs and save findings.
+            </p>
+          </>
+        )}
+        {editingWorker && (
+          <p className="text-sm font-medium">
+            Billing for {workers.find((worker) => worker.id === editingWorker)?.name}
+          </p>
+        )}
+        {!created && (
+          <AnalysisKey
+            key={editingWorker ?? "new"}
+            accessToken={accessToken}
+            value={analysisKey}
+            onChange={setAnalysisKey}
+            name="worker"
+          />
+        )}
         {created ? (
           <div className="space-y-3">
             <p className="text-sm font-medium">Run this command on your server</p>
@@ -115,8 +158,19 @@ export function WorkerSetup({
             </p>
           </div>
         ) : (
-          <Button disabled={busy || !address.trim()} onClick={createWorker}>
-            {busy ? "Generating…" : "Generate setup command"}
+          <Button disabled={busy || !address.trim() || !analysisKey} onClick={createWorker}>
+            {busy ? "Saving…" : actionLabel}
+          </Button>
+        )}
+        {editingWorker && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setEditingWorker(null);
+              setAnalysisKey(null);
+            }}
+          >
+            Cancel
           </Button>
         )}
         {workers
@@ -125,10 +179,11 @@ export function WorkerSetup({
             <div key={worker.id} className="flex justify-between items-center border-t pt-3 text-sm">
               <span>
                 {worker.name}
-                <span className="block text-xs text-muted-foreground">
-                  {now - Date.parse(worker.last_seen) < 120000 ? "Connected · ready to analyze" : "Not connected"}
-                </span>
+                <span className="block text-xs text-muted-foreground">{workerStatus(worker, now)}</span>
               </span>
+              <Button variant="ghost" size="sm" onClick={() => editBilling(worker)}>
+                Billing key
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"

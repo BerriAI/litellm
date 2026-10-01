@@ -6,5 +6,7 @@ services:
       LENS_WORKER_TOKEN: ${LENS_WORKER_TOKEN:?Create a worker credential in the Lens UI}
     restart: unless-stopped
     read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${LENS_WORKER_TMP_SIZE:-1g}
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

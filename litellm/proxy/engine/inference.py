@@ -7,7 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import litellm
 from litellm.integrations.clickhouse.context import lens_analysis
-from litellm.proxy.engine.models import Engine, Job, ModelRequest, ModelResult
+from litellm.proxy.engine.billing import complete, validate_key
+from litellm.proxy.engine.models import Engine, Job, ModelRequest, ModelResult, Worker
 from litellm.proxy.engine.repository import EngineRepository
 from litellm.proxy.engine.state import current_job, renew_budget, replace_job
 from litellm.types.utils import CostPerToken, ModelResponse
@@ -84,14 +85,18 @@ def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
     return ((len((prompt + _SYSTEM).encode()) + 1024) * input_rate + 4096 * output_rate) * 2
 
 
-async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker_id: str, body: ModelRequest) -> ModelResult:
+async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker: Worker, body: ModelRequest) -> ModelResult:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
         raise HTTPException(503, "No analysis models are configured")
+    if worker.analysis_key_id is None:
+        raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
+    billing_key: Final = await validate_key(worker.analysis_key_id)
+    team_id: Final = billing_key.team_id if billing_key else None
     deployments: Final = tuple(
         Deployment.model_validate(d)
-        for d in llm_router.get_model_list(model_name=job.settings.model, team_id=engine.scope.team_id or None) or ()
+        for d in llm_router.get_model_list(model_name=job.settings.model, team_id=team_id) or ()
     )
     if not deployments:
         raise HTTPException(400, "Analysis model is no longer available")
@@ -101,7 +106,13 @@ async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker_id: s
     def reserve(e: Engine) -> Engine:
         current: Final = renew_budget(e, now)
         active: Final = current_job(current)
-        if active is None or active.id != job.id or active.worker_id != worker_id:
+        if (
+            active is None
+            or active.id != job.id
+            or active.worker_id != worker.id
+            or active.lease_until is None
+            or active.lease_until <= datetime.now(timezone.utc)
+        ):
             raise HTTPException(409, "Job was cancelled or reassigned")
         if current.spent + estimate > current.settings.monthly_budget:
             raise HTTPException(402, "Monthly lens budget reached; increase it or wait for next month")
@@ -109,26 +120,33 @@ async def analyze(repo: EngineRepository, engine: Engine, job: Job, worker_id: s
             current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
         ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
 
-    if await repo.update(engine.id, reserve) is None:
-        raise HTTPException(409, "Could not reserve analysis budget")
+    async def reserve_budget() -> None:
+        if await repo.update(engine.id, reserve) is None:
+            raise HTTPException(409, "Could not reserve analysis budget")
+
+    data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
+        "model": job.settings.model,
+        "messages": [  # mutable-ok: OpenAI request contract
+            {"role": "system", "content": _SYSTEM},  # mutable-ok: OpenAI message contract
+            {"role": "user", "content": body.prompt},  # mutable-ok: OpenAI message contract
+        ],
+        "max_tokens": 4096,
+        "stream": False,
+        "timeout": 120,
+        "num_retries": 0,
+        "disable_fallbacks": True,
+        "response_format": {"type": "json_object"},  # mutable-ok: provider response-format JSON
+        "metadata": {  # mutable-ok: request processing enriches metadata
+            "tags": ["litellm-engine"],  # mutable-ok: logging callbacks require a list
+            "lens_id": engine.id,
+            "lens_run_id": job.id,
+            "lens_worker_id": worker.id,
+            "user_api_key_team_id": team_id,
+        },
+    }
+
     with lens_analysis():
-        response: Final = await llm_router.acompletion(  # pyright: ignore[reportUnknownMemberType]  # Router forwards provider-specific keyword arguments
-            model=job.settings.model,
-            messages=[  # mutable-ok: Router requires OpenAI message dictionaries in a list
-                {"role": "system", "content": _SYSTEM},  # mutable-ok: provider message dictionary
-                {"role": "user", "content": body.prompt},  # mutable-ok: provider message dictionary
-            ],
-            max_tokens=4096,
-            stream=False,
-            timeout=120,
-            num_retries=0,
-            disable_fallbacks=True,
-            response_format={"type": "json_object"},  # mutable-ok: provider response-format JSON object
-            metadata={  # mutable-ok: Router mutates metadata
-                "tags": ["litellm-engine"],  # mutable-ok: logging callbacks require a tag list
-                "user_api_key_team_id": engine.scope.team_id,
-            },
-        )
+        response: Final = await complete(worker.analysis_key_id, data, reserve_budget)
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     cost: Final = completion_charge(deployments, response, estimate)
 
