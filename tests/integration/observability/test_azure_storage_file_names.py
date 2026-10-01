@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from pathlib import Path
@@ -13,7 +14,7 @@ from _s3_v2_support import surface_reply
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.wire import wire_server
+from integration._support.wire import Reply, Request, wire_server
 
 ADLS_SAFE_FILE_NAME: Final = re.compile(r"^[A-Za-z0-9._+-]+\.json$")
 
@@ -59,3 +60,83 @@ def test_responses_ids_with_base64_padding_land_under_adls_safe_names(gateway: G
             assert all(ADLS_SAFE_FILE_NAME.match(name) for name in names), names
             assert len(frozenset(names)) == len(answered), names
         assert provider.drain()
+
+
+def _embedding_reply(request: Request) -> Reply:
+    assert request.method == "POST" and request.target.endswith("/embeddings"), request.target
+    return Reply(
+        body=json.dumps(
+            {
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.25, 0.5]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            }
+        ).encode()
+    )
+
+
+def _log_names_by_call_id(gateway: Gateway, tmp_path: Path, call_ids: tuple[str, ...]) -> dict[str, str]:
+    sink: Final = RecordingDataLakeSink()
+    cert, key = write_self_signed_cert(tmp_path, SINK_HOSTS)
+    with (
+        wire_server(_embedding_reply) as provider,
+        wire_server(sink.respond, tls=server_context(cert, key), keep_alive=True) as store,
+    ):
+        environment: Final = {**azure_storage_environment(store.url, cert), "DEFAULT_FLUSH_INTERVAL_SECONDS": "1"}
+        config: Final = azure_storage_config(tmp_path)
+        with (
+            owned_proxy(gateway, tmp_path, environment, config=config, workers=1) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                model="openai/text-embedding-3-small",
+                api_base=provider.url + "/v1",
+                api_key="synthetic-provider-key",
+            )
+            api_key: Final = scenario.key(models=[model])
+            responses: Final = tuple(
+                candidate.request(
+                    "POST",
+                    "/v1/embeddings",
+                    {"model": model, "input": call_id},
+                    key=api_key,
+                    headers={"x-litellm-call-id": call_id},
+                )
+                for call_id in call_ids
+            )
+            assert all(response.status_code == 200 for response in responses), tuple(
+                response.text for response in responses
+            )
+            eventually(
+                lambda: len(sink.stored()) + len(sink.duplicated()) + len(sink.unauthenticated_targets()),
+                lambda settled: settled >= len(call_ids),
+                seconds=60,
+            )
+            assert sink.unauthenticated_targets() == (), sink.unauthenticated_targets()
+            assert sink.duplicated() == (), f"a later log overwrote an earlier one at {sink.duplicated()}"
+        assert provider.drain()
+    return {path.split("/", 3)[3]: str(payload["id"]) for path, payload in sink.payloads().items()}
+
+
+def test_client_call_ids_differing_only_by_slash_or_underscore_land_in_separate_files(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """An embedding response carries no id, so its log is named after the caller's `x-litellm-call-id`. Two
+    caller ids that differ only by `/` and `_` are two requests and must leave two logs, neither overwriting
+    the other"""
+    marker: Final = f"svc-{uuid.uuid4().hex[:8]}"
+    call_ids: Final = (f"{marker}/req-1", f"{marker}_req-1")
+    assert _log_names_by_call_id(gateway, tmp_path, call_ids) == {f"{call_id}.json": call_id for call_id in call_ids}
+
+
+def test_client_call_ids_with_parent_segments_stay_inside_the_log_directory(gateway: Gateway, tmp_path: Path) -> None:
+    """A caller's `x-litellm-call-id` names its log file, so a `..` segment in it must not climb out of the
+    dated log directory into another day's folder or another filesystem"""
+    marker: Final = uuid.uuid4().hex[:8]
+    call_ids: Final = (f"../other-filesystem/{marker}", f"../2026-09-30/{marker}", f"%2e%2e/other-filesystem/{marker}")
+    assert _log_names_by_call_id(gateway, tmp_path, call_ids) == {
+        f".._other-filesystem_{marker}.json": call_ids[0],
+        f".._2026-09-30_{marker}.json": call_ids[1],
+        f"%2e%2e_other-filesystem_{marker}.json": call_ids[2],
+    }

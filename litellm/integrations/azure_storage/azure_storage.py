@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from functools import cache
 from typing import Final
+from urllib.parse import unquote
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -34,10 +35,15 @@ _ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
 
 
 def adls_safe_file_name(payload_id: str | None) -> str:
-    """`=` padding and `/` in a base64 payload id are what the Data Lake service rejects, so the name drops the
-    padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the length, so ids from
-    that alphabet stay distinct; anything else is left as is."""
-    return f"{(payload_id or str(uuid.uuid4())).translate(_ADLS_SAFE_NAME)}.json"
+    """A Responses API id is base64 behind `resp_`, and the Data Lake service rejects its `=` padding and `/`, so
+    that name drops the padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the
+    length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
+    unless a `..` segment, plain or percent-encoded, would place the file outside the log directory, in which case
+    it gets the same rewrite"""
+    name: Final = payload_id or str(uuid.uuid4())
+    if not name.startswith("resp_") and ".." not in unquote(name).split("/"):
+        return f"{name}.json"
+    return f"{name.translate(_ADLS_SAFE_NAME)}.json"
 
 
 @cache
