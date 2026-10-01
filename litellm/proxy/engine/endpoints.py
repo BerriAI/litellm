@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import AwareDatetime, BaseModel, Field, TypeAdapter
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -43,6 +43,7 @@ from litellm.proxy.engine.state import (
     merge_finding,
     queue_job,
     replace_job,
+    snapshot_finding,
 )
 from litellm.proxy.spend_tracking.log_visibility import LogVisibility, log_visibility
 
@@ -116,9 +117,20 @@ def required(engine: Engine | None) -> Engine:
     return engine
 
 
+def validate_selection(settings: EngineSettings) -> None:
+    for identity in settings.execution_ids:
+        try:
+            source, _, _, _ = parse_execution(identity)
+            if source not in ("traces", "requests"):
+                raise ValueError("Unsupported source")
+        except ValueError:
+            raise HTTPException(422, "Choose execution IDs returned by the activity preview")
+
+
 def validate_model(settings: EngineSettings, auth: UserAPIKeyAuth) -> None:
     from litellm.proxy.proxy_server import llm_router
 
+    validate_selection(settings)
     if llm_router is None or settings.model not in llm_router.get_model_names(team_id=auth.team_id):
         raise HTTPException(400, "Choose a model configured on this LiteLLM instance")
     allowed_models: Final = TypeAdapter(tuple[str, ...]).validate_python(auth.model_dump().get("models") or ())
@@ -181,9 +193,39 @@ async def update_engine(engine_id: str, settings: EngineSettings, auth: Auth) ->
 @router.post("/{engine_id}/runs", response_model=Engine)
 async def run_engine(engine_id: str, body: RunRequest, auth: Auth) -> Engine:
     await get_engine(engine_id, user_scope(auth))
+    if body.settings is not None:
+        validate_model(body.settings, auth)
     now: Final = datetime.now(timezone.utc)
     job_id: Final = str(uuid4())
-    return required(await repository().update(engine_id, lambda e: queue_job(e, now, job_id, body.lookback_hours)))
+    return required(
+        await repository().update(engine_id, lambda e: queue_job(e, now, job_id, body.lookback_hours, body.settings))
+    )
+
+
+@router.get("/{engine_id}", response_model=Engine)
+async def read_engine(engine_id: str, auth: Auth) -> Engine:
+    viewer: Final = await log_visibility(auth)
+    return await get_visible_engine(engine_id, viewer)
+
+
+@router.get("/{engine_id}/runs", response_model=tuple[Job, ...])
+async def list_runs(engine_id: str, auth: Auth, offset: int = Query(default=0, ge=0)) -> tuple[Job, ...]:
+    viewer: Final = await log_visibility(auth)
+    await get_visible_engine(engine_id, viewer)
+    return tuple(
+        j.model_copy(update=MappingProxyType({"sample": None, "findings": None, "assessments": ()}))
+        for j in await repository().jobs(engine_id, offset)
+    )
+
+
+@router.get("/{engine_id}/runs/{job_id}", response_model=Job)
+async def read_run(engine_id: str, job_id: str, auth: Auth) -> Job:
+    viewer: Final = await log_visibility(auth)
+    await get_visible_engine(engine_id, viewer)
+    job: Final = await repository().job(engine_id, job_id)
+    if job is None:
+        raise HTTPException(404, "Investigation not found")
+    return job
 
 
 @router.post("/{engine_id}/cancel", response_model=Engine)
@@ -225,18 +267,24 @@ async def update_finding(engine_id: str, finding_id: str, body: FindingUpdate, a
 
 
 class Preview(BaseModel):
+    as_of: AwareDatetime | None = None
+    offset: int = Field(default=0, ge=0)
     settings: EngineSettings
     lookback_hours: int = Field(default=24, ge=1, le=720)
 
 
 @router.post("/preview/sample", response_model=Sample)
 async def preview_sample(body: Preview, auth: Auth) -> Sample:
-    now: Final = datetime.now(timezone.utc)
+    scope: Final = user_scope(auth)
+    validate_selection(body.settings)
+    now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
     return await source_reader().sample(
-        user_scope(auth),
+        scope,
         body.settings,
         int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000),
         int((now - timedelta(minutes=2)).timestamp() * 1000),
+        offset=body.offset,
+        preview=True,
     )
 
 
@@ -266,7 +314,9 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 
 
 @router.post("/worker/claim", response_model=Claim | None)
-async def claim(worker: WorkerAuth) -> Claim | None:
+async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
+    if protocol_version != 2:
+        raise HTTPException(409, "Upgrade the Lens worker using the current Connect worker command")
     now: Final = datetime.now(timezone.utc)
     await repository().heartbeat(worker.id, now.isoformat())
     for candidate in await repository().engines():
@@ -305,9 +355,24 @@ async def sample(engine_id: str, job_id: str, worker: WorkerAuth) -> Sample:
     engine, job = await assigned(engine_id, job_id, worker)
     if job.sample is not None:
         return job.sample
-    selected: Final = await source_reader().sample(
-        engine.scope, job.settings, int(job.start.timestamp() * 1000), int(job.end.timestamp() * 1000)
-    )
+    pages: list[Sample] = []  # mutable-ok: freeze selection after stable cursor traversal
+    cursor = ""  # rebind-ok: advance by immutable identity, never by shifting row positions
+    while True:
+        page = await source_reader().sample(
+            engine.scope,
+            job.settings,
+            int(job.start.timestamp() * 1000),
+            int(job.end.timestamp() * 1000),
+            cursor=cursor,
+        )
+        pages.append(page)
+        if not page.next_cursor or sum(len(p.executions) for p in pages) >= pages[0].selected:
+            break
+        cursor = page.next_cursor
+    executions: Final = tuple(
+        execution for p in pages for execution in p.executions
+    )  # comprehension-ok: flatten query pages
+    selected: Final = Sample(executions=executions, eligible=pages[0].eligible, selected=len(executions))
 
     def freeze(e: Engine) -> Engine:
         active: Final = current_job(e)
@@ -333,7 +398,7 @@ async def content(
     execution_id: str,
     worker: WorkerAuth,
     cursor: str = "",
-    offset: int = Query(default=0, ge=0, le=1000000),
+    offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
     engine, job = await assigned(engine_id, job_id, worker)
     selected: Final = job.sample or Sample(executions=(), eligible=0)
@@ -361,7 +426,13 @@ async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) 
     now: Final = datetime.now(timezone.utc)
     selected: Final = job.sample or Sample(executions=(), eligible=0)
     allowed: Final = frozenset(e.id for e in selected.executions)
-    check_ids: Final = frozenset(c.id for c in job.settings.checks if c.enabled)
+    if len(frozenset(a.execution_id for a in body.assessments)) != len(body.assessments):
+        raise HTTPException(422, "Each run must have one assessment")
+    if any(a.execution_id not in allowed for a in body.assessments):
+        raise HTTPException(422, "Assessment references a run outside this job")
+    check_ids: Final = frozenset(c.id for c in job.settings.analysis_checks)
+    if any(not check_ids.issuperset((*a.issue_checks, *a.pattern_checks)) for a in body.assessments):
+        raise HTTPException(422, "Assessment references an unknown check")
     if any(
         f.check_id not in check_ids or any(e.execution_id not in allowed for e in f.evidence) for f in body.findings
     ):
@@ -386,6 +457,8 @@ async def result(engine_id: str, job_id: str, body: Result, worker: WorkerAuth) 
                         "finished_at": now,
                         "coverage": active.coverage if body.error else body.coverage,
                         "error": body.error,
+                        "assessments": body.assessments,
+                        "findings": tuple(snapshot_finding(e, f, job.revision, now) for f in body.findings),
                     }
                 )
             ),
@@ -445,7 +518,12 @@ async def validate_finding(engine: Engine, selected: Sample, finding: FindingDra
 
 @router.get("/{engine_id}/executions/{execution_id}", response_model=ExecutionContent)
 async def evidence_content(
-    engine_id: str, execution_id: str, auth: Auth, cursor: str = "", offset: int = Query(default=0, ge=0, le=1000000)
+    engine_id: str,
+    execution_id: str,
+    auth: Auth,
+    reader: Annotated[SourceReader, Depends(source_reader)],
+    cursor: str = "",
+    offset: int = Query(default=0, ge=0),
 ) -> ExecutionContent:
     viewer: Final = await log_visibility(auth)
     engine: Final = await get_visible_engine(engine_id, viewer)
@@ -466,4 +544,4 @@ async def evidence_content(
         span_count=1,
         root_seen=source == "requests",
     )
-    return await source_reader().content(engine.scope, execution, cursor, offset)
+    return await reader.content(engine.scope, execution, cursor, offset)
