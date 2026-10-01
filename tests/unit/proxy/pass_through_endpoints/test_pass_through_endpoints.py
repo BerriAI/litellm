@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter, ValidationError
@@ -2711,15 +2712,11 @@ async def test_pass_through_request_merge_query_params_rewrites_managed_ids_on_t
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_follows_redirect_to_final_response():
+async def test_pass_through_request_follows_redirect_to_final_response(httpx_transport):
     """
     The proxy must follow the upstream redirect and return the final response,
-    not the 302. A loopback server plays httpbin's redirect -> /get pair and
-    records which paths the client actually hit.
+    not the 302.
     """
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from queue import SimpleQueue
-    from threading import Thread
     from unittest.mock import MagicMock
 
     from fastapi import Request
@@ -2729,61 +2726,40 @@ async def test_pass_through_request_follows_redirect_to_final_response():
         pass_through_request,
     )
 
-    requested_paths: SimpleQueue[str] = SimpleQueue()
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "GET"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams("")
 
-    class RedirectThenGetHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            requested_paths.put(self.path)
-            if self.path == "/redirect/1":
-                self.send_response(302)
-                self.send_header("Location", "/get")
-                self.end_headers()
-            else:
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(
-                    json.dumps({"url": f"{base}/get"}).encode("utf-8")
-                )
+    async def mock_body():
+        return b""
 
-        def log_message(self, format, *args):
-            pass
+    mock_request.body = mock_body
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectThenGetHandler)
-    base = f"http://127.0.0.1:{server.server_port}"
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        mock_request = MagicMock(spec=Request)
-        mock_request.method = "GET"
-        mock_request.headers = Headers({})
-        mock_request.query_params = QueryParams("")
+    mock_user_api_key_dict = MagicMock()
 
-        async def mock_body():
-            return b""
-
-        mock_request.body = mock_body
-
-        mock_user_api_key_dict = MagicMock()
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://upstream.test/redirect/1").respond(
+            302, headers={"Location": "/get"}
+        )
+        upstream.get("https://upstream.test/get").respond(
+            200, json={"url": "https://upstream.test/get"}
+        )
 
         response = await pass_through_request(
             request=mock_request,
-            target=f"{base}/redirect/1",
+            target="https://upstream.test/redirect/1",
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )
-    finally:
-        server.shutdown()
-        thread.join()
-        server.server_close()
+        requested_urls: Final = [str(call.request.url) for call in upstream.calls]
 
     assert response.status_code == 200
-    assert json.loads(bytes(response.body))["url"] == f"{base}/get"
-
-    paths = []
-    while not requested_paths.empty():
-        paths.append(requested_paths.get())
-    assert tuple(paths) == ("/redirect/1", "/get")
+    assert json.loads(bytes(response.body))["url"] == "https://upstream.test/get"
+    assert requested_urls == [
+        "https://upstream.test/redirect/1",
+        "https://upstream.test/get",
+    ]
 
 
 @pytest.mark.asyncio
