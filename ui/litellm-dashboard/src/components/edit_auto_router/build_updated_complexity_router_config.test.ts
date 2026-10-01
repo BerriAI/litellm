@@ -48,6 +48,53 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each([undefined, false, true])("preserves cache settings through edit and save: %s", (enabled) => {
+    const stored = {
+      ...STORED,
+      classifier_type: "heuristic" as const,
+      cache_aware_routing: enabled,
+      cache_aware_routing_output_tokens: 0,
+      cache_aware_routing_timeout_ms: 750,
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.cache_aware_routing).toBe(enabled);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+    expect(saved.cache_aware_routing).toBe(enabled);
+    expect(Object.hasOwn(saved, "cache_aware_routing")).toBe(enabled !== undefined);
+    expect(saved).toMatchObject({
+      cache_aware_routing_output_tokens: 0,
+      cache_aware_routing_timeout_ms: 750,
+      some_future_backend_key: STORED.some_future_backend_key,
+    });
+  });
+
+  it("disables cache routing and removes cleared overrides without changing context or output limits", () => {
+    const stored = {
+      ...STORED,
+      classifier_type: "heuristic" as const,
+      cache_aware_routing: true,
+      cache_aware_routing_output_tokens: 512,
+      cache_aware_routing_timeout_ms: 750,
+      enable_context_window_escalation: false,
+      max_tokens_from_tier_model: false,
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const edited = {
+      ...hydrated,
+      cache_aware_routing: false,
+      cache_aware_routing_output_tokens: undefined,
+      cache_aware_routing_timeout_ms: undefined,
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, edited);
+    expect(saved).toMatchObject({
+      cache_aware_routing: false,
+      enable_context_window_escalation: false,
+      max_tokens_from_tier_model: false,
+    });
+    expect(saved).not.toHaveProperty("cache_aware_routing_output_tokens");
+    expect(saved).not.toHaveProperty("cache_aware_routing_timeout_ms");
+  });
+
   it.each([false, true])("omits masked JEV credentials from dashboard saves, edited: %s", (edited) => {
     const stored = {
       classifier_type: "jev" as const,
@@ -863,6 +910,9 @@ describe("managed keys survive an untouched open-and-save", () => {
     reasoning_override_min_score: 0.3,
     enable_context_window_escalation: false,
     context_window_escalation_buffer: 0.9,
+    cache_aware_routing: false,
+    cache_aware_routing_output_tokens: 512,
+    cache_aware_routing_timeout_ms: 750,
     code_keywords: ["async", "await"],
     reasoning_keywords: ["prove"],
     technical_keywords: ["api"],

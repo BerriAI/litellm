@@ -942,6 +942,27 @@ describe("autorouter_presets", () => {
       expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
     });
 
+    it.each([undefined, false, true])(
+      "preserves cache-routing settings and scalar tier models from a preset: %s",
+      (enabled) => {
+        const config = {
+          ...getPresetByKey("anthropic_family")!.complexity_router_config,
+          tiers: { SIMPLE: "small", MEDIUM: "large", COMPLEX: "large", REASONING: "large" },
+          cache_aware_routing: enabled,
+          cache_aware_routing_output_tokens: 0,
+          cache_aware_routing_timeout_ms: 750,
+        };
+        const prefill = buildPresetPrefill(config, groupsOnly(["small", "large"]));
+        const expected = {
+          tiers: { SIMPLE: ["small"], MEDIUM: ["large"], COMPLEX: ["large"], REASONING: ["large"] },
+          cache_aware_routing: enabled,
+          cache_aware_routing_output_tokens: 0,
+          cache_aware_routing_timeout_ms: 750,
+        };
+        expect(prefill.complexityRouterConfig).toMatchObject(expected);
+      },
+    );
+
     it("carries a preset's classification_mode and defaults it when the preset omits one", () => {
       const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
       const base = {

@@ -7,6 +7,7 @@ const groups: Record<string, string> = {
   "Ignore Custom Tags": "Classifier tuning",
   Affinity: "Sessions and efficiency",
   "Adaptive Routing": "Sessions and efficiency",
+  "Cache-aware routing": "Sessions and efficiency",
   Compression: "Sessions and efficiency",
   "Response Format": "Compatibility",
 };
