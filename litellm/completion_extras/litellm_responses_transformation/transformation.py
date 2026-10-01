@@ -198,6 +198,12 @@ def _as_chat_reasoning_items(
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
 
 
+def _pending_reasoning_items(
+    pending_reasoning_item: _BuiltReasoningItem | None,
+) -> list[ChatCompletionReasoningItem] | None:
+    return _as_chat_reasoning_items(() if pending_reasoning_item is None else (pending_reasoning_item,))
+
+
 _ToolChoiceT = TypeVar("_ToolChoiceT")
 
 
@@ -667,7 +673,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         item: "ResponseOutputMessage",
         starting_index: int,
         reasoning_content: str | None,
-        pending_reasoning_item: dict[str, Any] | None,
+        pending_reasoning_item: _BuiltReasoningItem | None,
     ) -> tuple[list[Any], int]:
         """Build ONE Choices for a ResponseOutputMessage, merging all of its content
         blocks into a single message.
@@ -704,16 +710,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             merged_text_parts.append(response_text)
             offset += len(response_text)
 
-        reasoning_items_for_msg = cast(
-            list[ChatCompletionReasoningItem] | None,
-            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-        )
         msg = Message(
             role=item.role,
             content="".join(merged_text_parts),
             reasoning_content=reasoning_content,
             annotations=merged_annotations or None,
-            reasoning_items=reasoning_items_for_msg,
+            reasoning_items=_pending_reasoning_items(pending_reasoning_item),
         )
         return [Choices(message=msg, finish_reason="stop", index=starting_index)], starting_index + 1
 
@@ -722,7 +724,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: list[Any],
         accumulated_tool_calls: list[dict[str, Any]],
         reasoning_content: str | None,
-        pending_reasoning_item: dict[str, Any] | None,
+        pending_reasoning_item: _BuiltReasoningItem | None,
         fallback_index: int,
     ) -> None:
         """Attach accumulated tool_calls to the last text-message choice, or
@@ -742,15 +744,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             None,
         )
         if last_msg_choice is None:
-            reasoning_items_for_msg = cast(
-                list[ChatCompletionReasoningItem] | None,
-                ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-            )
             msg = Message(
                 content=None,
                 tool_calls=accumulated_tool_calls,
                 reasoning_content=reasoning_content,
-                reasoning_items=reasoning_items_for_msg,
+                reasoning_items=_pending_reasoning_items(pending_reasoning_item),
             )
             choices.append(Choices(message=msg, finish_reason="tool_calls", index=fallback_index))
             return
@@ -770,10 +768,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             pending_reasoning_item is not None and getattr(last_msg_choice.message, "reasoning_items", None) is None
         )
         if needs_reasoning_items_backfill:
-            last_msg_choice.message.reasoning_items = cast(
-                list[ChatCompletionReasoningItem] | None,
-                [pending_reasoning_item],
-            )
+            last_msg_choice.message.reasoning_items = _pending_reasoning_items(pending_reasoning_item)
 
     @staticmethod
     def _convert_response_output_to_choices(
