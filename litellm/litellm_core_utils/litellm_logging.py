@@ -2069,7 +2069,24 @@ class Logging(LiteLLMLoggingBaseClass):
         if pricing is None:
             return False
         pricing_model: Final = pricing[0]
-        has_explicit_pricing: Final = pricing_model in litellm.model_cost or self._custom_pricing_for(result)
+        effective_router_model_id: Final = router_model_id or self.get_router_model_id()
+        metadata_model_info_entries: Final = tuple(
+            model_info
+            for metadata_key in ("metadata", "litellm_metadata")
+            if isinstance(metadata := self.litellm_params.get(metadata_key), Mapping)
+            and isinstance(model_info := metadata.get("model_info"), Mapping)
+        )
+        pricing_sources: Final = (
+            litellm.model_cost.get(pricing_model),
+            litellm.model_cost.get(effective_router_model_id) if effective_router_model_id is not None else None,
+            self.litellm_params,
+            *metadata_model_info_entries,
+        )
+        has_explicit_pricing: Final = any(
+            is_free_usage(usage, pricing_source)
+            for pricing_source in pricing_sources
+            if isinstance(pricing_source, Mapping)
+        )
         return has_explicit_pricing and is_free_usage(usage, pricing[1])
 
     def _custom_pricing_for(self, result: object) -> bool:
