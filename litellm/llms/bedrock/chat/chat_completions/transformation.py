@@ -31,7 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_media,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_model_is_openai_gpt,
@@ -262,6 +262,26 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         headers: dict[str, object] | httpx.Headers,  # mutable-ok: BaseConfig signature
     ) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
+    def validate_environment(
+        self,
+        headers: dict,  # mutable-ok: BaseConfig signature
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,  # mutable-ok: BaseConfig signature
+        litellm_params: dict,  # mutable-ok: BaseConfig signature
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:  # mutable-ok: BaseConfig signature
+        return super().validate_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=bedrock_bearer_token(api_key),
+            api_base=api_base,
+        )
 
     def get_complete_url(
         self,

@@ -25,6 +25,8 @@ from litellm.llms.bedrock.common_utils import (
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
+APPLICATION_INFERENCE_PROFILE_ARN = "arn:aws:bedrock:us-west-2:123412341234:application-inference-profile/a1b2c3"
+
 
 @pytest.fixture
 def local_cost_map(monkeypatch):
@@ -425,13 +427,71 @@ def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
 )
 @pytest.mark.parametrize(
     "request_params",
-    [{"additionalModelRequestFields": {"reasoning_effort": "high"}}, {"top_k": 40}, {"stop": ["END"]}],
-    ids=["additionalModelRequestFields", "top_k", "stop"],
+    [
+        {"additionalModelRequestFields": {"reasoning_effort": "high"}},
+        {"top_k": 40},
+        {"stop": ["END"]},
+        {"model_id": APPLICATION_INFERENCE_PROFILE_ARN},
+    ],
+    ids=["additionalModelRequestFields", "top_k", "stop", "model_id"],
 )
 def test_converse_extension_params_fall_back_to_converse(local_cost_map, model, request_params):
     assert bedrock_request_needs_converse(model, request_params) is True
     assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
     assert BedrockModelInfo.get_bedrock_route(model, {key: None for key in request_params}) == "chat_completions"
+
+
+@pytest.mark.parametrize(
+    "model", ["bedrock/us.openai.gpt-5.6-sol", "global.openai.gpt-6-sol", "bedrock/chat_completions/us.xai.grok-4.6"]
+)
+def test_model_id_override_is_served_by_converse_like_the_arn_model_form(local_cost_map, model):
+    assert bedrock_route_for_request(model, {"model_id": APPLICATION_INFERENCE_PROFILE_ARN}, None) == "converse"
+    assert bedrock_route_for_request(model, {"model_id": None}, None) == "chat_completions"
+
+
+SIGV4_PARAMS = {
+    "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+    "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.mark.parametrize("api_key", ["", None], ids=["blank", "absent"])
+def test_blank_api_key_is_signed_with_sigv4_instead_of_an_empty_bearer(monkeypatch, api_key):
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    url = "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions"
+    headers = cfg.validate_environment(
+        headers={},
+        model="bedrock/us.openai.gpt-5.6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=dict(SIGV4_PARAMS),
+        litellm_params={},
+        api_key=api_key,
+    )
+    assert "Authorization" not in headers
+    signed, _ = cfg.sign_request(
+        headers=headers,
+        optional_params=dict(SIGV4_PARAMS),
+        request_data={"model": "us.openai.gpt-5.6-sol", "messages": []},
+        api_base=url,
+        api_key=api_key,
+    )
+    assert signed["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/"), signed
+
+
+def test_bearer_api_key_is_sent_as_the_authorization_header(monkeypatch):
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    headers = cfg.validate_environment(
+        headers={},
+        model="bedrock/us.openai.gpt-5.6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        api_key="bedrock-api-key",
+    )
+    assert headers["Authorization"] == "Bearer bedrock-api-key"
 
 
 @pytest.mark.parametrize(
