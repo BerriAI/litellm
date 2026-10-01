@@ -1279,7 +1279,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_base=api_base,
                 is_async=False,
             )
-            request_headers: Final = dict(  # mutable-ok: the httpx request helpers take a dict
+            request_headers: Final = dict(
                 get_azure_request_auth_headers(headers=headers, azure_client_params=azure_client_params)
             )
             if aimg_generation is True:
@@ -1411,7 +1411,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },
@@ -1455,7 +1455,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj.pre_call(
             input=input,
             api_key=api_key,
-            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+            additional_args={
                 "complete_input_dict": speech_request_body(model, voice, optional_params),
                 "api_base": str(azure_client.base_url),
             },

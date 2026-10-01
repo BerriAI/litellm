@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import TypeAdapter, ValidationError
@@ -2711,10 +2712,10 @@ async def test_pass_through_request_merge_query_params_rewrites_managed_ids_on_t
 
 
 @pytest.mark.asyncio
-async def test_pass_through_with_httpbin_redirect():
+async def test_pass_through_request_follows_redirect_to_final_response(httpx_transport):
     """
-    Integration test using httpbin.org redirect endpoint to test real redirect handling.
-    This tests the actual redirect handling capability end-to-end using the full pass_through_request function.
+    The proxy must follow the upstream redirect and return the final response,
+    not the 302.
     """
     from unittest.mock import MagicMock
 
@@ -2725,44 +2726,40 @@ async def test_pass_through_with_httpbin_redirect():
         pass_through_request,
     )
 
-    # Create mock request
     mock_request = MagicMock(spec=Request)
     mock_request.method = "GET"
     mock_request.headers = Headers({})
     mock_request.query_params = QueryParams("")
 
-    # Mock the body method to return empty bytes for GET request
     async def mock_body():
         return b""
 
     mock_request.body = mock_body
 
-    # Mock user API key dict
     mock_user_api_key_dict = MagicMock()
 
-    try:
-        # Test with httpbin.org redirect endpoint
-        # This will redirect to httpbin.org/get
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://upstream.test/redirect/1").respond(
+            302, headers={"Location": "/get"}
+        )
+        upstream.get("https://upstream.test/get").respond(
+            200, json={"url": "https://upstream.test/get"}
+        )
+
         response = await pass_through_request(
             request=mock_request,
-            target="https://httpbin.org/redirect/1",
+            target="https://upstream.test/redirect/1",
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )
+        requested_urls: Final = [str(call.request.url) for call in upstream.calls]
 
-        # Should get the final response (200) from /get endpoint, not the redirect (302)
-        assert response.status_code == 200
-
-        # The response should be from the /get endpoint
-        response_content = bytes(response.body).decode("utf-8")
-
-        # httpbin.org/get returns JSON with info about the request
-        assert '"url": "https://httpbin.org/get"' in response_content
-    except Exception as e:
-        # If httpbin.org is not accessible, skip the test
-        import pytest
-
-        pytest.skip(f"Could not reach httpbin.org for integration test: {e}")
+    assert response.status_code == 200
+    assert json.loads(bytes(response.body))["url"] == "https://upstream.test/get"
+    assert requested_urls == [
+        "https://upstream.test/redirect/1",
+        "https://upstream.test/get",
+    ]
 
 
 @pytest.mark.asyncio

@@ -225,7 +225,7 @@ def _enduser_invalidation_where(budget_ids: Sequence[str]) -> dict[str, object]:
     default_budget_id: Final = litellm.max_end_user_budget_id
     if default_budget_id is None or default_budget_id not in budget_ids:
         return linked
-    return {"OR": [linked, {"budget_id": None}]}  # mutable-ok: prisma where filter must be a dict
+    return {"OR": [linked, {"budget_id": None}]}
 
 
 def _queue_budget_linked_resets(
@@ -721,8 +721,8 @@ class ResetBudgetJob:
         return tuple(
             await self._with_db_retry(
                 lambda: EndUserRepository(self.prisma_client).table.find_many(
-                    where={**where, "user_id": {"gt": cursor}},  # mutable-ok: prisma where filter must be a dict
-                    order={"user_id": "asc"},  # mutable-ok: prisma order filter must be a dict
+                    where={**where, "user_id": {"gt": cursor}},
+                    order={"user_id": "asc"},
                     take=RESET_BUDGET_JOB_BATCH_SIZE,
                 ),
                 reason="reset_budget_read_endusers_failure",
@@ -771,13 +771,13 @@ class ResetBudgetJob:
             log_subject="projects",
         )
         rollover_caps: Final[Mapping[str, float]] = MappingProxyType(
-            {  # mutable-ok: MappingProxyType wraps a one-shot dict comprehension
+            {
                 b.budget_id: cap
                 for b in budgets_to_reset
                 if b.budget_id is not None and (cap := _rollover_cap(b.max_budget)) is not None
             }
             if _rollover_enabled()
-            else {}  # mutable-ok: empty sentinel immediately frozen by MappingProxyType
+            else {}
         )
         return _BudgetCascade(
             budgets=tuple(budgets_to_reset),

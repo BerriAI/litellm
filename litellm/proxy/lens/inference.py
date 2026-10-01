@@ -129,18 +129,18 @@ async def analyze(
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
         "model": job.settings.model,
-        "messages": [  # mutable-ok: OpenAI request contract
-            {"role": "system", "content": _SYSTEM},  # mutable-ok: OpenAI message contract
-            {"role": "user", "content": body.prompt},  # mutable-ok: OpenAI message contract
+        "messages": [
+            {"role": "system", "content": _SYSTEM},
+            {"role": "user", "content": body.prompt},
         ],
         "max_tokens": 4096,
         "stream": False,
         "timeout": 120,
         "num_retries": 0,
         "disable_fallbacks": True,
-        "response_format": {"type": "json_object"},  # mutable-ok: provider response-format JSON
-        "metadata": {  # mutable-ok: request processing enriches metadata
-            "tags": ["litellm-lens"],  # mutable-ok: logging callbacks require a list
+        "response_format": {"type": "json_object"},
+        "metadata": {
+            "tags": ["litellm-lens"],
             "lens_id": lens.id,
             "lens_run_id": job.id,
             "lens_worker_id": worker.id,
