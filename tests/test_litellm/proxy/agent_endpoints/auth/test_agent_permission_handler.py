@@ -141,9 +141,10 @@ class TestAgentRequestHandler:
                 mock_key.return_value = UnrestrictedAgentAccess()
                 mock_team.return_value = UnrestrictedAgentAccess()
 
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: False
-                ) == UnrestrictedAgentAccess()
+                assert (
+                    await AgentRequestHandler.resolve_agent_access(auth, require_access_defined=lambda: False)
+                    == UnrestrictedAgentAccess()
+                )
                 assert await AgentRequestHandler.resolve_agent_access(
                     auth, require_access_defined=lambda: True
                 ) == RestrictedAgentAccess(frozenset())
@@ -180,12 +181,14 @@ class TestAgentRequestHandler:
             with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
                 mock_key.return_value = UnrestrictedAgentAccess()
                 mock_team.return_value = UnrestrictedAgentAccess()
-                assert await AgentRequestHandler.resolve_agent_access(
-                    admin, require_access_defined=lambda: True
-                ) == UnrestrictedAgentAccess()
-                assert await AgentRequestHandler.resolve_agent_access(
-                    string_admin, require_access_defined=lambda: True
-                ) == UnrestrictedAgentAccess()
+                assert (
+                    await AgentRequestHandler.resolve_agent_access(admin, require_access_defined=lambda: True)
+                    == UnrestrictedAgentAccess()
+                )
+                assert (
+                    await AgentRequestHandler.resolve_agent_access(string_admin, require_access_defined=lambda: True)
+                    == UnrestrictedAgentAccess()
+                )
 
     async def test_key_agent_access_requirement_precedes_agent_access_group_ceiling(self):
         agent_key: Final = UserAPIKeyAuth(
@@ -215,9 +218,10 @@ class TestAgentRequestHandler:
                 assert await AgentRequestHandler.resolve_agent_access(
                     auth, require_access_defined=lambda: True
                 ) == RestrictedAgentAccess(frozenset())
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: False
-                ) == UnrestrictedAgentAccess()
+                assert (
+                    await AgentRequestHandler.resolve_agent_access(auth, require_access_defined=lambda: False)
+                    == UnrestrictedAgentAccess()
+                )
 
                 mock_key.side_effect = None
                 mock_key.return_value = RestrictedAgentAccess(frozenset({"key-agent"}))
@@ -225,9 +229,10 @@ class TestAgentRequestHandler:
                 assert await AgentRequestHandler.resolve_agent_access(
                     auth, require_access_defined=lambda: True
                 ) == RestrictedAgentAccess(frozenset())
-                assert await AgentRequestHandler.resolve_agent_access(
-                    auth, require_access_defined=lambda: False
-                ) == UnrestrictedAgentAccess()
+                assert (
+                    await AgentRequestHandler.resolve_agent_access(auth, require_access_defined=lambda: False)
+                    == UnrestrictedAgentAccess()
+                )
 
     async def test_require_key_agent_access_defined_reads_general_settings(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy import proxy_server
@@ -235,9 +240,7 @@ class TestAgentRequestHandler:
         auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
         monkeypatch.setattr(proxy_server, "prisma_client", None)
 
-        with patch.object(
-            proxy_server, "general_settings", {"require_key_agent_access_defined": True}
-        ):
+        with patch.object(proxy_server, "general_settings", {"require_key_agent_access_defined": True}):
             assert await AgentRequestHandler.is_agent_allowed("agent-alpha", auth) is False
 
         with patch.object(proxy_server, "general_settings", {}):

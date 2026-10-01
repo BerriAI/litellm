@@ -16212,15 +16212,6 @@ async def model_info_v1(
             user_api_key_dict=user_api_key_dict,
         )
 
-    from litellm.proxy.agent_endpoints.model_list_helpers import (
-        append_agents_to_model_info,
-    )
-
-    await append_agents_to_model_info(
-        models=all_models,
-        user_api_key_dict=user_api_key_dict,
-    )
-
     hidden_names: Final = await get_hidden_unhealthy_model_names(
         healthy_only=healthy_only,
         general_settings=general_settings,
