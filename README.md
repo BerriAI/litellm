@@ -1,5 +1,8 @@
 <h1 align="center">
-        <img src="./.github/litellm-logo.svg" alt="LiteLLM" width="400">
+        <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/BerriAI/litellm/main/.github/litellm-logo-dark.svg">
+            <img src="https://raw.githubusercontent.com/BerriAI/litellm/main/.github/litellm-logo.svg" alt="LiteLLM" width="400">
+        </picture>
     </h1>
     <p align="center">
         <p align="center">LiteLLM AI Gateway
