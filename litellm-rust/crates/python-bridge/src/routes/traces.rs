@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 
-use litellm_core_utils::shared::Shared;
 use litellm_host_python::{FromPythonCache, ToPythonCache};
 use litellm_http::ClientVariant;
-use litellm_traces::{Connection, Error, InsertTable, Parameter, ReadQuery};
+use litellm_traces::{Connection, Error, InsertTable, Parameter, ReadQuery, Shared};
 use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},

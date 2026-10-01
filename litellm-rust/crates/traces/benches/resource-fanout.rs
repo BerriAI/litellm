@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use litellm_core_utils::shared::Shared;
+use litellm_traces::Shared;
 
 fn fanout<T: Clone>(resource: &T, spans: usize) -> Vec<T> {
     (0..spans).map(|_| resource.clone()).collect()

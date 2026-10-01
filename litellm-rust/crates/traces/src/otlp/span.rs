@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use litellm_core_utils::shared::Shared;
 use opentelemetry_proto::tonic::{
     collector::trace::v1::ExportTraceServiceRequest,
     trace::v1::{ResourceSpans, ScopeSpans, Span, span::SpanKind, status::StatusCode},
@@ -11,7 +10,7 @@ use super::{
     attributes::attributes,
     limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
 };
-use crate::DecodeError;
+use crate::{DecodeError, Shared};
 
 pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, DecodeError> {
     let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);

@@ -1,4 +1,4 @@
-use litellm_core_utils::shared::Shared;
+use litellm_traces::Shared;
 use litellm_traces::decode_otlp;
 use rstest::rstest;
 

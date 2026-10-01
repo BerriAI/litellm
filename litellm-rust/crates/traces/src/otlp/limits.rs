@@ -1,10 +1,9 @@
 use std::fmt;
 
-use litellm_core_utils::shared::Shared;
 use prost::encoding::{DecodeContext, WireType, decode_key, decode_varint, skip_field};
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
-use crate::DecodeError;
+use crate::{DecodeError, Shared};
 
 pub(super) const MAX_DEPTH: usize = 32;
 pub(super) const MAX_NODES: usize = 65_536;

@@ -3,11 +3,10 @@ mod limits;
 mod span;
 mod wire;
 
-use litellm_core_utils::shared::Shared;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-use crate::DecodeError;
+use crate::{DecodeError, Shared};
 
 #[derive(Serialize)]
 pub struct DecodedEvent {
