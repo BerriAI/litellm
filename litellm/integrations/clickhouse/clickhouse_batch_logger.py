@@ -12,7 +12,7 @@ import asyncio
 import os
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -46,19 +46,25 @@ class ClickHouseBatchLogger(CustomBatchLogger):
             flush_interval=CLICKHOUSE_FLUSH_INTERVAL_SECONDS,
         )
         self._flush_task: asyncio.Task[None] | None = None
+        self._stop: Final = asyncio.Event()
 
     def start(self) -> None:
         if self._flush_task is None or self._flush_task.done():
             self._flush_task = asyncio.get_running_loop().create_task(self.periodic_flush())
 
     async def aclose(self) -> None:
+        self._stop.set()
         if self._flush_task is not None:
-            if self.flush_lock is not None:
-                async with self.flush_lock:
-                    self._flush_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._flush_task
+            await self._flush_task
         await self.flush_queue()
+
+    async def periodic_flush(self) -> None:
+        while True:
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=self.flush_interval)
+            if self._stop.is_set():
+                return
+            await self.flush_queue()
 
     def is_full(self) -> bool:
         """Backpressure signal: producers should reject (429) instead of enqueueing."""

@@ -52,8 +52,7 @@ async def test_first_enqueued_row_flushes_after_synchronous_construction():
 
     logger.enqueue([{"i": 1}])
     await asyncio.wait_for(flushed.wait(), timeout=1)
-    if logger._flush_task is not None:
-        logger._flush_task.cancel()
+    await logger.aclose()
 
 
 @pytest.mark.asyncio
@@ -104,4 +103,22 @@ async def test_close_waits_for_active_insert_and_stops_periodic_flush() -> None:
     await asyncio.wait_for(closing, timeout=1)
     assert logger.rows_written == 1
     insert.assert_awaited_once_with("test_table", [{"i": 1}])
-    assert logger._flush_task is not None and logger._flush_task.cancelled()
+    assert logger._flush_task is not None and logger._flush_task.done()
+    assert not logger._flush_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_close_wakes_idle_worker_and_drains_queued_rows() -> None:
+    insert: Final = AsyncMock()
+    logger: Final = _logger(insert)
+    logger.flush_interval = 3600
+    logger.enqueue([{"i": 1}])
+    await asyncio.sleep(0)
+
+    await asyncio.wait_for(logger.aclose(), timeout=1)
+
+    insert.assert_awaited_once_with("test_table", [{"i": 1}])
+    assert logger.rows_written == 1
+    assert logger.log_queue == []
+    assert logger._flush_task is not None and logger._flush_task.done()
+    assert not logger._flush_task.cancelled()

@@ -87,7 +87,8 @@ async def test_tracing_config_automatically_logs_spend_without_callback_setting(
     assert storage.insert_rows.await_args.args[0] == "spend_logs"
     assert storage.insert_rows.await_args.args[1][0]["spend"] == 0.25
     assert logger not in litellm._async_success_callback
-    assert logger._flush_task is not None and logger._flush_task.cancelled()
+    assert logger._flush_task is not None and logger._flush_task.done()
+    assert not logger._flush_task.cancelled()
 
 
 # ---------------------------------------------------------------------------
