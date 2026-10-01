@@ -6650,7 +6650,7 @@ async def vector_store_access_check(
         if litellm.vector_store_registry is not None
         else None
     ) or ()
-    rag_vector_store_id: Final = _get_rag_query_vector_store_id(request_body)
+    rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
     rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
     vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
     if not vector_store_ids_to_run:
