@@ -35,7 +35,7 @@ GLOB_CHARS = frozenset("*?")
 # itself decomposed one level deeper and is checked through its own entry.
 SHARDED_ROOTS: tuple[str, ...] = (
     "tests/test_litellm",
-    "tests/test_litellm/proxy",
+    "tests/unit/proxy",
 )
 
 
@@ -480,7 +480,7 @@ def _check_slices() -> int:
 
 
 def _check_shards() -> int:
-    findings = _unassigned_shard_children(_invoked_test_tokens(_all_scalars()))
+    findings = _unassigned_shard_children(_invoked_test_tokens(_all_scalars()) | _unit_selection_tokens())
     if findings:
         _report(
             "test directories and files that no shard claims",

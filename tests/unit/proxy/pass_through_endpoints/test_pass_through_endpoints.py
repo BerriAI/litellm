@@ -2711,11 +2711,15 @@ async def test_pass_through_request_merge_query_params_rewrites_managed_ids_on_t
 
 
 @pytest.mark.asyncio
-async def test_pass_through_with_httpbin_redirect():
+async def test_pass_through_request_follows_redirect_to_final_response():
     """
-    Integration test using httpbin.org redirect endpoint to test real redirect handling.
-    This tests the actual redirect handling capability end-to-end using the full pass_through_request function.
+    The proxy must follow the upstream redirect and return the final response,
+    not the 302. A loopback server plays httpbin's redirect -> /get pair and
+    records which paths the client actually hit.
     """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from queue import SimpleQueue
+    from threading import Thread
     from unittest.mock import MagicMock
 
     from fastapi import Request
@@ -2725,44 +2729,61 @@ async def test_pass_through_with_httpbin_redirect():
         pass_through_request,
     )
 
-    # Create mock request
-    mock_request = MagicMock(spec=Request)
-    mock_request.method = "GET"
-    mock_request.headers = Headers({})
-    mock_request.query_params = QueryParams("")
+    requested_paths: SimpleQueue[str] = SimpleQueue()
 
-    # Mock the body method to return empty bytes for GET request
-    async def mock_body():
-        return b""
+    class RedirectThenGetHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requested_paths.put(self.path)
+            if self.path == "/redirect/1":
+                self.send_response(302)
+                self.send_header("Location", "/get")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps({"url": f"{base}/get"}).encode("utf-8")
+                )
 
-    mock_request.body = mock_body
+        def log_message(self, format, *args):
+            pass
 
-    # Mock user API key dict
-    mock_user_api_key_dict = MagicMock()
-
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectThenGetHandler)
+    base = f"http://127.0.0.1:{server.server_port}"
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
     try:
-        # Test with httpbin.org redirect endpoint
-        # This will redirect to httpbin.org/get
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.headers = Headers({})
+        mock_request.query_params = QueryParams("")
+
+        async def mock_body():
+            return b""
+
+        mock_request.body = mock_body
+
+        mock_user_api_key_dict = MagicMock()
+
         response = await pass_through_request(
             request=mock_request,
-            target="https://httpbin.org/redirect/1",
+            target=f"{base}/redirect/1",
             custom_headers={},
             user_api_key_dict=mock_user_api_key_dict,
         )
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
-        # Should get the final response (200) from /get endpoint, not the redirect (302)
-        assert response.status_code == 200
+    assert response.status_code == 200
+    assert json.loads(bytes(response.body))["url"] == f"{base}/get"
 
-        # The response should be from the /get endpoint
-        response_content = bytes(response.body).decode("utf-8")
-
-        # httpbin.org/get returns JSON with info about the request
-        assert '"url": "https://httpbin.org/get"' in response_content
-    except Exception as e:
-        # If httpbin.org is not accessible, skip the test
-        import pytest
-
-        pytest.skip(f"Could not reach httpbin.org for integration test: {e}")
+    paths = []
+    while not requested_paths.empty():
+        paths.append(requested_paths.get())
+    assert tuple(paths) == ("/redirect/1", "/get")
 
 
 @pytest.mark.asyncio

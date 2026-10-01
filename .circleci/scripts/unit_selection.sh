@@ -116,7 +116,7 @@ legacy_paths() {
       echo tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
       echo tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
       echo tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
-      echo tests/unit/proxy/response_polling/test_response_polling_handler.py
+      echo tests/unit/proxy/response_polling
       echo tests/unit/proxy/test_custom_tokenizer_bug.py
       echo tests/unit/proxy/test_get_favicon.py
       echo tests/unit/proxy/test_get_image.py
@@ -151,6 +151,7 @@ legacy_paths() {
     proxy-extras) echo tests/unit/litellm_proxy_extras ;;
     proxy-infra)
       echo tests/unit/gateway
+      echo tests/unit/proxy/management
       echo tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
       echo tests/unit/proxy/roi_calculator ;;
     responses-caching-types)

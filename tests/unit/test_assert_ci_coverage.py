@@ -92,7 +92,7 @@ def test_a_glob_names_only_what_it_matches_not_what_sits_below_it():
     glob = "tests/test_litellm/test_*.py"
     assert coverage._token_names(glob, "tests/test_litellm/test_router.py") is True
     assert coverage._token_names(glob, "tests/test_litellm/test_router.py/nested.py") is False
-    assert coverage._token_names(glob, "tests/test_litellm/proxy/test_router.py") is False
+    assert coverage._token_names(glob, "tests/test_litellm/nested/test_router.py") is False
 
 
 def test_a_glob_still_covers_the_subtree_for_the_census():
@@ -169,8 +169,25 @@ def test_every_sharded_root_named_in_the_script_exists_on_disk():
 
 
 def test_the_repo_as_it_stands_has_every_shard_child_assigned():
-    findings = coverage._unassigned_shard_children(coverage._invoked_test_tokens(coverage._all_scalars()))
+    findings = coverage._unassigned_shard_children(
+        coverage._invoked_test_tokens(coverage._all_scalars()) | coverage._unit_selection_tokens()
+    )
     assert [f.subject for f in findings] == []
+
+
+def test_a_child_named_only_by_unit_selection_counts_as_claimed(tmp_path):
+    root = tmp_path / "tests" / "tree"
+    (root / "claimed").mkdir(parents=True)
+    (root / "claimed" / "test_a.py").write_text("def test_a(): assert True\n")
+    (root / "orphan").mkdir(parents=True)
+    (root / "orphan" / "test_b.py").write_text("def test_b(): assert True\n")
+
+    selection_tokens: Final = coverage._invoked_test_tokens(coverage._all_scalars()) | frozenset(
+        {"tests/tree/claimed"}
+    )
+    findings = coverage._unassigned_shard_children(selection_tokens, roots=("tests/tree",), repo_root=tmp_path)
+
+    assert tuple(f.subject for f in findings) == ("tests/tree/orphan",)
 
 
 # --------------------------------------------------------------------------- #
