@@ -7195,6 +7195,44 @@ class TestMCPServerManager:
         assert kept is not None and kept.description == "kept"
 
     @pytest.mark.asyncio
+    async def test_server_save_during_an_in_flight_listing_is_not_undone_by_the_stale_record(self):
+        """A PUT /v1/mcp/server that lands while a listing awaits its upstream fetch drops the server's
+        catalog; the fetch completing afterwards must not write the pre-save catalog back, or hooks see
+        the old description next to the new definition until the next listing."""
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        user = UserAPIKeyAuth(api_key="sk-litellm", user_id="saver")
+        fetch_started = asyncio.Event()
+        release_fetch = asyncio.Event()
+
+        async def fetch(client, name):
+            fetch_started.set()
+            await release_fetch.wait()
+            return [MCPTool(name="turn", description="before save", inputSchema={})]
+
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager._fetch_tools_with_timeout = fetch
+        caller = ListedToolsCaller(user_api_key_auth=user)
+
+        async def list_tools() -> None:
+            await manager._get_tools_from_server(server=server, user_api_key_auth=user)
+
+        listing = asyncio.create_task(list_tools())
+        await fetch_started.wait()
+        manager._invalidate_server_definition_caches(server.server_id)
+        release_fetch.set()
+        await listing
+
+        assert manager.get_listed_tool(server, "turn", caller) is None
+
+        manager._fetch_tools_with_timeout = AsyncMock(
+            return_value=[MCPTool(name="turn", description="after save", inputSchema={})]
+        )
+        await manager._get_tools_from_server(server=server, user_api_key_auth=user)
+        listed = manager.get_listed_tool(server, "turn", caller)
+        assert listed is not None and listed.description == "after save"
+
+    @pytest.mark.asyncio
     async def test_user_oauth_refresh_keeps_listed_tools(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
