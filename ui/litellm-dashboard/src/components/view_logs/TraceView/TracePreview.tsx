@@ -1,33 +1,33 @@
 "use client";
 
-import { useMemo } from "react";
+import { cn } from "@/lib/cva.config";
 
-import previewTrace from "./__fixtures__/deep_agent_trace.json";
+import previewTrace from "./previewTrace.json";
 import { SpanIcon } from "./SpanIcon";
-import type { SpanRowData } from "./traceTree";
-import type { Trace } from "./traceTypes";
-import { buildTreeRows, fmtMs } from "./traceUtils";
+import type { SpanType } from "./traceTypes";
+import { fmtMs } from "./traceUtils";
 
-const PREVIEW_ROWS = 9;
-const PREVIEW_STATE = {
-  hideFramework: true,
-  collapsedSpanIds: new Set<string>(),
-  expandedGroupIds: new Set<string>(),
-  groupRevealCounts: {},
+interface PreviewRow {
+  id: string;
+  name: string;
+  type: SpanType;
+  model: string | null;
+  depth: number;
+  start_offset_ms: number;
+  duration_ms: number;
+  error: boolean;
+}
+
+const preview = previewTrace as {
+  name: string;
+  input_preview: string;
+  span_count: number;
+  duration_ms: number;
+  rows: PreviewRow[];
 };
 
-const trace = previewTrace as unknown as Trace;
-
-/** A static, crisp rendering of a real deep-agent run, so the empty state shows what Agent Traces looks like. */
 export function TracePreview() {
-  const rows = useMemo(
-    () =>
-      buildTreeRows(trace.spans, PREVIEW_STATE)
-        .filter((row): row is SpanRowData => row.kind === "span")
-        .slice(0, PREVIEW_ROWS),
-    [],
-  );
-  const total = trace.summary.duration_ms;
+  const total = preview.duration_ms;
   return (
     <div
       aria-hidden
@@ -36,34 +36,30 @@ export function TracePreview() {
     >
       <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
         <SpanIcon type="agent" size="md" />
-        <span className="text-[13px] font-medium text-foreground">{trace.summary.name}</span>
-        <span className="truncate text-[12px] text-muted-foreground">{trace.summary.input_preview}</span>
+        <span className="text-[13px] font-medium text-foreground">{preview.name}</span>
+        <span className="truncate text-[12px] text-muted-foreground">{preview.input_preview}</span>
         <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
-          {trace.summary.span_count} steps · {fmtMs(total)}
+          {preview.span_count} steps · {fmtMs(total)}
         </span>
       </div>
       <div className="relative">
-        {rows.map((row) => (
+        {preview.rows.map((row) => (
           <div key={row.id} className="flex h-8 items-center gap-2 border-b border-border/60 px-4 last:border-b-0">
             <div className="flex min-w-0 flex-1 items-center gap-2" style={{ paddingLeft: row.depth * 16 }}>
-              <SpanIcon type={row.span.type} model={row.span.model} error={row.span.status === "error"} size="sm" />
-              <span className="truncate text-[12.5px] text-foreground">{row.span.name}</span>
+              <SpanIcon type={row.type} model={row.model} error={row.error} size="sm" />
+              <span className="truncate text-[12.5px] text-foreground">{row.name}</span>
             </div>
             <div className="relative h-1.5 w-[40%] shrink-0 rounded-full bg-muted">
               <div
-                className={
-                  row.span.status === "error"
-                    ? "absolute h-full rounded-full bg-destructive"
-                    : "absolute h-full rounded-full bg-trace-brand/70"
-                }
+                className={cn("absolute h-full rounded-full", row.error ? "bg-destructive" : "bg-trace-brand/70")}
                 style={{
-                  left: `${(row.span.start_offset_ms / total) * 100}%`,
-                  width: `${Math.max((row.span.duration_ms / total) * 100, 0.6)}%`,
+                  left: `${(row.start_offset_ms / total) * 100}%`,
+                  width: `${Math.max((row.duration_ms / total) * 100, 0.6)}%`,
                 }}
               />
             </div>
             <span className="w-14 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
-              {fmtMs(row.span.duration_ms)}
+              {fmtMs(row.duration_ms)}
             </span>
           </div>
         ))}
