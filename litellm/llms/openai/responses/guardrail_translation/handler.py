@@ -60,6 +60,10 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     unappliable_request_rewrite,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.additional_tools import (
+    ADDITIONAL_TOOLS_INPUT_ITEM_TYPE,
+    TOOL_SEARCH_OUTPUT_INPUT_ITEM_TYPE,
+)
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -89,6 +93,10 @@ from litellm.types.responses.main import (
     OutputText,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+_HOISTED_TOOLS_INPUT_ITEM_TYPES: Final[frozenset[str]] = frozenset(
+    {ADDITIONAL_TOOLS_INPUT_ITEM_TYPE, TOOL_SEARCH_OUTPUT_INPUT_ITEM_TYPE}
+)
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -596,11 +604,21 @@ class OpenAIResponsesHandler(BaseTranslation):
             guardrailed,
         )
 
-    def extract_request_tool_names(self, data: dict) -> list[str]:
+    def extract_request_tool_names(self, data: dict[str, object]) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
         and custom, tools[].server_label for mcp)."""
-        names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
+        names: list[str] = []  # mutable-ok: accumulator returned to auth for allowlist enforcement
+        tools: list[object] = []  # mutable-ok: request tool accumulator before read-only iteration
+        tools.extend(data.get("tools") or ())
+        input_value: Final[object] = data.get("input")
+        if isinstance(input_value, list):
+            for item in input_value:
+                if not isinstance(item, dict) or item.get("type") not in _HOISTED_TOOLS_INPUT_ITEM_TYPES:
+                    continue
+                item_tools: object = item.get("tools")
+                if isinstance(item_tools, list):
+                    tools.extend(item_tools)
+        for tool in tools:
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):
