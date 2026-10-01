@@ -74,6 +74,13 @@ CODE_CHALLENGE = urlsafe_b64encode(hashlib.sha256(CODE_VERIFIER.encode("ascii"))
 @pytest.fixture(autouse=True)
 def _salt_key(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", MASTER_KEY)
+    from unittest.mock import patch
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_id",
+        return_value=_scoped_mcp_server("public", auth_type="none"),
+    ):
+        yield
 
 
 def _request(path="/authorize", query="", cookies=None, method="GET"):
@@ -339,6 +346,8 @@ async def test_full_walk_register_authorize_complete_token_and_replay(redirect_u
     handle, cookies = _flow_cookie_from(authorize_response)
 
     denied = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="attacker",
@@ -347,6 +356,8 @@ async def test_full_walk_register_authorize_complete_token_and_replay(redirect_u
     assert denied.status_code == 403
 
     anonymous = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id=None,
@@ -355,6 +366,8 @@ async def test_full_walk_register_authorize_complete_token_and_replay(redirect_u
     assert anonymous.status_code == 401
 
     completed = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="u1",
@@ -429,6 +442,8 @@ async def test_full_walk_register_authorize_complete_token_and_replay(redirect_u
 @pytest.mark.asyncio
 async def test_complete_rejects_missing_tampered_and_expired_flows():
     missing = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", method="POST"),
         flow_handle="nope",
         session_user_id="u1",
@@ -437,6 +452,8 @@ async def test_complete_rejects_missing_tampered_and_expired_flows():
     assert missing.status_code == 400
 
     tampered = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies={f"{CONNECT_FLOW_COOKIE_PREFIX}h1": "garbage"}, method="POST"),
         flow_handle="h1",
         session_user_id="u1",
@@ -518,6 +535,8 @@ async def test_token_gates_on_live_user_revalidation(failure, expected_status, e
     authorize_response = _authorize(client_id, session_user_id="deactivated-user")
     handle, cookies = _flow_cookie_from(authorize_response)
     completed = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="deactivated-user",
@@ -572,6 +591,8 @@ async def test_flow_is_single_use_shared_cache_rejects_second_complete():
     handle, cookies = _flow_cookie_from(_authorize(client_id, session_user_id="u1"))
 
     first = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="u1",
@@ -579,6 +600,8 @@ async def test_flow_is_single_use_shared_cache_rejects_second_complete():
     )
     assert first.status_code == 303
     second = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="u1",
@@ -720,6 +743,8 @@ async def _complete(redirect_uri: str, delivery, cookies=None, handle=None, sess
     if cookies is None:
         handle, cookies = _flow_cookie_from(_authorize(client_id, session_user_id="u1", redirect_uri=redirect_uri))
     response = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id=session_user_id,
@@ -827,6 +852,8 @@ async def test_unknown_delivery_value_is_rejected_before_the_flow_is_consumed():
     handle, cookies = _flow_cookie_from(_authorize(client_id, session_user_id="u1", redirect_uri=LOOPBACK_REDIRECT_URI))
 
     rejected = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="u1",
@@ -837,6 +864,8 @@ async def test_unknown_delivery_value_is_rejected_before_the_flow_is_consumed():
     assert json.loads(rejected.body)["error"] == "invalid_request"
 
     retried = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="u1",
@@ -997,7 +1026,9 @@ async def _complete_page(response, scoped_server=None, vendor=None, reachable=No
 
     handle, cookies = _flow_cookie_from(response)
     with patch(_MANAGER_PATCH) as manager:
-        manager.get_mcp_server_by_id.return_value = scoped_server
+        manager.get_mcp_server_by_id.side_effect = lambda server_id: (
+            scoped_server or _scoped_mcp_server("public", auth_type="none")
+        ) if server_id == "public-id" else scoped_server
         return await complete_connect_flow(
             request=_request("/authorize/complete", cookies=cookies, method="POST"),
             flow_handle=handle,
@@ -1005,7 +1036,7 @@ async def _complete_page(response, scoped_server=None, vendor=None, reachable=No
             cache=cache or DualCache(),
             lookup_vendor_credential=vendor or _VendorCredential(),
             lookup_server_reachability=reachable or _ServerReachability(),
-            **overrides,
+            **{"selected_servers": ("public-id",), **overrides},
         )
 
 
@@ -1814,6 +1845,8 @@ async def test_mcp_wire_formats_carry_no_native_client_fields():
     assert "audience" not in flow_wire
     assert "team_id" not in flow_wire
     completed = await complete_connect_flow(
+        selected_servers=("public-id",),
+        lookup_server_reachability=_ServerReachability(),
         request=_request("/authorize/complete", cookies=cookies, method="POST"),
         flow_handle=handle,
         session_user_id="u1",
@@ -2354,3 +2387,123 @@ async def test_token_exchange_relays_a_mint_refusal(failure, status, error):
     response = await _exchange_native(client_id, _Minter(failure), _Exchanger())
     assert response.status_code == status
     assert json.loads(response.body)["error"] == error
+
+
+@pytest.mark.asyncio
+async def test_unified_completion_requires_an_upstream_selection():
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = _authorize(client_id, session_user_id="u1")
+    completed = await _complete_page(response, selected_servers=())
+    assert completed.status_code == 400
+    assert "location" not in completed.headers
+    assert "select" in json.loads(completed.body)["error_description"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "credential,reachable,status",
+    [("absent", True, 400), ("unavailable", True, 503), ("present", False, 400), ("present", True, 303)],
+)
+async def test_unified_completion_checks_selected_upstream_and_permissions(credential, reachable, status):
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = _authorize(client_id, session_user_id="u1")
+    cache = DualCache()
+    server = _scoped_mcp_server(oauth2_flow="authorization_code")
+    vendor = _VendorCredential(credential)
+    completed = await _complete_page(
+        response,
+        scoped_server=server,
+        vendor=vendor,
+        reachable=_ServerReachability(reachable),
+        cache=cache,
+        selected_servers=("github-id",),
+    )
+    assert completed.status_code == status
+    if not reachable:
+        assert vendor.calls == []
+    if status != 303:
+        assert "location" not in completed.headers
+        retried = await _complete_page(response, scoped_server=server, cache=cache, selected_servers=("github-id",))
+        assert retried.status_code == 303
+    else:
+        code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+        token = await _redeem(code, client_id)
+        assert _opened_principal(json.loads(token.body)).resource_server_id is None
+
+
+@pytest.mark.asyncio
+async def test_unified_cancel_does_not_require_selected_servers():
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = _authorize(client_id, session_user_id="u1")
+    completed = await _complete_page(response, selected_servers=(), decision="deny")
+    assert completed.status_code == 303
+    assert parse_qs(urlparse(completed.headers["location"]).query)["error"] == ["access_denied"]
+
+
+@pytest.mark.asyncio
+async def test_unified_completion_checks_every_selected_server_and_preserves_cancellation():
+    import asyncio
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = _authorize(client_id, session_user_id="u1")
+    handle, cookies = _flow_cookie_from(response)
+    servers = {name: _scoped_mcp_server(name, oauth2_flow="authorization_code") for name in ("github", "slack")}
+    cache = DualCache()
+
+    async def credential(user_id, server_id):
+        if server_id == "slack-id":
+            return "absent"
+        return "present"
+
+    async def cancelled(user_id, server_id):
+        raise asyncio.CancelledError()
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.side_effect = servers.get
+        manager.get_mcp_server_by_id.side_effect = lambda server_id: next(
+            (server for server in servers.values() if server.server_id == server_id), None
+        )
+        arguments = {
+            "request": _request("/authorize/complete", cookies=cookies, method="POST"),
+            "flow_handle": handle,
+            "session_user_id": "u1",
+            "cache": cache,
+            "lookup_server_reachability": _ServerReachability(),
+        }
+        missing = await complete_connect_flow(
+            **arguments, selected_servers=("missing",), lookup_vendor_credential=credential
+        )
+        assert missing.status_code == 400
+        unfinished = await complete_connect_flow(
+            **arguments, selected_servers=("github-id", "slack-id"), lookup_vendor_credential=credential
+        )
+        assert unfinished.status_code == 400
+        with pytest.raises(asyncio.CancelledError):
+            await complete_connect_flow(**arguments, selected_servers=("github-id",), lookup_vendor_credential=cancelled)
+        completed = await complete_connect_flow(
+            **arguments, selected_servers=("github-id", "slack-id"), lookup_vendor_credential=_VendorCredential()
+        )
+        assert completed.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_unified_completion_validates_selected_id_despite_alias_collision():
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = _authorize(client_id, session_user_id="u1")
+    handle, cookies = _flow_cookie_from(response)
+    selected = _scoped_mcp_server("github", oauth2_flow="authorization_code")
+    other = _scoped_mcp_server("other", auth_type="none").model_copy(update={"alias": selected.server_id})
+    cache = DualCache()
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = other
+        manager.get_mcp_server_by_id.side_effect = {selected.server_id: selected, other.server_id: other}.get
+        vendor = _VendorCredential("absent")
+        arguments = dict(request=_request("/authorize/complete", cookies=cookies, method="POST"), flow_handle=handle, session_user_id="u1", cache=cache, selected_servers=(selected.server_id,), lookup_server_reachability=_ServerReachability())
+        refused = await complete_connect_flow(**arguments, lookup_vendor_credential=vendor)
+        assert refused.status_code == 400
+        assert vendor.calls == [("u1", selected.server_id)]
+        completed = await complete_connect_flow(**arguments, lookup_vendor_credential=_VendorCredential())
+        assert completed.status_code == 303

@@ -26289,6 +26289,8 @@ export interface components {
             delivery?: string | null;
             /** Flow */
             flow: string;
+            /** Selected Servers */
+            selected_servers?: string[] | null;
             /** Team Id */
             team_id?: string | null;
         };
