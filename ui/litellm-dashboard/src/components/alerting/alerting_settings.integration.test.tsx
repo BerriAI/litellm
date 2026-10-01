@@ -117,32 +117,28 @@ describe("AlertingSettings", () => {
   });
 
   it("ignores an older settings response after the access token changes", async () => {
-    let resolveOldRequest!: (value: typeof settingsResponse) => void;
-    let resolveNewRequest!: (value: typeof settingsResponse) => void;
-    const oldRequest = new Promise<typeof settingsResponse>((resolve) => {
-      resolveOldRequest = resolve;
-    });
-    const newRequest = new Promise<typeof settingsResponse>((resolve) => {
-      resolveNewRequest = resolve;
-    });
+    const oldRequest = Promise.withResolvers<typeof settingsResponse>();
+    const newRequest = Promise.withResolvers<typeof settingsResponse>();
     const refreshedSettings = settingsResponse.map((setting) =>
       setting.field_name === "budget_alert_ttl" ? { ...setting, field_value: 90 } : setting,
     );
 
-    alertingSettingsCall.mockImplementation((token: string) => (token === "sk-new" ? newRequest : oldRequest));
+    alertingSettingsCall.mockImplementation((token: string) =>
+      token === "sk-new" ? newRequest.promise : oldRequest.promise,
+    );
 
     const { rerender } = renderWithProviders(<AlertingSettings accessToken="sk-old" premiumUser />);
     rerender(<AlertingSettings accessToken="sk-new" premiumUser />);
 
     await act(async () => {
-      resolveNewRequest(refreshedSettings);
-      await newRequest;
+      newRequest.resolve(refreshedSettings);
+      await newRequest.promise;
     });
     await screen.findByDisplayValue("90");
 
     await act(async () => {
-      resolveOldRequest(settingsResponse);
-      await oldRequest;
+      oldRequest.resolve(settingsResponse);
+      await oldRequest.promise;
     });
 
     expect(screen.getByDisplayValue("90")).toBeInTheDocument();
