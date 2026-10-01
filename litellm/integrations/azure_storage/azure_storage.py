@@ -30,6 +30,14 @@ from litellm.types.secret_managers.get_azure_ad_token_provider import (
 from litellm.types.utils import StandardLoggingPayload
 
 AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
+_ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
+
+
+def adls_safe_file_name(payload_id: str | None) -> str:
+    """`=` padding and `/` in a base64 payload id are what the Data Lake service rejects, so the name drops the
+    padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the length, so ids from
+    that alphabet stay distinct; anything else is left as is."""
+    return f"{(payload_id or str(uuid.uuid4())).translate(_ADLS_SAFE_NAME)}.json"
 
 
 @cache
@@ -182,7 +190,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
                 json_payload: Final = safe_dumps(payload) + "\n"  # Add newline for each log entry
                 payload_bytes: Final = json_payload.encode("utf-8")
-                filename: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+                filename: Final = adls_safe_file_name(payload.get("id"))
                 base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{filename}"
 
                 # Execute the 3-step upload process
@@ -368,7 +376,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 verbose_logger.debug("Created directory: %s", today)
 
             # Create a file client
-            file_name: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+            file_name: Final = adls_safe_file_name(payload.get("id"))
             file_client: Final = directory_client.get_file_client(file_name)
 
             # Create the file
