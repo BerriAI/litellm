@@ -269,7 +269,8 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
     redacted message replaces the n-th non-empty element, because
     :func:`build_inspection_messages` emits one message per non-empty string.
     Responses-API ``tool_search_output`` tool descriptions are rewritten in
-    place, preserving the surrounding item and non-text fields.
+    place, preserving the surrounding item and non-text fields. The
+    ``tool_search_output`` fallback ``output`` field is rewritten the same way.
 
     Returns False, leaving ``data`` untouched, when a batch response does not
     carry exactly one message per inspected element: a partial rewrite would
@@ -299,16 +300,22 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
             text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
         data["input"] = "\n".join(text_parts)
     elif isinstance(input_value, list) and not is_string_batch_input(data):
-        redacted_texts: Final[list[str]] = [
+        response_texts: Final[tuple[str, ...]] = tuple(
             text for msg in redacted_messages if isinstance(text := _text_of_message(msg), str) and text
-        ]
-        if len(redacted_texts) != len(build_inspection_messages(data)):
+        )
+        if len(response_texts) != len(build_inspection_messages(data)):
             return False
-        redacted_iter: Final = iter(redacted_texts)
-        for idx, item in enumerate(input_value):
-            if isinstance(item, dict) and item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
-                item["tools"] = [  # mutable-ok: rewrites forwarded tool-search results in place
-                    {**tool, "description": next(redacted_iter)}
+        redacted_iter: Final[Iterator[str]] = iter(response_texts)
+        for item in input_value:
+            if isinstance(item, dict) and item.get("type") in _OUTPUT_ITEM_TYPES and "output" in item:
+                item["output"] = next(redacted_iter)
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "tool_search_output"
+                and isinstance(item.get("tools"), list)
+            ):
+                item["tools"] = [  # mutable-ok: request tools must remain a JSON list for the provider
+                    {**tool, "description": next(redacted_iter)}  # mutable-ok: request tools remain JSON dicts
                     if isinstance(tool, Mapping) and isinstance(tool.get("description"), str) and tool["description"]
                     else tool
                     for tool in item["tools"]

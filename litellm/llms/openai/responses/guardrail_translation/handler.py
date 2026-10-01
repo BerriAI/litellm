@@ -1195,18 +1195,18 @@ class OpenAIResponsesHandler(BaseTranslation):
         for output_item, rewrite in (
             (output_item, _tool_call_rewrite(before, after))
             for output_item, before, after in zip(tool_call_items, pre_guardrail_tool_calls, post_guardrail_tool_calls)
-        if after != before
+            if after != before
         ):
             self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
-
 
     @staticmethod
     def _parsed_tool_search_arguments(arguments: str) -> object:
         try:
-            parsed: Final = json.loads(arguments) if arguments else {}
+            if not arguments:
+                return {}  # mutable-ok: Responses tool-search arguments are JSON objects
+            return json.loads(arguments)
         except json.JSONDecodeError:
             return arguments
-        return parsed if parsed is not None else {}
 
     @staticmethod
     def _tool_call_ids_by_item_id(stream_events: Sequence[object]) -> Mapping[str, str]:

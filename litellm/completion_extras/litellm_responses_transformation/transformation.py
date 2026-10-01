@@ -243,7 +243,9 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
     is_custom: Final = item_type == "custom_tool_call"
     is_tool_search: Final = item_type == "tool_search_call"
     raw_arguments: Final = (item.get("input") if is_custom else item.get("arguments")) or ""
-    arguments: Final = json.dumps(raw_arguments) if is_tool_search and not isinstance(raw_arguments, str) else raw_arguments
+    arguments: Final = (
+        json.dumps(raw_arguments) if is_tool_search and not isinstance(raw_arguments, str) else raw_arguments
+    )
     name: Final = item.get("name") or ("custom_tool" if is_custom else "tool_search" if is_tool_search else "")
     function_chunk: Final = ChatCompletionToolCallFunctionChunk(name=name, arguments=arguments)
     tool_call_dict: Final = _ChatToolCallDict(

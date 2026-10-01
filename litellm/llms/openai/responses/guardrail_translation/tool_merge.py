@@ -176,10 +176,12 @@ def _merged_original(
 
 
 def _rebuilt_tool_search(original: Tool, flattened: Tool, guardrailed: Tool) -> tuple[Tool, ...]:
-    changed_function: Final = {
-        key: value for key, value in _function_fields(guardrailed).items() if _function_fields(flattened).get(key) != value
+    changed_function: dict[object, object] = {  # mutable-ok: json.dumps rejects MappingProxyType
+        key: value
+        for key, value in _function_fields(guardrailed).items()
+        if _function_fields(flattened).get(key) != value
     }
-    return ({**original, **changed_function},)
+    return ({**original, **changed_function},)  # mutable-ok: json.dumps rejects MappingProxyType
 
 
 def merge_guardrailed_tools(

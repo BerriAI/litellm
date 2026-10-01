@@ -767,6 +767,14 @@ def test_apply_redacted_messages_back_rewrites_tool_search_output_tool_descripti
     assert data["input"][0]["tools"][0]["name"] == "get_weather"
 
 
+def test_apply_redacted_messages_back_rewrites_tool_search_output_fallback_output():
+    data = {"input": [{"type": "tool_search_output", "call_id": "call_tool_search", "output": "tool-secret"}]}
+    redacted = [{"role": "tool", "content": "tool-[REDACTED]"}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["output"] == "tool-[REDACTED]"
+
+
 def test_apply_redacted_messages_back_blocks_partial_tool_search_output_rewrite():
     data = {
         "input": [
