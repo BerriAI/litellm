@@ -30,6 +30,11 @@ const OTEL_BASE_PACKAGES = "opentelemetry-distro opentelemetry-exporter-otlp-pro
 const PY_RUN_SNIPPET = "opentelemetry-instrument python my_agent.py";
 const TS_RUN_SNIPPET = "npx tsx my_agent.ts";
 const SAMPLE_TRACE_POLL_MS = 1000;
+export const TRACING_KEY_REQUEST = {
+  key_alias: "Agent tracing",
+  allowed_routes: ["/v1/traces"],
+  metadata: { purpose: "agent_tracing" },
+} as const;
 const SAMPLE_TRACE_POLL_ATTEMPTS = 15;
 
 type Installer = "pip" | "uv";
@@ -75,12 +80,17 @@ import { generateText } from "ai";
 registerOTel({ serviceName: process.env.OTEL_SERVICE_NAME ?? "my-agent" });
 
 const litellm = createOpenAICompatible({ name: "litellm", baseURL: "{PROXY}/v1", apiKey: process.env.LITELLM_API_KEY });
-const { text } = await generateText({
-  model: litellm("claude-sonnet-4-5"),
-  prompt: "What is LiteLLM?",
-  experimental_telemetry: { isEnabled: true, functionId: "my_agent" },
-});
-console.log(text);`,
+
+async function main() {
+  const { text } = await generateText({
+    model: litellm("claude-sonnet-4-5"),
+    prompt: "What is LiteLLM?",
+    experimental_telemetry: { isEnabled: true, functionId: "my_agent" },
+  });
+  console.log(text);
+}
+
+main();`,
   },
   {
     id: "langgraph",
@@ -171,12 +181,12 @@ const installPackages = (guide: Pick<FrameworkGuide, "packages" | "typescript">)
   guide.typescript ? guide.packages : [OTEL_BASE_PACKAGES, guide.packages].filter(Boolean).join(" ");
 
 /** The endpoint is the proxy base URL: OTLP exporters append /v1/traces themselves. */
-export const tracingEnvSnippet = (proxyUrl: string, apiKey: string | null = null): string =>
+export const tracingEnvSnippet = (proxyUrl: string, tracingKey: string | null = null): string =>
   [
-    ...(apiKey ? [`export LITELLM_API_KEY=${apiKey}`] : []),
+    ...(tracingKey ? [`export LITELLM_TRACING_KEY=${tracingKey}`] : []),
     `export OTEL_EXPORTER_OTLP_ENDPOINT=${proxyUrl}`,
     "export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
-    'export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $LITELLM_API_KEY"',
+    `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $${tracingKey ? "LITELLM_TRACING_KEY" : "LITELLM_API_KEY"}"`,
     "export OTEL_SERVICE_NAME=my-agent",
   ].join("\n");
 
@@ -437,11 +447,11 @@ function TraceReceipt({
 
 function TracingKey({
   accessToken,
-  apiKey,
+  tracingKey,
   onCreated,
 }: {
   accessToken: string;
-  apiKey: string | null;
+  tracingKey: string | null;
   onCreated: (key: string) => void;
 }) {
   const [creating, setCreating] = useState(false);
@@ -452,7 +462,7 @@ function TracingKey({
     try {
       const result = await apiClient.post<{ key?: string }>("/key/generate", {
         accessToken,
-        body: { key_alias: "Agent tracing", metadata: { purpose: "agent_tracing" } },
+        body: TRACING_KEY_REQUEST,
       });
       if (!result.key) throw new Error("The proxy did not return the new key");
       onCreated(result.key);
@@ -462,13 +472,14 @@ function TracingKey({
       setCreating(false);
     }
   };
-  if (apiKey) {
+  if (tracingKey) {
     return (
       <div className="space-y-2">
-        <CodeBlock code={apiKey} display={maskSecret(apiKey)} tabs={<FileLabel>Your tracing key</FileLabel>} />
+        <CodeBlock code={tracingKey} display={maskSecret(tracingKey)} tabs={<FileLabel>Your tracing key</FileLabel>} />
         <p className="text-sm text-muted-foreground">
-          Hidden for safety. Copy copies the full key, and the environment step below includes it. Manage it under
-          Virtual Keys as &quot;Agent tracing&quot;.
+          Hidden for safety. Copy copies the full key, and the environment step below includes it. This key can only
+          send traces, so your agent still needs its own key for model calls. Manage it under Virtual Keys as
+          &quot;Agent tracing&quot;.
         </p>
       </div>
     );
@@ -555,6 +566,7 @@ export function TracingSetupCard({
   connected = false,
   onCheck,
   checking = false,
+  readOnly = false,
 }: {
   detail: string | null;
   accessToken: string;
@@ -562,12 +574,13 @@ export function TracingSetupCard({
   connected?: boolean;
   onCheck?: () => void;
   checking?: boolean;
+  readOnly?: boolean;
 }) {
   const proxyUrl = getProxyBaseUrl().replace(/\/$/, "");
   const [framework, setFramework] = useState(FRAMEWORKS[0].id);
   const [installer, setInstaller] = useState<Installer>("pip");
   const [codingAgent, setCodingAgent] = useState<CodingAgent>("Claude Code");
-  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [tracingKey, setTracingKey] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
   const guide = FRAMEWORKS.find((f) => f.id === framework) ?? FRAMEWORKS[0];
   const packages = installPackages(guide);
@@ -631,12 +644,14 @@ export function TracingSetupCard({
         </>
       ) : (
         <>
-          <Step title="See it work in one click">
-            <p className="mb-3 text-sm leading-6 text-muted-foreground">
-              Send a small sample run (an agent, an LLM call and a tool call) to confirm tracing works end to end.
-            </p>
-            <SendTestTrace accessToken={accessToken} onOpenTrace={onOpenTrace} />
-          </Step>
+          {!readOnly && (
+            <Step title="See it work in one click">
+              <p className="mb-3 text-sm leading-6 text-muted-foreground">
+                Send a small sample run (an agent, an LLM call and a tool call) to confirm tracing works end to end.
+              </p>
+              <SendTestTrace accessToken={accessToken} onOpenTrace={onOpenTrace} />
+            </Step>
+          )}
 
           <Endpoints proxyUrl={proxyUrl} />
 
@@ -668,7 +683,11 @@ export function TracingSetupCard({
           </div>
 
           <Step title="Get a LiteLLM key">
-            <TracingKey accessToken={accessToken} apiKey={apiKey} onCreated={setApiKey} />
+            {readOnly ? (
+              <p className="text-sm text-muted-foreground">Ask a proxy admin for a LiteLLM virtual key.</p>
+            ) : (
+              <TracingKey accessToken={accessToken} tracingKey={tracingKey} onCreated={setTracingKey} />
+            )}
           </Step>
 
           <Step
@@ -713,8 +732,8 @@ export function TracingSetupCard({
             </Step>
             <Step title="Configure environment">
               <CodeBlock
-                code={tracingEnvSnippet(proxyUrl, apiKey)}
-                display={tracingEnvSnippet(proxyUrl, apiKey && maskSecret(apiKey))}
+                code={tracingEnvSnippet(proxyUrl, tracingKey)}
+                display={tracingEnvSnippet(proxyUrl, tracingKey && maskSecret(tracingKey))}
                 tabs={<FileLabel>Shell</FileLabel>}
               />
             </Step>
