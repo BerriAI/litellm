@@ -498,6 +498,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
             "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
         ) as mock_registry:
             mock_registry.get_agent_by_id.return_value = agent
+            mock_registry.stable_agent_id.return_value = "agent-iter-1"
             # First call within budget.
             await handler.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -840,7 +841,8 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         )
 
         internal_cache = MagicMock()
-        internal_cache.async_get_cache = AsyncMock(return_value=10.0)
+        internal_cache.dual_cache = DualCache()
+        internal_cache.async_get_cache = AsyncMock(side_effect=[10.0, None])
         handler = _PROXY_MaxBudgetPerSessionHandler(
             internal_usage_cache=internal_cache,
         )
@@ -854,6 +856,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
             "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
         ) as mock_registry:
             mock_registry.get_agent_by_id.return_value = agent
+            mock_registry.stable_agent_id.return_value = "agent-session-1"
             with pytest.raises(ProxyRateLimitError) as exc_info:
                 await handler.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
