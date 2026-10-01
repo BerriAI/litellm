@@ -7722,6 +7722,123 @@ class TestMCPServerManager:
 
         assert listed is not None and listed.description == "slot a"
 
+    def test_listed_tools_slot_is_split_per_team_for_keyless_callers(self):
+        """A team-only JWT admits a caller with neither a key nor a user, so the team keys the slot."""
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        team_one: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id=None, team_id="team-one")
+        )
+        team_two: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id=None, team_id="team-two")
+        )
+        manager._record_listed_tools(
+            server, [MCPTool(name="foo", description="Fetch rows FLAGWORD", inputSchema={})], team_one
+        )
+
+        assert manager.get_listed_tool(server, "foo", team_two) is None
+        listed: Final = manager.get_listed_tool(server, "foo", team_one)
+        assert listed is not None and listed.description == "Fetch rows FLAGWORD"
+
+    def test_listed_tools_slot_is_split_per_team_for_the_same_keyless_user(self):
+        """One JWT user acting in two teams is served two team-shaped catalogs, so each team is a slot."""
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        alice_in_one: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id="alice", team_id="team-one")
+        )
+        alice_in_two: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id="alice", team_id="team-two")
+        )
+        manager._record_listed_tools(
+            server, [MCPTool(name="foo", description="Fetch rows FLAGWORD", inputSchema={})], alice_in_one
+        )
+
+        assert manager.get_listed_tool(server, "foo", alice_in_two) is None
+        listed: Final = manager.get_listed_tool(server, "foo", alice_in_one)
+        assert listed is not None and listed.description == "Fetch rows FLAGWORD"
+
+    def test_listed_tools_slot_is_split_by_the_admission_bearer_of_keyless_callers_without_a_user(self):
+        """Two team-only JWT callers of one team differ only in the JWT they were admitted with, so that
+        credential keys the slot, on a server that never forwards it."""
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        alice: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id=None, team_id="team-one"),
+            raw_headers={"authorization": "Bearer jwt-alice"},
+        )
+        bob: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key=None, user_id=None, team_id="team-one"),
+            raw_headers={"authorization": "Bearer jwt-bob"},
+        )
+        manager._record_listed_tools(server, [MCPTool(name="foo", description="alice view", inputSchema={})], alice)
+
+        assert manager.get_listed_tool(server, "foo", bob) is None
+        listed: Final = manager.get_listed_tool(server, "foo", alice)
+        assert listed is not None and listed.description == "alice view"
+
+    @pytest.mark.parametrize(
+        ("server_kwargs", "forwards_bearer"),
+        [
+            pytest.param(
+                {"auth_type": MCPAuth.oauth2, "delegate_auth_to_upstream": True, "oauth2_flow": "authorization_code"},
+                True,
+                id="oauth2-delegated-to-upstream",
+            ),
+            pytest.param({"auth_type": MCPAuth.oauth_delegate}, True, id="oauth-delegate"),
+            pytest.param({"auth_type": MCPAuth.true_passthrough}, True, id="true-passthrough"),
+            pytest.param({"auth_type": MCPAuth.oauth2_token_exchange}, True, id="token-exchange"),
+            pytest.param(
+                {"auth_type": MCPAuth.none, "extra_headers": ["Authorization"], "oauth_passthrough": True},
+                True,
+                id="oauth-passthrough",
+            ),
+            pytest.param({}, False, id="plain"),
+            pytest.param(
+                {"auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code"},
+                False,
+                id="oauth2-gateway-managed",
+            ),
+            pytest.param(
+                {
+                    "auth_type": MCPAuth.oauth2,
+                    "oauth2_flow": "client_credentials",
+                    "delegate_auth_to_upstream": True,
+                    "client_id": "gateway",
+                    "client_secret": "secret",
+                    "token_url": "http://idp/token",
+                },
+                False,
+                id="oauth2-client-credentials",
+            ),
+        ],
+    )
+    def test_listed_tools_slot_is_split_by_the_forwarded_bearer_on_servers_that_forward_it(
+        self, server_kwargs: dict[str, object], forwards_bearer: bool
+    ):
+        """Two callers sharing one key but carrying different upstream bearers are served two upstream
+        catalogs exactly on the servers whose egress forwards or exchanges that bearer."""
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            **{"server_id": "dg", "name": "dg", "transport": MCPTransport.http, "url": "http://dg", **server_kwargs}
+        )
+        caller_a: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-master"),
+            raw_headers={"x-litellm-api-key": "Bearer sk-master", "authorization": "Bearer UP-A"},
+        )
+        caller_b: Final = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-master"),
+            raw_headers={"x-litellm-api-key": "Bearer sk-master", "authorization": "Bearer UP-B"},
+        )
+        manager._record_listed_tools(
+            server, [MCPTool(name="lookup", description="Workspace A lookup FLAGWORD", inputSchema={})], caller_a
+        )
+
+        for_b: Final = manager.get_listed_tool(server, "lookup", caller_b)
+        assert (for_b is None) is forwards_bearer
+        for_a: Final = manager.get_listed_tool(server, "lookup", caller_a)
+        assert for_a is not None and for_a.description == "Workspace A lookup FLAGWORD"
+
     @pytest.mark.asyncio
     async def test_call_tool_hands_hooks_the_catalog_the_same_forwarded_headers_listed(self):
         manager = MCPServerManager()

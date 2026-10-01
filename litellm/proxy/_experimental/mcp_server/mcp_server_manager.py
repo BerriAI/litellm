@@ -1221,6 +1221,21 @@ def listed_tools_caller_for(
     )
 
 
+def _admission_identity(
+    auth: UserAPIKeyAuth, raw_headers: Mapping[str, str] | None
+) -> tuple[str | None, str | None, str | None, str | None, str | None]:
+    """The admission identity the served catalog is shaped for: the hashed key, user, team and
+    organization, plus the admission credential (``x-litellm-api-key``, else ``Authorization``) of a
+    caller admitted with neither a key nor a user."""
+    keyless: Final = auth.api_key is None and auth.user_id is None
+    credential: Final = (
+        _raw_header_value(raw_headers, "x-litellm-api-key") or _raw_header_value(raw_headers, "authorization")
+        if keyless
+        else None
+    )
+    return auth.api_key, auth.user_id, auth.team_id, auth.org_id, credential
+
+
 def _format_byok_openapi_auth_header(mcp_server: MCPServer, mcp_auth_header: str) -> str:
     """Format a raw BYOK credential for OpenAPI tool ``Authorization`` injection.
 
@@ -4692,11 +4707,14 @@ class MCPServerManager:
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
         """Key the listed-tool cache by every request input that can change the served catalog.
 
-        The catalog is guardrail-shaped for the caller's own key (default-on guardrails, key or team
-        selections and opt-outs), so every keyed caller gets its own slot, on OpenAPI servers too.
-        Forwarded headers, header-driven stdio env, the caller bearer (forwarded as-is or exchanged as
-        the OBO subject) and the server-specific auth header also reach upstream and split the slot
-        further. Only unkeyed listings with none of those share the ``None`` slot.
+        The catalog is guardrail-shaped for the caller's admission identity (default-on guardrails,
+        key or team selections and opt-outs), so every admitted caller gets its own slot, keyed by
+        ``_admission_identity``: the hashed key, user, team and organization, plus the admission
+        credential of a caller admitted with neither a key nor a user (a team-only JWT). Forwarded
+        headers, header-driven stdio env, the caller bearer on every server whose egress forwards it
+        (``_consumes_caller_authorization``) or exchanges it as the OBO subject, and the
+        server-specific auth header also reach upstream and split the slot further. Only unkeyed
+        listings with none of those share the ``None`` slot.
         """
         if caller is None:
             return None
@@ -4706,19 +4724,18 @@ class MCPServerManager:
         stdio_env: Final = None if header_env == self._build_stdio_env(server) else header_env
         caller_bearer: Final = (
             self._extract_subject_token(caller.oauth2_headers, caller.raw_headers, auth)
-            if server.is_client_forwarded_token or server.auth_type == MCPAuth.oauth2_token_exchange
+            if _consumes_caller_authorization(server) or server.auth_type == MCPAuth.oauth2_token_exchange
             else None
         )
-        _, digest = self._discovery_key(
-            server,
-            auth,
-            caller.mcp_auth_header,
-            forwarded,
-            stdio_env,
-            caller_bearer,
-            per_caller=auth is not None,
+        identity: Final = None if auth is None else _admission_identity(auth, caller.raw_headers)
+        if not (identity or caller.mcp_auth_header or forwarded or stdio_env or caller_bearer):
+            return None
+        material: Final = json.dumps(
+            (identity, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer),
+            sort_keys=True,
+            separators=(",", ":"),
         )
-        return digest
+        return hashlib.sha256(material.encode()).hexdigest()
 
     @staticmethod
     def _forwarded_header_values(
