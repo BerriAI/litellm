@@ -5,15 +5,12 @@ import copy
 import inspect
 import warnings
 from collections.abc import Iterator
-from typing import Dict
 
 import pytest
-
 
 import litellm
 import litellm.proxy.proxy_server
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
-
 
 # Top-level assignments of these types are the ones importlib.reload(litellm)
 # would have effectively reset. We snapshot them at conftest import time and
@@ -140,9 +137,7 @@ def setup_and_teardown():
 
 def pytest_collection_modifyitems(config, items):
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
-    custom_logger_tests = [
-        item for item in items if "custom_logger" in item.parent.name
-    ]
+    custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
     # Sort tests based on their names
@@ -159,7 +154,7 @@ _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "llm_router",
 )
 
-_proxy_module_globals_snapshot = pytest.StashKey[Dict[str, object]]()
+_proxy_module_globals_snapshot = pytest.StashKey[dict[str, object]]()
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -167,9 +162,7 @@ def pytest_runtest_setup(item):
     from litellm.proxy import proxy_server
 
     item.stash[_proxy_module_globals_snapshot] = {
-        name: vars(proxy_server)[name]
-        for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE
-        if name in vars(proxy_server)
+        name: vars(proxy_server)[name] for name in _PROXY_MODULE_GLOBALS_TO_ISOLATE if name in vars(proxy_server)
     }
     yield
 
