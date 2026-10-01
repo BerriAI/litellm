@@ -429,7 +429,7 @@ async def proxy_realtime_calls(
     decoded_payload: Final = _decode_realtime_token_payload(decrypted_token_value)
     if decoded_payload is None and decrypted_token_value.lstrip().startswith(("{", "[")):
         return Response(
-            content=json.dumps({"error": "Invalid or expired token"}),
+            content='{"error":"Invalid or expired token"}',
             status_code=http_status.HTTP_401_UNAUTHORIZED,
             media_type="application/json",
         )
