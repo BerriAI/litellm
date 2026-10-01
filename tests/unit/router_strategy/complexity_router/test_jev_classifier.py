@@ -29,6 +29,32 @@ from litellm.router_strategy.complexity_router.jev_classifier import (
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
 
+@pytest.mark.parametrize(
+    ("configured_key", "expected"),
+    [
+        ("os.environ/JEV_CONFIG_TEST_KEY", "resolved-key"),
+        ("literal-key", "literal-key"),
+    ],
+)
+def test_jev_config_resolves_environment_key_and_preserves_literal_key(
+    monkeypatch: pytest.MonkeyPatch, configured_key: str, expected: str
+) -> None:
+    monkeypatch.setenv("JEV_CONFIG_TEST_KEY", "resolved-key")
+    config = JevClassifierConfig(api_key=configured_key)
+
+    client = ComplexityRouter._build_jev_client(config)
+
+    assert client._api_key == expected
+
+
+def test_jev_config_rejects_missing_environment_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("JEV_CONFIG_TEST_KEY", raising=False)
+    config = JevClassifierConfig(api_key="os.environ/JEV_CONFIG_TEST_KEY")
+
+    with pytest.raises(ValueError, match="api_key"):
+        ComplexityRouter._build_jev_client(config)
+
+
 class _UsageRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

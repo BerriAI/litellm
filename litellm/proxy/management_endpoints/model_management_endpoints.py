@@ -90,6 +90,7 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
     authorize_member_auto_router_write,
+    reject_non_admin_jev_secret_reference,
 )
 from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
@@ -2112,6 +2113,16 @@ class ModelManagementAuthChecks:
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ):
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
+        if member_operation is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            incoming_params = (
+                incoming_model_params.litellm_params
+                if incoming_model_params is not None
+                else model_params.litellm_params
+            )
+            reject_non_admin_jev_secret_reference(
+                incoming_params.complexity_router_config if incoming_params is not None else None,
+                user_api_key_dict.user_role,
+            )
         ## Check team model auth
         if model_params.model_info.team_id is not None:
             team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(
