@@ -7131,15 +7131,34 @@ class TestMCPServerManager:
         hook_kwargs = proxy_logging_obj._create_mcp_request_object_from_kwargs.call_args.args[0]
         assert (hook_kwargs["tool_description"], hook_kwargs["tool_input_schema"]) == (None, None)
 
-    def test_get_listed_tool_resolves_prefixed_name_and_latest_listing(self):
+    def test_get_listed_tool_resolves_the_bare_name_from_the_latest_listing(self):
         manager = MCPServerManager()
         server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
         manager._create_prefixed_tools([MCPTool(name="echo", description="v1", inputSchema={})], server)
         manager._create_prefixed_tools([MCPTool(name="echo", description="v2", inputSchema={})], server)
 
-        by_prefixed_name = manager.get_listed_tool(server, "srv-echo")
-        assert by_prefixed_name is not None and by_prefixed_name.description == "v2"
+        latest = manager.get_listed_tool(server, "echo")
+        assert latest is not None and latest.description == "v2"
         assert manager.get_listed_tool(server, "missing") is None
+
+    def test_get_listed_tool_never_strips_the_bare_name_it_is_given(self):
+        """The lookup is exact: a never-listed tool whose bare name starts with the server prefix is not the
+        listed sibling that stripping the prefix again would name."""
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv-id", name="srv", alias="srv", transport=MCPTransport.http, url="http://srv")
+        caller = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="sk-user", user_id="alice"))
+        manager._create_prefixed_tools(
+            [
+                MCPTool(name="foo", description="Fetches foo records", inputSchema={"type": "object"}),
+                MCPTool(name="bar", description="Fetches bar records", inputSchema={"type": "object"}),
+            ],
+            server,
+            caller=caller,
+        )
+
+        assert manager.get_listed_tool(server, "srv-foo", caller) is None
+        listed = manager.get_listed_tool(server, "foo", caller)
+        assert listed is not None and listed.description == "Fetches foo records"
 
     @pytest.mark.asyncio
     async def test_get_listed_tool_uses_admin_description_override_clients_saw(self):
@@ -7157,7 +7176,7 @@ class TestMCPServerManager:
         )
         await manager._get_tools_from_server(server, add_prefix=True)
 
-        overridden = manager.get_listed_tool(server, "srv-echo")
+        overridden = manager.get_listed_tool(server, "echo")
         assert overridden is not None
         assert (overridden.name, overridden.description, overridden.input_schema) == ("echo", "Admin wording", schema)
         untouched = manager.get_listed_tool(server, "ping")
@@ -7178,7 +7197,7 @@ class TestMCPServerManager:
         served = await manager._get_tools_from_server(server, add_prefix=True, proxy_logging_obj=proxy_logging_obj)
         assert [tool.description for tool in served] == ["Read a [MASKED] note"]
 
-        listed = manager.get_listed_tool(server, "notes-read_note")
+        listed = manager.get_listed_tool(server, "read_note")
         assert listed is not None and listed.description == "Read a [MASKED] note", (
             "tools/call must be evaluated against the description tools/list served"
         )
@@ -7360,15 +7379,15 @@ class TestMCPServerManager:
             caller=ListedToolsCaller(user_api_key_auth=bob),
         )
 
-        alice_tool = manager.get_listed_tool(server, "srv-read", ListedToolsCaller(user_api_key_auth=alice))
-        bob_tool = manager.get_listed_tool(server, "srv-read", ListedToolsCaller(user_api_key_auth=bob))
+        alice_tool = manager.get_listed_tool(server, "read", ListedToolsCaller(user_api_key_auth=alice))
+        bob_tool = manager.get_listed_tool(server, "read", ListedToolsCaller(user_api_key_auth=bob))
         assert alice_tool is not None and (alice_tool.description, alice_tool.input_schema) == (
             "alice view",
             alice_schema,
         )
         assert bob_tool is not None and (bob_tool.description, bob_tool.input_schema) == ("bob view", bob_schema)
         carol = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="carol", token="k"))
-        assert manager.get_listed_tool(server, "srv-read", carol) is None
+        assert manager.get_listed_tool(server, "read", carol) is None
 
         shared = MCPServer(server_id="shared", name="shared", transport=MCPTransport.http, url="http://shared")
         manager._create_prefixed_tools(
@@ -7434,11 +7453,11 @@ class TestMCPServerManager:
             [MCPTool(name="turn", description="Catalog B", inputSchema={})], server, caller=caller_b
         )
 
-        for_a = manager.get_listed_tool(server, "srv-turn", caller_a)
-        for_b = manager.get_listed_tool(server, "srv-turn", caller_b)
+        for_a = manager.get_listed_tool(server, "turn", caller_a)
+        for_b = manager.get_listed_tool(server, "turn", caller_b)
         assert for_a is not None and for_a.description == "Catalog A"
         assert for_b is not None and for_b.description == "Catalog B"
-        assert manager.get_listed_tool(server, "srv-turn", ListedToolsCaller()) is None
+        assert manager.get_listed_tool(server, "turn", ListedToolsCaller()) is None
 
     def test_shared_server_ignores_headers_it_never_forwards(self):
         manager = MCPServerManager()
@@ -7676,9 +7695,9 @@ class TestMCPServerManager:
             manager._create_prefixed_tools(
                 [MCPTool(name="turn", description="alice view", inputSchema={})], server, caller=alice
             )
-            assert manager.get_listed_tool(server, "srv-turn", bob) is None
+            assert manager.get_listed_tool(server, "turn", bob) is None
 
-        for_alice = manager.get_listed_tool(server, "srv-turn", alice)
+        for_alice = manager.get_listed_tool(server, "turn", alice)
         assert for_alice is not None and for_alice.description == "alice view"
 
     def test_signed_server_slot_splits_on_the_callers_key_not_only_the_user(self):
@@ -7696,10 +7715,10 @@ class TestMCPServerManager:
             manager._create_prefixed_tools(
                 [MCPTool(name="turn", description="slot a", inputSchema={})], server, caller=alice
             )
-            assert manager.get_listed_tool(server, "srv-turn", bob) is None
+            assert manager.get_listed_tool(server, "turn", bob) is None
 
             same_key = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="same-user", api_key="sk-alpha"))
-            listed = manager.get_listed_tool(server, "srv-turn", same_key)
+            listed = manager.get_listed_tool(server, "turn", same_key)
 
         assert listed is not None and listed.description == "slot a"
 
@@ -7746,7 +7765,7 @@ class TestMCPServerManager:
         proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
         await manager.call_tool(
             server_name="catalog",
-            name="catalog-turn",
+            name="turn",
             arguments={"turn": "A-1"},
             user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm", user_id="shared-key"),
             proxy_logging_obj=proxy_logging_obj,
@@ -7785,13 +7804,13 @@ class TestMCPServerManager:
             [MCPTool(name="read", description="u1 again", inputSchema={})], server, caller=callers[1]
         )
 
-        assert manager.get_listed_tool(server, "srv-read", callers[0]) is None
-        second = manager.get_listed_tool(server, "srv-read", callers[1])
+        assert manager.get_listed_tool(server, "read", callers[0]) is None
+        second = manager.get_listed_tool(server, "read", callers[1])
         assert second is not None and second.description == "u1 again"
-        newest = manager.get_listed_tool(server, "srv-read", callers[-1])
+        newest = manager.get_listed_tool(server, "read", callers[-1])
         assert newest is not None and newest.description == callers[-1].user_api_key_auth.user_id
         assert len(manager._listed_tools_by_server_id[server.server_id]) == _LISTED_TOOLS_CALLERS_PER_SERVER + 1
-        shared = manager.get_listed_tool(server, "srv-read")
+        shared = manager.get_listed_tool(server, "read")
         assert shared is not None and shared.description == "shared"
 
     @pytest.mark.asyncio
@@ -7826,10 +7845,9 @@ class TestMCPServerManager:
             global_mcp_tool_registry.unregister_tools_with_prefix("petstore-")
 
         assert [t.name for t in listed] == ["petstore-list_pets" if add_prefix else "list_pets"]
-        for name in ("list_pets", "petstore-list_pets"):
-            tool = manager.get_listed_tool(server, name)
-            assert tool is not None and tool.description == "List pets"
-            assert tool.input_schema["properties"] == {"limit": {"type": "integer"}}
+        tool = manager.get_listed_tool(server, "list_pets")
+        assert tool is not None and tool.description == "List pets"
+        assert tool.input_schema["properties"] == {"limit": {"type": "integer"}}
 
     @pytest.mark.asyncio
     async def test_openapi_listing_ignores_overlapping_server_prefix(self):

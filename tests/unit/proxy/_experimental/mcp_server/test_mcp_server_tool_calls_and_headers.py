@@ -8286,6 +8286,53 @@ async def test_execute_mcp_tool_runs_the_longer_colliding_operation_and_hands_ho
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation_named_after_a_listed_one():
+    """After the caller listed ``get_pet``, a call to the never-listed ``petstore-get_pet`` operation hands the
+    pre-call hooks name and arguments only, not the listed sibling's description and schema."""
+    from litellm.proxy._experimental.mcp_server import operations as mcp_module
+
+    petstore = MCPServer(
+        server_id="petstore-id",
+        name="petstore",
+        server_name="petstore",
+        transport=MCPTransport.http,
+        url=None,
+        spec_path="https://example.com/petstore.yaml",
+    )
+    registry = mcp_module.global_mcp_tool_registry
+    registry.register_tool(
+        name="petstore-petstore-get_pet", description="long", input_schema={}, handler=lambda: "long"
+    )
+    manager = mcp_module.global_mcp_server_manager
+    alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
+    manager._record_listed_tools(
+        petstore,
+        [MCPTool(name="get_pet", description="Fetches pet records. FLAGWORD", inputSchema={"type": "object"})],
+        ListedToolsCaller(user_api_key_auth=alice),
+    )
+    pre_call_tool_check = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch.object(manager, "_get_mcp_server_from_tool_name", return_value=petstore),
+            patch.object(manager, "pre_call_tool_check", new=pre_call_tool_check),
+        ):
+            result = await mcp_module.execute_mcp_tool(
+                name="petstore-petstore-get_pet",
+                arguments={},
+                allowed_mcp_servers=[petstore],
+                start_time=datetime.now(),
+                user_api_key_auth=alice,
+            )
+    finally:
+        registry.unregister_tools_with_prefix("petstore-")
+        manager._listed_tools_by_server_id.pop(petstore.server_id, None)
+
+    assert pre_call_tool_check.call_args.kwargs["tool"] is None
+    assert result.content[0].text == "long"
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tool_rest_unresolved_prefixed_name_routes_to_requested_server():
     """A prefixed REST name that resolves to no tool must still dispatch to the server_id.
 
