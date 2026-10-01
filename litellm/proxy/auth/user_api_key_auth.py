@@ -660,7 +660,7 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
         "query_string": ws_scope.get("query_string", b""),
         "headers": scope_headers,
         "path": ws_scope.get("path", ""),
-        "state": ws_scope.setdefault("state", {}),  # mutable-ok: Starlette's socket state, shared with the request
+        "state": ws_scope.setdefault("state", {}),
     }
     for key in ("root_path", "app_root_path"):
         if key in ws_scope:
@@ -1373,12 +1373,12 @@ async def _read_request_body_deferring_parse_failure(
         route=get_request_route(request=request),
         content_type=_safe_get_request_headers(request=request).get("content-type", ""),
     ):
-        _safe_set_request_parsed_body(request=request, parsed_body={})  # mutable-ok: the body cache stores a plain dict
-        return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
+        _safe_set_request_parsed_body(request=request, parsed_body={})
+        return {}, None
     try:
         parsed_body: Final = await _read_request_body(request=request)
     except ProxyException as parse_exception:
-        return {}, parse_exception  # mutable-ok: request_data is a plain dict across the whole auth path
+        return {}, parse_exception
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
@@ -1397,7 +1397,7 @@ async def _record_unparsable_body_failure(
 
     try:
         await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
-            request_data={},  # mutable-ok: the failure hook seeds the call id and metadata onto this dict
+            request_data={},
             original_exception=body_parse_exception,
             user_api_key_dict=user_api_key_dict,
             error_type=ProxyErrorTypes.bad_request_error,
@@ -1687,7 +1687,7 @@ async def _user_api_key_auth_builder(
                         do_standard_jwt_auth = False
                         # Fall through to virtual key checks
                         if valid_token.user_id is not None and valid_token.user_email is None:
-                            mapped_claims = jwt_claims or {}  # mutable-ok: empty-dict fallback for the None-claims case
+                            mapped_claims = jwt_claims or {}
                             mapped_user_email = jwt_handler.get_user_email(token=mapped_claims, default_value=None)
                             mapped_jwt_user_id: Final = jwt_handler.get_user_id(token=mapped_claims, default_value=None)
                             if mapped_user_email is not None and mapped_jwt_user_id == valid_token.user_id:
@@ -3950,7 +3950,7 @@ async def authorize_internal_virtual_key(
         start_time=datetime.now(timezone.utc),
         parent_otel_span=None,
         end_user_id=None,
-        end_user_params={},  # mutable-ok: existing end-user validation contract
+        end_user_params={},
         _end_user_object=None,
     )
     auth.budget_reservation = None

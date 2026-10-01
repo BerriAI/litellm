@@ -37172,6 +37172,19 @@ export interface components {
             /** Successful Requests */
             successful_requests: number;
         };
+        /** ModelInsightDailyTotal */
+        ModelInsightDailyTotal: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+        };
         /** ModelInsightMetric */
         ModelInsightMetric: {
             /** Completion Tokens */
@@ -37223,6 +37236,8 @@ export interface components {
         ModelInsightsResponse: {
             /** Daily */
             daily: components["schemas"]["ModelInsightDailyMetric"][];
+            /** Daily Totals */
+            daily_totals: components["schemas"]["ModelInsightDailyTotal"][];
             /** End Date */
             end_date: string;
             /** Start Date */

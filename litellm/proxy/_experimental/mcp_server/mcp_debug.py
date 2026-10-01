@@ -203,7 +203,7 @@ class _DiagnosticSend:
             self._start = None
             headers: Final = MappingProxyType({**self._headers, **self._resolution()})
             await self._send(
-                {  # mutable-ok: ASGI send consumes a mutable message mapping
+                {
                     **start,
                     "headers": tuple(start.get("headers", ()))
                     + tuple((key.encode(), value.encode()) for key, value in headers.items()),
@@ -432,9 +432,7 @@ def _sensitive_field(key: str) -> bool:
 def _redact_object(
     fields: Mapping[str, JsonValue],
 ) -> dict[str, JsonValue]:  # mutable-ok: the standard JSON encoder requires dict objects
-    return {  # mutable-ok: construct the JSON object once for the standard parser and encoder
-        key: REDACTED if _sensitive_field(key) else value for key, value in fields.items()
-    }
+    return {key: REDACTED if _sensitive_field(key) else value for key, value in fields.items()}
 
 
 def _header_secret_values(name: str, value: str) -> tuple[str, ...]:

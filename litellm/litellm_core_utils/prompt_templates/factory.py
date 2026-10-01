@@ -2376,7 +2376,7 @@ def anthropic_messages_pt(
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages: Final[_AnthropicMessageList] = []  # mutable-ok: accumulator behind the mutable return contract
+    new_messages: Final[_AnthropicMessageList] = []
 
     if len(messages) == 0:
         if not litellm.modify_params:
