@@ -8,7 +8,17 @@ import { AgentTracesSection } from "./AgentTracesSection";
 const DEFAULT_RANGE_HOURS = 24;
 const TIME_FORMAT = "YYYY-MM-DDTHH:mm";
 
-export default function AgentTracesPage({ accessToken, isActive = true }: { accessToken: string; isActive?: boolean }) {
+export default function AgentTracesPage({
+  accessToken,
+  isActive = true,
+  readOnly = false,
+  canMintTracingKey = false,
+}: {
+  accessToken: string;
+  isActive?: boolean;
+  readOnly?: boolean;
+  canMintTracingKey?: boolean;
+}) {
   const [rangeHours, setRangeHours] = useState(DEFAULT_RANGE_HOURS);
   const [live, setLive] = useState(true);
   const [anchor, setAnchor] = useState(() => moment());
@@ -34,6 +44,8 @@ export default function AgentTracesPage({ accessToken, isActive = true }: { acce
         endTime={endTime}
         isCustomDate={false}
         isLiveTail={live}
+        readOnly={readOnly}
+        canMintTracingKey={canMintTracingKey}
         timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: setLive }}
       />
     </div>
