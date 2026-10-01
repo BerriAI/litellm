@@ -2575,7 +2575,7 @@ class TestWorkerStartupHooks:
         from litellm.proxy.proxy_server import proxy_startup_event
 
         env_overrides = {
-            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_dummy_hook",
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.unit.proxy.test_proxy_cli:_dummy_hook",
         }
         # Remove DATABASE_URL to avoid real DB setup
         clean_env = {
@@ -2603,7 +2603,7 @@ class TestWorkerStartupHooks:
         from litellm.proxy.proxy_server import proxy_startup_event
 
         env_overrides = {
-            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_dummy_async_hook",
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.unit.proxy.test_proxy_cli:_dummy_async_hook",
         }
         clean_env = {
             k: v
@@ -2627,7 +2627,7 @@ class TestWorkerStartupHooks:
         from litellm.proxy.proxy_server import proxy_startup_event
 
         env_overrides = {
-            "LITELLM_WORKER_STARTUP_HOOKS": "tests.test_litellm.proxy.test_proxy_cli:_failing_hook",
+            "LITELLM_WORKER_STARTUP_HOOKS": "tests.unit.proxy.test_proxy_cli:_failing_hook",
         }
         clean_env = {
             k: v
@@ -2663,8 +2663,8 @@ class TestWorkerStartupHooks:
         from litellm.proxy.proxy_server import proxy_startup_event
 
         hooks = (
-            "tests.test_litellm.proxy.test_proxy_cli:_dummy_hook,"
-            "tests.test_litellm.proxy.test_proxy_cli:_dummy_async_hook"
+            "tests.unit.proxy.test_proxy_cli:_dummy_hook,"
+            "tests.unit.proxy.test_proxy_cli:_dummy_async_hook"
         )
         env_overrides = {
             "LITELLM_WORKER_STARTUP_HOOKS": hooks,

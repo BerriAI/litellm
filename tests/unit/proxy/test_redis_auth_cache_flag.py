@@ -65,6 +65,7 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
     fresh_user_cache = DualCache()
     fresh_spend_cache = DualCache()
     fresh_cli_sso_cache = DualCache()
+    fresh_config_cache = DualCache()
 
     enable_redis_auth_cache = litellm_settings.get("enable_redis_auth_cache", False)
 
@@ -72,6 +73,7 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
         patch.object(ps, "user_api_key_cache", fresh_user_cache),
         patch.object(ps, "spend_counter_cache", fresh_spend_cache),
         patch.object(ps, "cli_sso_session_cache", fresh_cli_sso_cache),
+        patch.object(ps, "litellm_config_cache", fresh_config_cache),
         patch.object(ps, "llm_router", None),
         # Cache is locally imported inside _init_cache: patch it at source.
         patch("litellm.Cache", return_value=mock_litellm_cache),

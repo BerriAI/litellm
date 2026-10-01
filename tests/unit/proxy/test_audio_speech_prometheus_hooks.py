@@ -44,7 +44,7 @@ def client_no_auth():
 
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
-    config_fp = os.path.join(filepath, "test_configs", "test_config_no_auth.yaml")
+    config_fp = os.path.join(filepath, "test_configs", "test_config_hosted_vllm_embedding.yaml")
     asyncio.run(initialize(config=config_fp, debug=True))
     return TestClient(app)
 

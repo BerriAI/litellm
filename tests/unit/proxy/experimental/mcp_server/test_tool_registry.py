@@ -59,7 +59,7 @@ def test_load_tools_from_config():
             "name": "config_tool",
             "description": "A tool from config",
             "input_schema": {"type": "object"},
-            "handler": "test_tool_registry.example_handler",
+            "handler": "tests.unit.proxy.experimental.mcp_server.test_tool_registry.example_handler",
         }
     ]
 
