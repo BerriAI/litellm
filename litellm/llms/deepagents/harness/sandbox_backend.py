@@ -106,7 +106,7 @@ def _ls_entries(base: str, stdout: str) -> Iterator[FileInfo]:
             yield FileInfo(path=f"{base}/{name}" + ("/" if is_dir else ""), is_dir=is_dir)
 
 
-class SandboxBackend(SandboxBackendProtocol):
+class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBaseClass]  # deepagents/langchain are optional and not installed for type checking
     """deepagents backend whose files and shell live in a litellm Sandbox."""
 
     def __init__(
@@ -464,7 +464,7 @@ def _blocked_message(request: ToolCallRequest, blocked: frozenset[str]) -> ToolM
     )
 
 
-class ToolFilterMiddleware(AgentMiddleware):
+class ToolFilterMiddleware(AgentMiddleware):  # pyright: ignore[reportUntypedBaseClass]  # deepagents/langchain are optional and not installed for type checking
     """Hide tools from the model and refuse calls to them (disable_tools / permissions)."""
 
     def __init__(self, blocked: frozenset[str]) -> None:
@@ -548,7 +548,7 @@ def record_llm_usage(ctx: SessionContext, cost_model: str | None, response: LLMR
         _logger.exception("harness deepagents: usage accounting failed")
 
 
-class UsageCallback(AsyncCallbackHandler):
+class UsageCallback(AsyncCallbackHandler):  # pyright: ignore[reportUntypedBaseClass]  # deepagents/langchain are optional and not installed for type checking
     """Counts every model call in the graph, subagents and summarization included."""
 
     def __init__(self, ctx: SessionContext, cost_model: str | None) -> None:
