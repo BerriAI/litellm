@@ -17,3 +17,13 @@ reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-da
 id = "GHSA-xpv3-w29h-x7cv"
 ignoreUntil = 2026-10-02
 reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-day uv exclude-newer cooldown; bump oauthlib and remove this entry once it clears"
+
+[[IgnoredVulns]]
+id = "GHSA-5p39-cfhj-2xmp"
+ignoreUntil = 2026-09-25
+reason = "anyio 4.14.2 fixes this but uv.lock updates must come from a branch in the canonical repository; remove this entry once the lockfile is updated"
+
+[[IgnoredVulns]]
+id = "GHSA-82r6-8w77-94w6"
+ignoreUntil = 2026-09-25
+reason = "anyio 4.14.2 fixes this but uv.lock updates must come from a branch in the canonical repository; remove this entry once the lockfile is updated"
