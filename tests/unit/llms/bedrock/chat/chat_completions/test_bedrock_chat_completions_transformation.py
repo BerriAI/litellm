@@ -149,6 +149,40 @@ def test_complete_url_appends_to_openai_v1_base():
     assert url == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
 
 
+def test_complete_url_sends_to_the_runtime_endpoint_over_api_base_like_converse(monkeypatch):
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    url = cfg.get_complete_url(
+        api_base="https://signing-host.example.com",
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params={"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": "https://egress.example.com/"},
+        litellm_params={},
+    )
+    assert url == "https://egress.example.com/openai/v1/chat/completions"
+
+
+def test_complete_url_sends_to_the_env_runtime_endpoint_over_api_base_like_converse(monkeypatch):
+    monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com")
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    url = cfg.get_complete_url(
+        api_base="https://signing-host.example.com",
+        api_key=None,
+        model="us.openai.gpt-5.6-sol",
+        optional_params={"aws_region_name": "us-east-1"},
+        litellm_params={},
+    )
+    assert url == "https://env-egress.example.com/openai/v1/chat/completions"
+
+
+@pytest.mark.parametrize("digits", [4, 4301, 30000])
+@pytest.mark.parametrize("template", ["openai.gpt-{run}", "us.openai.gpt-5.{run}", "openai.gpt-{run}.{run}-sol"])
+def test_overlong_gpt_version_digits_route_to_converse_without_raising(local_cost_map, template, digits):
+    model = template.format(run="9" * digits)
+    assert bedrock_runtime_chat_completions_is_default(model) is False
+    assert bedrock_route_for_request(model, {}, None) == "converse"
+
+
 def test_project_id_is_not_sent_as_openai_project_header():
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     headers = cfg.validate_environment(

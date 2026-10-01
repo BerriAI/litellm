@@ -277,12 +277,12 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         aws_region_name: Final = self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
             optional_params=self._params_with_region_from_path(optional_params, model), model=model
         )
-        endpoint_url, _ = self._aws_signer.get_runtime_endpoint(
+        _, proxy_endpoint_url = self._aws_signer.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
             aws_region_name=aws_region_name,
         )
-        base: Final = endpoint_url.rstrip("/")
+        base: Final = proxy_endpoint_url.rstrip("/")
         if base.endswith("/openai/v1/chat/completions"):
             return base
         if base.endswith("/openai/v1"):
