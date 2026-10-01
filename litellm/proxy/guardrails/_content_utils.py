@@ -268,6 +268,8 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
     (``/embeddings`` ``input`` list) is rewritten element-wise: the n-th
     redacted message replaces the n-th non-empty element, because
     :func:`build_inspection_messages` emits one message per non-empty string.
+    Responses-API ``tool_search_output`` tool descriptions are rewritten in
+    place, preserving the surrounding item and non-text fields.
 
     Returns False, leaving ``data`` untouched, when a batch response does not
     carry exactly one message per inspected element: a partial rewrite would
@@ -296,7 +298,33 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequen
                 continue
             text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
         data["input"] = "\n".join(text_parts)
+    elif isinstance(input_value, list) and not is_string_batch_input(data):
+        redacted_texts: Final[list[str]] = [
+            text for msg in redacted_messages if isinstance(text := _text_of_message(msg), str) and text
+        ]
+        if len(redacted_texts) != len(build_inspection_messages(data)):
+            return False
+        redacted_iter: Final = iter(redacted_texts)
+        for idx, item in enumerate(input_value):
+            if isinstance(item, dict) and item.get("type") == "tool_search_output" and isinstance(item.get("tools"), list):
+                item["tools"] = [  # mutable-ok: rewrites forwarded tool-search results in place
+                    {**tool, "description": next(redacted_iter)}
+                    if isinstance(tool, Mapping) and isinstance(tool.get("description"), str) and tool["description"]
+                    else tool
+                    for tool in item["tools"]
+                ]
     return True
+
+
+def _text_of_message(message: object) -> str | None:
+    if not isinstance(message, Mapping):
+        return None
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_iter_text_parts_in_content(content))
+    return None
 
 
 def has_non_string_content(data: Mapping[str, object]) -> bool:
@@ -314,9 +342,11 @@ def has_non_string_content(data: Mapping[str, object]) -> bool:
                 if message.get("content") is not None:
                     return True
     input_value: Final = data.get("input")
-    if input_value is not None and not isinstance(input_value, str):
+    if input_value is None or isinstance(input_value, str):
+        return False
+    if not isinstance(input_value, list):
         return True
-    return False
+    return not all(isinstance(item, dict) for item in input_value)
 
 
 def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:

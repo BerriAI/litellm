@@ -743,6 +743,45 @@ def test_guardrails_inspect_tool_search_output_fallback_output():
     assert list(iter_message_text(data)) == ["tool-secret"]
 
 
+def test_apply_redacted_messages_back_rewrites_tool_search_output_tool_descriptions():
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "tool-secret",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+        ]
+    }
+    redacted = [{"role": "tool", "content": "tool-[REDACTED]"}]
+
+    assert apply_redacted_messages_back(data, redacted) is True
+    assert data["input"][0]["tools"][0]["description"] == "tool-[REDACTED]"
+    assert data["input"][0]["tools"][0]["name"] == "get_weather"
+
+
+def test_apply_redacted_messages_back_blocks_partial_tool_search_output_rewrite():
+    data = {
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_tool_search",
+                "tools": [{"type": "function", "name": "one", "description": "leak-one"}],
+            }
+        ]
+    }
+
+    assert apply_redacted_messages_back(data, []) is False
+    assert data["input"][0]["tools"][0]["description"] == "leak-one"
+
+
 # ── is_non_conversational_call_type ──────────────────────────────────────────────
 
 
