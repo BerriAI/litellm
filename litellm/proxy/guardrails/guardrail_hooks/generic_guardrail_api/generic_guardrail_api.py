@@ -29,6 +29,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.record_scope import (
+    RecordScope,
+    guardrail_information_scope_from_config,
+    returned_unchanged,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -39,8 +44,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
-
-from .record_scope import DEFAULT_GUARDRAIL_INFORMATION_SCOPE, RecordScope, returned_unchanged
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -343,9 +346,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         if streaming_buffer_until_moderated is not None:
             self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
 
-        self._record_scope: Final = RecordScope(
-            DEFAULT_GUARDRAIL_INFORMATION_SCOPE if guardrail_information_scope is None else guardrail_information_scope
-        )
+        self._record_scope: Final = RecordScope(guardrail_information_scope_from_config(guardrail_information_scope))
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
