@@ -747,21 +747,17 @@ def can_satisfy_confirmed_routing_tags(
     if not candidates and (confirmed_required or confirmed_excluded):
         return False
 
-    confirmed_positive: Final = [tag for tag in positive_tags if tag in routing_confirmed]
+    confirmed_positive: Final = tuple(tag for tag in positive_tags if tag in routing_confirmed)
     if not confirmed_positive:
         return True
 
-    # A tag_regex deployment may still match via request headers even when plain
-    # tags do not; leave those legs to the normal attempt path.
     if any(d.get("litellm_params", MappingProxyType({})).get("tag_regex") for d in candidates):
         return True
 
-    # Confirmed positive tags force a hard deny when nothing matches (defaults /
-    # fail-open do not apply). Skip the leg rather than attempting it.
     match_any: Final = getattr(llm_router_instance, "tag_filtering_match_any", True)
     return any(
         is_valid_deployment_tag(
-            d.get("litellm_params", MappingProxyType({})).get("tags") or [],
+            d.get("litellm_params", MappingProxyType({})).get("tags") or (),
             positive_tags,
             match_any,
         )
