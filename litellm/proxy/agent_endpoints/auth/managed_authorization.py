@@ -222,7 +222,7 @@ async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
         raise litellm.BudgetExceededError(current_cost=spend, max_budget=budget, message="Agent budget exceeded")
 
 
-_INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
+AGENT_INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
@@ -280,13 +280,13 @@ async def prepare_agent_invocation(
         and billing_policy.litellm_budget_table.max_budget is not None
     )
     try:
-        fee: Final = _INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)
+        fee: Final = AGENT_INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)
         unbounded_token_price: Final = (
             billable
             and bounded
             and fixed_fee is None
             and any(
-                _INVOCATION_COST.validate_python(pricing[field]) > 0
+                AGENT_INVOCATION_COST.validate_python(pricing[field]) > 0
                 for field in ("input_cost_per_token", "output_cost_per_token")
                 if pricing.get(field) is not None
             )
