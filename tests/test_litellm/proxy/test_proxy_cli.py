@@ -1927,12 +1927,14 @@ class TestRunServerDbSetup:
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_use_prisma_db_push_flag_behavior(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
@@ -2007,12 +2009,14 @@ class TestRunServerDbSetup:
 
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
     def test_migrations_run_when_the_prisma_cli_is_not_on_path(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         tmp_path,
@@ -2080,12 +2084,14 @@ class TestRunServerDbSetup:
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_fails_when_db_setup_fails(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
@@ -2147,12 +2153,14 @@ class TestRunServerDbSetup:
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_startup_exits_on_non_postgres_database_url(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
@@ -2198,12 +2206,14 @@ class TestRunServerDbSetup:
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.build_request_log_indexes")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_v2_migration_resolver_opts_in_via_env_var(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
+        mock_build_indexes,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,

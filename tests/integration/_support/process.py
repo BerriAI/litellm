@@ -16,6 +16,10 @@ import psutil
 
 from integration._support.client import Gateway
 
+DB_PUSH: Final = ("--use_prisma_db_push",)
+MIGRATE_DEPLOY: Final = ("--use_v2_migration_resolver",)
+LEGACY_MIGRATE_DEPLOY: Final = ()
+
 
 def in_group(process: psutil.Process, group: int) -> bool:
     try:
@@ -62,9 +66,16 @@ def owned_proxy(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
+    database_setup: tuple[str, ...] = DB_PUSH,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
-        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
+        gateway,
+        directory,
+        overrides,
+        config=config,
+        remove_environment=remove_environment,
+        workers=workers,
+        database_setup=database_setup,
     ) as owned:
         yield owned.gateway
 
@@ -78,6 +89,7 @@ def owned_proxy_process(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
+    database_setup: tuple[str, ...] = DB_PUSH,
 ) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
@@ -109,7 +121,7 @@ def owned_proxy_process(
                 str(workers),
                 "--telemetry",
                 "False",
-                "--use_prisma_db_push",
+                *database_setup,
                 "--enforce_prisma_migration_check",
             ],
             cwd=root,
