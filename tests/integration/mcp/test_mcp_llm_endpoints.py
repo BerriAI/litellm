@@ -195,9 +195,7 @@ class Rig:
         )
 
     def upstream_tools(self) -> tuple[tuple[str, ...], ...]:
-        return tuple(
-            _tool_names(json.loads(request.body)) for request in self.wire.drain() if request.method == "POST"
-        )
+        return tuple(_tool_names(json.loads(request.body)) for request in self.wire.drain() if request.method == "POST")
 
     def final_text(self, body: Mapping[str, object]) -> str:
         if self.surface == "chat":
@@ -320,6 +318,7 @@ def test_toolset_gateway_url_serves_a_team_granted_toolset_to_a_key_without_its_
     gateway: Gateway, surface: Surface
 ) -> None:
     with _rig(gateway, surface) as rig:
+        register_mcp(rig.scenario, rig.peer, "open" + uuid.uuid4().hex[:8], allow_all_keys=True)
         toolset_name: Final = "ts" + uuid.uuid4().hex[:8]
         toolset_id: Final = create_toolset(rig.scenario, ((rig.server_id, "add"),), toolset_name=toolset_name)
         sibling_id: Final = create_toolset(rig.scenario, ((rig.server_id, "multiply"),))
@@ -366,3 +365,41 @@ def test_streaming_chat_executes_the_tool_once_and_streams_the_follow_up(gateway
         assert text == ANSWER, response.text
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
         assert len(rig.upstream_tools()) == 2
+
+
+def test_streaming_chat_through_a_toolset_gateway_url_serves_a_team_key_without_its_own_grant(
+    gateway: Gateway,
+) -> None:
+    with _rig(gateway, "chat") as rig:
+        register_mcp(rig.scenario, rig.peer, "open" + uuid.uuid4().hex[:8], allow_all_keys=True)
+        toolset_name: Final = "ts" + uuid.uuid4().hex[:8]
+        toolset_id: Final = create_toolset(rig.scenario, ((rig.server_id, "add"),), toolset_name=toolset_name)
+        key: Final = rig.scenario.key(team_id=rig.scenario.team(object_permission={"mcp_toolsets": [toolset_id]}))
+        response: Final = rig.send(key, [{**AUTO, "server_url": f"litellm_proxy/mcp/{toolset_name}"}], stream=True)
+        assert response.status_code == 200, response.text
+        chunks: Final = tuple(
+            json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and line != "data: [DONE]"
+        )
+        text: Final = "".join(
+            str(chunk["choices"][0]["delta"].get("content") or "") for chunk in chunks if chunk.get("choices")
+        )
+        assert text == ANSWER, response.text
+        assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+        requests: Final = rig.upstream_tools()
+        assert len(requests) == 2 and all(names == (rig.tool,) for names in requests), requests
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_toolset_gateway_url_gives_a_key_of_an_ungranted_team_no_tools_and_never_reaches_the_peer(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _rig(gateway, surface) as rig:
+        toolset_name: Final = "ts" + uuid.uuid4().hex[:8]
+        create_toolset(rig.scenario, ((rig.server_id, "add"),), toolset_name=toolset_name)
+        key: Final = rig.scenario.key(team_id=rig.scenario.team())
+        response: Final = rig.send(key, [{**AUTO, "server_url": f"litellm_proxy/mcp/{toolset_name}"}])
+        assert _peer_add_calls(rig.peer) == (), "denied caller reached the peer"
+        assert all(rig.tool not in names for names in rig.upstream_tools()), rig.upstream_tools()
+        assert response.status_code in (200, 400, 401, 403), response.text
