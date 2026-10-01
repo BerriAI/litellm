@@ -133,7 +133,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         return BaseVectorStoreAuthCredentials()
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
-        return VectorStoreIndexEndpoints(read=[], write=[])  # mutable-ok: the TypedDict declares list fields
+        return VectorStoreIndexEndpoints(read=[], write=[])
 
     @staticmethod
     def _reject_unknown_params(litellm_params: Mapping[str, object]) -> None:
@@ -283,7 +283,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         limit: Final = cls._limit(optional_params)
         return (
             f"{api_base}/v1/vector_stores/{quote(vector_store_id, safe='')}/search",
-            {  # mutable-ok: JSON transport requires a dict
+            {
                 "query": query_text,
                 "query_vector": tuple(vector),
                 "mongodb_database": params.require_database(),

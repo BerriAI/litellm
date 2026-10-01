@@ -33651,6 +33651,18 @@
         "Worker": {
           "additionalProperties": false,
           "properties": {
+            "analysis_key_id": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Analysis Key Id"
+            },
             "id": {
               "title": "Id",
               "type": "string"
@@ -33702,6 +33714,11 @@
         },
         "WorkerName": {
           "properties": {
+            "analysis_key_id": {
+              "pattern": "^[a-f0-9]{64}$",
+              "title": "Analysis Key Id",
+              "type": "string"
+            },
             "name": {
               "default": "Lens worker",
               "maxLength": 100,
@@ -33710,6 +33727,9 @@
               "type": "string"
             }
           },
+          "required": [
+            "analysis_key_id"
+          ],
           "title": "WorkerName",
           "type": "object"
         }
@@ -34646,52 +34666,6 @@
           ]
         }
       },
-      "/engine/workers/register": {
-        "post": {
-          "operationId": "register_worker_engine_workers_register_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkerName"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/WorkerCreated"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Register Worker",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
       "/guardrails/register": {
         "post": {
           "description": "Register a guardrail for onboarding (team submission).\n\nAccepts a guardrail config in the\n[Generic Guardrail API](https://docs.litellm.ai/docs/adding_provider/generic_guardrail_api) format.\nThe submission is stored with status `pending_review` until an admin approves it.",
@@ -34779,6 +34753,52 @@
             }
           ],
           "summary": "Introspect Endpoint",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/lens/workers/register": {
+        "post": {
+          "operationId": "register_worker_lens_workers_register_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerName"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/WorkerCreated"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Register Worker",
           "tags": [
             "mcp_discoverable"
           ]
@@ -41264,6 +41284,39 @@
           "title": "ModelInsightDailyMetric",
           "type": "object"
         },
+        "ModelInsightDailyTotal": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "date",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests"
+          ],
+          "title": "ModelInsightDailyTotal",
+          "type": "object"
+        },
         "ModelInsightMetric": {
           "properties": {
             "completion_tokens": {
@@ -41395,6 +41448,13 @@
               "title": "Daily",
               "type": "array"
             },
+            "daily_totals": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightDailyTotal"
+              },
+              "title": "Daily Totals",
+              "type": "array"
+            },
             "end_date": {
               "title": "End Date",
               "type": "string"
@@ -41415,6 +41475,7 @@
             "start_date",
             "end_date",
             "daily",
+            "daily_totals",
             "top_models"
           ],
           "title": "ModelInsightsResponse",
@@ -52061,6 +52122,16 @@
               ],
               "title": "Updated By"
             },
+            "user": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ToolDiscoveryUser"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "user_agent": {
               "anyOf": [
                 {
@@ -52097,6 +52168,41 @@
             "tool"
           ],
           "title": "ToolDetailResponse",
+          "type": "object"
+        },
+        "ToolDiscoveryUser": {
+          "properties": {
+            "user_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Alias"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "user_id"
+          ],
+          "title": "ToolDiscoveryUser",
           "type": "object"
         },
         "ToolListResponse": {

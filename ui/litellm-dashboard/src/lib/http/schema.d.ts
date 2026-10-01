@@ -1263,8 +1263,8 @@ export interface paths {
          * @description Benchmarks for the auto-router dashboard: session shape, savings against the configured
          *     baseline, and prompt-caching behaviour bucketed by what the router did.
          *
-         *     Reads session rollups folded once per request at spend-write time, with bounded
-         *     retained-log recovery for historical comparisons. A user filter selects only turns attributed to that
+         *     Reads session rollups folded once per request at spend-write time, so this endpoint
+         *     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
          *     internal user when written; older key-only history remains outside user views. A session
          *     is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
          *     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
@@ -4790,279 +4790,6 @@ export interface paths {
          *     ```
          */
         post: operations["update_end_user_end_user_update_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Engines */
-        get: operations["list_engines_engine_get"];
-        put?: never;
-        /** Create Engine */
-        post: operations["create_engine_engine_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/preview/sample": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Preview Sample */
-        post: operations["preview_sample_engine_preview_sample_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/worker/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Claim */
-        post: operations["claim_engine_worker_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/worker/{engine_id}/{job_id}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Content */
-        get: operations["content_engine_worker__engine_id___job_id__content_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/worker/{engine_id}/{job_id}/heartbeat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Heartbeat */
-        post: operations["heartbeat_engine_worker__engine_id___job_id__heartbeat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/worker/{engine_id}/{job_id}/model": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Model */
-        post: operations["model_engine_worker__engine_id___job_id__model_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/worker/{engine_id}/{job_id}/progress": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Progress */
-        post: operations["progress_engine_worker__engine_id___job_id__progress_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/worker/{engine_id}/{job_id}/result": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Result */
-        post: operations["result_engine_worker__engine_id___job_id__result_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/worker/{engine_id}/{job_id}/sample": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Sample */
-        get: operations["sample_engine_worker__engine_id___job_id__sample_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/workers/register": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Register Worker */
-        post: operations["register_worker_engine_workers_register_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/workers/{worker_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Revoke Worker */
-        delete: operations["revoke_worker_engine_workers__worker_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/{engine_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Update Engine */
-        put: operations["update_engine_engine__engine_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/{engine_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cancel Engine */
-        post: operations["cancel_engine_engine__engine_id__cancel_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/{engine_id}/executions/{execution_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Evidence Content */
-        get: operations["evidence_content_engine__engine_id__executions__execution_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/engine/{engine_id}/findings/{finding_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Finding */
-        patch: operations["update_finding_engine__engine_id__findings__finding_id__patch"];
-        trace?: never;
-    };
-    "/engine/{engine_id}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Run Engine */
-        post: operations["run_engine_engine__engine_id__runs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8859,6 +8586,315 @@ export interface paths {
         put?: never;
         /** Warm */
         post: operations["warm_lazy_warm__name__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Lenses */
+        get: operations["list_lenses_lens_get"];
+        put?: never;
+        /** Create Lens */
+        post: operations["create_lens_lens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/preview/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Sample */
+        post: operations["preview_sample_lens_preview_sample_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim */
+        post: operations["claim_lens_worker_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/{lens_id}/{job_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Content */
+        get: operations["content_lens_worker__lens_id___job_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/{lens_id}/{job_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Heartbeat */
+        post: operations["heartbeat_lens_worker__lens_id___job_id__heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/{lens_id}/{job_id}/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Model */
+        post: operations["model_lens_worker__lens_id___job_id__model_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/{lens_id}/{job_id}/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Progress */
+        post: operations["progress_lens_worker__lens_id___job_id__progress_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/{lens_id}/{job_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Result */
+        post: operations["result_lens_worker__lens_id___job_id__result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/worker/{lens_id}/{job_id}/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sample */
+        get: operations["sample_lens_worker__lens_id___job_id__sample_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/workers/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Worker */
+        post: operations["register_worker_lens_workers_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/workers/{worker_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Worker */
+        delete: operations["revoke_worker_lens_workers__worker_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/workers/{worker_id}/billing-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Worker Billing */
+        put: operations["set_worker_billing_lens_workers__worker_id__billing_key_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/{lens_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Lens */
+        get: operations["read_lens_lens__lens_id__get"];
+        /** Update Lens */
+        put: operations["update_lens_lens__lens_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/{lens_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Lens */
+        post: operations["cancel_lens_lens__lens_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/{lens_id}/executions/{execution_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evidence Content */
+        get: operations["evidence_content_lens__lens_id__executions__execution_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/{lens_id}/findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Finding */
+        patch: operations["update_finding_lens__lens_id__findings__finding_id__patch"];
+        trace?: never;
+    };
+    "/lens/{lens_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_lens__lens_id__runs_get"];
+        put?: never;
+        /** Run Lens */
+        post: operations["run_lens_lens__lens_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/{lens_id}/runs/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Run */
+        get: operations["read_run_lens__lens_id__runs__job_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -21743,6 +21779,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/{trace_id}/spans/{span_id}/error": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Span Error */
+        get: operations["get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/unified_access_group": {
         parameters: {
             query?: never;
@@ -25428,7 +25481,7 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description Estimated single-model cost for covered turns only
+             * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
              */
             baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
@@ -25449,7 +25502,7 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
+             * @description Recorded savings over baseline_spend, as a percentage
              */
             saved_pct: number | null;
             /**
@@ -25464,17 +25517,17 @@ export interface components {
             saved_spend: number | null;
             /**
              * Savings Estimated Actual Spend
-             * @description Actual spend, including classifier cost, for covered turns only
+             * @description Actual spend, including classifier cost, for the compared requests
              */
             savings_estimated_actual_spend: number;
             /**
              * Savings Estimated Classifier Cost
-             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             * @description Classifier cost included in the compared actual spend; null when classification costs for those requests are unavailable
              */
             savings_estimated_classifier_cost?: number | null;
             /**
              * Savings Estimated Turns
-             * @description Requests with a matching savings comparison, including historical recorded estimates
+             * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25507,7 +25560,7 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description Estimated single-model cost for covered turns only
+             * @description Estimated single-model cost: compared actual spend plus recorded savings; null when traffic has no recorded savings
              */
             baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
@@ -25518,7 +25571,7 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description Total recorded savings over the matching historical and current baseline; null when costs are unavailable
+             * @description Recorded savings over baseline_spend, as a percentage
              */
             saved_pct: number | null;
             /**
@@ -25533,17 +25586,17 @@ export interface components {
             saved_spend: number | null;
             /**
              * Savings Estimated Actual Spend
-             * @description Actual spend, including classifier cost, for covered turns only
+             * @description Actual spend, including classifier cost, for the compared requests
              */
             savings_estimated_actual_spend: number;
             /**
              * Savings Estimated Classifier Cost
-             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             * @description Classifier cost included in the compared actual spend; null when classification costs for those requests are unavailable
              */
             savings_estimated_classifier_cost?: number | null;
             /**
              * Savings Estimated Turns
-             * @description Requests with a matching savings comparison, including historical recorded estimates
+             * @description Requests compared against the baseline: every request on complexity routers that recorded savings
              */
             savings_estimated_turns: number;
             /** Sessions */
@@ -25832,7 +25885,7 @@ export interface components {
             };
             /**
              * Baseline Spend
-             * @description Estimated single-model cost; unavailable unless every turn is covered
+             * @description Estimated single-model cost: spend plus recorded savings
              */
             baseline_spend: number | null;
             /**
@@ -25857,17 +25910,17 @@ export interface components {
             saved_spend: number | null;
             /**
              * Savings Estimated Actual Spend
-             * @description Actual spend, including classifier cost, for covered turns only
+             * @description Actual spend, including classifier cost, for requests whose estimate recorded its baseline cost
              */
             savings_estimated_actual_spend: number;
             /**
              * Savings Estimated Baseline Spend
-             * @description Estimated single-model cost for covered turns only
+             * @description Estimated single-model cost for requests whose estimate recorded its baseline cost
              */
             savings_estimated_baseline_spend: number | null;
             /**
              * Savings Estimated Turns
-             * @description Requests with a matching savings comparison, including historical recorded estimates
+             * @description Requests whose savings estimate recorded its baseline cost
              */
             savings_estimated_turns: number;
             /** Session Id */
@@ -28031,11 +28084,11 @@ export interface components {
         };
         /** Claim */
         Claim: {
-            /** Engine Id */
-            engine_id: string;
             /** Findings */
             findings: components["schemas"]["Finding"][];
             job: components["schemas"]["Job"];
+            /** Lens Id */
+            lens_id: string;
         };
         /**
          * ClassificationRubric
@@ -29864,6 +29917,11 @@ export interface components {
              */
             grouping_batches: number;
             /**
+             * Inconclusive
+             * @default 0
+             */
+            inconclusive: number;
+            /**
              * Investigated
              * @default 0
              */
@@ -30722,116 +30780,6 @@ export interface components {
             /** Slug */
             slug: string;
         };
-        /** Engine */
-        Engine: {
-            /** Budget Month */
-            budget_month: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Findings
-             * @default []
-             */
-            findings: components["schemas"]["Finding"][];
-            /** Id */
-            id: string;
-            /**
-             * Jobs
-             * @default []
-             */
-            jobs: components["schemas"]["Job"][];
-            /** Last Scan At */
-            last_scan_at?: string | null;
-            /**
-             * Next Run At
-             * Format: date-time
-             */
-            next_run_at: string;
-            /**
-             * Revision
-             * @default 1
-             */
-            revision: number;
-            scope: components["schemas"]["Scope"];
-            settings: components["schemas"]["EngineSettings"];
-            /**
-             * Spent
-             * @default 0
-             */
-            spent: number;
-            /**
-             * Version
-             * @default 0
-             */
-            version: number;
-        };
-        /** EngineList */
-        EngineList: {
-            /** Engines */
-            engines: components["schemas"]["Engine"][];
-            /** Tracing Enabled */
-            tracing_enabled: boolean;
-            /** Workers */
-            workers: components["schemas"]["Worker"][];
-        };
-        /** EngineSettings */
-        EngineSettings: {
-            /** Checks */
-            checks: components["schemas"]["Check"][];
-            /**
-             * Context
-             * @default
-             */
-            context: string;
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /**
-             * Filters
-             * @default []
-             */
-            filters: components["schemas"]["MetadataFilter"][];
-            /**
-             * Interval Minutes
-             * @default 15
-             */
-            interval_minutes: number;
-            /**
-             * Lookback Hours
-             * @default 24
-             */
-            lookback_hours: number;
-            /** Model */
-            model: string;
-            /**
-             * Monthly Budget
-             * @default 20
-             */
-            monthly_budget: number;
-            /** Name */
-            name: string;
-            /**
-             * Sample Size
-             * @default 100
-             */
-            sample_size: number;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @default traces
-             * @enum {string}
-             */
-            source: "traces" | "requests" | "both";
-        };
         /** EnrichTemplateRequest */
         EnrichTemplateRequest: {
             /**
@@ -30950,6 +30898,12 @@ export interface components {
             execution_id: string;
             /** Quote */
             quote: string;
+            /**
+             * Role
+             * @default support
+             * @enum {string}
+             */
+            role: "support" | "counterexample";
             /** Span Id */
             span_id: string;
         };
@@ -32517,6 +32471,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Assessments
+             * @default []
+             */
+            assessments: components["schemas"]["RunAssessment"][];
+            /**
              * Attempts
              * @default 0
              */
@@ -32532,6 +32491,7 @@ export interface components {
              *       "eligible": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
+             *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
              *       "screened": 0,
@@ -32555,6 +32515,8 @@ export interface components {
              * @default
              */
             error: string;
+            /** Findings */
+            findings?: components["schemas"]["Finding"][] | null;
             /** Finished At */
             finished_at?: string | null;
             /** Id */
@@ -32564,7 +32526,7 @@ export interface components {
             /** Revision */
             revision: number;
             sample?: components["schemas"]["Sample"] | null;
-            settings: components["schemas"]["EngineSettings"];
+            settings: components["schemas"]["LensSettings"];
             /**
              * Stage
              * @default Queued
@@ -32808,6 +32770,136 @@ export interface components {
             release_url: string;
             /** Version */
             version: string;
+        };
+        /** Lens */
+        Lens: {
+            /** Budget Month */
+            budget_month: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Findings
+             * @default []
+             */
+            findings: components["schemas"]["Finding"][];
+            /** Id */
+            id: string;
+            /**
+             * Jobs
+             * @default []
+             */
+            jobs: components["schemas"]["Job"][];
+            /** Last Scan At */
+            last_scan_at?: string | null;
+            /**
+             * Next Run At
+             * Format: date-time
+             */
+            next_run_at: string;
+            /**
+             * Revision
+             * @default 1
+             */
+            revision: number;
+            scope: components["schemas"]["Scope"];
+            settings: components["schemas"]["LensSettings"];
+            /**
+             * Spent
+             * @default 0
+             */
+            spent: number;
+            /**
+             * Version
+             * @default 0
+             */
+            version: number;
+        };
+        /** LensList */
+        LensList: {
+            /** Lenses */
+            lenses: components["schemas"]["Lens"][];
+            /** Tracing Enabled */
+            tracing_enabled: boolean;
+            /** Workers */
+            workers: components["schemas"]["Worker"][];
+        };
+        /** LensSettings */
+        LensSettings: {
+            /**
+             * Checks
+             * @default []
+             */
+            checks: components["schemas"]["Check"][];
+            /**
+             * Concurrency
+             * @default 8
+             */
+            concurrency: number;
+            /**
+             * Context
+             * @default
+             */
+            context: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Filters
+             * @default []
+             */
+            filters: components["schemas"]["MetadataFilter"][];
+            /**
+             * Interval Minutes
+             * @default 15
+             */
+            interval_minutes: number;
+            /**
+             * Lookback Hours
+             * @default 24
+             */
+            lookback_hours: number;
+            /** Model */
+            model: string;
+            /**
+             * Monthly Budget
+             * @default 20
+             */
+            monthly_budget: number;
+            /** Name */
+            name: string;
+            /**
+             * Sample Percent
+             * @default 100
+             */
+            sample_percent: number;
+            /** Sample Size */
+            sample_size?: number | null;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @default traces
+             * @enum {string}
+             */
+            source: "traces" | "requests" | "both";
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
         };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
@@ -34661,6 +34753,7 @@ export interface components {
             updated_at?: string | null;
             /** Updated By */
             updated_by?: string | null;
+            user?: components["schemas"]["ToolDiscoveryUser"] | null;
             /** User Agent */
             user_agent?: string | null;
         };
@@ -37085,6 +37178,19 @@ export interface components {
             /** Successful Requests */
             successful_requests: number;
         };
+        /** ModelInsightDailyTotal */
+        ModelInsightDailyTotal: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+        };
         /** ModelInsightMetric */
         ModelInsightMetric: {
             /** Completion Tokens */
@@ -37136,6 +37242,8 @@ export interface components {
         ModelInsightsResponse: {
             /** Daily */
             daily: components["schemas"]["ModelInsightDailyMetric"][];
+            /** Daily Totals */
+            daily_totals: components["schemas"]["ModelInsightDailyTotal"][];
             /** End Date */
             end_date: string;
             /** Start Date */
@@ -39801,12 +39909,19 @@ export interface components {
         };
         /** Preview */
         Preview: {
+            /** As Of */
+            as_of?: string | null;
             /**
              * Lookback Hours
              * @default 24
              */
             lookback_hours: number;
-            settings: components["schemas"]["EngineSettings"];
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+            settings: components["schemas"]["LensSettings"];
         };
         /** Progress */
         Progress: {
@@ -39816,6 +39931,7 @@ export interface components {
              *       "eligible": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
+             *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
              *       "screened": 0,
@@ -42783,6 +42899,11 @@ export interface components {
         };
         /** Result */
         "Result-Input": {
+            /**
+             * Assessments
+             * @default []
+             */
+            assessments: components["schemas"]["RunAssessment"][];
             coverage: components["schemas"]["Coverage"];
             /**
              * Error
@@ -43040,6 +43161,26 @@ export interface components {
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
         };
+        /** RunAssessment */
+        RunAssessment: {
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Issue Checks
+             * @default []
+             */
+            issue_checks: string[];
+            /**
+             * Pattern Checks
+             * @default []
+             */
+            pattern_checks: string[];
+        };
         /**
          * RunDeleteResponse
          * @description Response from deleting a run
@@ -43062,6 +43203,7 @@ export interface components {
         RunRequest: {
             /** Lookback Hours */
             lookback_hours?: number | null;
+            settings?: components["schemas"]["LensSettings"] | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -43454,6 +43596,15 @@ export interface components {
             eligible: number;
             /** Executions */
             executions: components["schemas"]["Execution"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Next Offset */
+            next_offset?: number | null;
+            /**
+             * Selected
+             * @default 0
+             */
+            selected: number;
         };
         /**
          * ScheduledJobStaggerSettings
@@ -43980,6 +44131,17 @@ export interface components {
             type: "skill_reference";
             /** Version */
             version?: string;
+        };
+        /** SpanErrorPage */
+        SpanErrorPage: {
+            /** Message */
+            message: string;
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Span Id */
+            span_id: string;
+            /** Total Chars */
+            total_chars: number;
         };
         /** SpendAnalyticsPaginatedResponse */
         SpendAnalyticsPaginatedResponse: {
@@ -45487,6 +45649,15 @@ export interface components {
             /** Overrides */
             overrides?: components["schemas"]["ToolPolicyOverrideRow"][];
             tool: components["schemas"]["LiteLLM_ToolTableRow"];
+        };
+        /** ToolDiscoveryUser */
+        ToolDiscoveryUser: {
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /** ToolFunction */
         ToolFunction: {
@@ -47895,6 +48066,8 @@ export interface components {
         };
         /** Worker */
         Worker: {
+            /** Analysis Key Id */
+            analysis_key_id?: string | null;
             /** Id */
             id: string;
             /**
@@ -47911,6 +48084,11 @@ export interface components {
             revoked: boolean;
             scope: components["schemas"]["Scope"];
         };
+        /** WorkerBilling */
+        WorkerBilling: {
+            /** Analysis Key Id */
+            analysis_key_id: string;
+        };
         /** WorkerCreated */
         WorkerCreated: {
             /** Token */
@@ -47919,6 +48097,8 @@ export interface components {
         };
         /** WorkerName */
         WorkerName: {
+            /** Analysis Key Id */
+            analysis_key_id: string;
             /**
              * Name
              * @default Lens worker
@@ -55351,556 +55531,6 @@ export interface operations {
             };
         };
     };
-    list_engines_engine_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EngineList"];
-                };
-            };
-        };
-    };
-    create_engine_engine_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EngineSettings"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Engine"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    preview_sample_engine_preview_sample_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Preview"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Sample"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    claim_engine_worker_claim_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Claim"] | null;
-                };
-            };
-        };
-    };
-    content_engine_worker__engine_id___job_id__content_get: {
-        parameters: {
-            query: {
-                execution_id: string;
-                cursor?: string;
-                offset?: number;
-            };
-            header?: never;
-            path: {
-                engine_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionContent"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    heartbeat_engine_worker__engine_id___job_id__heartbeat_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": boolean;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    model_engine_worker__engine_id___job_id__model_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ModelRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    progress_engine_worker__engine_id___job_id__progress_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Progress"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": boolean;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    result_engine_worker__engine_id___job_id__result_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Result-Input"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Engine"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    sample_engine_worker__engine_id___job_id__sample_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Sample"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    register_worker_engine_workers_register_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkerName"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkerCreated"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revoke_worker_engine_workers__worker_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                worker_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": boolean;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_engine_engine__engine_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EngineSettings"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Engine"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_engine_engine__engine_id__cancel_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Engine"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    evidence_content_engine__engine_id__executions__execution_id__get: {
-        parameters: {
-            query?: {
-                cursor?: string;
-                offset?: number;
-            };
-            header?: never;
-            path: {
-                engine_id: string;
-                execution_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionContent"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_finding_engine__engine_id__findings__finding_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-                finding_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FindingUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Engine"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_engine_engine__engine_id__runs_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                engine_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Engine"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     chat_completion_engines__model__chat_completions_post: {
         parameters: {
             query?: never;
@@ -60458,6 +60088,698 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_lenses_lens_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LensList"];
+                };
+            };
+        };
+    };
+    create_lens_lens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LensSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_sample_lens_preview_sample_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Preview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sample"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_lens_worker_claim_post: {
+        parameters: {
+            query?: {
+                protocol_version?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Claim"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    content_lens_worker__lens_id___job_id__content_get: {
+        parameters: {
+            query: {
+                execution_id: string;
+                cursor?: string;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    heartbeat_lens_worker__lens_id___job_id__heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_lens_worker__lens_id___job_id__model_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    progress_lens_worker__lens_id___job_id__progress_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Progress"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    result_lens_worker__lens_id___job_id__result_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Result-Input"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sample_lens_worker__lens_id___job_id__sample_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Sample"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_worker_lens_workers_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerName"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_worker_lens_workers__worker_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": boolean;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_worker_billing_lens_workers__worker_id__billing_key_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                worker_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerBilling"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_lens_lens__lens_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_lens_lens__lens_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LensSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_lens_lens__lens_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evidence_content_lens__lens_id__executions__execution_id__get: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+                execution_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_finding_lens__lens_id__findings__finding_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FindingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_lens__lens_id__runs_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_lens_lens__lens_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lens"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_run_lens__lens_id__runs__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
                 };
             };
             /** @description Validation Error */
@@ -77028,6 +77350,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
+        parameters: {
+            query?: {
+                trace_ref?: string;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+                span_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpanErrorPage"];
                 };
             };
             /** @description Validation Error */

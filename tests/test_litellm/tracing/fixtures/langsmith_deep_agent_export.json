@@ -42,10 +42,10 @@
      },
      "spans": [
       {
-       "traceId": "S61CuE6d47pG/IcBhfjwIw==",
-       "spanId": "XnnztbUEmF4=",
+       "traceId": "4bad42b84e9de3ba46fc870185f8f023",
+       "spanId": "5e79f3b5b504985e",
        "name": "deep_research_agent",
-       "kind": "SPAN_KIND_INTERNAL",
+       "kind": 1,
        "startTimeUnixNano": "1790742989377137920",
        "endTimeUnixNano": "1790743040762587136",
        "attributes": [
@@ -123,16 +123,16 @@
         }
        ],
        "status": {
-        "code": "STATUS_CODE_OK"
+        "code": 1
        },
        "flags": 256
       },
       {
-       "traceId": "S61CuE6d47pG/IcBhfjwIw==",
-       "spanId": "imocMZQNB68=",
-       "parentSpanId": "Hfr3D90RhPI=",
+       "traceId": "4bad42b84e9de3ba46fc870185f8f023",
+       "spanId": "8a6a1c31940d07af",
+       "parentSpanId": "1dfaf70fdd1184f2",
        "name": "ChatOpenAI",
-       "kind": "SPAN_KIND_INTERNAL",
+       "kind": 1,
        "startTimeUnixNano": "1790742989383207936",
        "endTimeUnixNano": "1790742998893985024",
        "attributes": [
@@ -354,16 +354,16 @@
         }
        ],
        "status": {
-        "code": "STATUS_CODE_OK"
+        "code": 1
        },
        "flags": 256
       },
       {
-       "traceId": "S61CuE6d47pG/IcBhfjwIw==",
-       "spanId": "zwThqgPzRPo=",
-       "parentSpanId": "g0UfMjWEf2w=",
+       "traceId": "4bad42b84e9de3ba46fc870185f8f023",
+       "spanId": "cf04e1aa03f344fa",
+       "parentSpanId": "83451f3235847f6c",
        "name": "FilesystemMiddleware.wrap_model_call",
-       "kind": "SPAN_KIND_INTERNAL",
+       "kind": 1,
        "startTimeUnixNano": "1790742989379030016",
        "endTimeUnixNano": "1790742998895730944",
        "attributes": [
@@ -477,16 +477,16 @@
         }
        ],
        "status": {
-        "code": "STATUS_CODE_OK"
+        "code": 1
        },
        "flags": 256
       },
       {
-       "traceId": "S61CuE6d47pG/IcBhfjwIw==",
-       "spanId": "svs6j1ovzgE=",
-       "parentSpanId": "Vt73x+GSQ0o=",
+       "traceId": "4bad42b84e9de3ba46fc870185f8f023",
+       "spanId": "b2fb3a8f5a2fce01",
+       "parentSpanId": "56def7c7e192434a",
        "name": "task",
-       "kind": "SPAN_KIND_INTERNAL",
+       "kind": 1,
        "startTimeUnixNano": "1790742998900896000",
        "endTimeUnixNano": "1790743034076956160",
        "attributes": [
@@ -624,16 +624,16 @@
         }
        ],
        "status": {
-        "code": "STATUS_CODE_OK"
+        "code": 1
        },
        "flags": 256
       },
       {
-       "traceId": "S61CuE6d47pG/IcBhfjwIw==",
-       "spanId": "gUmbSS/ZP4U=",
-       "parentSpanId": "svs6j1ovzgE=",
+       "traceId": "4bad42b84e9de3ba46fc870185f8f023",
+       "spanId": "81499b492fd93f85",
+       "parentSpanId": "b2fb3a8f5a2fce01",
        "name": "researcher",
-       "kind": "SPAN_KIND_INTERNAL",
+       "kind": 1,
        "startTimeUnixNano": "1790742998901422080",
        "endTimeUnixNano": "1790743034076699904",
        "attributes": [
@@ -759,16 +759,16 @@
         }
        ],
        "status": {
-        "code": "STATUS_CODE_OK"
+        "code": 1
        },
        "flags": 256
       },
       {
-       "traceId": "S61CuE6d47pG/IcBhfjwIw==",
-       "spanId": "/mLyrQOgEWw=",
-       "parentSpanId": "SUm+6tN4+TU=",
+       "traceId": "4bad42b84e9de3ba46fc870185f8f023",
+       "spanId": "fe62f2ad03a0116c",
+       "parentSpanId": "4949beead378f935",
        "name": "search_docs",
-       "kind": "SPAN_KIND_INTERNAL",
+       "kind": 1,
        "startTimeUnixNano": "1790743004976721920",
        "endTimeUnixNano": "1790743004977214208",
        "attributes": [
@@ -912,7 +912,7 @@
         }
        ],
        "status": {
-        "code": "STATUS_CODE_OK"
+        "code": 1
        },
        "flags": 256
       }

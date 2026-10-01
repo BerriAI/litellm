@@ -20,6 +20,7 @@ export interface Span {
   status: SpanStatus;
   /** Exception message when status is "error". */
   error?: string | null;
+  error_truncated?: boolean;
   input_preview: string;
   model: string | null;
   input_tokens: number;
@@ -72,11 +73,40 @@ export interface TracePage {
   next_cursor: string | null;
 }
 
-/** `input` / `output` are JSON strings (messages for llm spans, raw args / result for tools). */
+/** Mirrors `litellm/tracing/ui_format.py`: span content already reduced to what the UI renders. */
+export interface UIToolCall {
+  name: string;
+  /** JSON-encoded arguments. */
+  arguments: string;
+}
+
+export interface UIMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  name?: string;
+  tool_calls?: UIToolCall[];
+}
+
+export interface UIField {
+  key: string;
+  value: string;
+}
+
+export type UIContent =
+  | { kind: "messages"; messages: UIMessage[] }
+  | { kind: "fields"; fields: UIField[] }
+  | { kind: "text"; text: string };
+
+/**
+ * `input` / `output` are the raw stored JSON strings. `input_ui` / `output_ui` are the
+ * standard rendering; optional because older proxies don't send them.
+ */
 export interface SpanDetail {
   span_id: string;
   input: string;
   output: string;
+  input_ui?: UIContent;
+  output_ui?: UIContent;
   attributes: Record<string, string>;
 }
 
@@ -90,4 +120,11 @@ export interface TraceMessage {
   content: string;
   name?: string;
   tool_calls?: TraceToolCall[];
+}
+
+export interface SpanErrorPage {
+  span_id: string;
+  message: string;
+  total_chars: number;
+  next_cursor: string | null;
 }
