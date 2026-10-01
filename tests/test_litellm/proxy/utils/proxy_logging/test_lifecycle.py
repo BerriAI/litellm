@@ -483,7 +483,9 @@ async def test_update_request_status_when_alerting_set_writes_cache(proxy_loggin
         "key": "request_status:call-1",
         "value": "success",
         "local_only": True,
-        "ttl": 105.0,
+        # alerting_threshold * 1.5 + HANGING_ALERT_BUFFER_TIME_SECONDS, matching
+        # the hanging-request tracker entry's own ttl (see #43285).
+        "ttl": 67.5,
     }
 
 
