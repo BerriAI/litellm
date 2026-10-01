@@ -186,8 +186,9 @@ async def test_shared_resource_still_hits_insert_limit_before_transport(recordin
 @pytest.mark.asyncio
 async def test_insert_validates_values_without_pydantic_copy(recording_server: RecordingServer) -> None:
     storage: Final = TraceStorage("trace_test", recording_server.base_url)
-    with pytest.raises(ValueError):
-        await storage.insert_rows("otel_traces", [{"ResourceAttributes": object()}])
+    invalid: Final = object()
+    with pytest.raises(ValueError, match=type(invalid).__name__):
+        await storage.insert_rows("otel_traces", [{"ResourceAttributes": invalid}])
     await storage.insert_rows("otel_traces", (MappingProxyType({"Timestamp": 1}),))
     assert (
         json.loads(gzip.decompress(recording_server.requests[0].raw_body))["Timestamp"]

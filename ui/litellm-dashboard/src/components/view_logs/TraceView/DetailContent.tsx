@@ -111,7 +111,7 @@ function DiagnosticContent({ accessToken, traceId, traceRef, span }: DetailConte
   const [cursor, setCursor] = useState<string | null>(null);
   const queryOptions: UseQueryOptions<SpanErrorPage, Error> = {
     queryKey: ["agentTraceSpanError", traceId, traceRef, span.span_id, accessToken, cursor],
-    queryFn: () => agentTraceSpanErrorCall(accessToken, traceId, span.span_id, traceRef, cursor),
+    queryFn: () => agentTraceSpanErrorCall(accessToken, traceId, span.span_id, { traceRef, cursor }),
     enabled: opened,
     staleTime: Infinity,
     gcTime: 0,

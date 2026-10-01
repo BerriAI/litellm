@@ -2143,12 +2143,11 @@ export const agentTraceSpanErrorCall = async (
   accessToken: string,
   traceId: string,
   spanId: string,
-  traceRef?: string,
-  cursor?: string | null,
+  options: { traceRef?: string; cursor?: string | null },
 ): Promise<SpanErrorPage> =>
   apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined, cursor: cursor || undefined },
+    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined },
   });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
