@@ -1346,31 +1346,18 @@ async def _resolve_byok_mcp_auth_header(
     return mcp_auth_header
 
 
-async def _byok_listing_auth_header(
+async def _byok_catalog_auth_header(
     mcp_server: MCPServer,
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_auth_header: str | dict[str, str] | None,
 ) -> str | dict[str, str] | None:
-    """The credential a tools/list may use: a supplied header forwards unchanged, and a missing one
-    falls back to the stored credential without the tool-call path's byok_auth_required raise."""
+    """Keys the caller's catalog slot the way tools/call will look it up; never sent upstream."""
     if not mcp_server.is_byok or mcp_auth_header is not None:
         return mcp_auth_header
 
     from litellm.proxy._experimental.mcp_server.operations import _get_byok_credential
 
     return await _get_byok_credential(mcp_server, user_api_key_auth)
-
-
-def _listing_upstream_auth_header(
-    mcp_server: MCPServer,
-    mcp_auth_header: str | dict[str, str] | None,
-    byok_auth_header: str | dict[str, str] | None,
-) -> str | dict[str, str] | None:
-    """The credential a tools/list sends upstream: an oauth2 server's is minted or signed, never the
-    stored BYOK one, the same rule ``_get_tools_from_mcp_servers`` applies to its own resolution."""
-    if mcp_server.auth_type == MCPAuth.oauth2:
-        return mcp_auth_header
-    return byok_auth_header
 
 
 def _client_forwarded_authorization_headers(
@@ -4511,13 +4498,9 @@ class MCPServerManager:
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
 
         client = None
-        resolved_mcp_auth_header: Final = await _byok_listing_auth_header(server, user_api_key_auth, mcp_auth_header)
-        upstream_mcp_auth_header: Final = _listing_upstream_auth_header(
-            server, mcp_auth_header, resolved_mcp_auth_header
-        )
         listed_caller: Final = ListedToolsCaller(
             user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=resolved_mcp_auth_header,
+            mcp_auth_header=await _byok_catalog_auth_header(server, user_api_key_auth, mcp_auth_header),
             raw_headers=raw_headers,
             oauth2_headers=oauth2_headers,
         )
@@ -4564,7 +4547,7 @@ class MCPServerManager:
                 if (
                     get_mcp_jwt_signer() is not None
                     and not has_static_authorization
-                    and not upstream_mcp_auth_header
+                    and not mcp_auth_header
                     and not has_extra_authorization
                 ):
                     extra_headers = await inject_mcp_jwt_headers_for_upstream(
@@ -4587,7 +4570,7 @@ class MCPServerManager:
 
             client = await self._create_mcp_client(
                 server=server,
-                mcp_auth_header=upstream_mcp_auth_header,
+                mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,

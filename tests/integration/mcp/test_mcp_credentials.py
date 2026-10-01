@@ -245,6 +245,45 @@ def test_oauth2_byok_listing_sends_the_minted_token_not_the_users_stored_secret(
         assert secret.encode() not in sent, "stored BYOK secret replaced the minted token on tools/list"
 
 
+@pytest.mark.parametrize(("auth_type", "header", "shape"), STATIC_MODES[:2])
+def test_byok_rest_listing_sends_the_servers_static_credential_not_the_users_stored_secret(
+    gateway: Gateway, auth_type: str, header: bytes, shape: str
+) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "byok" + uuid.uuid4().hex[:8]
+        static: Final = "static-" + uuid.uuid4().hex
+        identity: Final = register_mcp(
+            scenario, peer, alias, auth_type=auth_type, is_byok=True, credentials={"auth_value": static}
+        )
+        owner: Final = scenario.user()
+        owner_key: Final = scenario.key(user_id=owner, object_permission={"mcp_servers": [identity]})
+        secret: Final = "byok-" + uuid.uuid4().hex
+        stored: Final = gateway.client.post(
+            f"/v1/mcp/server/{identity}/user-credential",
+            json={"credential": secret},
+            headers={"x-litellm-api-key": owner_key},
+        )
+        assert stored.status_code in (200, 201), stored.text
+        scenario.cleanups.callback(
+            gateway.client.delete,
+            f"/v1/mcp/server/{identity}/user-credential",
+            headers={"x-litellm-api-key": owner_key},
+        )
+        peer.drain()
+        response: Final = gateway.client.get(
+            "/mcp-rest/tools/list", params={"server_id": identity}, headers={"x-litellm-api-key": owner_key}
+        )
+        assert response.status_code == 200, response.text
+        assert "add" in {tool["name"] for tool in response.json()["tools"]}, response.text
+        listings: Final = _listings(peer)
+        assert len(listings) == 1, listings
+        assert _header(listings[0], header) == shape.format(secret=static, basic="").encode(), listings[0]["headers"]
+        peer.drain()
+        called: Final = call_tool(gateway, owner_key, identity, f"{alias}-add", ADD)
+        assert called.status_code == 200, called.text
+        assert _header(_one_call(peer), header) == shape.format(secret=secret, basic="").encode()
+
+
 def test_deprecated_string_x_mcp_auth_lists_a_byok_server_for_a_key_without_a_user(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "byok" + uuid.uuid4().hex[:8]

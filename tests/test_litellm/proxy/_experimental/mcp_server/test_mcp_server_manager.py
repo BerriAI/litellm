@@ -7380,10 +7380,32 @@ class TestMCPServerManager:
         assert listed is not None and listed.description == "t"
         assert manager._create_mcp_client.await_args.kwargs["mcp_auth_header"] == "Bearer hdr"
 
+    @pytest.mark.parametrize(
+        "server_auth",
+        [
+            pytest.param(
+                {
+                    "auth_type": MCPAuth.oauth2,
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                    "token_url": "http://cc1/token",
+                },
+                id="oauth2",
+            ),
+            pytest.param({"auth_type": MCPAuth.api_key, "authentication_token": "STATIC-ADMIN-TOKEN"}, id="api_key"),
+            pytest.param(
+                {"auth_type": MCPAuth.bearer_token, "authentication_token": "STATIC-ADMIN-TOKEN"}, id="bearer_token"
+            ),
+            pytest.param({"auth_type": MCPAuth.none}, id="none"),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_oauth2_byok_listing_leaves_the_minted_token_and_signer_in_place(self):
-        """The stored BYOK secret keys the catalog slot tools/call reads, but never reaches the oauth2
-        upstream on tools/list: the client mints its M2M token and MCPJWTSigner still signs."""
+    async def test_byok_listing_keys_the_catalog_by_the_stored_secret_but_never_sends_it_upstream(
+        self, server_auth: dict[str, object]
+    ):
+        """The stored BYOK secret keys the catalog slot tools/call reads, but tools/list sends upstream
+        exactly what the caller supplied (nothing here), so the static token, the M2M mint and
+        MCPJWTSigner all behave as they did before the catalog existed, whatever the auth_type."""
         from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
             byok_credential_cache_key,
             cache_byok_credential,
@@ -7396,16 +7418,13 @@ class TestMCPServerManager:
             name="cc1",
             transport=MCPTransport.http,
             url="http://cc1",
-            auth_type=MCPAuth.oauth2,
-            client_id="cid",
-            client_secret="csec",
-            token_url="http://cc1/token",
             is_byok=True,
+            **server_auth,
         )
         alice = UserAPIKeyAuth(api_key="sk-alice", user_id="alice")
         manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="echo", description="m2m catalog", inputSchema={})]
+            return_value=[MCPTool(name="echo", description="listed catalog", inputSchema={})]
         )
         signer_headers = AsyncMock(return_value={"Authorization": "Bearer signed-jwt"})
         cache_byok_credential("alice", "cc1", "BYOK-ALICE-SECRET")
@@ -7430,7 +7449,7 @@ class TestMCPServerManager:
         signer_headers.assert_awaited_once()
         call_side = ListedToolsCaller(user_api_key_auth=alice, mcp_auth_header="BYOK-ALICE-SECRET")
         listed = manager.get_listed_tool(server, "echo", call_side)
-        assert listed is not None and listed.description == "m2m catalog"
+        assert listed is not None and listed.description == "listed catalog"
 
     @pytest.mark.parametrize(
         ("signer", "static_headers"),
