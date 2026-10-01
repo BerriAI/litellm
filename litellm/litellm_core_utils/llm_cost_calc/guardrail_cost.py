@@ -79,7 +79,7 @@ def bedrock_guardrail_cost_by_unit(
     pricing: Final = _bedrock_guardrail_pricing(aws_region_name)
     if pricing is None:
         return None
-    return {  # mutable-ok: stamped into guardrail_information, which safe_dumps only serializes as a plain dict
+    return {
         counter: _priced_units(units, pricing.guardrail_cost_per_unit.get(counter))
         for counter, units in usage_units.items()
     }

@@ -437,16 +437,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/hooks/projects/useDeleteProject.test.ts": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/projects/useDeleteProject.ts": {
-    "no-restricted-syntax": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/hooks/projects/useProjectDetails.test.ts": {
     "react/display-name": {
       "count": 1
@@ -654,11 +644,6 @@
   "src/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab.tsx": {
     "no-nested-ternary": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer.ts": {
-    "prefer-const": {
-      "count": 6
     }
   },
   "src/app/(dashboard)/old-usage/_components/usage.tsx": {
@@ -972,11 +957,6 @@
       "count": 2
     }
   },
-  "src/app/(dashboard)/projects/_components/ProjectKeysSection.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/projects/_components/ProjectModals/ProjectBaseForm.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
@@ -1071,7 +1051,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
@@ -1690,9 +1670,6 @@
   "src/components/key_team_helpers/key_list.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/key_team_helpers/transform_key_info.tsx": {
@@ -1809,16 +1786,16 @@
       "count": 1
     },
     "max-params": {
-      "count": 23
+      "count": 21
     },
     "no-nested-ternary": {
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 150
+      "count": 147
     },
     "prefer-const": {
-      "count": 32
+      "count": 31
     }
   },
   "src/components/object_permissions_view.tsx": {

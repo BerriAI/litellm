@@ -102,21 +102,24 @@ def _wire_batcher_for_test(prisma_client, fail_commit=False):
     return batch_calls
 
 
-def _wire_cascade_reads_for_test(prisma_client):
+def _wire_cascade_reads_for_test(prisma_client, endusers=()):
     """
     The budget tier's cascade reads the rows it is about to zero, so their
     spend counters can be invalidated after the commit. Give each of those
     tables an awaitable find_many so the reads resolve instead of falling into
     the job's warn-and-continue path.
+
+    End users are read by the post-commit invalidation walk rather than by
+    ``get_data``, so callers that care about customers pass them here.
     """
     for table in (
         "litellm_teammembership",
         "litellm_verificationtoken",
         "litellm_organizationtable",
         "litellm_tagtable",
-        "litellm_endusertable",
     ):
         getattr(prisma_client.db, table).find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=list(endusers))
 
 
 @pytest.mark.asyncio
@@ -556,7 +559,7 @@ async def test_reset_budget_continues_other_categories_on_failure():
         **{u["user_id"]: u["spend"] for u in [user2]},
         **{t["team_id"]: t["spend"] for t in [team1, team2]},
     }
-    _wire_cascade_reads_for_test(prisma_client)
+    _wire_cascade_reads_for_test(prisma_client, endusers=[enduser1])
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -607,7 +610,10 @@ async def test_reset_budget_continues_other_categories_on_failure():
     called_tables = {
         call.kwargs.get("table_name") for call in prisma_client.get_data.await_args_list
     }
-    assert called_tables == {"key", "user", "team", "budget", "enduser"}
+    assert called_tables == {"key", "user", "team", "budget"}
+    # Customers are not part of that set: the cascade zeroes them by budget link
+    # and reads them only afterwards, to invalidate their cached spend.
+    prisma_client.db.litellm_endusertable.find_many.assert_awaited()
 
     # Every category writes through the batch path now, so update_data is unused.
     prisma_client.update_data.assert_not_awaited()
@@ -1029,7 +1035,7 @@ async def test_service_logger_endusers_success():
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
     batch_calls = _wire_batcher_for_test(prisma_client)
-    _wire_cascade_reads_for_test(prisma_client)
+    _wire_cascade_reads_for_test(prisma_client, endusers=endusers)
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -1094,7 +1100,7 @@ async def test_service_logger_endusers_failure():
     prisma_client.get_data = AsyncMock(side_effect=fake_get_data)
     prisma_client.update_data = AsyncMock()
     _wire_batcher_for_test(prisma_client, fail_commit=True)
-    _wire_cascade_reads_for_test(prisma_client)
+    _wire_cascade_reads_for_test(prisma_client, endusers=endusers)
 
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.service_logging_obj = MagicMock()
@@ -1121,7 +1127,9 @@ async def test_service_logger_endusers_failure():
     ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_budgets_found") == len(budgets)
-    assert event_metadata.get("num_endusers_found") == len(endusers)
+    # Customers are read by the post-commit invalidation walk, which a failed
+    # commit never reaches, so a failure reports none touched.
+    assert event_metadata.get("num_endusers_found") == 0
     assert "endusers_found" not in event_metadata
     assert "budgets_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()

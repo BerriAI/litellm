@@ -175,6 +175,8 @@ jobs:
         env:
           TESTS: ${{ needs.detect.outputs.tests }}
           E2E_FIXTURE_MODE: live
+          E2E_PROVIDER_EDGE_HOST_REACHABLE: '1'
+          COLUMNS: '400'
         run: |
           umask 077
           read -r -a test_files <<< "${TESTS}"
@@ -189,6 +191,7 @@ jobs:
             uv run --no-sync python .github/e2e-stack/assert_tests_ran.py "${report}" "${test_files[@]}"
             verified=$?
             set -e
+            grep -E '^(FAILED|ERROR) ' "${log}" || true
             grep -E '^=+ .* in [0-9.]+s( \([0-9:]+\))? =+$' "${log}" | tail -n 1
             echo "::endgroup::"
             if [ "${status}" = "5" ]; then
@@ -206,6 +209,24 @@ jobs:
             echo "pass ${pass} of 3 passed"
           done
 
+      - name: Redact the pytest output
+        if: always() && steps.boot.outcome == 'success'
+        run: |
+          umask 077
+          shopt -s nullglob
+          uv run --no-sync python .github/e2e-stack/redact_output.py \
+            --values tests/e2e/.env --values "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" \
+            --out "${RUNNER_TEMP}/e2e-redacted" "${RUNNER_TEMP}"/e2e-pass-*.log "${RUNNER_TEMP}"/e2e-pass-*.xml
+
+      - name: Keep the redacted pytest output
+        if: always() && steps.boot.outcome == 'success'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: e2e-changed-pytest-output-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e2e-redacted
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Stop the stack
         if: always() && steps.boot.outcome != 'skipped'
         run: bash .github/e2e-stack/down.sh
@@ -214,7 +235,7 @@ jobs:
         if: always()
         run: |
           rm -f tests/e2e/.env "${RUNNER_TEMP}/e2e-boot.log" "${RUNNER_TEMP}"/e2e-pass-*.log "${RUNNER_TEMP}"/e2e-pass-*.xml
-          rm -rf "${RUNNER_TEMP}/litellm-e2e-stack"
+          rm -rf "${RUNNER_TEMP}/litellm-e2e-stack" "${RUNNER_TEMP}/e2e-redacted"
 
   gate:
     name: e2e-changed-tests
