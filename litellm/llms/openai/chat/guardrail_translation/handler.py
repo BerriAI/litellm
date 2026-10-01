@@ -54,6 +54,7 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
     GenericGuardrailAPIInputs,
     ModelResponse,
     ModelResponseStream,
@@ -836,6 +837,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             stream_ended=stream_ended,
             tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        released_key: Final = self.get_streaming_scan_key(responses_so_far)
+        if released_key is None or not released_key.tool_calls_in_flight:
+            return tuple(responses_so_far)
+        terminator: Final = ModelResponseStream(
+            choices=[  # mutable-ok: ModelResponseStream drops choices passed as anything but a list
+                StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")
+            ]
+        )
+        return (*responses_so_far, terminator)
 
     @staticmethod
     def _streamed_tool_call_fingerprints(responses_so_far: Sequence[object]) -> tuple[str, ...]:

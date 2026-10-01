@@ -1866,6 +1866,32 @@ def _chat_completion_body(secret: str) -> bytes:
     ).encode()
 
 
+def _responses_tool_call_frames(secret: str) -> tuple[bytes, ...]:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    arguments: Final = json.dumps({"query": secret})
+    pending: Final = {"type": "function_call", "id": "fc_" + identity, "call_id": "call_" + identity, "name": "lookup"}
+    finished: Final = {**pending, "arguments": arguments, "status": "completed"}
+    envelope: Final = {"id": identity, "object": "response", "created_at": 1, "model": "gpt-4o-mini", "output": []}
+    events: Final = (
+        {"type": "response.created", "response": {**envelope, "status": "in_progress"}},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {**pending, "arguments": "", "status": "in_progress"},
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_" + identity,
+            "output_index": 0,
+            "delta": arguments,
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": finished},
+        {"type": "response.completed", "response": {**envelope, "status": "completed", "output": [finished]}},
+    )
+    encoded: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+    return (b"".join(encoded[:3]), b"".join(encoded[3:]))
+
+
 def _responses_stream_frames(secret: str) -> tuple[bytes, ...]:
     identity: Final = "resp_" + uuid.uuid4().hex
     completed: Final = {
@@ -1932,7 +1958,7 @@ def _scripted_provider(gate: threading.Event | None, pause: float, shape: str) -
         frames: Final = (
             _gemini_stream_frames(secret)
             if "streamGenerateContent" in path
-            else _responses_stream_frames(secret)
+            else (_responses_tool_call_frames(secret) if shape == "tool_call" else _responses_stream_frames(secret))
             if path.endswith("/responses")
             else _chat_stream_frames(secret, shape)
         )
@@ -2332,6 +2358,37 @@ def test_client_disconnect_mid_stream_scans_what_each_streaming_mode_released(
         payload: Final = json.dumps(scans[-1])
         assert all(fragment in payload for fragment in expected), (marker, scans)
         assert _post_call_statuses(rig, rig.model)[0][-1:] == ("success",)
+
+
+def _tool_call_request(rig: _DisconnectRig, path: str) -> dict[str, JsonValue]:
+    if path == "/v1/responses":
+        return {"model": rig.model, "input": "synthetic prompt " + rig.token(), "stream": True}
+    if path == "/v1/messages":
+        return {**_chat_body(rig, 0), "max_tokens": 64}
+    return _chat_body(rig, 0)
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        pytest.param("/v1/chat/completions", id="chat"),
+        pytest.param("/v1/responses", id="responses"),
+        pytest.param("/v1/messages", id="messages"),
+    ),
+)
+def test_client_disconnect_mid_tool_call_scans_the_tool_call_it_already_received(
+    gateway: Gateway, tmp_path: Path, path: str
+) -> None:
+    with _disconnect_rig(gateway, tmp_path, shape="tool_call") as rig:
+        try:
+            received: Final = _stream_and_close(rig, path, _tool_call_request(rig, path), rig.token())
+            assert rig.token() in received, received
+            scans: Final = eventually(
+                lambda: rig.scans.response_scans(rig.secret()), lambda values: len(values) >= 1, seconds=4
+            )
+        finally:
+            rig.gate.set()
+        assert rig.secret() in json.dumps(scans[-1].get("tool_calls")), scans
 
 
 def test_client_disconnect_mid_stream_scans_for_a_guardrail_the_request_opted_into(

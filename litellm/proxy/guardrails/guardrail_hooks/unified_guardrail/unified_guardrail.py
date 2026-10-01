@@ -65,6 +65,9 @@ class _EndpointTranslation(Protocol):
     def get_streaming_scan_key(self) -> "Callable[[Sequence[object]], StreamingScanKey | None]": ...
 
     @property
+    def released_stream_as_ended(self) -> "Callable[[Sequence[object]], tuple[object, ...]]": ...
+
+    @property
     def build_block_sse_chunks(self) -> "Callable[..., Sequence[bytes] | None]": ...
 
     @property
@@ -1022,28 +1025,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         return self.optional_params.get(name, config_value)
 
     @staticmethod
-    def _released_chat_stream_as_ended(
-        *,
-        endpoint_translation: _EndpointTranslation,
-        responses_so_far: Sequence[object],
-        tool_calls_in_flight: bool,
-    ) -> tuple[object, ...]:
-        """Chat Completions only inspects tool calls once the stream has finished, so a stream the
-        client left mid tool call is scanned as if it ended on what the client already received"""
-        from litellm.llms.openai.chat.guardrail_translation.handler import (
-            OpenAIChatCompletionsHandler,
-        )
-
-        if not tool_calls_in_flight or not isinstance(endpoint_translation, OpenAIChatCompletionsHandler):
-            return tuple(responses_so_far)
-        terminator: Final = ModelResponseStream(
-            choices=[  # mutable-ok: ModelResponseStream drops choices passed as anything but a list
-                StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")
-            ]
-        )
-        return (*responses_so_far, terminator)
-
-    @staticmethod
     async def _scan_released_stream_after_disconnect(
         *,
         endpoint_translation: _EndpointTranslation,
@@ -1053,12 +1034,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict,
     ) -> None:
-        released_key: Final = endpoint_translation.get_streaming_scan_key(responses_so_far)
-        scanned: Final = UnifiedLLMGuardrails._released_chat_stream_as_ended(
-            endpoint_translation=endpoint_translation,
-            responses_so_far=responses_so_far,
-            tool_calls_in_flight=released_key is not None and released_key.tool_calls_in_flight,
-        )
+        scanned: Final = endpoint_translation.released_stream_as_ended(responses_so_far)
         if _is_redundant_scan(endpoint_translation.get_streaming_scan_key(scanned), last_scan_key):
             return
         recorded_before: Final = len(_recorded_guardrail_information(request_data))

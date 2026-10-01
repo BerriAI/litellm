@@ -3654,3 +3654,28 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), added, self._completed(3, [function_call])])
         assert ended_key.tool_calls_in_flight is False
         assert len(ended_key.tool_calls) == 1
+
+    def test_released_stream_as_ended_keys_the_tool_call_the_client_already_received(self):
+        handler = OpenAIResponsesHandler()
+        added = {
+            "type": "response.output_item.added",
+            "sequence_number": 1,
+            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather", "arguments": ""},
+        }
+        arguments_delta = {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": 2,
+            "item_id": "fc_1",
+            "delta": '{"city": "Paris"',
+        }
+        ended_key = handler.get_streaming_scan_key(
+            handler.released_stream_as_ended([self._delta(0, "hi"), added, arguments_delta])
+        )
+        assert ended_key.stream_ended is True
+        assert ended_key.texts == ("hi",)
+        assert len(ended_key.tool_calls) == 1 and "Paris" in ended_key.tool_calls[0], ended_key
+
+    def test_released_stream_as_ended_leaves_a_text_only_stream_as_released(self):
+        released = (self._delta(0, "hi"), self._delta(1, " there"))
+        ended = OpenAIResponsesHandler().released_stream_as_ended(released)
+        assert ended == released and all(a is b for a, b in zip(ended, released, strict=True))
