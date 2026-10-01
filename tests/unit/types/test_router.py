@@ -40,6 +40,7 @@ def test_custom_pricing_params_keeps_every_field_it_had():
         "output_cost_per_character",
         "cache_read_input_token_cost",
         "cache_creation_input_token_cost",
+        "cost_per_second",
         "input_cost_per_second",
         "cache_read_input_token_cost_flex",
         "input_cost_per_character_above_128k_tokens",

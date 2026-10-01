@@ -64,6 +64,16 @@ def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> 
 
 
 AZURE_DEPLOYMENT_SEGMENT: Final = re.compile(r"(?<![^/])openai/deployments/([^/]+)")
+AZURE_BODY_MODEL_INFERENCE_ENDPOINTS: Final = frozenset(
+    {"responses", "chat/completions", "completions", "embeddings", "images/generations", "audio/speech"}
+)
+
+
+def is_azure_body_model_inference_endpoint(endpoint: str) -> bool:
+    if AZURE_DEPLOYMENT_SEGMENT.search(endpoint) is not None:
+        return False
+    path: Final = endpoint.strip("/")
+    return any(path == name or path.endswith(f"/{name}") for name in AZURE_BODY_MODEL_INFERENCE_ENDPOINTS)
 
 
 def azure_router_model_in_endpoint(endpoint: str, router_models: Collection[str]) -> str | None:

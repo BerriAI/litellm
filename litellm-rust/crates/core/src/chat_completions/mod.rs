@@ -5,7 +5,7 @@ pub use crate::error::RouteError as Error;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use prepare::{prepare_provider_request, resolve_request};
 
 use crate::chat_completions::types::ChatCompletionsRequest;
@@ -67,7 +67,7 @@ impl ChatCompletionsRoute {
     async fn run(
         &self,
         request: ChatCompletionsRequest<'_>,
-        cache_options: Option<litellm_cache_response::CacheOptions>,
+        cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {

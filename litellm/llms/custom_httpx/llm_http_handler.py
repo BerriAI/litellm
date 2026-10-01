@@ -201,6 +201,7 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
     from websockets.asyncio.client import ClientConnection
 
+    from litellm.google_genai.streaming_iterator import AsyncGoogleGenAIGenerateContentStreamingIterator
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
@@ -209,6 +210,7 @@ if TYPE_CHECKING:
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -401,7 +403,8 @@ def _decoded_body_headers(response: httpx.Response) -> httpx.Headers:
     `aiter_bytes` yields the decoded body, so the upstream transfer headers only
     describe the bytes on the wire when no content-encoding was applied.
     """
-    if response.headers.get("content-encoding", "identity").lower() == "identity":
+    headers: Final[Mapping[str, str]] = response.headers
+    if headers.get("content-encoding", "identity").lower() == "identity":
         return response.headers
     return httpx.Headers(
         [
@@ -3291,7 +3294,8 @@ class BaseLLMHTTPHandler:
         """
         if upload_url_location == "headers":
             # Google Cloud Storage style - URL in X-Goog-Upload-URL header
-            upload_url = response.headers.get("X-Goog-Upload-URL")
+            upload_headers: Final[Mapping[str, str]] = response.headers
+            upload_url = upload_headers.get("X-Goog-Upload-URL")
             return upload_url, None
         else:
             # Response body style (e.g., Manus, S3 presigned URLs)
@@ -11594,7 +11598,7 @@ class BaseLLMHTTPHandler:
         stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         system_instruction: object | None = None,
-    ) -> Any:
+    ) -> "AsyncGoogleGenAIGenerateContentStreamingIterator | GenerateContentResponse":
         """
         Async version of the generate content handler.
         Uses async HTTP client to make requests.

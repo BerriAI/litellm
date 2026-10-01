@@ -1,3 +1,5 @@
+import { AgentIdentityFields } from "./AgentIdentityFields";
+import { withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect } from "react";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
@@ -287,6 +289,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const buildAgentData = (values: AgentFormValues): AgentRequestPayload | null => {
     if (agentType === CUSTOM_AGENT_TYPE) {
+      if (values.identity_provider === "microsoft_entra") return { agent_name: values.agent_name };
       return {
         agent_name: values.agent_name,
         agent_card_params: {
@@ -353,12 +356,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         return;
       }
       const values = form.getValues();
-      const agentData = buildAgentData(values);
-      if (!agentData) {
+      const built = buildAgentData(values);
+      if (!built) {
         toast.error("Failed to build agent data");
         setIsSubmitting(false);
         return;
       }
+      const agentData = withAgentIdentity(built, values);
 
       // Build object_permission from MCP Tools step (allowed_mcp_servers_and_groups, mcp_tool_permissions)
       const mcpServersAndGroups = values.allowed_mcp_servers_and_groups ?? {};
@@ -792,7 +796,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                     <StatusBadge tone="warning" label="GENERIC" className="h-4 px-1 text-[10px]" />
                   </span>
                   <span className="block text-xs whitespace-normal text-warning">
-                    For agents that don&apos;t follow a standard protocol, just needs a virtual key
+                    For outbound agents using an identity provider or virtual key
                   </span>
                 </span>
               </span>
@@ -800,6 +804,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           </SelectContent>
         </Select>
       </Field>
+
+      <AgentIdentityFields accessToken={accessToken} />
 
       <div className="mt-4">
         {agentType === CUSTOM_AGENT_TYPE ? (
@@ -910,7 +916,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           name="team_id"
           label={labelWithHint(
             "Assign to Team",
-            "Optionally assign this agent to a team. The agent and its key will belong to the selected team.",
+            "Optionally select a team for the virtual key. The agent identity and its permissions are managed separately.",
           )}
         >
           {({ value, onChange }) => (
@@ -920,6 +926,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
         <Separator className="my-4" />
 
+        {form.getValues("identity_provider") === "microsoft_entra" && (
+          <p className="mb-4 text-sm text-muted-foreground">
+            This agent will authenticate with Microsoft Entra ID. You can skip virtual key creation.
+          </p>
+        )}
         <RadioGroup
           value={keyAssignOption}
           onValueChange={(value) => setKeyAssignOption(value as "create_new" | "existing_key" | "skip")}
@@ -1004,7 +1015,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             className="text-sm text-muted-foreground underline hover:text-foreground"
             onClick={() => setKeyAssignOption("skip")}
           >
-            Skip for now — I&apos;ll assign a key later
+            {form.getValues("identity_provider") === "microsoft_entra"
+              ? "Use Entra JWT authentication"
+              : "Skip for now, I’ll assign a key later"}
           </button>
         </div>
       </div>
@@ -1033,7 +1046,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       )}
       {!createdKeyValue && !assignedKeyAlias && keyAssignOption === "skip" && (
         <p className="mt-2 text-sm text-muted-foreground">
-          No key assigned. You can create one from the Virtual Keys page.
+          {form.getValues("identity_provider") === "microsoft_entra"
+            ? "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection."
+            : "No key assigned. You can create one from the Virtual Keys page."}
         </p>
       )}
     </div>

@@ -31,6 +31,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     AllAnthropicToolsValues,
@@ -39,6 +40,7 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
+from litellm.types.utils import LlmProviders
 
 _MessageT = TypeVar("_MessageT")
 
@@ -225,6 +227,15 @@ def is_anthropic_oauth_key(value: str | None) -> bool:
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
 
+ANTHROPIC_OAUTH_FORWARD_PROVIDERS: Final[frozenset[str]] = frozenset((LlmProviders.ANTHROPIC.value,))
+
+
+def resolve_used_client_oauth_token(client_sent_oauth_token: object, custom_llm_provider: str | None) -> bool | None:
+    if not isinstance(client_sent_oauth_token, bool):
+        return None
+    return client_sent_oauth_token and custom_llm_provider in ANTHROPIC_OAUTH_FORWARD_PROVIDERS
+
+
 def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
     """Merge a new beta value into an existing comma-separated anthropic-beta header."""
     if not existing:
@@ -325,6 +336,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         file_ids: Final = get_file_ids_from_messages(messages)
         return len(file_ids) > 0
+
+    def is_mid_conversation_output_config_used(self, messages: list[AllMessageValues]) -> bool:
+        """
+        Return if "output_config" is in a message
+        """
+        return any("output_config" in message for message in messages)
 
     def is_mcp_server_used(self, mcp_servers: list[AnthropicMcpServerTool] | None) -> bool:
         if mcp_servers is None:
@@ -851,6 +868,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         mcp_server_used: bool = False,
         *,
         custom_llm_provider: str,
+        is_mid_conversation_output_config_used: bool = False,
     ) -> list[str]:
         """
         Get list of common beta headers based on the features that are active.
@@ -882,6 +900,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         if mcp_server_used:
             betas.append("mcp-client-2025-04-04")
+
+        if is_mid_conversation_output_config_used:
+            betas.append(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
         return list(set(betas))
 
@@ -915,6 +936,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         container_with_skills_used: bool = False,
         api_base: str | None = None,
         use_bearer_for_custom_base: bool = False,
+        is_mid_conversation_output_config_used: bool = False,
     ) -> dict:
         betas: Final = set()
         # Anthropic no longer requires the prompt-caching beta header
@@ -949,6 +971,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         # Container with skills uses a separate beta header
         if container_with_skills_used:
             betas.add("skills-2025-10-02")
+
+        if is_mid_conversation_output_config_used:
+            betas.add(ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER)
 
         _is_oauth: Final = api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
         headers: Final = {
@@ -1015,6 +1040,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         mcp_server_used: Final = self.is_mcp_server_used(mcp_servers=optional_params.get("mcp_servers"))
         pdf_used: Final = self.is_pdf_used(messages=messages)
         file_id_used: Final = self.is_file_id_used(messages=messages)
+        is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages=messages)
         web_search_tool_used: Final = self.is_web_search_tool_used(tools=tools)
         tool_search_used: Final = self.is_tool_search_used(tools=tools)
         programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools=tools)
@@ -1032,6 +1058,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             api_key=api_key,
             auth_token=auth_token,
             file_id_used=file_id_used,
+            is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
