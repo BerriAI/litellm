@@ -460,6 +460,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     analyze_url,
                     json=analyze_payload,
                     headers={"Accept": "application/json"},
+                    timeout=(
+                        aiohttp.ClientTimeout(total=self.timeout)
+                        if isinstance(self.timeout, (int, float))
+                        else aiohttp.client.DEFAULT_TIMEOUT
+                    ),
                 ) as response:
                     # Validate HTTP status
                     if response.status >= 400:
@@ -745,6 +750,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 anonymize_url,
                 json=anonymize_payload,
                 headers={"Accept": "application/json"},
+                timeout=(
+                    aiohttp.ClientTimeout(total=self.timeout)
+                    if isinstance(self.timeout, (int, float))
+                    else aiohttp.client.DEFAULT_TIMEOUT
+                ),
             ) as response:
                 if response.status >= 400:
                     error_body = await response.text()

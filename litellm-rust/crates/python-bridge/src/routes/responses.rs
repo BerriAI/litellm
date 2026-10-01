@@ -142,7 +142,7 @@ impl ResponsesWebSocketConnection {
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(route_error_to_pyerr)?;
@@ -152,21 +152,21 @@ impl ResponsesWebSocketConnection {
 
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.send_text(text).await.map_err(route_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.recv_text().await.map_err(route_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.close().await.map_err(route_error_to_pyerr)
         })
     }

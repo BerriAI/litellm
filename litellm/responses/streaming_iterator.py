@@ -601,7 +601,7 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        target._hidden_params = {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
+        target._hidden_params = {  # mutable-ok: logging aliases _hidden_params into request metadata and writes into it
             "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
             "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
             **existing,

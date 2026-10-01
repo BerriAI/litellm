@@ -6068,7 +6068,68 @@ async def test_websocket_passthrough_propagates_active_trace_context(
     propagated = get_current_span(TraceContextTextMapPropagator().extract(captured["headers"]))
     assert propagated.get_span_context().trace_id == span.get_span_context().trace_id
     assert propagated.get_span_context().span_id == span.get_span_context().span_id
-    assert captured["headers"].get("authorization") == ("Bearer client" if forward_headers else None)
+    assert "authorization" not in captured["headers"]
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_never_forwards_caller_credentials_upstream(monkeypatch):
+    from starlette.websockets import WebSocketState
+
+    captured: dict[str, dict[str, str]] = {}
+    upstream_ws = FakeUpstreamWebSocket("{}")
+
+    def fake_connect(target, additional_headers):
+        captured["headers"] = additional_headers
+        return FakeUpstreamConnect(upstream_ws)
+
+    websocket = MagicMock()
+    websocket.accept = AsyncMock()
+    websocket.send_text = AsyncMock()
+    websocket.send_bytes = AsyncMock()
+    websocket.receive = AsyncMock(return_value={"type": "websocket.disconnect"})
+    websocket.close = AsyncMock()
+    websocket.headers = {
+        "authorization": "Bearer sk-caller-virtual-key",
+        "api-key": "sk-caller-virtual-key",
+        "x-api-key": "sk-caller-virtual-key",
+        "x-goog-api-key": "sk-caller-virtual-key",
+        "x-goog-user-project": "caller-project",
+    }
+    websocket.client_state = WebSocketState.CONNECTED
+    websocket.application_state = WebSocketState.CONNECTED
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+    mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_worker = MagicMock()
+    mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
+        fake_connect,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.GLOBAL_LOGGING_WORKER",
+        mock_worker,
+    )
+    await websocket_passthrough_request(
+        websocket=websocket,
+        target="wss://upstream.example.test/v1/realtime",
+        custom_headers={
+            "Authorization": "Bearer upstream-admin-secret",
+            "x-api-key": "upstream-admin-key",
+        },
+        user_api_key_dict=UserAPIKeyAuth(),
+        forward_headers=True,
+        endpoint="/realtime",
+        accept_websocket=True,
+    )
+
+    assert all("sk-caller-virtual-key" not in value for value in captured["headers"].values())
+    assert captured["headers"]["Authorization"] == "Bearer upstream-admin-secret"
+    assert captured["headers"]["x-api-key"] == "upstream-admin-key"
+    assert captured["headers"]["x-goog-user-project"] == "caller-project"
 
 
 class ClosingUpstreamWebSocket:
@@ -7622,3 +7683,534 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key"] == "cli-session-alice"
     assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
+
+
+@dataclass(frozen=True, slots=True)
+class _StoredConfigRow:
+    param_name: str
+    param_value: Mapping[str, object]
+
+
+class _InMemoryConfigTable:
+    def __init__(self, rows: Mapping[str, Mapping[str, object]]) -> None:
+        self.rows: dict[str, Mapping[str, object]] = dict(rows)
+        self.db: Final = SimpleNamespace(litellm_config=self)
+        self.writer_db: Final = SimpleNamespace(litellm_config=self)
+
+    def _row(self, param_name: str) -> _StoredConfigRow | None:
+        value: Final = self.rows.get(param_name)
+        return None if value is None else _StoredConfigRow(param_name=param_name, param_value=value)
+
+    async def get_generic_data(self, key: str, value: str, table_name: str) -> _StoredConfigRow | None:
+        return self._row(value)
+
+    async def find_first(self, where: Mapping[str, str]) -> _StoredConfigRow | None:
+        return self._row(where["param_name"])
+
+    async def find_unique(self, where: Mapping[str, str]) -> _StoredConfigRow | None:
+        return self._row(where["param_name"])
+
+    async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _StoredConfigRow:
+        self.rows[where["param_name"]] = json.loads(data["update"]["param_value"])
+        return _StoredConfigRow(param_name=where["param_name"], param_value=self.rows[where["param_name"]])
+
+
+@dataclass(frozen=True, slots=True)
+class _DbBackedProxy:
+    proxy_config: object
+    config_path: str
+    config_table: _InMemoryConfigTable
+
+
+async def _boot_db_backed_proxy(
+    tmp_path,
+    monkeypatch,
+    config_pass_through_endpoints: list[dict[str, object]],
+    db_pass_through_endpoints: list[dict[str, object]],
+    master_key: str | None = None,
+    store_model_in_db: bool = True,
+) -> _DbBackedProxy:
+    import yaml
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _registered_pass_through_routes
+
+    general_settings: Final[dict[str, object]] = {"pass_through_endpoints": config_pass_through_endpoints}
+    if master_key is not None:
+        general_settings["master_key"] = master_key
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"model_list": [], "general_settings": general_settings}))
+    config_table: Final = _InMemoryConfigTable(
+        {"general_settings": {"pass_through_endpoints": db_pass_through_endpoints}} if db_pass_through_endpoints else {}
+    )
+    proxy_config: Final = proxy_server.ProxyConfig()
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_config)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delitem(proxy_server.app.dependency_overrides, user_api_key_auth, raising=False)
+    _registered_pass_through_routes.clear()
+
+    await proxy_config.load_config(router=None, config_file_path=str(config_path))
+    monkeypatch.setattr(proxy_server, "prisma_client", config_table)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
+    return _DbBackedProxy(proxy_config, str(config_path), config_table)
+
+
+async def _run_db_sync_cycle(proxy: _DbBackedProxy) -> None:
+    await proxy.proxy_config.get_config(config_file_path=proxy.config_path)
+    await proxy.proxy_config._update_general_settings(proxy.config_table.rows.get("general_settings", {}))
+    await proxy.proxy_config._init_pass_through_endpoints_in_db()
+
+
+async def _send_through_proxy(
+    path: str, headers: Mapping[str, str], method: str = "POST"
+) -> tuple[httpx.Response, list[httpx.Request]]:
+    from litellm.proxy.proxy_server import app
+
+    upstream_requests: Final[list[httpx.Request]] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        upstream_requests.append(request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://proxy.test") as client:
+            response = await client.request(method, path, headers=dict(headers), json={"q": 1})
+    finally:
+        cleanup()
+        await fake_client.aclose()
+    return response, upstream_requests
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_keeps_forwarding_client_headers_after_a_db_sync(tmp_path, monkeypatch):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/cfg-forward",
+                "target": "http://config-upstream.test/api",
+                "forward_headers": True,
+                "auth": False,
+            }
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+
+    response, upstream_requests = await _send_through_proxy("/cfg-forward", {"Authorization": "Bearer caller-jwt"})
+
+    assert response.status_code == 200
+    assert [str(request.url) for request in upstream_requests] == ["http://config-upstream.test/api"]
+    assert upstream_requests[0].headers["authorization"] == "Bearer caller-jwt"
+
+
+@pytest.mark.asyncio
+async def test_config_and_db_pass_throughs_both_serve_and_list_after_a_db_sync(tmp_path, monkeypatch):
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import get_pass_through_endpoints
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-only", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-only", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+    )
+    await _run_db_sync_cycle(proxy)
+
+    config_response, config_upstream = await _send_through_proxy("/cfg-only", {})
+    db_response, db_upstream = await _send_through_proxy("/db-only", {})
+    listed: Final = await get_pass_through_endpoints(
+        endpoint_id=None,
+        team_id=None,
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+
+    assert (config_response.status_code, db_response.status_code) == (200, 200)
+    assert [str(request.url) for request in config_upstream] == ["http://config-upstream.test/api"]
+    assert [str(request.url) for request in db_upstream] == ["http://db-upstream.test/api"]
+    assert sorted((endpoint.path, endpoint.is_from_config) for endpoint in listed.endpoints) == [
+        ("/cfg-only", True),
+        ("/db-only", False),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_after_delete",
+    [{"pass_through_endpoints": []}, {}],
+    ids=["emptied-list", "dropped-key"],
+)
+async def test_a_deleted_db_pass_through_stops_serving_on_the_next_db_sync(tmp_path, monkeypatch, stored_after_delete):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-kept", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-gone", "path": "/db-gone", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    served_before, _ = await _send_through_proxy("/db-gone", {})
+
+    proxy.config_table.rows["general_settings"] = stored_after_delete
+    await _run_db_sync_cycle(proxy)
+    served_after, db_upstream = await _send_through_proxy("/db-gone", {})
+    config_after, config_upstream = await _send_through_proxy("/cfg-kept", {})
+
+    assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 401, 200)
+    assert db_upstream == []
+    assert [str(request.url) for request in config_upstream] == ["http://config-upstream.test/api"]
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_reads_its_custom_key_header_when_the_db_holds_pass_throughs(
+    tmp_path, monkeypatch
+):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/cfg-keyed",
+                "target": "http://config-upstream.test/api",
+                "auth": True,
+                "headers": {"litellm_user_api_key": "x-cfg-key"},
+            }
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-only", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+
+    response, upstream_requests = await _send_through_proxy("/cfg-keyed", {"x-cfg-key": "sk-pass-through-master"})
+
+    assert response.status_code == 200
+    assert [str(request.url) for request in upstream_requests] == ["http://config-upstream.test/api"]
+
+
+@pytest.mark.asyncio
+async def test_ui_can_create_a_db_pass_through_when_the_config_declares_pass_throughs(tmp_path, monkeypatch):
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_endpoints
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-only", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+
+    await create_pass_through_endpoints(
+        data=PassThroughGenericEndpoint(path="/ui-made", target="http://ui-upstream.test/api", auth=False),
+        request=MagicMock(spec=Request),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+    await _run_db_sync_cycle(proxy)
+    response, upstream_requests = await _send_through_proxy("/ui-made", {})
+
+    assert [endpoint["path"] for endpoint in proxy.config_table.rows["general_settings"]["pass_through_endpoints"]] == [
+        "/ui-made"
+    ]
+    assert response.status_code == 200
+    assert [str(request.url) for request in upstream_requests] == ["http://ui-upstream.test/api"]
+
+
+@pytest.mark.asyncio
+async def test_a_ui_created_pass_through_leaves_the_config_ones_open_before_the_next_db_sync(tmp_path, monkeypatch):
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_endpoints
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-open", "target": "http://config-upstream.test/api", "auth": False, "forward_headers": True}
+        ],
+        db_pass_through_endpoints=[],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+
+    await create_pass_through_endpoints(
+        data=PassThroughGenericEndpoint(path="/ui-open", target="http://ui-upstream.test/api", auth=False),
+        request=MagicMock(spec=Request),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+    config_response, config_upstream = await _send_through_proxy("/cfg-open", {"Authorization": "Bearer caller-jwt"})
+    ui_response, ui_upstream = await _send_through_proxy("/ui-open", {})
+
+    assert (config_response.status_code, ui_response.status_code) == (200, 200)
+    assert [request.headers.get("authorization") for request in config_upstream] == ["Bearer caller-jwt"]
+    assert [str(request.url) for request in ui_upstream] == ["http://ui-upstream.test/api"]
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_serves_right_after_boot(tmp_path, monkeypatch):
+    await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-boot", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+
+    response, upstream_requests = await _send_through_proxy("/cfg-boot", {})
+
+    assert response.status_code == 200
+    assert [str(request.url) for request in upstream_requests] == ["http://config-upstream.test/api"]
+
+
+@pytest.mark.asyncio
+async def test_config_pass_through_resolves_an_os_environ_target(tmp_path, monkeypatch):
+    monkeypatch.setenv("LIT_PASS_THROUGH_TEST_UPSTREAM", "http://env-upstream.test/api")
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-env", "target": "os.environ/LIT_PASS_THROUGH_TEST_UPSTREAM", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+    )
+
+    at_boot, at_boot_upstream = await _send_through_proxy("/cfg-env", {})
+    await _run_db_sync_cycle(proxy)
+    after_sync, after_sync_upstream = await _send_through_proxy("/cfg-env", {})
+
+    assert (at_boot.status_code, after_sync.status_code) == (200, 200)
+    assert [str(request.url) for request in (*at_boot_upstream, *after_sync_upstream)] == [
+        "http://env-upstream.test/api",
+        "http://env-upstream.test/api",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_settings_write_keeps_the_config_file_pass_throughs(tmp_path, monkeypatch):
+    import yaml
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-kept", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+        store_model_in_db=False,
+    )
+    config: Final = await proxy.proxy_config.get_config(config_file_path=proxy.config_path)
+
+    await proxy.proxy_config.save_config(
+        new_config={**config, "general_settings": {**config["general_settings"], "max_parallel_requests": 7}}
+    )
+
+    saved_general_settings: Final = yaml.safe_load(open(proxy.config_path))["general_settings"]
+    assert saved_general_settings["max_parallel_requests"] == 7
+    assert [endpoint["path"] for endpoint in saved_general_settings["pass_through_endpoints"]] == ["/cfg-kept"]
+
+
+@pytest.mark.asyncio
+async def test_a_config_reload_keeps_config_pass_throughs_open_next_to_db_ones(tmp_path, monkeypatch):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-open", "target": "http://config-upstream.test/api", "auth": False, "forward_headers": True}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-only", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+
+    await proxy.proxy_config.get_config(config_file_path=proxy.config_path)
+    response, upstream_requests = await _send_through_proxy("/cfg-open", {"Authorization": "Bearer caller-jwt"})
+
+    assert response.status_code == 200
+    assert [request.headers.get("authorization") for request in upstream_requests] == ["Bearer caller-jwt"]
+
+
+@pytest.mark.asyncio
+async def test_ui_create_keeps_the_stored_pass_throughs_when_models_are_not_stored_in_the_db(tmp_path, monkeypatch):
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_endpoints
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-only", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-stored", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        store_model_in_db=False,
+    )
+
+    await create_pass_through_endpoints(
+        data=PassThroughGenericEndpoint(path="/ui-made", target="http://ui-upstream.test/api", auth=False),
+        request=MagicMock(spec=Request),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+
+    assert [endpoint["path"] for endpoint in proxy.config_table.rows["general_settings"]["pass_through_endpoints"]] == [
+        "/db-stored",
+        "/ui-made",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_stored_pass_through_field_stops_serving_its_routes_right_away(tmp_path, monkeypatch):
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import delete_config_general_settings
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-kept", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-gone", "path": "/db-gone", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    served_before, _ = await _send_through_proxy("/db-gone", {})
+
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(config_type="general_settings", field_name="pass_through_endpoints"),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+    served_after, db_upstream = await _send_through_proxy("/db-gone", {})
+    config_after, _ = await _send_through_proxy("/cfg-kept", {})
+
+    assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 401, 200)
+    assert db_upstream == []
+
+
+@dataclass(frozen=True, slots=True)
+class _LaggingReadReplica:
+    writer: _InMemoryConfigTable
+
+    async def find_first(self, where: Mapping[str, str]) -> _StoredConfigRow | None:
+        return None
+
+    async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _StoredConfigRow:
+        return await self.writer.upsert(where=where, data=data)
+
+
+@pytest.mark.asyncio
+async def test_ui_create_keeps_stored_pass_throughs_a_lagging_read_replica_has_not_seen(tmp_path, monkeypatch):
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_endpoints
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-stored", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+    )
+    monkeypatch.setattr(
+        proxy.config_table, "db", SimpleNamespace(litellm_config=_LaggingReadReplica(proxy.config_table))
+    )
+
+    await create_pass_through_endpoints(
+        data=PassThroughGenericEndpoint(path="/ui-made", target="http://ui-upstream.test/api", auth=False),
+        request=MagicMock(spec=Request),
+        user_api_key_dict=UserAPIKeyAuth(user_role="proxy_admin"),
+    )
+
+    assert [endpoint["path"] for endpoint in proxy.config_table.rows["general_settings"]["pass_through_endpoints"]] == [
+        "/db-stored",
+        "/ui-made",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_config_reload_applies_auth_turned_on_for_a_config_pass_through(tmp_path, monkeypatch):
+    import yaml
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-locked", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    open_before, _ = await _send_through_proxy("/cfg-locked", {})
+
+    reloaded_config: Final = yaml.safe_load(open(proxy.config_path))
+    reloaded_config["general_settings"]["pass_through_endpoints"][0]["auth"] = True
+    open(proxy.config_path, "w").write(yaml.safe_dump(reloaded_config))
+    await _run_db_sync_cycle(proxy)
+    locked_after, upstream_requests = await _send_through_proxy("/cfg-locked", {})
+
+    assert (open_before.status_code, locked_after.status_code) == (200, 401)
+    assert upstream_requests == []
+
+
+@pytest.mark.asyncio
+async def test_pass_throughs_stay_open_while_a_db_sync_reads_the_database(tmp_path, monkeypatch):
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {"path": "/cfg-open", "target": "http://config-upstream.test/api", "auth": False}
+        ],
+        db_pass_through_endpoints=[
+            {"id": "db-endpoint", "path": "/db-open", "target": "http://db-upstream.test/api", "auth": False}
+        ],
+        master_key="sk-pass-through-master",
+    )
+    await _run_db_sync_cycle(proxy)
+    database_read_started: Final = asyncio.Event()
+    release_database_read: Final = asyncio.Event()
+    read_row: Final = proxy.config_table.get_generic_data
+
+    async def slow_read(key: str, value: str, table_name: str) -> _StoredConfigRow | None:
+        database_read_started.set()
+        await release_database_read.wait()
+        return await read_row(key=key, value=value, table_name=table_name)
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import utils as proxy_utils
+
+    monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
+    monkeypatch.setattr(proxy.config_table, "get_generic_data", slow_read)
+    sync: Final = asyncio.create_task(proxy.proxy_config.get_config(config_file_path=proxy.config_path))
+    await asyncio.wait_for(database_read_started.wait(), timeout=5)
+    config_during_sync, _ = await _send_through_proxy("/cfg-open", {})
+    db_during_sync, _ = await _send_through_proxy("/db-open", {})
+    release_database_read.set()
+    await sync
+
+    assert (config_during_sync.status_code, db_during_sync.status_code) == (200, 200)

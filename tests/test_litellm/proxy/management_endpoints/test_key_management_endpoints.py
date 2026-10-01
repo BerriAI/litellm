@@ -3377,30 +3377,25 @@ async def test_validate_key_team_change_with_member_permissions():
             "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
         ) as mock_get_user:
             with patch(
-                "litellm.proxy.management_endpoints.key_management_endpoints._is_user_team_admin"
-            ) as mock_is_admin:
-                with patch(
-                    "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
-                ) as mock_has_perms:
+                "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
+            ) as mock_has_perms:
+                mock_get_user.return_value = mock_member_object
+                mock_has_perms.return_value = True
 
-                    mock_get_user.return_value = mock_member_object
-                    mock_is_admin.return_value = False
-                    mock_has_perms.return_value = True
+                # This should not raise an exception due to member permissions
+                await validate_key_team_change(
+                    key=mock_key,
+                    team=mock_team,
+                    change_initiated_by=mock_change_initiator,
+                    llm_router=mock_router,
+                )
 
-                    # This should not raise an exception due to member permissions
-                    await validate_key_team_change(
-                        key=mock_key,
-                        team=mock_team,
-                        change_initiated_by=mock_change_initiator,
-                        llm_router=mock_router,
-                    )
-
-                    # Verify the permission check was called with correct parameters
-                    mock_has_perms.assert_called_once_with(
-                        team_member_role=mock_member_object.role,
-                        team_table=mock_team,
-                        route=KeyManagementRoutes.KEY_UPDATE.value,
-                    )
+                # Verify the permission check was called with correct parameters
+                mock_has_perms.assert_called_once_with(
+                    team_member_role=mock_member_object.role,
+                    team_table=mock_team,
+                    route=KeyManagementRoutes.KEY_UPDATE.value,
+                )
 
 
 @pytest.mark.asyncio

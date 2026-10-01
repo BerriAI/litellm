@@ -13,7 +13,7 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    litellm_host_python::run_sync(py, super::capture(py).instrument(future), map_error)
+    litellm_host_python::run_sync(py, crate::logger::capture(py).instrument(future), map_error)
 }
 
 pub(crate) fn run_async<T, E, F>(
@@ -26,7 +26,7 @@ where
     E: Send + 'static,
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
-    litellm_host_python::run_async(py, super::capture(py).instrument(future), map_error)
+    litellm_host_python::run_async(py, crate::logger::capture(py).instrument(future), map_error)
 }
 
 pub(crate) fn run_sync_value<T, F>(py: Python<'_>, future: F) -> PyResult<T>
@@ -34,7 +34,7 @@ where
     T: Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
-    litellm_host_python::run_sync_value(py, super::capture(py).instrument(future))
+    litellm_host_python::run_sync_value(py, crate::logger::capture(py).instrument(future))
 }
 
 pub(crate) fn run_async_value<T, F>(py: Python<'_>, future: F) -> PyResult<Bound<'_, PyAny>>
@@ -42,5 +42,5 @@ where
     T: for<'py> IntoPyObject<'py> + Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
-    litellm_host_python::run_async_value(py, super::capture(py).instrument(future))
+    litellm_host_python::run_async_value(py, crate::logger::capture(py).instrument(future))
 }
