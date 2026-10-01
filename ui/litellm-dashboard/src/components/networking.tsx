@@ -2017,6 +2017,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  used_client_oauth_token?: string;
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
@@ -2121,12 +2122,21 @@ export const agentTraceListCall = async ({
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
-export const agentTraceCall = async (accessToken: string, traceId: string): Promise<Trace> =>
-  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, { accessToken });
+export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
+    accessToken,
+    query: { trace_ref: traceRef || undefined },
+  });
 
-export const agentTraceSpanCall = async (accessToken: string, traceId: string, spanId: string): Promise<SpanDetail> =>
+export const agentTraceSpanCall = async (
+  accessToken: string,
+  traceId: string,
+  spanId: string,
+  traceRef?: string,
+): Promise<SpanDetail> =>
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
+    query: { trace_ref: traceRef || undefined },
   });
 
 export const adminSpendLogsCall = async (accessToken: string) => {

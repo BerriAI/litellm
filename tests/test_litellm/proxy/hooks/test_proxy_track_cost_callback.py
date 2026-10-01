@@ -161,6 +161,138 @@ async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "used_client_oauth_token, custom_llm_provider, expected",
+    [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False)],
+)
+async def test_async_post_call_failure_hook_carries_used_client_oauth_token_from_litellm_metadata(
+    used_client_oauth_token: bool, custom_llm_provider: str, expected: bool
+):
+    """
+    /v1/messages and /v1/responses stamp the proxy's own fields into request_data["litellm_metadata"]
+    and leave request_data["metadata"] to the caller's native metadata, so a failed request on those
+    routes wrote a spend row whose used_client_oauth_token was null instead of the stamped value
+    """
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": custom_llm_provider,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"user_id": "anthropic-native-metadata"},
+        "litellm_metadata": {"used_client_oauth_token": used_client_oauth_token},
+        "proxy_server_request": {"request_id": "test_request_id"},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("rate limited"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+    call_kwargs = mock_update_database.call_args[1]["kwargs"]
+    assert call_kwargs["litellm_params"]["metadata"]["user_id"] == "anthropic-native-metadata"
+    payload = get_logging_payload(
+        kwargs=call_kwargs, response_obj={}, start_time=datetime.now(), end_time=datetime.now()
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "metadata_buckets, expected",
+    [
+        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"used_client_oauth_token": False}}, False),
+        ({"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_id": "caller"}}, None),
+        ({"metadata": {"used_client_oauth_token": "yes"}}, None),
+    ],
+)
+async def test_async_post_call_failure_hook_never_lets_caller_metadata_set_used_client_oauth_token(
+    metadata_buckets: dict, expected: bool | None
+):
+    """
+    On /v1/messages and /v1/responses the request's own metadata field belongs to the caller, so a
+    used_client_oauth_token they put there must never outrank the proxy's stamp or stand in for a missing one
+    """
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("rate limited"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+    payload = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_route, metadata_buckets, expected",
+    [
+        (
+            "/v1/chat/completions",
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_api_key_hash": "guardrail"}},
+            True,
+        ),
+        (
+            "/v1/messages",
+            {"metadata": {"used_client_oauth_token": True}, "litellm_metadata": {"user_api_key_hash": "proxy"}},
+            None,
+        ),
+    ],
+)
+async def test_async_post_call_failure_hook_reads_used_client_oauth_token_from_the_routes_stamped_bucket(
+    request_route: str, metadata_buckets: dict, expected: bool | None
+):
+    logger = _ProxyDBLogger()
+    request_data = {
+        "model": "claude-sonnet-5",
+        "custom_llm_provider": "anthropic",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("rate limited"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", request_route=request_route),
+        )
+
+    payload = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert json.loads(payload["metadata"])["used_client_oauth_token"] is expected
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_bills_guardrail_cost_on_blocked_request():
     """LIT-5651: a request blocked by a guardrail never reaches the LLM, but the
     guardrail invocation itself is billed by the provider. The failure row must
@@ -2714,3 +2846,34 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
         assert "headers" in failure_debug_lines[0]
     else:
         assert failure_debug_lines == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
+async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "model": "test-model",
+        "response_cost": 0.01,
+        "litellm_params": {"metadata": {identity_field: "autonomous-agent"}},
+    }
+    with patch(
+        "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as persist:
+        await _ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=ModelResponse(), start_time=datetime.now(), end_time=datetime.now()
+        )
+    persist.assert_awaited_once()
+    assert persist.call_args.kwargs["response_cost"] == 0.01
+    assert persist.call_args.kwargs["user_id"] is None
+    assert persist.call_args.kwargs["user_api_key"] is None
+    assert persist.call_args.kwargs["kwargs"]["litellm_params"]["metadata"][identity_field] == "autonomous-agent"
+
+
+@pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
+def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
+    assert _should_track_cost_callback(
+        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+    ) is expected

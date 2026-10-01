@@ -1,13 +1,18 @@
 import asyncio
+import base64
+import json
+import re
 import sys
 import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.integrations.azure_storage.azure_storage import (
     AzureBlobStorageLogger,
     _cached_credential_chain_token_provider,
+    adls_safe_file_name,
 )
 from litellm.types.secret_managers.get_azure_ad_token_provider import AzureCredentialType
 from litellm.types.utils import StandardLoggingPayload
@@ -365,3 +370,157 @@ async def test_service_client_defaults_to_commercial_endpoint(mock_env_vars):
         fake_aio_module.DataLakeServiceClient.call_args.kwargs["account_url"]
         == "https://test-account.dfs.core.windows.net"
     )
+
+
+def _fake_datalake_module() -> MagicMock:
+    fake_aio_module = MagicMock()
+    fake_aio_module.DataLakeServiceClient.side_effect = lambda **_: MagicMock(close=AsyncMock())
+    return fake_aio_module
+
+
+@pytest.mark.asyncio
+async def test_service_client_is_reused_until_its_ttl_elapses(mock_env_vars):
+    """Within the TTL every upload must share one live client; closing a client
+    that is still in use by a concurrent upload fails that upload with an Azure
+    AuthenticationFailed error and drops the audit record"""
+    fake_aio_module = _fake_datalake_module()
+    now = 1_000_000.0
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger(clock=lambda: now)
+        first = await logger.get_service_client()
+        second = await logger.get_service_client()
+
+    assert second is first, "a second call inside the TTL must return the same client"
+    first.close.assert_not_awaited()
+    assert fake_aio_module.DataLakeServiceClient.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_service_client_is_replaced_once_its_ttl_elapses(mock_env_vars):
+    fake_aio_module = _fake_datalake_module()
+    ticks = iter((1_000_000.0, 1_000_000.0 + _DEFAULT_TTL_FOR_HTTPX_CLIENTS + 1, 2_000_000.0))
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger(clock=lambda: next(ticks))
+        first = await logger.get_service_client()
+        second = await logger.get_service_client()
+
+    assert second is not first, "an expired client must be closed and rebuilt"
+    first.close.assert_awaited_once()
+    second.close.assert_not_awaited()
+    assert fake_aio_module.DataLakeServiceClient.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_service_client_is_replaced_at_the_exact_ttl_boundary(mock_env_vars):
+    fake_aio_module = _fake_datalake_module()
+    ticks = iter((1_000_000.0, 1_000_000.0 + _DEFAULT_TTL_FOR_HTTPX_CLIENTS, 2_000_000.0))
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger(clock=lambda: next(ticks))
+        first = await logger.get_service_client()
+        second = await logger.get_service_client()
+
+    assert second is not first, "a call exactly at the TTL must rebuild the client"
+    first.close.assert_awaited_once()
+    second.close.assert_not_awaited()
+    assert fake_aio_module.DataLakeServiceClient.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("payload_id", "expected"),
+    (
+        ("resp_YWJj", "resp_YWJj.json"),
+        ("resp_YWJjZA==", "resp_YWJjZA.json"),
+        ("resp_YWJjZGU=", "resp_YWJjZGU.json"),
+        ("resp_+/8=", "resp_+_8.json"),
+        ("resp_a+b", "resp_a+b.json"),
+        ("chatcmpl-abc123", "chatcmpl-abc123.json"),
+    ),
+)
+def test_adls_safe_file_name_rewrites_base64_padding_and_reserved_characters(payload_id, expected):
+    name = adls_safe_file_name(payload_id)
+    assert name == expected, f"{payload_id!r} must map to {expected!r}, got {name!r}"
+    assert re.fullmatch(r"[A-Za-z0-9._+-]+\.json", name), (
+        f"{name!r} must contain no characters Data Lake treats as path separators or signing input"
+    )
+
+
+def test_adls_safe_file_name_is_deterministic_and_distinct_per_id():
+    ids = (
+        "resp_" + base64.b64encode(b"a").decode(),
+        "resp_" + base64.b64encode(b"ab").decode(),
+        "resp_" + base64.b64encode(b"abc").decode(),
+        "resp_" + base64.b64encode(b"abcd").decode(),
+        "resp_" + base64.b64encode(b"\xfb\xff").decode(),
+    )
+    names = tuple(adls_safe_file_name(payload_id) for payload_id in ids)
+    again = tuple(adls_safe_file_name(payload_id) for payload_id in ids)
+    assert names == again, "the rewrite must be deterministic for a given id"
+    assert len(set(names)) == len(ids), f"distinct ids must map to distinct names, got {names}"
+
+
+def test_adls_safe_file_name_without_an_id_is_a_uuid_json():
+    name = adls_safe_file_name(None)
+    assert re.fullmatch(r"[0-9a-f-]{36}\.json", name), (
+        f"an id-less payload must fall back to a uuid-named file, got {name!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_account_key_upload_names_the_file_adls_safe_and_keeps_the_original_id(
+    workload_identity_env_vars, monkeypatch
+):
+    monkeypatch.setenv("AZURE_STORAGE_ACCOUNT_KEY", "dGVzdC1rZXk=")
+
+    file_client = MagicMock()
+    file_client.create_file = AsyncMock()
+    file_client.append_data = AsyncMock()
+    file_client.flush_data = AsyncMock()
+    directory_client = MagicMock()
+    directory_client.exists = AsyncMock(return_value=True)
+    directory_client.get_file_client = MagicMock(return_value=file_client)
+    file_system_client = MagicMock()
+    file_system_client.get_directory_client = MagicMock(return_value=directory_client)
+    service_client = MagicMock()
+    service_client.get_file_system_client = MagicMock(return_value=file_system_client)
+    fake_aio_module = MagicMock()
+    fake_aio_module.DataLakeServiceClient = MagicMock(return_value=service_client)
+
+    with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
+        logger = AzureBlobStorageLogger()
+        await logger.async_upload_payload_to_azure_blob_storage({"id": "resp_YWJjZA=="})
+
+    directory_client.get_file_client.assert_called_once_with("resp_YWJjZA.json")
+    body = json.loads(file_client.append_data.call_args.kwargs["data"])
+    assert body["id"] == "resp_YWJjZA==", "the stored payload must keep the original id byte for byte"
+
+
+@pytest.mark.asyncio
+async def test_entra_upload_names_the_file_adls_safe_and_keeps_the_original_id(mock_env_vars):
+    with (
+        patch("litellm.integrations.azure_storage.azure_storage.get_async_httpx_client") as mock_get_client,
+        patch("litellm.integrations.azure_storage.azure_storage.get_azure_ad_token_from_entra_id") as mock_get_token,
+    ):
+        mock_http_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_http_client.put.return_value = mock_response
+        mock_http_client.patch.return_value = mock_response
+        mock_get_client.return_value = mock_http_client
+        mock_token_provider = MagicMock()
+        mock_token_provider.return_value = "mock-azure-ad-token"
+        mock_get_token.return_value = mock_token_provider
+
+        logger = AzureBlobStorageLogger()
+        logger.azure_auth_token = "mock-azure-ad-token"
+        logger.token_expiry = None
+
+        await logger.async_upload_payload_to_azure_blob_storage({"id": "resp_YWJjZA=="})
+
+    put_call_args = mock_http_client.put.call_args
+    assert put_call_args[0][0] == (
+        "https://test-account.dfs.core.windows.net/test-container/resp_YWJjZA.json?resource=file"
+    ), f"the Entra path must be the rewritten name, got {put_call_args[0][0]!r}"
+    append_call = mock_http_client.patch.call_args_list[0]
+    assert "resp_YWJjZA==" in append_call[1]["data"], "the stored payload must keep the original id byte for byte"

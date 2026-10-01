@@ -33,6 +33,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
+    proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
@@ -45,6 +46,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
@@ -155,6 +157,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "autorouter_savings",
         "autorouter_savings_estimate",
         "autorouter_baseline_observation",
+        "used_client_oauth_token",
     )
 )
 
@@ -179,6 +182,7 @@ def _get_spend_logs_metadata(
     autorouter_baseline_observation: str | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
+    used_client_oauth_token: bool | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -223,6 +227,7 @@ def _get_spend_logs_metadata(
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
             azure_spillover=azure_spillover,
+            used_client_oauth_token=used_client_oauth_token,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -238,6 +243,7 @@ def _get_spend_logs_metadata(
         autorouter_baseline_observation=autorouter_baseline_observation,
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
+        used_client_oauth_token=used_client_oauth_token,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -715,6 +721,9 @@ def get_logging_payload(
             selected_provider=custom_llm_provider,
             router_correlation_id=litellm_call_id,
         ),
+        used_client_oauth_token=resolve_used_client_oauth_token(
+            proxy_stamped_used_client_oauth_token(litellm_params.get("metadata"), litellm_params), custom_llm_provider
+        ),
         azure_spillover=azure_spillover(
             response_headers=kwargs.get("response_headers")
             if isinstance(kwargs.get("response_headers"), Mapping)
@@ -796,6 +805,7 @@ def get_logging_payload(
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
+            billing_agent_id=clean_metadata.get("billing_agent_id"),
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
             custom_llm_provider=custom_llm_provider or "",
             messages=_get_messages_for_spend_logs_payload(
