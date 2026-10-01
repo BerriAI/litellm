@@ -1141,6 +1141,63 @@ async def test_upsert_sso_user_fills_user_alias_for_existing_user():
     )
 
 
+def test_build_sso_user_update_data_omits_email_when_idp_sends_none():
+    """
+    A login without an email claim must not write user_email, so a stored email survives.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email=None,
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email=None,
+        user_id="S-1-5-21-adfs-user",
+        existing_user_alias=None,
+    )
+
+    assert update_data == {"user_alias": "Doe, Jane"}
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_keeps_stored_email_when_idp_sends_none():
+    """
+    An existing user whose IdP token carries no email and no new name is left untouched on login.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    existing_user = LiteLLM_UserTable(
+        user_id="S-1-5-21-adfs-user",
+        user_email="admin.typed@example.com",
+        user_role="internal_user",
+        user_alias="Doe, Jane",
+    )
+    sso_result = CustomOpenID(id="S-1-5-21-adfs-user", email=None, provider="generic", team_ids=[])
+
+    returned = await SSOAuthenticationHandler.upsert_sso_user(
+        result=sso_result,
+        user_info=existing_user,
+        user_email=None,
+        user_defined_values=None,
+        prisma_client=mock_prisma,
+    )
+
+    assert returned is existing_user
+    mock_prisma.db.litellm_usertable.update_many.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_insert_sso_user_sets_user_alias_from_display_name():
     """
