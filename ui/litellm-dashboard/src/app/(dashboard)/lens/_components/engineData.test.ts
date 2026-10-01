@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   analysisElapsed,
   analysisProgress,
+  evidenceTarget,
   normalizeFilters,
   sortedFindings,
   type Finding,
@@ -106,6 +107,11 @@ describe("Analysis progress", () => {
 });
 
 describe("Lens selection and findings", () => {
+  it("keeps the scoped trace reference in an evidence citation", () => {
+    const id = btoa(JSON.stringify(["traces", "team-a", "reused-trace", "ref-a"]));
+    expect(evidenceTarget(id)).toEqual({ source: "traces", team: "team-a", id: "reused-trace", traceRef: "ref-a" });
+  });
+
   it("preserves literal equals signs in a metadata value", () => {
     expect(normalizeFilters([{ key: " swarm ", value: " research=v2 " }])).toEqual([
       { key: "swarm", value: "research=v2" },
