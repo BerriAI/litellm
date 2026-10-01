@@ -137,7 +137,10 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(gateway: Gateway, 
         gateway.post(f"/engine/{engine_id}/cancel", {})
 
 
-def test_worker_spend_logs_do_not_expose_investigation_content(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.parametrize("cancel_on_disconnect", (False, True))
+def test_worker_spend_logs_do_not_expose_investigation_content(
+    gateway: Gateway, tmp_path: Path, cancel_on_disconnect: bool
+) -> None:
     config: Final = tmp_path / "lens-privacy.json"
     config.write_text(
         json.dumps(
@@ -148,6 +151,7 @@ def test_worker_spend_logs_do_not_expose_investigation_content(gateway: Gateway,
                     "database_url": "os.environ/DATABASE_URL",
                     "store_model_in_db": True,
                     "store_prompts_in_spend_logs": True,
+                    "cancel_on_disconnect": cancel_on_disconnect,
                     "proxy_batch_write_at": 1,
                     "proxy_batch_polling_interval": 1,
                     "allowed_ips": ["127.0.0.1"],

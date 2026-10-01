@@ -40,8 +40,16 @@ async def complete(
     payload: Final = orjson.dumps(data)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(incoming)
 
+    body: Final[Message] = {
+        "type": "http.request",
+        "body": payload,
+        "more_body": False,
+    }
+    messages: Final = iter((body,))
+
     async def receive() -> Message:
-        return {"type": "http.request", "body": payload, "more_body": False}  # mutable-ok: ASGI message contract
+        message: Final = next(messages, None)
+        return message if message is not None else await incoming.receive()
 
     request: Final = Request(
         {  # mutable-ok: Starlette mutates its ASGI scope
