@@ -221,14 +221,10 @@ def test_missing_package_fails_at_config_load_with_install_hint() -> None:
 
 def test_plugin_that_swallows_unreachable_fallback_into_kwargs_is_rejected() -> None:
     class Swallowing:
-        def __init__(
-            self, *, fail_mode: str = "fail_closed", **kwargs: object
-        ) -> None: ...  # kwargs-ok: models plugin 0.2.4
+        def __init__(self, *, fail_mode: str = "fail_closed", **kwargs: object) -> None: ...
 
     class Binding:
-        def __init__(
-            self, *, unreachable_fallback: str | None = None, **kwargs: object
-        ) -> None: ...  # kwargs-ok: plugin 0.2.5
+        def __init__(self, *, unreachable_fallback: str | None = None, **kwargs: object) -> None: ...
 
     assert not binds_unreachable_fallback(Swallowing)
     assert binds_unreachable_fallback(Binding)

@@ -1,36 +1,41 @@
 import asyncio
-import base64
-import binascii
 import json
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final
 from urllib.parse import urlparse, urlunparse
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.realtime.transcription_protocol import (
+    RealtimeTranscriptionProtocolError,
+    TranscriptionSessionUpdate,
+    completed_event,
+    decode_pcm16_append,
+    delta_event,
+    duration_usage,
+    error_event,
+    json_object,
+    parse_transcription_session_update,
+    speech_event,
+    transcription_session,
+    transcription_session_created_event,
+)
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.meta import MuseAudioEncoding, MuseHandshake, MuseMode, MuseSampleRate
 from litellm.types.llms.openai import (
-    OpenAIRealtimeErrorEvent,
     OpenAIRealtimeEvents,
-    OpenAIRealtimeInputAudioBufferSpeechEvent,
-    OpenAIRealtimeInputAudioTranscriptionCompleted,
-    OpenAIRealtimeInputAudioTranscriptionDelta,
-    OpenAIRealtimeServerVadTurnDetection,
     OpenAIRealtimeTranscriptionSession,
     OpenAIRealtimeTranscriptionSessionCreated,
-    OpenAIRealtimeTranscriptionSettings,
 )
 from litellm.types.realtime import (
-    RealtimeInputAudioTranscriptionDurationUsage,
     RealtimeInputAudioTranscriptionUsage,
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
@@ -98,17 +103,13 @@ _LANGUAGE_CODES: Final = MappingProxyType(
         "zh": "Mandarin Chinese",
     }
 )
-_SUPPORTED_TRANSCRIPTION_KEYS: Final = frozenset(("model", "language"))
 _MAX_AUDIO_BACKLOG_SECONDS: Final = 4
 _PACKET_MS: Final = 80
 _END_STREAM: Final = '{"type":"endStream"}'
 _PROVIDER_ERROR_MESSAGE: Final = "Meta Muse realtime transcription failed"
-_JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-_EMPTY_OBJECT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
-_SERVER_VAD: Final[OpenAIRealtimeServerVadTurnDetection] = {"type": "server_vad"}
 
 
-class MuseProtocolError(ValueError):
+class MuseProtocolError(RealtimeTranscriptionProtocolError):
     pass
 
 
@@ -150,26 +151,13 @@ class MuseSessionConfig:
         return biased
 
     def openai_session(self, session_id: str) -> OpenAIRealtimeTranscriptionSession:
-        session: Final[OpenAIRealtimeTranscriptionSession] = {
-            "id": session_id,
-            "object": "realtime.transcription_session",
-            "type": "transcription",
-            "audio": {
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": self.sample_rate},
-                    "transcription": self._transcription_settings(),
-                    "turn_detection": None if self.mode == "PUSH_TO_TALK" else _SERVER_VAD,
-                }
-            },
-        }
-        return session
-
-    def _transcription_settings(self) -> OpenAIRealtimeTranscriptionSettings:
-        base: Final[OpenAIRealtimeTranscriptionSettings] = {"model": self.model}
-        if not self.language_bias:
-            return base
-        localized: Final[OpenAIRealtimeTranscriptionSettings] = {**base, "language": self.language_bias[0]}
-        return localized
+        return transcription_session(
+            session_id=session_id,
+            model=self.model,
+            sample_rate=self.sample_rate,
+            language=self.language_bias[0] if self.language_bias else None,
+            server_vad=self.mode != "PUSH_TO_TALK",
+        )
 
 
 _DEFAULT_SESSION_CONFIG: Final = MuseSessionConfig(
@@ -177,38 +165,8 @@ _DEFAULT_SESSION_CONFIG: Final = MuseSessionConfig(
 )
 
 
-def _json_object(payload: str) -> Mapping[str, JsonValue]:
-    try:
-        value: Final = _JSON_ADAPTER.validate_json(payload)
-    except ValidationError:
-        raise MuseProtocolError("invalid JSON object") from None
-    if not isinstance(value, dict):
-        raise MuseProtocolError("message must be a JSON object")
-    return value
-
-
-def _mapping(value: JsonValue | None, name: str) -> Mapping[str, JsonValue]:
-    if value is None:
-        return _EMPTY_OBJECT
-    if not isinstance(value, dict):
-        raise MuseProtocolError(f"{name} must be an object")
-    return value
-
-
-def _string(value: JsonValue | None, name: str) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise MuseProtocolError(f"{name} must be a string")
-    return value
-
-
 def _normalize_model(model: str) -> str:
     return model.removeprefix("meta/").strip()
-
-
-def _event_id() -> str:
-    return f"event_{uuid.uuid4().hex}"
 
 
 def normalize_language(language: str) -> str:
@@ -254,138 +212,55 @@ def build_muse_realtime_url(api_base: str | None) -> str:
     return urlunparse((scheme, netloc, "/v1/asr/realtime", "", "", ""))
 
 
-def _parse_sample_rate(session: Mapping[str, JsonValue]) -> MuseSampleRate:
-    beta_format: Final = session.get("input_audio_format")
-    audio: Final = _mapping(session.get("audio"), "session.audio")
-    audio_input: Final = _mapping(audio.get("input"), "session.audio.input")
-    ga_format: Final = audio_input.get("format")
-    if beta_format is not None and ga_format is not None:
-        raise MuseProtocolError("input audio format must use either beta or GA layout")
-    if beta_format is not None:
-        if beta_format != "pcm16":
+def _parse_sample_rate(update: TranscriptionSessionUpdate) -> MuseSampleRate:
+    audio_format: Final = update.audio_format
+    if audio_format is None:
+        return 24_000
+    if audio_format.layout == "beta":
+        if audio_format.encoding != "pcm16":
             raise MuseProtocolError("Muse Voice requires pcm16 input audio")
         return 24_000
-    if ga_format is None:
-        return 24_000
-    if isinstance(ga_format, str):
-        if ga_format != "pcm16":
-            raise MuseProtocolError("Muse Voice requires audio/pcm input audio")
-        return 24_000
-    format_mapping: Final = _mapping(ga_format, "session.audio.input.format")
-    if format_mapping.get("type") != "audio/pcm":
+    if not audio_format.is_pcm16:
         raise MuseProtocolError("Muse Voice requires audio/pcm input audio")
-    channels: Final = format_mapping.get("channels", 1)
-    if isinstance(channels, bool) or channels != 1:
+    if audio_format.channels not in (None, 1):
         raise MuseProtocolError("Muse Voice requires mono input audio")
-    rate: Final = format_mapping.get("rate", 24_000)
-    if isinstance(rate, bool) or not isinstance(rate, int) or rate not in SUPPORTED_SAMPLE_RATES:
+    rate: Final = 24_000 if audio_format.rate is None else audio_format.rate
+    if rate not in SUPPORTED_SAMPLE_RATES:
         raise MuseProtocolError("Muse Voice supports PCM16 at 16000 Hz or 24000 Hz")
     return 16_000 if rate == 16_000 else 24_000
 
 
-def _parse_mode(session: Mapping[str, JsonValue], audio_input: Mapping[str, JsonValue]) -> MuseMode:
-    turn_detection_present: Final = "turn_detection" in session or "turn_detection" in audio_input
-    turn_detection: Final = session.get("turn_detection", audio_input.get("turn_detection"))
-    if turn_detection_present and turn_detection is None:
+def _parse_mode(update: TranscriptionSessionUpdate) -> MuseMode:
+    if update.turn_detection_disabled:
         return "PUSH_TO_TALK"
-    if turn_detection is None:
-        return "ENDPOINTING"
-    turn_detection_mapping: Final = _mapping(turn_detection, "turn_detection")
-    if turn_detection_mapping.get("type") not in (None, "server_vad"):
+    if update.turn_detection_type not in (None, "server_vad"):
         raise MuseProtocolError("Muse Voice supports server_vad turn detection or null")
     return "ENDPOINTING"
 
 
 def parse_session_update(payload: str, expected_model: str) -> MuseSessionConfig:
-    message: Final = _json_object(payload)
-    if message.get("type") not in ("session.update", "transcription_session.update"):
-        raise MuseProtocolError("expected session.update")
-    session: Final = _mapping(message.get("session"), "session")
-    if not session:
-        raise MuseProtocolError("session.update requires a session object")
-    if session.get("type") not in (None, "transcription", "realtime"):
+    update: Final = parse_transcription_session_update(payload, MuseProtocolError)
+    if update.session_type not in (None, "transcription", "realtime"):
         raise MuseProtocolError("Muse Voice supports transcription sessions only")
-    audio: Final = _mapping(session.get("audio"), "session.audio")
-    audio_input: Final = _mapping(audio.get("input"), "session.audio.input")
-    beta_transcription: Final = session.get("input_audio_transcription")
-    ga_transcription: Final = audio_input.get("transcription")
-    if beta_transcription is not None and ga_transcription is not None:
-        raise MuseProtocolError("input transcription must use either beta or GA layout")
-    transcription: Final = _mapping(
-        beta_transcription if beta_transcription is not None else ga_transcription,
-        "input audio transcription",
-    )
-    unsupported: Final = tuple(sorted(key for key in transcription if key not in _SUPPORTED_TRANSCRIPTION_KEYS))
-    if unsupported:
-        verbose_logger.warning("Meta realtime: dropping unsupported transcription settings %s", unsupported)
-    requested_model: Final = _string(transcription.get("model"), "transcription model")
+    if update.unsupported_transcription_keys:
+        verbose_logger.warning(
+            "Meta realtime: dropping unsupported transcription settings %s", update.unsupported_transcription_keys
+        )
     normalized_model: Final = _normalize_model(expected_model)
     if normalized_model != MUSE_MODEL:
         raise MuseProtocolError("unsupported Meta realtime model")
-    if requested_model is not None and _normalize_model(requested_model) != normalized_model:
+    if update.model is not None and _normalize_model(update.model) != normalized_model:
         raise MuseProtocolError("realtime session model cannot be changed")
-    language: Final = _string(transcription.get("language"), "language")
     return MuseSessionConfig(
         model=normalized_model,
-        mode=_parse_mode(session, audio_input),
-        sample_rate=_parse_sample_rate(session),
-        language_bias=() if language is None else (normalize_language(language),),
+        mode=_parse_mode(update),
+        sample_rate=_parse_sample_rate(update),
+        language_bias=() if update.language is None else (normalize_language(update.language),),
     )
 
 
 def session_created_event(config: MuseSessionConfig, session_id: str) -> OpenAIRealtimeTranscriptionSessionCreated:
-    event: Final[OpenAIRealtimeTranscriptionSessionCreated] = {
-        "type": "session.created",
-        "event_id": _event_id(),
-        "session": config.openai_session(session_id),
-    }
-    return event
-
-
-def error_event(message: str) -> OpenAIRealtimeErrorEvent:
-    event: Final[OpenAIRealtimeErrorEvent] = {
-        "type": "error",
-        "error": {"type": "server_error", "message": message},
-    }
-    return event
-
-
-def _speech_event(
-    event_type: Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"], item_id: str
-) -> OpenAIRealtimeInputAudioBufferSpeechEvent:
-    event: Final[OpenAIRealtimeInputAudioBufferSpeechEvent] = {
-        "type": event_type,
-        "event_id": _event_id(),
-        "item_id": item_id,
-    }
-    return event
-
-
-def _delta_event(item_id: str, delta: str) -> OpenAIRealtimeInputAudioTranscriptionDelta:
-    event: Final[OpenAIRealtimeInputAudioTranscriptionDelta] = {
-        "type": "conversation.item.input_audio_transcription.delta",
-        "event_id": _event_id(),
-        "item_id": item_id,
-        "content_index": 0,
-        "delta": delta,
-    }
-    return event
-
-
-def _completed_event(
-    item_id: str, transcript: str, usage: RealtimeInputAudioTranscriptionUsage | None
-) -> OpenAIRealtimeInputAudioTranscriptionCompleted:
-    event: Final[OpenAIRealtimeInputAudioTranscriptionCompleted] = {
-        "type": "conversation.item.input_audio_transcription.completed",
-        "event_id": _event_id(),
-        "item_id": item_id,
-        "content_index": 0,
-        "transcript": transcript,
-    }
-    if usage is None:
-        return event
-    billed: Final[OpenAIRealtimeInputAudioTranscriptionCompleted] = {**event, "usage": usage}
-    return billed
+    return transcription_session_created_event(config.openai_session(session_id))
 
 
 def _required_turn_id(message: Mapping[str, JsonValue], event: str) -> str:
@@ -424,18 +299,18 @@ class _TurnState:
         has_content: Final = self.latest_partial is not None or self.final_text is not None
         if (self.started or has_content) and not self.start_emitted:
             self.start_emitted = True
-            yield _speech_event("input_audio_buffer.speech_started", self.item_id)
+            yield speech_event("input_audio_buffer.speech_started", self.item_id)
         if self.latest_partial is not None and self.final_text is None:
             delta: Final = _new_suffix(self.emitted_partial, self.latest_partial)
             if delta:
                 self.emitted_partial = self.latest_partial
-                yield _delta_event(self.item_id, delta)
+                yield delta_event(self.item_id, delta)
         if self.stopped and not self.stopped_emitted:
             self.stopped_emitted = True
-            yield _speech_event("input_audio_buffer.speech_stopped", self.item_id)
+            yield speech_event("input_audio_buffer.speech_stopped", self.item_id)
         if self.final_text is not None and self.stopped_emitted and not self.completed_emitted:
             self.completed_emitted = True
-            yield _completed_event(self.item_id, self.final_text, take_usage())
+            yield completed_event(self.item_id, self.final_text, take_usage())
 
 
 class MuseEventTransformer:
@@ -467,8 +342,7 @@ class MuseEventTransformer:
         if seconds <= 0:
             return None
         self._unbilled_seconds = 0.0
-        usage: Final[RealtimeInputAudioTranscriptionDurationUsage] = {"type": "duration", "seconds": seconds}
-        return usage
+        return duration_usage(seconds)
 
     def _apply_turn_event(self, event_type: JsonValue | None, message: Mapping[str, JsonValue]) -> _TurnState | None:
         match event_type:
@@ -612,7 +486,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
         model: str,
         session_configuration_request: str | None = None,
     ) -> tuple[str | bytes, ...]:
-        request: Final = _json_object(message)
+        request: Final = json_object(message, MuseProtocolError)
         event_type: Final = request.get("type")
         if event_type in ("session.update", "transcription_session.update"):
             return self._configure(message, model)
@@ -664,7 +538,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
         return result
 
     def _backend_events(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        frame: Final = _json_object(payload)
+        frame: Final = json_object(payload, MuseProtocolError)
         session_id: Final = frame.get("sessionId")
         if session_id is None:
             return self._transformer.transform(frame)
@@ -686,17 +560,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
 
     def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[bytes, ...]:
         config: Final = self._require_config()
-        encoded: Final = request.get("audio")
-        if not isinstance(encoded, str):
-            raise MuseProtocolError("Audio must be a base64 string")
-        if len(encoded) > config.max_encoded_append_bytes:
-            raise MuseProtocolError("Audio append exceeds the four-second backlog limit")
-        try:
-            audio: Final = base64.b64decode(encoded, validate=True)
-        except (binascii.Error, ValueError):
-            raise MuseProtocolError("Audio must be valid base64") from None
-        if len(audio) % 2:
-            raise MuseProtocolError("PCM16 audio must contain complete samples")
+        audio: Final = decode_pcm16_append(request.get("audio"), config.max_encoded_append_bytes, MuseProtocolError)
         buffered: Final = self._pending_audio + audio
         packet_end: Final = len(buffered) - len(buffered) % config.packet_bytes
         self._pending_audio = buffered[packet_end:]

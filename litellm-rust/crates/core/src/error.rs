@@ -1,7 +1,17 @@
-use thiserror::Error as ThisError;
+//! One error for every route in this crate. OCR still carries its own, richer enum.
+//!
+//! A variant is declared by the layer that produces it and nested here as is:
+//! credentials by `litellm_auth` (AWS folds into it at that crate's boundary), the wire by
+//! `litellm_http`, secrets by `litellm_secrets`. The transformation layer's [`LlmError`]
+//! maps onto the same-named variants once, here, so no route re-declares them.
 
-#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
-pub enum Error {
+use std::sync::Arc;
+
+use litellm_http::transport::Error as TransportError;
+use litellm_llms::Error as LlmError;
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RouteError {
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,
@@ -9,212 +19,142 @@ pub enum Error {
     },
     #[error("missing required field: {0}")]
     MissingField(&'static str),
-    #[error("Document URL is required")]
-    MissingDocumentUrl,
-    #[error("invalid response: {0}")]
-    InvalidResponse(String),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
     #[error("invalid request: {0}")]
-    InvalidRequest(String),
-    #[error("{0}")]
-    Auth(String),
-    #[error(
-        "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
-    )]
-    MissingApiKey { provider: &'static str },
-    #[error(
-        "invalid authentication configuration: Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID"
-    )]
-    MissingAzureAiCredentials,
-    #[error(
-        "invalid authentication configuration: Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID"
-    )]
-    MissingAzureDocumentIntelligenceCredentials,
-    #[error(
-        "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()"
-    )]
-    MissingReductoApiKey,
-    #[error("upstream request failed with status {status}: {body}")]
-    Http { status: u16, body: String },
-    #[error("upstream network error: {0}")]
-    Network(String),
-    /// The provider was never reached: DNS, TCP, TLS or proxy setup failed
-    /// before any byte of the request went out. Nothing was billed, so a host
-    /// that keeps a reference implementation can serve the request itself.
-    /// A timeout is deliberately not this, since the provider may have received
-    /// and answered the request already.
-    #[error("could not reach the provider: {0}")]
-    Connect(String),
-    #[error("routing error: {0}")]
-    Routing(String),
-    /// The request is outside the surface this route covers in Rust. Hosts that
-    /// keep a reference implementation treat this as "fall back", not "fail".
+    InvalidRequest(#[source] litellm_llms::ErrorDetail),
+    #[error("invalid response: {0}")]
+    InvalidResponse(#[source] litellm_llms::ErrorDetail),
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
-}
-
-impl Error {
-    pub const fn http_status_code(&self) -> Option<u16> {
-        match self {
-            Self::InvalidRequest(_) => Some(400),
-            Self::MissingDocumentUrl => Some(500),
-            Self::Http { status, .. } => Some(*status),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, ThisError)]
-pub(crate) enum MediaError {
-    #[error("media URL rejected by network policy")]
-    BlockedUrl,
-    #[error("media download is disabled")]
-    DownloadDisabled,
-    #[error("media download exceeds the maximum size")]
-    DownloadTooLarge,
-    #[error("too many redirects while fetching media")]
-    TooManyRedirects,
-    #[error("media redirect is missing a Location header")]
-    MissingRedirectLocation,
-    #[error("invalid media redirect")]
-    InvalidRedirect,
-    #[error("media download failed with status {0}")]
-    Http(u16),
-    #[error("media download timed out")]
-    Timeout,
-    #[error("{0}")]
+    #[error(transparent)]
+    Auth(#[from] litellm_auth::Error),
+    #[error(transparent)]
     Transport(#[from] TransportError),
+    #[error(transparent)]
+    Headers(#[from] litellm_http::request::HeaderError),
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
+    #[error(transparent)]
+    Secret(#[from] SecretError),
+    #[error("post-call hook failed: {0}")]
+    PostCallHook(#[source] Arc<RouteError>),
 }
 
-#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
-pub enum TransportError {
-    #[error("upstream request failed with status {status}: {body}")]
-    Http { status: u16, body: String },
-    #[error("upstream network error: {0}")]
-    Network(String),
-    #[error("could not reach the provider: {0}")]
-    Connect(String),
+impl From<litellm_host::machine::MachineFault> for RouteError {
+    fn from(fault: litellm_host::machine::MachineFault) -> Self {
+        use litellm_host::machine::MachineFault;
+        Self::InvalidRequest(match fault {
+            MachineFault::Abandoned => "host driver was abandoned".into(),
+            MachineFault::Protocol(message) => format!("host {message}").into(),
+        })
+    }
 }
 
-impl TransportError {
-    pub fn from_reqwest_before_dispatch(error: reqwest::Error) -> Self {
-        let before_dispatch = !error.is_timeout() && (error.is_connect() || error.is_builder());
-        let message = error.without_url().to_string();
-        if before_dispatch {
-            Self::Connect(message)
-        } else {
-            Self::Network(message)
+impl RouteError {
+    pub(crate) fn post_call(error: Self) -> Self {
+        Self::PostCallHook(Arc::new(error))
+    }
+
+    /// The caller's request is what is wrong, as opposed to the environment, the wire, or
+    /// the provider's answer.
+    pub fn is_request(&self) -> bool {
+        match self {
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidProvider(_)
+            | Self::InvalidRequest(_)
+            | Self::Unsupported(_)
+            | Self::Headers(_) => true,
+            Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
+            Self::InvalidResponse(_)
+            | Self::Transport(_)
+            | Self::Http(_)
+            | Self::Secret(_)
+            | Self::PostCallHook(_) => false,
         }
     }
 }
 
-impl From<reqwest::Error> for TransportError {
-    fn from(error: reqwest::Error) -> Self {
-        Self::Network(error.without_url().to_string())
-    }
-}
-
-impl From<crate::ocr::error::OcrRequestError> for Error {
-    fn from(error: crate::ocr::error::OcrRequestError) -> Self {
+impl From<LlmError> for RouteError {
+    fn from(error: LlmError) -> Self {
         match error {
-            crate::ocr::error::OcrRequestError::MissingField(field) => Self::MissingField(field),
-            crate::ocr::error::OcrRequestError::MissingDocumentUrl => Self::MissingDocumentUrl,
-            error => Self::InvalidRequest(error.to_string()),
+            LlmError::InvalidType { expected, actual } => Self::InvalidType { expected, actual },
+            LlmError::MissingField(field) => Self::MissingField(field),
+            LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
+            LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
+            LlmError::Unsupported(reason) => Self::Unsupported(reason),
+            LlmError::Auth(error) => Self::Auth(error),
         }
     }
 }
 
-impl From<crate::ocr::error::OcrResponseError> for Error {
-    fn from(error: crate::ocr::error::OcrResponseError) -> Self {
-        Self::InvalidResponse(error.to_string())
+#[derive(Clone, Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SecretError(Arc<litellm_secrets::Error>);
+
+impl SecretError {
+    pub fn source_error(&self) -> &litellm_secrets::Error {
+        &self.0
     }
 }
 
-impl From<TransportError> for Error {
-    fn from(error: TransportError) -> Self {
-        match error {
-            TransportError::Http { status, body } => Self::Http { status, body },
-            TransportError::Network(message) => Self::Network(message),
-            TransportError::Connect(message) => Self::Connect(message),
-        }
+impl From<litellm_secrets::Error> for RouteError {
+    fn from(error: litellm_secrets::Error) -> Self {
+        Self::Secret(SecretError(Arc::new(error)))
     }
 }
 
-impl From<crate::AuthError> for Error {
-    fn from(error: crate::AuthError) -> Self {
-        match error {
-            crate::AuthError::MissingApiKey { provider } => Self::MissingApiKey { provider },
-            error => Self::Auth(error.to_string()),
-        }
+impl PartialEq for SecretError {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
-pub fn json_type_name(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "bool",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
-}
+impl Eq for SecretError {}
 
 #[cfg(test)]
-mod transport_tests {
-    use super::*;
+mod tests {
+    use super::RouteError;
+    use litellm_llms::{Error as LlmError, ErrorDetail};
+    use rstest::rstest;
 
     #[test]
-    fn missing_auth_key_preserves_provider_in_public_error() {
+    fn a_missing_api_key_is_the_environment_not_the_request() {
+        assert!(
+            !RouteError::Auth(litellm_auth::Error::MissingApiKey {
+                provider: "Anthropic",
+                environment_variable: "ANTHROPIC_API_KEY",
+            })
+            .is_request()
+        );
+        assert!(RouteError::Auth(litellm_auth::Error::InvalidHeader).is_request());
+        assert!(RouteError::InvalidRequest("top_k".into()).is_request());
+        assert!(!RouteError::InvalidResponse("bad json".into()).is_request());
+    }
+    #[rstest]
+    #[case::request(true)]
+    #[case::response(false)]
+    fn contextual_errors_preserve_sources_and_route_classification(#[case] request: bool) {
+        let source = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let source_message = source.to_string();
+        let detail = ErrorDetail::invalid("test payload", source);
+        let error = RouteError::from(if request {
+            LlmError::InvalidRequest(detail)
+        } else {
+            LlmError::InvalidResponse(detail)
+        });
+        assert_eq!(error.is_request(), request);
+        let category = if request { "request" } else { "response" };
         assert_eq!(
-            Error::from(crate::AuthError::MissingApiKey { provider: "Vertex" }),
-            Error::MissingApiKey { provider: "Vertex" }
+            error.to_string(),
+            format!("invalid {category}: invalid test payload: {source_message}")
         );
-    }
-
-    #[tokio::test]
-    async fn transport_errors_remove_urls_and_keep_dispatch_context() {
-        let error = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("client")
-            .get("http://localhost:invalid/private?api_key=secret")
-            .send()
-            .await
-            .expect_err("invalid port");
-        let error = TransportError::from_reqwest_before_dispatch(error);
-        assert!(matches!(error, TransportError::Connect(_)));
-        assert!(!error.to_string().contains("secret"));
-        assert!(!error.to_string().contains("private"));
-    }
-
-    #[tokio::test]
-    async fn request_timeout_is_not_safe_to_retry_as_a_connect_failure() {
-        use std::time::Duration;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let address = listener.local_addr().expect("address");
-        let request = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .expect("client")
-            .get(format!("http://{address}"))
-            .timeout(Duration::from_millis(200))
-            .send();
-        let (response, accepted) = tokio::join!(
-            request,
-            tokio::time::timeout(Duration::from_secs(2), listener.accept())
-        );
-        let _connection = accepted
-            .expect("accept deadline")
-            .expect("accepted connection");
-        let error = response.expect_err("server does not respond");
-        assert!(error.is_timeout());
-        assert!(matches!(
-            TransportError::from_reqwest_before_dispatch(error),
-            TransportError::Network(_)
-        ));
+        let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
+            error.source()
+        })
+        .find_map(|error| error.downcast_ref::<serde_json::Error>())
+        .expect("the original JSON error remains available");
+        assert_eq!(source.to_string(), source_message);
     }
 }

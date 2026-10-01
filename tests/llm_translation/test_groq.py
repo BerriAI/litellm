@@ -32,7 +32,7 @@ class TestGroq(BaseLLMChatTest):
 
     @pytest.mark.parametrize(
         "model",
-        ["groq/qwen/qwen3-32b", "groq/openai/gpt-oss-20b", "groq/openai/gpt-oss-120b"],
+        ["groq/qwen/qwen3.8-27b", "groq/openai/gpt-oss-20b", "groq/openai/gpt-oss-120b"],
     )
     def test_reasoning_effort_in_supported_params(self, model):
         """Test that reasoning_effort is in the list of supported parameters for Groq"""

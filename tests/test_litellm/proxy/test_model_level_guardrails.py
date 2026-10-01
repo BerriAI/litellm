@@ -600,7 +600,7 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
 
     captured_pre_call_guardrails: list = []
 
-    async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):
+    async def fake_pre_call_hook(*, user_api_key_dict, data, call_type, skip_guardrails=False):
         # Snapshot the list rather than the dict: metadata is shared by
         # reference, so a merge that happens after this point would otherwise
         # show up here retroactively and the assertion would pass either way.

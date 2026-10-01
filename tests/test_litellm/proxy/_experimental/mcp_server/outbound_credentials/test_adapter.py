@@ -7,6 +7,7 @@ maps each CredError onto its HTTP status. These pin the parity-critical mapping 
 
 import base64
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -20,7 +21,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
+    validate_static_credential,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
@@ -34,8 +37,42 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     SharedKey,
     TokenExchangeConfig,
 )
-from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+@pytest.mark.parametrize("auth_type,header,value", [
+    (MCPAuth.api_key, "Authorization", "Bearer fixture-key"),
+    (MCPAuth.api_key, "Authorization", "ApiKey fixture-key"),
+    (MCPAuth.api_key, "Authorization", "token fixture-key"),
+    (MCPAuth.api_key, "Authorization", "Bearer token"),
+    (MCPAuth.api_key, "Authorization", "opaque-key"),
+    (MCPAuth.api_key, "Authorization", "Custom Custom"),
+    (MCPAuth.api_key, "X-API-Key", "Bearer Bearer"),
+    (MCPAuth.api_key, "X-Custom", "ApiKey ApiKey"),
+    (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
+])
+def test_static_credential_preserves_supported_api_key_and_raw_headers(
+    auth_type: MCPAuthType, header: str, value: str,
+) -> None:
+    result: Final = validate_static_credential(auth_type, {header: value}, upstream_token_header=header)
+    assert isinstance(result, Ok)
+
+
+@pytest.mark.parametrize("auth_type,headers,static_header_names,expected", [
+    (MCPAuth.api_key, {"apikey": "static-key"}, ("apikey",), Ok),
+    (MCPAuth.api_key, {"apikey": "static-key", "X-API-Key": ""}, ("apikey",), Ok),
+    (MCPAuth.api_key, {"apikey": ""}, ("apikey",), Error),
+    (MCPAuth.api_key, {"apikey": "static-key"}, (), Error),
+    (MCPAuth.api_key, {"apikey": "static-key"}, ("X-Tenant",), Error),
+    (MCPAuth.bearer_token, {"apikey": "static-key"}, ("apikey",), Error),
+    (MCPAuth.token, {"apikey": "static-key"}, ("apikey",), Error),
+])
+def test_static_credential_counts_api_key_static_headers_only(
+    auth_type: MCPAuthType, headers: dict[str, str], static_header_names: tuple[str, ...], expected: type,
+) -> None:
+    result: Final = validate_static_credential(auth_type, headers, static_header_names=static_header_names)
+    assert isinstance(result, expected)
 
 
 def _server(**kwargs) -> MCPServer:
@@ -155,12 +192,6 @@ def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
         _server(auth_type=MCPAuth.api_key),  # no token configured
         _server(auth_type=MCPAuth.bearer_token),  # no token configured
         _server(auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True),  # delegated upstream OAuth -> v1
-        _server(auth_type=MCPAuth.oauth2_token_exchange),  # no endpoint/client creds -> incomplete -> v1
-        _server(
-            auth_type=MCPAuth.oauth2_token_exchange,
-            token_exchange_endpoint="https://idp/token",
-            client_id="cid",
-        ),  # missing client_secret -> incomplete -> v1
         _server(auth_type=MCPAuth.aws_sigv4),
         _server(auth_type=None, oauth_passthrough=True, extra_headers=["Authorization"]),
     ],
@@ -802,3 +833,14 @@ def test_a_blank_header_name_means_unset_rather_than_an_error(blank):
     spec = to_server_spec(server)
     assert spec is not None
     assert spec.config.header_name == "Authorization"
+
+
+@pytest.mark.parametrize("client_secret", [None, ""])
+@pytest.mark.parametrize("is_byok", [False, True])
+def test_incomplete_obo_keeps_exchange_ownership(client_secret: str | None, is_byok: bool) -> None:
+    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2_token_exchange, client_id="client",
+                                  client_secret=client_secret, is_byok=is_byok))
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.client_id == "client"
+    assert spec.config.client_secret is None

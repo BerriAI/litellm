@@ -18,13 +18,18 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    get_end_user_object,
     get_org_object,
     get_team_membership,
     get_team_object,
     get_user_object,
 )
-from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_auth_objects, prefetch_identity_keys
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
+)
 
 USER_ID = "prefetch-user"
 TEAM_ID = "prefetch-team"
@@ -336,3 +341,29 @@ async def test_no_redis_goes_straight_to_one_query():
 
     assert prisma.db.query_first.await_count == 1
     assert cache.in_memory_cache.get_cache(f"team_membership:{USER_ID}:{TEAM_ID}") is not None
+
+
+@pytest.mark.asyncio
+async def test_identity_prefetch_warms_the_end_user_so_its_getter_needs_neither_redis_nor_the_database():
+    end_user_key = end_user_cache_key("eu-1")
+    redis = CountingRedis({end_user_key: json.dumps({"user_id": "eu-1", "blocked": False, "spend": 0.0})})
+    cache = _cache(redis)
+    prisma = _prisma()
+
+    await prefetch_identity_keys([end_user_key, end_user_restricted_registry_cache_key()], cache)
+    end_user = await get_end_user_object(end_user_id="eu-1", prisma_client=prisma, user_api_key_cache=cache)
+
+    assert end_user is not None and end_user.user_id == "eu-1"
+    assert redis.commands == [f"MGET {end_user_key} {end_user_restricted_registry_cache_key()}"]
+    assert prisma.db.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_identity_prefetch_does_not_cache_an_absent_entry_as_present():
+    redis = CountingRedis({})
+    cache = _cache(redis)
+
+    await prefetch_identity_keys([end_user_cache_key("eu-absent")], cache)
+
+    assert redis.round_trips == 1
+    assert cache.in_memory_cache.get_cache(end_user_cache_key("eu-absent")) is None

@@ -17,10 +17,12 @@ import SCIMConfig from "@/components/SCIM";
 import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings/LoggingSettings";
 import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
+import TeamAdminEditableFieldsSettings from "@/components/Settings/AdminSettings/UISettings/TeamAdminEditableFieldsSettings";
 import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings";
 import CyberArk from "@/components/Settings/AdminSettings/CyberArk/CyberArk";
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
+import WebSearchInterceptionSettings from "@/components/Settings/AdminSettings/WebSearchInterceptionSettings/WebSearchInterceptionSettings";
 import SSOModals from "@/components/SSOModals";
 import {
   emptySSOSettingsFormValues,
@@ -382,6 +384,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       children: (
         <div className="flex flex-col gap-4">
           <UISettings />
+          <TeamAdminEditableFieldsSettings />
           <UserBannerSettings />
         </div>
       ),
@@ -405,6 +408,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       key: "plugins",
       label: "Plugins",
       children: <PluginSettings />,
+    },
+    {
+      key: "web-search-interception",
+      label: "Web Search Interception",
+      children: <WebSearchInterceptionSettings />,
     },
   ];
 

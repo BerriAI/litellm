@@ -15,6 +15,14 @@ all read the whole table and all pass. That is deliberate: a rule wide enough to
 reach them fires on most ordinary migrations, and a marker everyone adds by reflex
 stops carrying information. The outage this was written for was a backfill.
 
+The one schema change banned outright is `ADD COLUMN ... DEFAULT` on a table in
+`REQUEST_LOG_TABLES`, the tables that hold a row per request. Postgres 11 stores such
+a default as metadata and touches no rows, but Postgres 10, which is supported,
+rewrites the whole heap and rebuilds every index under an `ACCESS EXCLUSIVE` lock,
+which on a spend-log-sized table is the same outage as a backfill. Every other table
+is small enough that the rewrite is not worth a rule, and a column added to a log
+table without a default is still free on every version.
+
 Flagged, per statement, by its leading keyword:
 
   UPDATE      rewrites every matching row, and `WHERE` does not bound the scan
@@ -32,6 +40,10 @@ Flagged, per statement, by its leading keyword:
               against the part of the statement holding it, so a writable CTE
               bounded by its own `VALUES` list is not handed the query the statement
               ends with as the rows it copies
+  ALTER       only `ALTER TABLE` on a request-log table, and only when one of its
+              actions adds a column with a `DEFAULT`. An `ALTER COLUMN ... SET
+              DEFAULT` written after the column exists changes metadata alone, so it
+              passes, as does an `ADD CONSTRAINT`
 
 Referential actions (`ON DELETE CASCADE`, `ON UPDATE CASCADE`) are schema, never a
 statement's leading keyword, so they pass.
@@ -85,7 +97,7 @@ would let one written for a `DO` block silence a rewrite added to that block lat
 
 `GRANDFATHERED` freezes the violations that predate this check. Prisma records a
 checksum for every applied migration and this repo treats applied files as
-immutable, so those two cannot take an inline marker. The set is closed; a new
+immutable, so those files cannot take an inline marker. The set is closed; a new
 migration belongs nowhere in it.
 """
 
@@ -102,10 +114,14 @@ MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "
 
 GRANDFATHERED = frozenset(
     {
+        "20250425182129_add_session_id",
         "20260817000000_shadow_eval_multi_key",
+        "20260818000000_add_spend_log_timestamps",
         "20260818224500_add_shadow_eval_stopped_by",
     }
 )
+
+REQUEST_LOG_TABLES = frozenset({"LiteLLM_SpendLogs", "LiteLLM_ErrorLogs"})
 
 MARKER = re.compile(r"--[ \t]*data-migration-ok:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
 DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")
@@ -128,6 +144,8 @@ DEFINES_A_ROUTINE = re.compile(
 )
 QUALIFIED_NAME = r"(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_$]*)"
 ROUTINE_NAME = re.compile(rf"\s*(?:{QUALIFIED_NAME}\s*\.\s*)?({QUALIFIED_NAME})")
+TABLE_NAME = ROUTINE_NAME
+ALTERS_A_TABLE = re.compile(r"\bALTER\s+TABLE\b(?:\s+IF\s+EXISTS)?(?:\s+ONLY)?", re.IGNORECASE)
 OPENS_A_CALL = re.compile(r"\s*\(")
 NAMES_AN_INDEX = re.compile(r"\bCREATE\b.+\bINDEX\b", re.IGNORECASE | re.DOTALL)
 INTRODUCES_A_RELATION = frozenset({"TABLE", "INTO", "REFERENCES", "EXISTS", "COPY"})
@@ -185,6 +203,10 @@ statement with the bound spelled out:
 
     -- data-migration-ok: <what bounds this>
     UPDATE ...
+
+On Postgres 10 an `ADD COLUMN ... DEFAULT` on a request-log table rewrites the table
+too. Add the column nullable with no default, then set the default in a separate
+`ALTER COLUMN ... SET DEFAULT`, which never touches existing rows.
 """
 
 
@@ -537,6 +559,51 @@ def row_source_in(text: str) -> str | None:
     return next((word for word in ("SELECT", "TABLE") if contains(text, word)), None)
 
 
+def rewrites_a_log_table(clause: str, region: str, base: int) -> str | None:
+    """The keyword to report when an `ALTER TABLE` adds a defaulted column to a request-log
+    table, which Postgres 10 answers by rewriting the whole table. The table is read from the
+    region rather than the masked clause, since masking blanks the quoted name in place, after
+    stepping over any comment sitting between `TABLE` and the name, which masking blanked as
+    well. Each action of the statement is read on its own so that a `SET DEFAULT` on one column
+    does not stand in for a default on a column another action adds."""
+    altered = ALTERS_A_TABLE.search(clause)
+    if altered is None:
+        return None
+    named = TABLE_NAME.match(region, skip_comments(region, base + altered.end()))
+    if named is None or named.group(1).strip('"') not in REQUEST_LOG_TABLES:
+        return None
+    actions = strip_parens(clause[named.end() - base :]).split(",")
+    if not any(adds_a_defaulted_column(action) for action in actions):
+        return None
+    return f"ADD COLUMN ... DEFAULT on {named.group(1)}"
+
+
+def skip_comments(sql: str, start: int) -> int:
+    index = start
+    while index < len(sql):
+        pair = sql[index : index + 2]
+        if pair == "--":
+            stop = sql.find("\n", index)
+            index = len(sql) if stop == -1 else stop
+        elif pair == "/*":
+            index = skip_block_comment(sql, index)
+        elif sql[index].isspace():
+            index += 1
+        else:
+            return index
+    return index
+
+
+def adds_a_defaulted_column(action: str) -> bool:
+    """Whether an `ALTER TABLE` action is an `ADD COLUMN` carrying a column default. A `DEFAULT`
+    right after `SET` is the referential action of an inline foreign key, which fills nothing
+    in, so it does not count."""
+    words = tuple(word.group().upper() for word in FIRST_WORD.finditer(action))
+    if words[:1] != ("ADD",) or words[1:2] == ("CONSTRAINT",):
+        return False
+    return any(word == "DEFAULT" and previous != "SET" for previous, word in zip(words, words[1:]))
+
+
 def hands_off_sql(statement: str, executed: frozenset[str]) -> bool:
     """Whether a statement gives the server a string literal to run as SQL. `EXECUTE` runs one
     outright, and so does `DO`, whose body is a string wherever it is not dollar-quoted. An
@@ -724,9 +791,12 @@ def scan_region(
                         )
 
             keyword = offending_keyword(clause)
-            if keyword is None or exempt:
+            if exempt:
                 continue
-            yield Violation(migration, line_of(document, offset + keyword_start(clause, base)), keyword)
+            found = keyword or rewrites_a_log_table(clause, region, base)
+            if found is None:
+                continue
+            yield Violation(migration, line_of(document, offset + keyword_start(clause, base)), found)
 
     for body in bodies:
         if not runs_when_applied(masked, region, bodies, runnable, identifiers, body):

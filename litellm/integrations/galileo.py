@@ -396,12 +396,13 @@ class GalileoObserve(CustomLogger):
         )
 
     @staticmethod
-    def _log_v2_payload_validation(payload: dict[str, Any]) -> None:
+    def _log_v2_payload_validation(payload: dict[str, object]) -> None:
         missing_fields: Final[list[str]] = []
-        traces: Final[Sequence[object]] = payload.get("traces", [])
-        if not traces:
+        traces_value: Final = payload.get("traces", [])
+        if not traces_value:
             missing_fields.append("traces")
 
+        traces: Final[Sequence[object]] = traces_value if isinstance(traces_value, list) else []
         for trace_index, trace in enumerate(traces):
             if not isinstance(trace, dict):
                 continue
@@ -425,8 +426,8 @@ class GalileoObserve(CustomLogger):
                 missing_fields,
             )
 
-    def _log_flush_payload(self, url: str, payload: dict[str, Any]) -> None:
-        traces: Final[Sequence[object]] = payload.get("traces", [])
+    def _log_flush_payload(self, url: str, payload: dict[str, object]) -> None:
+        traces: Final = payload.get("traces")
         verbose_logger.debug(
             "Galileo Logger flush URL: %s trace_count=%s",
             url,
