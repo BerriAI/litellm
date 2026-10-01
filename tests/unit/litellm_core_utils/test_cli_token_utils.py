@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.cli_keyring import (
     KEYRING_ACCOUNT,
     KEYRING_PREFLIGHT_ACCOUNT,
     KEYRING_SERVICE,
+    KEYRING_STAGING_ACCOUNT,
     KeyringDisabled,
     KeyringDiscardsWrites,
     KeyringNotInstalled,
@@ -1058,6 +1059,31 @@ class _KeychainHeldByABlockedWrite(_NeverAnsweringKeyringModule):
         return self.stored
 
 
+class _StagingKeyring:
+    """A keychain that keeps every account separately, and can die between the delete and the add
+    of a write the way an interrupted macOS delete-then-add does."""
+
+    def __init__(self, *, die_after_delete=()):
+        self.store = {}
+        self.calls = []
+        self.die_after_delete = set(die_after_delete)
+
+    def get_password(self, service_name, username):
+        self.calls.append(("get", service_name, username))
+        return self.store.get(username)
+
+    def set_password(self, service_name, username, password):
+        self.calls.append(("set", service_name, username))
+        self.store.pop(username, None)
+        if username in self.die_after_delete:
+            raise RuntimeError("killed mid-write")
+        self.store[username] = password
+
+    def delete_password(self, service_name, username):
+        self.calls.append(("delete", service_name, username))
+        self.store.pop(username, None)
+
+
 def _answered_within(seconds, call):
     answers = []
     worker = threading.Thread(target=lambda: answers.append(call()), daemon=True)
@@ -1079,7 +1105,7 @@ def install_fake_keyring(monkeypatch):
 
 class TestKeyringVault:
     def test_round_trips_through_the_installed_keyring(self, install_fake_keyring):
-        fake = install_fake_keyring(_FakeKeyringModule())
+        fake = install_fake_keyring(_StagingKeyring())
         vault = KeyringVault()
 
         assert vault.write("blob-1") == SecretStored()
@@ -1087,7 +1113,8 @@ class TestKeyringVault:
         assert vault.erase() == SecretErased()
         assert vault.read() == SecretMissing()
         assert {call[1] for call in fake.calls} == {KEYRING_SERVICE}
-        assert {call[2] for call in fake.calls} == {KEYRING_ACCOUNT, KEYRING_PREFLIGHT_ACCOUNT}
+        assert {call[2] for call in fake.calls} == {KEYRING_ACCOUNT, KEYRING_STAGING_ACCOUNT, KEYRING_PREFLIGHT_ACCOUNT}
+        assert KEYRING_STAGING_ACCOUNT not in fake.store
 
     def test_the_kill_switch_reports_no_keychain(self, monkeypatch):
         """`LITELLM_CLI_DISABLE_KEYRING` has to work without importing keyring, because keyring
@@ -1231,6 +1258,68 @@ class TestKeyringVault:
         install_fake_keyring(_FakeKeyringModule(get_error=RuntimeError("locked")))
 
         assert KeyringVault().erase() == KeyringUnreachable()
+
+    def test_a_write_parks_the_secret_in_staging_before_touching_the_live_slot(self, install_fake_keyring):
+        """The live slot is only replaced once the new secret has been read back from staging, so a
+        write the keychain takes badly can no longer strand the previous credential."""
+        fake = install_fake_keyring(_StagingKeyring())
+        vault = KeyringVault()
+        fake.store[KEYRING_ACCOUNT] = "blob-old"
+
+        assert vault.write("blob-new") == SecretStored()
+
+        sets = [call for call in fake.calls if call[0] == "set" and call[2] != KEYRING_PREFLIGHT_ACCOUNT]
+        assert [call[2] for call in sets] == [KEYRING_STAGING_ACCOUNT, KEYRING_ACCOUNT]
+        assert vault.read() == SecretFound("blob-new")
+        assert KEYRING_STAGING_ACCOUNT not in fake.store
+
+    def test_a_staging_write_that_fails_leaves_the_previous_credential_untouched(self, install_fake_keyring):
+        """A keychain that refuses the new secret must cost the caller that secret, never the one it
+        is replacing. This is the shape of #43374: the refresh already burned the old token
+        server-side, so losing the stored copy too is what logged the CLI out."""
+        fake = install_fake_keyring(_StagingKeyring(die_after_delete={KEYRING_STAGING_ACCOUNT}))
+        vault = KeyringVault()
+        fake.store[KEYRING_ACCOUNT] = "blob-old"
+
+        assert vault.write("blob-new") == KeyringUnreachable()
+        assert vault.read() == SecretFound("blob-old")
+
+    def test_an_interrupted_live_write_is_recovered_from_staging_on_the_next_read(self, install_fake_keyring):
+        """A kill between the live slot's delete and add used to leave no credential at all: the
+        server had already burned the old refresh token, and the new pair died in memory with the
+        process. The staged copy is the newest credential this machine saved, so the next read
+        hands it back instead of reporting the login gone."""
+        fake = install_fake_keyring(_StagingKeyring(die_after_delete={KEYRING_ACCOUNT}))
+        vault = KeyringVault()
+        fake.store[KEYRING_ACCOUNT] = "blob-old"
+
+        assert vault.write("blob-new") == KeyringUnreachable()
+        assert fake.store.get(KEYRING_ACCOUNT) is None
+        assert fake.store[KEYRING_STAGING_ACCOUNT] == "blob-new"
+
+        assert vault.read() == SecretFound("blob-new")
+        assert fake.store[KEYRING_ACCOUNT] == "blob-new"
+
+    def test_a_stranded_staging_copy_does_not_replace_a_live_credential(self, install_fake_keyring):
+        """Promotion is only for a live slot that did not survive its write. A live slot that still
+        answers keeps serving, and the next save overwrites the stranded staging copy."""
+        fake = install_fake_keyring(_StagingKeyring())
+        vault = KeyringVault()
+        fake.store[KEYRING_ACCOUNT] = "blob-old"
+        fake.store[KEYRING_STAGING_ACCOUNT] = "blob-stranded"
+
+        assert vault.read() == SecretFound("blob-old")
+
+    def test_logout_removes_a_stranded_staging_copy(self, install_fake_keyring):
+        """A staging copy a killed write left behind must not resurrect the login that was just
+        ended the next time anything reads the vault."""
+        fake = install_fake_keyring(_StagingKeyring())
+        vault = KeyringVault()
+        fake.store[KEYRING_STAGING_ACCOUNT] = "blob-stranded"
+
+        assert vault.erase() == SecretErased()
+        assert fake.store == {}
+        assert vault.read() == SecretMissing()
 
 
 class TestIsCliTokenFreshWithExpiresAt:
