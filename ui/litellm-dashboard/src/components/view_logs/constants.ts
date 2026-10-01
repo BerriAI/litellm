@@ -28,6 +28,11 @@ export const SPAN_TYPE_LABELS: Record<string, string> = {
   batch: "Batch",
 };
 
+export const CREDENTIAL_LABELS: Record<string, string> = {
+  true: "Client OAuth token",
+  false: "Configured key",
+};
+
 export const QUICK_SELECT_OPTIONS: { label: string; value: number; unit: string }[] = [
   { label: "Last Minute", value: 1, unit: "minutes" },
   { label: "Last 15 Minutes", value: 15, unit: "minutes" },

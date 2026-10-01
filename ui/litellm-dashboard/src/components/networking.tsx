@@ -2017,6 +2017,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  used_client_oauth_token?: string;
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;

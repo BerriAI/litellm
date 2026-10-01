@@ -87,6 +87,7 @@ describe("RequestLogsFilters", () => {
       "Span Type",
       "Status",
       "Cache",
+      "Credential",
       "Key Alias",
       "User ID",
       "End User",
@@ -288,6 +289,16 @@ describe("RequestLogsFilters", () => {
   });
 
   it.each([
+    ["", "All Credentials"],
+    ["true", "Client OAuth token"],
+    ["false", "Configured key"],
+  ])("shows the human label on the Credential trigger for %s", async (credential, label) => {
+    renderFilters(credential === "" ? {} : { [LOG_FILTER_IDS.CREDENTIAL]: credential });
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it.each([
     ["", "All Types"],
     ["llm", "LLM"],
     ["agent", "Agent"],
@@ -330,6 +341,29 @@ describe("RequestLogsFilters", () => {
     await user.click(await screen.findByRole("option", { name: label }));
 
     expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CACHE_STATUS, expected);
+  });
+
+  it.each([
+    ["Client OAuth token", "true"],
+    ["Configured key", "false"],
+  ])("selecting %s sets the credential filter to %s", async (label, expected) => {
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByText("All Credentials"));
+    await user.click(await screen.findByRole("option", { name: label }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CREDENTIAL, expected);
+  });
+
+  it("selecting All Credentials clears the credential filter", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.CREDENTIAL]: "true" });
+
+    await user.click(await screen.findByText("Client OAuth token"));
+    await user.click(await screen.findByRole("option", { name: "All Credentials" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.CREDENTIAL, undefined);
   });
 
   it("stores the raw status code when a labeled error code is picked", async () => {

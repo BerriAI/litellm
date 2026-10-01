@@ -339,6 +339,13 @@ def get_or_create_metadata_bucket(
     return metadata_key, metadata_bucket
 
 
+def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapping[str, object] | None) -> object:
+    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
+    if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
+        return litellm_metadata["used_client_oauth_token"]
+    return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
