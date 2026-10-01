@@ -63,12 +63,8 @@ def _should_update_field(field: str, value: object, sent_fields: AbstractSet[str
         return False
     if field in sent_fields and (isinstance(value, bool) or field in _CLEARABLE_LIST_FIELDS):
         return True
-    if isinstance(value, (list, dict)):
-        match value:
-            case [] | {}:
-                return False
-            case _:
-                return True
+    if isinstance(value, (list, dict)) and not value:
+        return False
     return value != 0
 
 

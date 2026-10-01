@@ -51,6 +51,9 @@ client = TestClient(app)
         ("models", [], frozenset({"models"}), True),
         ("models", [], frozenset(), False),
         ("metadata", {}, frozenset({"metadata"}), False),
+        ("object_permission", {"mcp_servers": ["s1"]}, frozenset(), True),
+        ("object_permission", {"mcp_servers": ["s1"]}, frozenset({"object_permission"}), True),
+        ("metadata", ["m1"], frozenset(), True),
         ("models", ["m1"], frozenset(), True),
         ("max_budget", 0, frozenset({"max_budget"}), False),
         ("max_budget", 5.0, frozenset(), True),
@@ -63,6 +66,9 @@ client = TestClient(app)
         "clear-models",
         "omitted-empty-models",
         "empty-metadata",
+        "nonempty-object-permission-omitted",
+        "nonempty-object-permission-sent",
+        "nonempty-list-other-field",
         "nonempty-models",
         "zero-budget",
         "nonzero-budget",
@@ -969,6 +975,33 @@ def test_customer_update_clears_models_allowlist(mock_prisma_client, mock_user_a
 
     assert response.status_code == 200, response.text
     assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["models"] == []
+
+
+def test_customer_update_applies_nonempty_object_permission(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False, "object_permission_id": None})
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    updated_permission = MagicMock()
+    updated_permission.object_permission_id = "permission-1"
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(return_value=updated_permission)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="c1", blocked=False, object_permission_id="permission-1")
+    )
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "object_permission": {"mcp_servers": ["s1"]}},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_awaited_once()
+    permission_upsert = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs
+    assert permission_upsert["data"]["create"]["mcp_servers"] == ["s1"]
+    assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["object_permission_id"] == (
+        "permission-1"
+    )
 
 
 def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
