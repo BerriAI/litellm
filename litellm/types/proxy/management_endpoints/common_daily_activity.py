@@ -101,6 +101,22 @@ class DailySpendMetadata(BaseModel):
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
+    api_key_limit: int | None = Field(
+        default=None,
+        description="When set, api_keys and every api_key_breakdown list at most this many keys, "
+        "ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+    )
+    total_api_keys: int | None = Field(
+        default=None,
+        description="Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key "
+        "lists are truncated to the highest-spend keys.",
+    )
+    entity_total_api_keys: dict[str, int] | None = Field(
+        default=None,
+        description="Distinct API keys per entity over the requested range, set when the entity breakdown is "
+        "included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys "
+        "among the top api_key_limit keys overall.",
+    )
 
 
 class SpendAnalyticsPaginatedResponse(BaseModel):

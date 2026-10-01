@@ -125,6 +125,8 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    daily_activity_repository,
+    daily_activity_scope,
     get_daily_activity_aggregated,
 )
 from litellm.proxy.management_endpoints.common_utils import (
@@ -6761,18 +6763,22 @@ async def get_team_daily_activity_aggregated(
         proxy_logging_obj=proxy_logging_obj,
     )
 
+    repository: Final = daily_activity_repository(prisma_client)
+    activity_scope: Final = daily_activity_scope(
+        "litellm_dailyteamspend",
+        "team_id",
+        scope.team_ids,
+        scope.exclude_team_ids,
+        scope.api_key_filter,
+        start_date,
+        end_date,
+        model,
+        timezone,
+    )
     return await get_daily_activity_aggregated(
-        prisma_client=prisma_client,
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=scope.team_ids,
+        repository,
+        activity_scope,
         entity_metadata_field=scope.team_alias_metadata,
-        start_date=start_date,
-        end_date=end_date,
-        model=model,
-        api_key=scope.api_key_filter,
-        exclude_entity_ids=scope.exclude_team_ids,
-        timezone_offset_minutes=timezone,
         include_entity_breakdown=True,
     )
 

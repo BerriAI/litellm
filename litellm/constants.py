@@ -2162,6 +2162,17 @@ MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
 PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
 PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
+USAGE_TOP_API_KEYS_DEFAULT: Final[int] = 100
+USAGE_TOP_API_KEYS_MAX: Final[int] = 1000
+USAGE_KEY_PAGE_DEFAULT: Final[int] = 50
+USAGE_KEY_PAGE_MAX: Final[int] = 100
+USAGE_KEY_SEARCH_DEFAULT: Final[int] = 100
+USAGE_KEY_SEARCH_MAX: Final[int] = 100
+USAGE_MODEL_TOP_KEYS_DEFAULT: Final[int] = 5
+USAGE_MODEL_TOP_KEYS_MAX: Final[int] = 100
+USAGE_CACHE_LEAKAGE_KEYS_DEFAULT: Final[int] = 20
+USAGE_CACHE_LEAKAGE_KEYS_MAX: Final[int] = 100
+USAGE_EXPORT_BATCH_SIZE: Final[int] = 1000
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90

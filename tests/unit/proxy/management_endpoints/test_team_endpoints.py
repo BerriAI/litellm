@@ -14669,15 +14669,17 @@ async def test_get_team_daily_activity_aggregated_scopes_and_flags(mock_db_clien
             )
 
             mock_aggregated.assert_called_once()
-            call_kwargs = mock_aggregated.call_args[1]
-            assert call_kwargs["api_key"] == ["user_key_1"]
-            assert call_kwargs["entity_id"] == [team_id]
+            repository, scope = mock_aggregated.call_args.args
+            call_kwargs = mock_aggregated.call_args.kwargs
+            assert repository is not None
+            assert scope.api_keys == ("user_key_1",)
+            assert scope.entity_ids == (team_id,)
             assert call_kwargs["entity_metadata_field"] == {
                 team_id: {"team_alias": "Test Team"}
             }
             assert call_kwargs["include_entity_breakdown"] is True
-            assert call_kwargs["timezone_offset_minutes"] == 480
-            assert call_kwargs["table_name"] == "litellm_dailyteamspend"
+            assert scope.timezone_offset_minutes == 480
+            assert scope.table.value == "litellm_dailyteamspend"
 
 
 @pytest.mark.asyncio
