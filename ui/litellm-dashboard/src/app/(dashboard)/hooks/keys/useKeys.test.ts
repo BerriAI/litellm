@@ -564,16 +564,13 @@ describe("useKeys", () => {
         json: async () => mockKeysResponse,
       });
 
-      const { result } = renderHook(
-        () =>
-          useKeys(1, 10, {
-            userID: "user-1",
-            includeTeamKeys: false,
-            includeCreatedByKeys: false,
-            substringMatching: false,
-          }),
-        { wrapper },
-      );
+      const scopedOptions = {
+        userID: "user-1",
+        includeTeamKeys: false,
+        includeCreatedByKeys: false,
+        substringMatching: false,
+      };
+      const { result } = renderHook(() => useKeys(1, 10, scopedOptions), { wrapper });
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
@@ -608,19 +605,19 @@ describe("useKeys", () => {
     });
 
     it("refetches under a separate cache key when the scope options differ", async () => {
+      const scopeOptions = (scoped: boolean) => ({
+        userID: scoped ? "user-1" : undefined,
+        includeTeamKeys: !scoped,
+        includeCreatedByKeys: !scoped,
+        substringMatching: !scoped,
+      });
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => mockKeysResponse,
       });
 
       const { result, rerender } = renderHook(
-        ({ scoped }: { scoped: boolean }) =>
-          useKeys(1, 10, {
-            userID: scoped ? "user-1" : undefined,
-            includeTeamKeys: !scoped,
-            includeCreatedByKeys: !scoped,
-            substringMatching: !scoped,
-          }),
+        ({ scoped }: { scoped: boolean }) => useKeys(1, 10, scopeOptions(scoped)),
         { wrapper, initialProps: { scoped: true } },
       );
 
