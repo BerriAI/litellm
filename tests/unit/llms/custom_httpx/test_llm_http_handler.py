@@ -4,6 +4,8 @@ import json
 import logging
 import threading
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -3979,6 +3981,93 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert events[6]["usage"] == {"type": "duration", "seconds": 2.0}
     assert speech_client.requests[0].streaming_config.config.model == "chirp_3"
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
+
+
+class _PlainWebSocketBackend:
+    def __init__(self, reply: str | None) -> None:
+        self.paths: Final[list[str]] = []
+        self.frames: Final[list[str]] = []
+        self._reply: Final = reply
+
+    async def handle(self, ws) -> None:
+        self.paths.append(ws.request.path)
+        self.frames.append(await ws.recv())
+        if self._reply is not None:
+            await ws.send(self._reply)
+
+
+def _session_logging_obj() -> Mock:
+    logging_obj = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    return logging_obj
+
+
+@asynccontextmanager
+async def _serve_on_http_api_base(backend: _PlainWebSocketBackend) -> AsyncIterator[str]:
+    import websockets
+
+    async with websockets.serve(backend.handle, "127.0.0.1", 0) as server:
+        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_opens_a_ws_backend_from_an_http_api_base():
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    backend = _PlainWebSocketBackend(reply=None)
+    client_ws = _ScriptedClientWebSocket([], last_event_type="never_sent")
+
+    async with _serve_on_http_api_base(backend) as api_base:
+        await BaseLLMHTTPHandler().async_realtime(
+            model="gemini-3.8-live",
+            websocket=client_ws,
+            logging_obj=_session_logging_obj(),
+            provider_config=GeminiRealtimeConfig(),
+            headers={},
+            api_base=api_base,
+            api_key="test-key",
+        )
+
+    assert backend.paths == [
+        "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=test-key"
+    ]
+    assert json.loads(backend.frames[0])["setup"]["model"] == "models/gemini-3.8-live"
+    assert client_ws.events == [("close", (1000, "upstream websocket closed with code 1000"))]
+
+
+@pytest.mark.asyncio
+async def test_async_responses_websocket_relays_through_a_ws_backend_from_an_http_api_base():
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    completed = json.dumps({"type": "response.completed", "response": {"id": "resp_1", "status": "completed"}})
+    backend = _PlainWebSocketBackend(reply=completed)
+    client_ws = _ScriptedClientWebSocket(
+        [json.dumps({"type": "response.create", "model": "gpt-5.6", "input": "hi"})],
+        last_event_type="response.completed",
+    )
+
+    async with _serve_on_http_api_base(backend) as api_base:
+        await BaseLLMHTTPHandler().async_responses_websocket(
+            model="gpt-5.6",
+            websocket=client_ws,
+            logging_obj=_session_logging_obj(),
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            api_base=f"{api_base}/v1",
+            api_key="sk-test",
+            custom_llm_provider="openai",
+        )
+
+    assert backend.paths == ["/v1/responses?model=gpt-5.6"]
+    assert backend.frames == [json.dumps({"type": "response.create", "model": "gpt-5.6", "input": "hi"})]
+    assert [name for name, _ in client_ws.events] == ["send_text"]
+    assert [(event["type"], event["response"]["status"]) for event in client_ws.sent_events()] == [
+        ("response.completed", "completed")
+    ]
 
 
 @pytest.mark.asyncio
