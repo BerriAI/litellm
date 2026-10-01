@@ -284,6 +284,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_272k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
+    cache_creation_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_creation_input_token_cost_above_1hr: float | None
     cache_creation_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
@@ -300,6 +301,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens: float | None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
+    cache_read_input_token_cost_above_272k_tokens_ultrafast: ReadOnly[float | None]
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
@@ -319,6 +321,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: float | None
     input_cost_per_token_above_272k_tokens_flex: float | None
+    input_cost_per_token_above_272k_tokens_ultrafast: ReadOnly[float | None]
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
@@ -329,6 +332,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_video_per_second: float | None  # only for vertex ai models
     input_cost_per_audio_token_batches: ReadOnly[float | None]
     input_cost_per_image_token_batches: ReadOnly[float | None]
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
@@ -359,6 +363,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: float | None
     output_cost_per_token_above_272k_tokens_flex: float | None
+    output_cost_per_token_above_272k_tokens_ultrafast: ReadOnly[float | None]
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
@@ -2784,6 +2789,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     acompletion: bool | None
     preset_cache_key: str | None
     no_log: bool | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     input_cost_per_token: float | None
     output_cost_per_token: float | None
@@ -3180,6 +3186,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     team_alias: str | None
     team_id: str | None
+    used_client_oauth_token: ReadOnly[bool | None]
 
 
 class AzureSpillover(TypedDict):
@@ -3709,6 +3716,7 @@ class MirroredPricingParams(BaseModel):
 
 class CustomPricingLiteLLMParams(MirroredPricingParams):
     ## CUSTOM PRICING ##
+    cost_per_second: float | None = None
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
@@ -3734,6 +3742,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_ultrafast: float | None = None
     cache_creation_input_token_cost_flex: float | None = None
     cache_creation_input_token_cost_priority: float | None = None
     cache_creation_input_token_cost_ultrafast: float | None = None
@@ -3746,6 +3755,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_ultrafast: float | None = None
     cache_read_input_token_cost_batches: float | None = None
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
@@ -3762,6 +3772,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
+    input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     input_cost_per_token_above_200k_tokens_batches: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
@@ -3788,6 +3799,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
+    output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     output_cost_per_token_above_200k_tokens_batches: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
@@ -4142,6 +4154,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
     DARKBLOOM = "darkbloom"
