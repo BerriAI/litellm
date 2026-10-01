@@ -199,10 +199,8 @@ def test_customer_model_validation_does_not_break_other_customers(gateway: Gatew
             "/customer/new",
             {"user_id": invalid_members_id, "models": [1, 2]},
         )
-        assert invalid_string.status_code != 500, invalid_string.text
-        assert invalid_members.status_code != 500, invalid_members.text
-        unrelated_info: Final = gateway.get("/customer/info", {"end_user_id": unrelated})
-        supported: Final = "models" in unrelated_info
+        assert invalid_string.status_code == 422, invalid_string.text
+        assert invalid_members.status_code == 422, invalid_members.text
         empty_string: Final = gateway.request(
             "POST",
             "/customer/new",
@@ -212,15 +210,7 @@ def test_customer_model_validation_does_not_break_other_customers(gateway: Gatew
         empty_string_info: Final = gateway.get(
             "/customer/info", {"end_user_id": string_value(empty_string.json()["user_id"])}
         )
-        assert empty_string_info.get("models") == ([""] if supported else None), empty_string_info
-        if supported:
-            assert invalid_string.status_code == 422, invalid_string.text
-            assert invalid_members.status_code == 422, invalid_members.text
-        else:
-            assert invalid_string.status_code == 200, invalid_string.text
-            assert invalid_members.status_code == 200, invalid_members.text
-            assert "models" not in gateway.get("/customer/info", {"end_user_id": invalid_string_id})
-            assert "models" not in gateway.get("/customer/info", {"end_user_id": invalid_members_id})
+        assert empty_string_info["models"] == [""], empty_string_info
         served: Final = _customer_request(gateway, key, model, unrelated, wire)
         assert served.status_code == 200, served.text
 

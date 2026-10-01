@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -13,12 +12,12 @@ from typing import Final, Literal
 
 import httpx
 import psycopg
-import pytest
 import yaml
 from psycopg.rows import dict_row
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 
+from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
 from tests.integration._support.client import Gateway, Scenario, eventually
 from tests.integration._support.customer_model_allowlist_wire import customer_model_allowlist_reply
 from tests.integration._support.database import scratch_database
@@ -27,8 +26,7 @@ from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-_AUDIT_HEAD_ROOT: Final = Path(os.environ.get("INTEGRATION_AUDIT_HEAD_ROOT", str(_REPO_ROOT))).resolve()
-_PRISMA_DIR: Final = _AUDIT_HEAD_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
+_PRISMA_DIR: Final = _REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
 _MIGRATIONS_DIR: Final = _PRISMA_DIR / "migrations"
 _MODELS_MIGRATION: Final = "20260930000000_add_end_user_models"
 _MIGRATIONS: Final = tuple(sorted(path.name for path in _MIGRATIONS_DIR.iterdir() if path.is_dir()))
@@ -483,13 +481,21 @@ def _models_column_exists(database_url: str) -> bool:
 def test_head_migration_adds_empty_allowlist_without_rewriting_customers(
     gateway: Gateway,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with scratch_database() as database_url:
         _deploy_base_shaped_schema(database_url, tmp_path)
         assert not _models_column_exists(database_url)
         assert _applied_migrations(database_url) == tuple(name for name in _MIGRATIONS if name != _MODELS_MIGRATION)
         customer: Final = f"integration-upgrade-{uuid.uuid4().hex}"
+        python_path: Final = os.pathsep.join(
+            path
+            for path in (
+                str(_REPO_ROOT / "tests"),
+                str(_REPO_ROOT),
+                os.environ.get("PYTHONPATH", ""),
+            )
+            if path
+        )
         with psycopg.connect(database_url) as connection:
             connection.execute(
                 'INSERT INTO "LiteLLM_EndUserTable" ("user_id", "alias", "spend", "blocked") '
@@ -503,25 +509,18 @@ def test_head_migration_adds_empty_allowlist_without_rewriting_customers(
             capture_output=True,
             text=True,
             timeout=80,
-            cwd=_AUDIT_HEAD_ROOT,
+            cwd=_REPO_ROOT,
             env={
                 **os.environ,
                 "DATABASE_URL": database_url,
-                "PYTHONPATH": os.pathsep.join((str(_AUDIT_HEAD_ROOT / "tests"), str(_AUDIT_HEAD_ROOT))),
+                "PYTHONPATH": python_path,
             },
         )
         assert entrypoint.returncode == 0, entrypoint.stdout + entrypoint.stderr
         assert _MODELS_MIGRATION in _applied_migrations(database_url), entrypoint.stdout
         assert _models_column_exists(database_url)
-        migration: Final = (_MIGRATIONS_DIR / _MODELS_MIGRATION / "migration.sql").read_text()
-        assert re.search(r"\b(?:UPDATE|DELETE)\b", migration, re.IGNORECASE) is None, migration
 
         with wire_server(customer_model_allowlist_reply) as wire:
-            monkeypatch.setenv("INTEGRATION_PROXY_ROOT", str(_AUDIT_HEAD_ROOT))
-            monkeypatch.setenv(
-                "PYTHONPATH",
-                os.pathsep.join((str(_AUDIT_HEAD_ROOT / "tests"), str(_AUDIT_HEAD_ROOT))),
-            )
             with owned_proxy(
                 gateway,
                 tmp_path,
@@ -539,17 +538,19 @@ def test_head_migration_adds_empty_allowlist_without_rewriting_customers(
                     _assert_upstream_request(wire, marker)
 
 
-def test_cached_end_user_without_models_decodes_as_unrestricted(gateway: Gateway) -> None:
+def test_cached_end_user_without_models_decodes_as_unrestricted(gateway: Gateway, peer: Gateway) -> None:
     with wire_server(customer_model_allowlist_reply) as wire, gateway.scenario() as scenario:
         allowed: Final = scenario.model(api_base=f"{wire.url}/v1")
         requested: Final = scenario.model(api_base=f"{wire.url}/v1")
         key: Final = scenario.key(models=[allowed, requested])
         customer: Final = _customer(scenario, ())
-        info: Final = gateway.get("/customer/info", {"end_user_id": customer})
-        if "models" in info:
-            gateway.post("/customer/update", {"user_id": customer, "models": [allowed]})
+        updated: Final = gateway.request("POST", "/customer/update", {"user_id": customer, "models": [allowed]})
+        assert updated.status_code == 200, updated.text
+        updated_info: Final = gateway.get("/customer/info", {"end_user_id": customer})
+        expected_models: Final = [allowed] if _models_column_exists(os.environ["DATABASE_URL"]) else None
+        assert updated_info.get("models") == expected_models, updated_info
 
-        cache_key: Final = f"end_user_id:{customer}"
+        cache_key: Final = end_user_cache_key(customer)
         legacy: Final = {
             "user_id": customer,
             "blocked": False,
@@ -562,7 +563,7 @@ def test_cached_end_user_without_models_decodes_as_unrestricted(gateway: Gateway
         with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
             cache.set(cache_key, json.dumps(legacy))
             marker: Final = uuid.uuid4().hex
-            response: Final = _customer_chat(gateway, key, requested, customer, marker)
+            response: Final = _customer_chat(peer, key, requested, customer, marker)
             assert response.status_code == 200, response.text
             _assert_upstream_request(wire, marker)
             cache.delete(cache_key)

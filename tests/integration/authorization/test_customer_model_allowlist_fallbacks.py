@@ -1,5 +1,4 @@
 import json
-import os
 import uuid
 from pathlib import Path
 from typing import Final
@@ -95,7 +94,7 @@ def test_client_fallback_inside_customer_allowlist_is_served(gateway: Gateway) -
         _assert_requests(wire, marker, 1)
 
 
-def test_fallback_without_primary_has_distinct_base_and_head_errors(gateway: Gateway) -> None:
+def test_fallback_only_request_is_denied_by_customer_allowlist(gateway: Gateway) -> None:
     with wire_server(_reply) as wire, gateway.scenario() as scenario:
         allowed: Final = scenario.model(api_base=f"{wire.url}/v1")
         fallback: Final = scenario.model(api_base=f"{wire.url}/v1")
@@ -103,14 +102,8 @@ def test_fallback_without_primary_has_distinct_base_and_head_errors(gateway: Gat
         customer: Final = _customer(scenario, (allowed,))
         marker: Final = uuid.uuid4().hex
         response: Final = _chat(gateway, key, None, customer, marker, (fallback,))
-        error: Final = object_value(object_value(response.json())["error"])
-        audit_leg: Final = os.environ.get("LITELLM_CUSTOMER_ALLOWLIST_AUDIT_LEG", "head")
-        if audit_leg == "base":
-            assert response.status_code == 400, response.text
-            assert error["type"] == "invalid_request_error", response.text
-        else:
-            assert response.status_code == 403, response.text
-            assert error["type"] == "customer_model_access_denied", response.text
+        assert response.status_code == 403, response.text
+        assert "customer_model_access_denied" in response.text, response.text
         _assert_requests(wire, marker, 0)
 
 
