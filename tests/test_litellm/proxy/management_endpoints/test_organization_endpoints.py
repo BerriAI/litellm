@@ -1395,6 +1395,37 @@ async def test_new_organization_temp_budget_fields_go_to_budget_row_not_metadata
     assert json.loads(org_write.get("metadata", "{}")) == {}
 
 
+@pytest.mark.asyncio
+async def test_new_organization_without_models_succeeds_for_proxy_admin_with_restricted_key_models(monkeypatch):
+    """A proxy admin's own key model scope must not carry into org creation: the SSO
+    session key copies the user row's models, and scoped admins were getting a 400
+    on the dashboard's models-less /organization/new call."""
+    from litellm.proxy._types import LitellmUserRoles, NewOrganizationRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import new_organization
+    from litellm.proxy.utils import PrismaClient
+
+    prisma_client = MagicMock()
+    prisma_client.jsonify_object = MagicMock(side_effect=lambda data: PrismaClient.jsonify_object(prisma_client, data))
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    prisma_client.db.litellm_organizationtable.create = AsyncMock(return_value={"organization_id": "org-1"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+
+    response = await new_organization(
+        data=NewOrganizationRequest(organization_alias="org"),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            models=["gpt-4o-mini"],
+        ),
+    )
+
+    assert response == {"organization_id": "org-1"}
+    org_write = prisma_client.db.litellm_organizationtable.create.await_args.kwargs["data"]
+    assert org_write["models"] == []
+
+
 def test_v2_update_organization_is_in_openapi_schema():
     """PATCH /v2/organization/{organization_id} is documented in the generated OpenAPI spec."""
     from fastapi import FastAPI
