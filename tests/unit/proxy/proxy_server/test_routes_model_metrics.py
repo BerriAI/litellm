@@ -461,3 +461,50 @@ def test_alerting_settings_returns_database_values(client, auth_as, monkeypatch)
     assert setting["field_value"] == 60
     assert setting["stored_in_db"] is True
 
+@pytest.mark.parametrize(
+    ("source", "expected_value", "expected_stored_in_db"),
+    [
+        ("config", 60, False),
+        ("db", 90, True),
+        ("unset", None, None),
+        ("default", None, None),
+    ],
+)
+def test_alerting_field_helpers_cover_each_source(
+    source, expected_value, expected_stored_in_db
+):
+    config_values = {"budget_alert_ttl": 60}
+    db_values = {"budget_alert_ttl": 90}
+
+    assert (
+        proxy_server._alerting_field_value(
+            source,
+            "budget_alert_ttl",
+            config_values,
+            db_values,
+        )
+        == expected_value
+    )
+    assert proxy_server._alerting_stored_in_db(source) is expected_stored_in_db
+
+
+def test_alerting_field_response_uses_explicit_config_value():
+    settings = SettingsStore("general_settings")
+    settings.load_yaml({"alerting_args": {"budget_alert_ttl": 60}})
+    field_info = proxy_server.SlackAlertingArgs.model_fields["budget_alert_ttl"]
+
+    result = proxy_server._alerting_field_response(
+        settings=settings,
+        db_values={},
+        config_values={"budget_alert_ttl": 60},
+        allowed_args={"budget_alert_ttl": "Integer"},
+        field_name="budget_alert_ttl",
+        field_info=field_info,
+    )
+
+    assert result.field_name == "budget_alert_ttl"
+    assert result.field_type == "Integer"
+    assert result.field_value == 60
+    assert result.stored_in_db is False
+    assert result.source == "config"
+
