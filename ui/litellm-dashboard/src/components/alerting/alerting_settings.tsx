@@ -62,7 +62,7 @@ const AlertingSettings: React.FC<AlertingSettingsProps> = ({ accessToken, premiu
       return;
     }
 
-    let fieldValue = formValues;
+    const fieldValue = formValues;
 
     if (fieldValue == null || fieldValue == undefined) {
       return;
