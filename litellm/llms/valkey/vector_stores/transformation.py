@@ -254,7 +254,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         )
         try:
             raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
-            return self._to_response(raw_result, query_text, params.text_field)
+            return self._to_response(raw_result, query_text, params.text_field)  # pyright: ignore[reportUnknownArgumentType]  # raw_result flows from the from_url client whose return type the types-redis 4.6 stubs leave unknown; the shape is validated inside _to_response
         finally:
             client.close()
 
@@ -307,7 +307,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
                 knn, query_params=vec_params
             )
-            return self._to_response(raw_result, query_text, params.text_field)
+            return self._to_response(raw_result, query_text, params.text_field)  # pyright: ignore[reportUnknownArgumentType]  # raw_result flows from the from_url client whose return type the types-redis 4.6 stubs leave unknown; the shape is validated inside _to_response
         finally:
             await client.aclose()
 
