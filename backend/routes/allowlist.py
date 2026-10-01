@@ -81,7 +81,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     # Spend / analytics
     "/spend/",
     "/analytics/",
-    "/engine/",
+    "/lens/",
     "/v1/traces",
     "/global/",
     "/user_agent",
@@ -146,7 +146,7 @@ BACKEND_EXACT_PATHS: frozenset[str] = frozenset(
     {
         "/",
         "/routes",
-        "/engine",
+        "/lens",
         "/openapi.json",
         "/docs",
         "/docs/oauth2-redirect",
