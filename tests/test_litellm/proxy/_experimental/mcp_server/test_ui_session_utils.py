@@ -145,7 +145,7 @@ async def test_build_effective_auth_contexts_appends_admitted_user_context(monke
 
     assert contexts[-1].user_id == "user-42" and contexts[-1].team_id is None
     assert [ctx.team_id for ctx in contexts[:-1]] == ["team-one"]
-    reload_mock.assert_awaited_once_with("user-42")
+    reload_mock.assert_awaited_once_with("user-42", requires_fresh_policy=False)
 
 
 @pytest.mark.asyncio
@@ -198,7 +198,7 @@ async def test_acting_user_auth_returns_admitted_subject_for_non_admin_sessions(
     result = await acting_user_auth(user_auth)
 
     assert result.user_id == "user-42" and result.team_id is None
-    reload_mock.assert_awaited_once_with("user-42")
+    reload_mock.assert_awaited_once_with("user-42", requires_fresh_policy=False)
 
 
 @pytest.mark.asyncio

@@ -11,8 +11,6 @@ All /team management endpoints
 
 import asyncio
 import copy
-import csv
-import io
 import json
 import math
 import traceback
@@ -29,21 +27,18 @@ from typing import (
     NamedTuple,
     NoReturn,
     Protocol,
-    TypeAlias,
     TypeVar,
     cast,
 )
 
 import fastapi
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -127,15 +122,14 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     resolve_model_budget,
 )
+from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
-    get_daily_activity_export_rows,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
-    _is_user_org_admin_for_team,
-    _is_user_team_admin,
     _set_object_metadata_field,
     _team_member_has_permission,
     _update_metadata_fields,
@@ -201,7 +195,6 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router import Router
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
-    DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
@@ -210,14 +203,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkUpdateTeamMemberPermissionsRequest,
     BulkUpdateTeamMemberPermissionsResponse,
     GetTeamMemberPermissionsResponse,
-    TeamDailyActivityExportFormat,
-    TeamDailyActivityExportMetadata,
-    TeamDailyActivityExportResponse,
-    TeamDailyActivityExportRow,
-    TeamDailyActivityExportType,
-    TeamIdSearchFilter,
     TeamIdSearchMatch,
-    TeamKeyActivitySearchWhere,
     TeamListItem,
     TeamListResponse,
     TeamMemberAddResult,
@@ -491,45 +477,6 @@ async def _refresh_cached_team(
     )
 
 
-TeamAccessRole: TypeAlias = Literal["proxy_admin", "org_admin", "team_admin"]
-
-
-def _raise_team_access_denied() -> NoReturn:
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="You do not have access to this team",
-    )
-
-
-async def _resolve_team_access(
-    team_obj: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> TeamAccessRole | None:
-    """Strongest role the caller holds over ``team_obj``, or None when they hold none.
-
-    Org admin outranks team admin so a caller holding both keeps unrestricted edits.
-    """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return "proxy_admin"
-
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return "org_admin"
-
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return "team_admin"
-
-    return None
-
-
-async def _verify_team_access(
-    team_obj: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    """Raise 403 unless the caller is a proxy admin, an org admin for the team's org, or a team admin."""
-    if await _resolve_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict) is None:
-        _raise_team_access_denied()
-
-
 _GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
 
 
@@ -539,7 +486,7 @@ def _general_settings() -> Mapping[str, object]:
     return _GENERAL_SETTINGS.validate_python(general_settings)
 
 
-def _caller_edit_access(role: TeamAccessRole | None, general_settings: Mapping[str, object]) -> TeamEditAccess:
+def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, object]) -> TeamEditAccess:
     """What the caller may change on /team/update, reported on /team/info so the dashboard never re-derives it."""
     match role:
         case "proxy_admin" | "org_admin":
@@ -1173,7 +1120,7 @@ async def _check_user_team_limits(
 
     Only used by /team/new for standalone teams (organization_id is None).
     /team/update does NOT call this — an existing team's admin is already
-    authorized via _verify_team_access() and is not gated by their personal
+    authorized via the team access check and is not gated by their personal
     wallet. Org-scoped teams use _check_org_team_limits() instead.
     """
     # Validate team budget against user's max_budget
@@ -2290,16 +2237,16 @@ async def update_team(
             # Non-proxy-admins get the same 403 as an access denial so /team/update
             # cannot be used to probe which team ids exist
             if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-                _raise_team_access_denied()
+                team_access_denied()
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
         existing_team: Final = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
-        access_role: Final = await _resolve_team_access(team_obj=existing_team, user_api_key_dict=user_api_key_dict)
+        access_role: Final = await get_team_access().strongest_role(user_api_key_dict, existing_team)
         if access_role is None:
-            _raise_team_access_denied()
+            team_access_denied()
         if access_role == "team_admin":
             data = team_admin_request_or_raise(  # rebind-ok: resent values must not reach the derived writes below
                 team_admin_edit_verdict(
@@ -2367,7 +2314,7 @@ async def update_team(
         if data.organization_id is not None and len(data.organization_id) > 0:  # allow unsetting the organization_id
             # If the caller is relocating the team to a different org, they
             # must also be PROXY_ADMIN or an org-admin of the DESTINATION org.
-            # _verify_team_access above only checked the team's CURRENT org,
+            # the team access check above only covered the team's CURRENT org,
             # so without this gate an org-admin could hand their team to any
             # other org (or capture a team from another org they once
             # administered into a new destination).
@@ -2846,11 +2793,7 @@ async def _validate_team_member_add_permissions(
     the request matches the caller's own ``user_id`` and is being
     added with ``role="user"``.
     """
-    if getattr(user_api_key_dict, "user_role", None) == LitellmUserRoles.PROXY_ADMIN.value:
-        return
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data):
-        return
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data):
+    if await get_team_access().allows(user_api_key_dict, complete_team_data, TEAM_OR_ORG_ADMIN):
         return
 
     if not _is_available_team(
@@ -3662,11 +3605,7 @@ async def _team_member_delete(
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, existing_team_row, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={
@@ -3866,11 +3805,7 @@ async def team_member_update(
 
     ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=existing_team_row)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, existing_team_row, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={
@@ -3979,7 +3914,7 @@ async def team_member_update(
 
 def _check_not_resetting_own_spend(user_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
     """
-    _verify_team_access authorizes a team admin (or org admin) over their own
+    The team access check authorizes a team admin (or org admin) over their own
     team, with no check that the target user_id differs from the caller. Left
     unchecked, that admin could target their own LiteLLM_TeamMembership row and
     repeatedly reset it to 0 right before it crosses their per-member cap,
@@ -4058,7 +3993,8 @@ async def reset_team_member_spend_fn(
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=True,
     )
-    await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
+        team_access_denied()
     _check_not_resetting_own_spend(user_id=user_id, user_api_key_dict=user_api_key_dict)
 
     membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
@@ -4153,7 +4089,8 @@ async def reset_team_member_budget_fn(
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=True,
     )
-    await _verify_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict)
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
+        team_access_denied()
 
     membership_where: Final = {  # mutable-ok: prisma client requires a plain dict where= argument
         "user_id_team_id": {"user_id": user_id, "team_id": team_id}  # mutable-ok: same prisma where= argument
@@ -4431,10 +4368,8 @@ async def delete_team(
         team_row_pydantic = LiteLLM_TeamTable.model_validate(team_row_base.model_dump())
 
         # Verify caller has access to manage this team
-        await _verify_team_access(
-            team_obj=team_row_pydantic,
-            user_api_key_dict=user_api_key_dict,
-        )
+        if not await get_team_access().allows(user_api_key_dict, team_row_pydantic, TEAM_OR_ORG_ADMIN):
+            team_access_denied()
 
         team_rows.append(team_row_pydantic)
 
@@ -4530,26 +4465,12 @@ async def delete_team(
         llm_router=llm_router,
     )
 
-    # ## DELETE TEAM MEMBERSHIPS
-    for team_row in team_rows:
-        ### get all team members
-        team_members = team_row.members_with_roles
-        ### call team_member_delete for each team member
-        tasks = []
-        for team_member in team_members:
-            tasks.append(
-                _team_member_delete(
-                    data=TeamMemberDeleteRequest(
-                        team_id=team_row.team_id,
-                        user_id=team_member.user_id,
-                        user_email=team_member.user_email,
-                    ),
-                    user_api_key_dict=user_api_key_dict,
-                )
-            )
-        await asyncio.gather(*tasks)
-
     await _sweep_deleted_team_references(team_ids=data.team_ids, prisma_client=prisma_client)
+
+    member_ids_per_team: Final = await _resolve_deleted_team_member_user_ids(
+        teams=team_rows,
+        prisma_client=prisma_client,
+    )
 
     ## DELETE TEAMS
     # Both the delete and the reconcile sweep run under every team's advisory lock
@@ -4578,8 +4499,15 @@ async def delete_team(
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
+    await _invalidate_deleted_team_member_cache(
+        member_ids_per_team=member_ids_per_team,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     for deleted_team in team_rows:
+        _emit_team_members_metric(
+            deleted_team.model_copy(update={"members_with_roles": ()})  # mutable-ok: pydantic update payload
+        )
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=deleted_team.team_id)
 
     return deleted_teams
@@ -4652,6 +4580,63 @@ async def _invalidate_deleted_team_cache(
             for team in teams
         )
     )
+
+
+async def _invalidate_deleted_team_member_cache(
+    member_ids_per_team: Sequence[tuple[str, Sequence[str]]],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    for team_id, member_user_ids in member_ids_per_team:
+        await _evict_deleted_team_member_cache(
+            team_id=team_id,
+            member_user_ids=member_user_ids,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+
+async def _evict_deleted_team_member_cache(
+    team_id: str,
+    member_user_ids: Sequence[str],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    await evict_and_broadcast(cache_keys=tuple(member_user_ids), user_api_key_cache=user_api_key_cache)
+    await asyncio.gather(
+        *(
+            invalidate_team_member_spend_state(
+                user_id=user_id,
+                team_id=team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
+            for user_id in member_user_ids
+        )
+    )
+
+
+async def _resolve_deleted_team_member_user_ids(
+    teams: Sequence[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    resolved: Final = await asyncio.gather(
+        *(_deleted_team_member_user_ids(team=team, prisma_client=prisma_client) for team in teams)
+    )
+    return tuple(zip((team.team_id for team in teams), resolved))
+
+
+async def _deleted_team_member_user_ids(team: LiteLLM_TeamTable, prisma_client: PrismaClient) -> tuple[str, ...]:
+    roster_user_ids: Final = frozenset(
+        member.user_id for member in team.members_with_roles if member.user_id is not None
+    )
+    email_only_member_emails: Final = frozenset(
+        member.user_email
+        for member in team.members_with_roles
+        if member.user_id is None and member.user_email is not None
+    )
+    if not email_only_member_emails:
+        return tuple(sorted(roster_user_ids))
+    # One case-insensitive lookup for the whole roster. A per-email fan-out would size the
+    # query count by team membership, the same shape as the P2028 fan-out this path removed.
+    email_only_users: Final = await UserRepository(prisma_client).find_by_emails(sorted(email_only_member_emails))
+    return tuple(sorted(roster_user_ids.union(user.user_id for user in email_only_users)))
 
 
 def _transform_teams_to_deleted_records(
@@ -4762,7 +4747,7 @@ async def validate_membership(user_api_key_dict: UserAPIKeyAuth, team_table: Lit
         return
 
     # Check if user is an org admin for the team's organization
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_table):
+    if await get_team_access().allows(user_api_key_dict, team_table, TEAM_OR_ORG_ADMIN):
         return
 
     raise HTTPException(
@@ -4918,7 +4903,7 @@ async def team_info(
             )
         team_table: Final = LiteLLM_TeamTable.model_validate(team_info.model_dump())
         await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_table)
-        access_role: Final = await _resolve_team_access(team_obj=team_table, user_api_key_dict=user_api_key_dict)
+        access_role: Final = await get_team_access().strongest_role(user_api_key_dict, team_table)
         organization_models: Final[list[str] | None] = (
             _parent_organization_models(team_info) if access_role is not None else None
         )
@@ -5191,10 +5176,10 @@ async def block_team(
         )
 
     # Verify caller has access to manage this team
-    await _verify_team_access(
-        team_obj=LiteLLM_TeamTable.model_validate(existing_team.model_dump()),
-        user_api_key_dict=user_api_key_dict,
-    )
+    if not await get_team_access().allows(
+        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+    ):
+        team_access_denied()
 
     record: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
@@ -5240,10 +5225,10 @@ async def unblock_team(
         )
 
     # Verify caller has access to manage this team
-    await _verify_team_access(
-        team_obj=LiteLLM_TeamTable.model_validate(existing_team.model_dump()),
-        user_api_key_dict=user_api_key_dict,
-    )
+    if not await get_team_access().allows(
+        user_api_key_dict, LiteLLM_TeamTable.model_validate(existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+    ):
+        team_access_denied()
 
     record: Final = await _team_db(prisma_client).update(
         where={"team_id": data.team_id},
@@ -6124,11 +6109,7 @@ async def team_model_add(
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
 
     # Authorization check - only proxy admin, team admin, or org admin can add models
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={"error": "Only proxy admin or team admin can modify team models"},
@@ -6244,11 +6225,7 @@ async def team_model_delete(
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
 
     # Authorization check - only proxy admin, team admin, or org admin can remove models
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team_obj, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={"error": "Only proxy admin or team admin can modify team models"},
@@ -6321,8 +6298,7 @@ async def team_member_permissions(
     if (
         hasattr(user_api_key_dict, "user_role")
         and not _user_has_admin_view(user_api_key_dict)
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
+        and not await get_team_access().allows(user_api_key_dict, complete_team_data, TEAM_OR_ORG_ADMIN)
         and not _is_available_team(
             team_id=complete_team_data.team_id,
             user_api_key_dict=user_api_key_dict,
@@ -6385,12 +6361,7 @@ async def update_team_member_permissions(
 
     # Available-team self-join must NOT grant write access to team-wide
     # permission policies; only proxy/team/org admins can update them.
-    if (
-        hasattr(user_api_key_dict, "user_role")
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=complete_team_data)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, complete_team_data, TEAM_OR_ORG_ADMIN):
         raise HTTPException(
             status_code=403,
             detail={
@@ -6628,7 +6599,7 @@ async def _resolve_team_daily_activity_scope(
         has_full_team_view = True
         for team_alias in team_aliases:
             team_obj = LiteLLM_TeamTable.model_validate(team_alias.model_dump())
-            is_admin = _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+            is_admin = is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
             has_perm = _team_member_has_permission(
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
@@ -6812,283 +6783,6 @@ async def get_team_daily_activity_aggregated(
         end_date=end_date,
         model=model,
         api_key=scope.api_key_filter,
-        exclude_entity_ids=scope.exclude_team_ids,
-        timezone_offset_minutes=timezone,
-        include_entity_breakdown=True,
-    )
-
-
-_EXPORT_CSV_METRIC_HEADERS: Final = (
-    "Spend ($)",
-    "Requests",
-    "Successful Requests",
-    "Failed Requests",
-    "Total Tokens",
-    "Prompt Tokens",
-    "Completion Tokens",
-    "Cache Read Input Tokens",
-    "Cache Creation Input Tokens",
-)
-
-
-def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, ...]:
-    base: Final = ("Date", "Team", "Team ID")
-    if export_type == "daily_with_keys":
-        return (*base, "Key Alias", "Key ID", "User ID", "User Email", *_EXPORT_CSV_METRIC_HEADERS)
-    if export_type == "daily_with_users":
-        return (*base, "User ID", "User Email", "Keys", *_EXPORT_CSV_METRIC_HEADERS)
-    if export_type == "daily_with_models":
-        return (
-            *base,
-            "Model",
-            "Spend ($)",
-            "Requests",
-            "Successful",
-            "Failed",
-            "Total Tokens",
-            "Prompt Tokens",
-            "Completion Tokens",
-            "Cache Read Input Tokens",
-            "Cache Creation Input Tokens",
-        )
-    return (*base, *_EXPORT_CSV_METRIC_HEADERS)
-
-
-def _csv_safe(value: str) -> str:
-    return "'" + value if value[:1] in ("=", "+", "-", "@", "\t", "\r") else value
-
-
-def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
-    return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
-        "Date": row.date,
-        "Team": _csv_safe(row.team_alias) if row.team_alias else "-",
-        "Team ID": row.team_id,
-        "Key Alias": _csv_safe(row.key_alias) if row.key_alias else "-",
-        "Key ID": row.api_key or "-",
-        "User ID": _csv_safe(row.user_id) if row.user_id else "-",
-        "User Email": _csv_safe(row.user_email) if row.user_email else "-",
-        "Keys": row.keys,
-        "Model": _csv_safe(row.model) if row.model else "-",
-        "Spend ($)": f"{row.spend:.4f}",
-        "Flat Cost ($)": f"{row.flat_cost:.4f}",
-        "Total Cost ($)": f"{row.spend + row.flat_cost:.4f}",
-        "Requests": row.api_requests,
-        "Successful Requests": row.successful_requests,
-        "Failed Requests": row.failed_requests,
-        "Successful": row.successful_requests,
-        "Failed": row.failed_requests,
-        "Total Tokens": row.total_tokens,
-        "Prompt Tokens": row.prompt_tokens,
-        "Completion Tokens": row.completion_tokens,
-        "Cache Read Input Tokens": row.cache_read_input_tokens,
-        "Cache Creation Input Tokens": row.cache_creation_input_tokens,
-    }
-
-
-def _team_export_csv(export_type: TeamDailyActivityExportType, rows: Sequence[TeamDailyActivityExportRow]) -> str:
-    base_headers: Final = _export_csv_headers(export_type)
-    spend_index: Final = base_headers.index("Spend ($)") + 1
-    headers: Final = (
-        (*base_headers[:spend_index], "Flat Cost ($)", "Total Cost ($)", *base_headers[spend_index:])
-        if sum(row.flat_cost for row in rows) > 0
-        else base_headers
-    )
-    buffer: Final = io.StringIO()
-    writer: Final = csv.DictWriter(buffer, fieldnames=headers, extrasaction="ignore")
-    writer.writeheader()
-    writer.writerows(_export_csv_record(row) for row in rows)
-    return buffer.getvalue()
-
-
-@router.get(
-    "/team/daily/activity/export",
-    response_model=TeamDailyActivityExportResponse,
-    responses={200: {"content": {"text/csv": {}, "application/json": {}}}},  # mutable-ok: OpenAPI content map
-    tags=["team management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-)
-async def get_team_daily_activity_export(
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    start_date: str | None = None,
-    end_date: str | None = None,
-    export_type: TeamDailyActivityExportType = "daily",
-    format: TeamDailyActivityExportFormat = "csv",
-    team_id: str | None = None,
-    exclude_team_ids: str | None = None,
-    timezone_offset: Annotated[int | None, Query(alias="timezone")] = None,
-) -> Response:
-    """
-    Server-side Team Usage export, not subject to USAGE_TOP_API_KEYS_LIMIT.
-
-    Same scoping as /team/daily/activity/aggregated, answered by one unbounded
-    rollup query, returned as CSV or JSON. For daily_with_keys,
-    daily_with_users and daily_with_models the PTU sentinel flat-cost rows are
-    excluded, so metadata totals under those export types cover request spend
-    only; the plain daily export includes them.
-    """
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
-
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
-    if range_error is not None or start_date is None or end_date is None:
-        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
-
-    scope: Final = await _resolve_team_daily_activity_scope(
-        team_ids=team_id,
-        exclude_team_ids=exclude_team_ids,
-        api_key=None,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-
-    rows: Final = await get_daily_activity_export_rows(
-        prisma_client=prisma_client,
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=scope.team_ids,
-        entity_metadata_field=scope.team_alias_metadata,
-        start_date=start_date,
-        end_date=end_date,
-        api_key=scope.api_key_filter,
-        exclude_entity_ids=scope.exclude_team_ids,
-        timezone_offset_minutes=timezone_offset,
-        export_type=export_type,
-    )
-
-    now: Final = datetime.now(timezone.utc)
-    metadata: Final = TeamDailyActivityExportMetadata(
-        export_date=now.isoformat(),
-        export_type=export_type,
-        start_date=start_date,
-        end_date=end_date,
-        team_ids=list(scope.team_ids) if scope.team_ids else None,  # mutable-ok: response model field type
-        total_spend=sum(row.spend for row in rows),
-        total_flat_cost=sum(row.flat_cost for row in rows),
-        total_api_requests=sum(row.api_requests for row in rows),
-        total_successful_requests=sum(row.successful_requests for row in rows),
-        total_failed_requests=sum(row.failed_requests for row in rows),
-        total_tokens=sum(row.total_tokens for row in rows),
-    )
-
-    if format == "json":
-        return JSONResponse(
-            content=TeamDailyActivityExportResponse(metadata=metadata, data=rows).model_dump(mode="json")
-        )
-    return Response(
-        content=_team_export_csv(export_type, rows),
-        media_type="text/csv; charset=utf-8",
-        headers={  # mutable-ok: starlette Response headers is a dict
-            "Content-Disposition": f'attachment; filename="team_usage_{export_type}_{now.date().isoformat()}.csv"'
-        },
-    )
-
-
-def _team_key_search_where(*, search: str, scope: _TeamDailyActivityScope) -> TeamKeyActivitySearchWhere:
-    """Caller scoping lives inside the same Prisma where as the search term so `take`
-    never trims visible matches in favour of keys the caller is not allowed to see."""
-    search_or: Final = (
-        {"token": search},  # mutable-ok: prisma where clause leaf
-        {"key_alias": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
-        {"user_id": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
-    )
-    own_keys: Final = tuple(scope.api_key_filter) if isinstance(scope.api_key_filter, list) else None
-    team_filter: Final[TeamIdSearchFilter | None] = (
-        {  # mutable-ok: prisma where clause leaf
-            "in": tuple(scope.team_ids),
-            "notIn": tuple(scope.exclude_team_ids),
-        }
-        if scope.team_ids is not None and scope.exclude_team_ids is not None
-        else {"in": tuple(scope.team_ids)}  # mutable-ok: prisma where clause leaf
-        if scope.team_ids is not None
-        else {"notIn": tuple(scope.exclude_team_ids)}  # mutable-ok: prisma where clause leaf
-        if scope.exclude_team_ids is not None
-        else None
-    )
-    if team_filter is None and own_keys is None:
-        return {"OR": search_or}  # mutable-ok: prisma where clause root
-    if team_filter is None and own_keys is not None:
-        return {"token": {"in": own_keys}, "OR": search_or}  # mutable-ok: prisma where clause root
-    if team_filter is not None and own_keys is None:
-        return {"team_id": team_filter, "OR": search_or}  # mutable-ok: prisma where clause root
-    assert team_filter is not None and own_keys is not None
-    return {  # mutable-ok: prisma where clause root
-        "team_id": team_filter,
-        "token": {"in": own_keys},  # mutable-ok: prisma where clause leaf
-        "OR": search_or,
-    }
-
-
-@router.get(
-    "/team/daily/activity/aggregated/search",
-    response_model=SpendAnalyticsPaginatedResponse,
-    tags=["team management"],  # mutable-ok: FastAPI route tags shape
-)
-async def search_team_daily_activity_keys(
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    search: str = fastapi.Query(
-        ...,
-        min_length=1,
-        description="Exact token hash, or a case-insensitive substring of the key alias or owning user id",
-    ),
-    team_ids: str | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    exclude_team_ids: str | None = None,
-    timezone: int | None = None,
-) -> SpendAnalyticsPaginatedResponse:
-    """Aggregated daily team activity for the keys matching `search`, across every key the caller may
-    see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend."""
-    from litellm.proxy.proxy_server import (
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
-    )
-
-    if prisma_client is None:
-        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
-
-    range_error: Final = _aggregated_date_range_error(start_date, end_date)
-    if range_error is not None:
-        raise _daily_activity_error(status_code=400, message=range_error)
-
-    scope: Final = await _resolve_team_daily_activity_scope(
-        team_ids=team_ids,
-        exclude_team_ids=exclude_team_ids,
-        api_key=None,
-        user_api_key_dict=user_api_key_dict,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
-    matched_keys: Final = await _tokens_db(prisma_client).find_many(
-        where=_team_key_search_where(search=search, scope=scope),
-        take=USAGE_TOP_API_KEYS_LIMIT,
-        order={"spend": "desc"},  # mutable-ok: prisma serializes order, keep it a plain dict
-    )
-    tokens: Final = [key.token for key in matched_keys]  # mutable-ok: get_daily_activity_aggregated takes list[str]
-    if not tokens:
-        return SpendAnalyticsPaginatedResponse(
-            results=[],  # mutable-ok: response model field shape
-            metadata=DailySpendMetadata(api_key_limit=USAGE_TOP_API_KEYS_LIMIT, total_api_keys=0),
-        )
-
-    return await get_daily_activity_aggregated(
-        prisma_client=prisma_client,
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=scope.team_ids,
-        entity_metadata_field=scope.team_alias_metadata,
-        start_date=start_date,
-        end_date=end_date,
-        model=None,
-        api_key=tokens,
         exclude_entity_ids=scope.exclude_team_ids,
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,

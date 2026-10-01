@@ -6,7 +6,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
-from litellm.rust_bridge.catalog import Delivery, Route, RouteContext
+from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
@@ -85,7 +85,6 @@ def _context(request: LiteLLMMessagesRequest) -> RouteContext:
         Route.MESSAGES,
         provider=_resolved_provider(request),
         model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
     )
 
 

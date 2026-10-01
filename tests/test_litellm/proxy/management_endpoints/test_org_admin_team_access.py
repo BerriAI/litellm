@@ -2,7 +2,6 @@
 Tests for org admin access to team management endpoints.
 
 Covers:
-- _is_user_org_admin_for_team helper
 - validate_membership allowing org admins
 - _user_is_org_admin route-level check (no privilege escalation)
 """
@@ -68,7 +67,7 @@ def _make_caller_user(
 
 
 def _patch_org_admin_deps(get_user_return):
-    """Context manager that patches the lazy imports inside _is_user_org_admin_for_team."""
+    """Context manager that patches the lazy imports inside PrismaOrgRoles.is_org_admin."""
     return (
         patch(
             "litellm.proxy.auth.auth_checks.get_user_object",
@@ -81,88 +80,6 @@ def _patch_org_admin_deps(get_user_return):
             "litellm.proxy.proxy_server.user_api_key_cache", MagicMock(), create=True
         ),
     )
-
-
-# ---------------------------------------------------------------------------
-# _is_user_org_admin_for_team
-# ---------------------------------------------------------------------------
-
-
-class TestIsUserOrgAdminForTeam:
-    """Tests for the reusable _is_user_org_admin_for_team helper."""
-
-    @pytest.mark.asyncio
-    async def test_org_admin_for_teams_org_returns_true(self):
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
-
-        team = _make_team(organization_id="org-1")
-        key = _make_user_key(user_id="org-admin-user")
-        caller = _make_caller_user(user_id="org-admin-user", org_id="org-1")
-
-        p1, p2, p3, p4 = _patch_org_admin_deps(caller)
-        with p1, p2, p3, p4:
-            result = await _is_user_org_admin_for_team(
-                user_api_key_dict=key, team_obj=team
-            )
-            assert result is True
-
-    @pytest.mark.asyncio
-    async def test_org_admin_different_org_returns_false(self):
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
-
-        team = _make_team(organization_id="org-1")
-        key = _make_user_key(user_id="other-admin")
-        caller = _make_caller_user(user_id="other-admin", org_id="org-2")
-
-        p1, p2, p3, p4 = _patch_org_admin_deps(caller)
-        with p1, p2, p3, p4:
-            result = await _is_user_org_admin_for_team(
-                user_api_key_dict=key, team_obj=team
-            )
-            assert result is False
-
-    @pytest.mark.asyncio
-    async def test_team_without_org_returns_false(self):
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
-
-        team = _make_team(organization_id=None)
-        key = _make_user_key()
-        result = await _is_user_org_admin_for_team(user_api_key_dict=key, team_obj=team)
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_org_member_not_admin_returns_false(self):
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
-
-        team = _make_team(organization_id="org-1")
-        key = _make_user_key(user_id="regular")
-        caller = _make_caller_user(user_id="regular", org_id="org-1", org_role="user")
-
-        p1, p2, p3, p4 = _patch_org_admin_deps(caller)
-        with p1, p2, p3, p4:
-            result = await _is_user_org_admin_for_team(
-                user_api_key_dict=key, team_obj=team
-            )
-            assert result is False
-
-    @pytest.mark.asyncio
-    async def test_no_user_id_returns_false(self):
-        from litellm.proxy.management_endpoints.common_utils import (
-            _is_user_org_admin_for_team,
-        )
-
-        team = _make_team(organization_id="org-1")
-        key = _make_user_key(user_id=None)
-        result = await _is_user_org_admin_for_team(user_api_key_dict=key, team_obj=team)
-        assert result is False
 
 
 # ---------------------------------------------------------------------------

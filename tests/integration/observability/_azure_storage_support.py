@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 import json
 import threading
 import time
@@ -7,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlsplit
 
 import yaml
 from integration._support.client import JsonValue, eventually, object_value
@@ -17,6 +19,47 @@ ACCOUNT: Final = "litellmaudit"
 FILE_SYSTEM: Final = "litellm-logs"
 SINK_HOSTS: Final = (f"{ACCOUNT}.dfs.core.localhost", f"{ACCOUNT}.blob.core.localhost")
 ACCOUNT_KEY: Final = base64.b64encode(b"synthetic-account-key-for-integration-tests").decode()
+AUTHENTICATION_FAILED: Final = (
+    b'{"error":{"code":"AuthenticationFailed","message":"Server failed to authenticate the request. '
+    b'Make sure the value of Authorization header is formed correctly including the signature."}}'
+)
+_SIGNED_HEADERS: Final = (
+    "content-encoding",
+    "content-language",
+    "content-length",
+    "content-md5",
+    "content-type",
+    "date",
+    "if-modified-since",
+    "if-match",
+    "if-none-match",
+    "if-unmodified-since",
+    "byte_range",
+)
+
+
+def shared_key_signature(request: Request) -> str:
+    """The SharedKey signature the service computes for a request: canonical headers, the account plus the
+    path exactly as sent on the wire, then the decoded query. The aio client signs a directory-scoped file
+    path with `%3D` but sends a bare `=`, so a padded name fails here the way it fails on the service."""
+    headers: Final = {name.lower(): value for name, value in request.headers.items() if value}
+    standard: Final = tuple(
+        "" if name == "content-length" and headers.get(name) == "0" else headers.get(name, "")
+        for name in _SIGNED_HEADERS
+    )
+    canonical_headers: Final = "".join(
+        f"{name}:{value}\n" for name, value in sorted(headers.items()) if name.startswith("x-ms-")
+    )
+    parts: Final = urlsplit(request.target)
+    canonical_resource: Final = f"/{ACCOUNT}{parts.path}"
+    canonical_query: Final = "".join(
+        f"\n{name.lower()}:{unquote(value)}" for name, value in sorted(parse_qsl(parts.query, keep_blank_values=True))
+    )
+    string_to_sign: Final = (
+        f"{request.method}\n" + "\n".join(standard) + "\n" + canonical_headers + canonical_resource + canonical_query
+    )
+    digest: Final = hmac.new(base64.b64decode(ACCOUNT_KEY), string_to_sign.encode(), hashlib.sha256).digest()
+    return f"SharedKey {ACCOUNT}:{base64.b64encode(digest).decode()}"
 
 
 @dataclass(slots=True)
@@ -33,6 +76,9 @@ class RecordingDataLakeSink:
     files: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: flushed files must be readable later
     flush_count: dict[str, int] = field(default_factory=dict)  # mutable-ok: re-flush of one path means double upload
     rejected: list[str] = field(default_factory=list)  # mutable-ok: rejected request methods seen while failing
+    unauthenticated: list[str] = field(
+        default_factory=list
+    )  # mutable-ok: targets whose SharedKey signature did not verify
     in_flight: int = 0
     peak: int = 0
     attempt_count: int = 0
@@ -46,6 +92,14 @@ class RecordingDataLakeSink:
             if self.fail_status:
                 self.rejected.append(request.method)
                 return Reply(status=self.fail_status, body=b'{"error":{"code":"SinkFailure"}}')
+            presented: Final = next(
+                (value for name, value in request.headers.items() if name.lower() == "authorization"), ""
+            )
+            if presented != shared_key_signature(request):
+                self.unauthenticated.append(request.target)
+                return Reply(
+                    status=403, headers={"x-ms-error-code": "AuthenticationFailed"}, body=AUTHENTICATION_FAILED
+                )
             if path != f"/{FILE_SYSTEM}" and not path.startswith(f"/{FILE_SYSTEM}/"):
                 return Reply(status=400, body=b'{"error":{"code":"InvalidUri"}}')
             self.in_flight += 1
@@ -103,6 +157,10 @@ class RecordingDataLakeSink:
     def rejected_methods(self) -> tuple[str, ...]:
         with self.lock:
             return tuple(self.rejected)
+
+    def unauthenticated_targets(self) -> tuple[str, ...]:
+        with self.lock:
+            return tuple(self.unauthenticated)
 
     def duplicated(self) -> tuple[str, ...]:
         with self.lock:

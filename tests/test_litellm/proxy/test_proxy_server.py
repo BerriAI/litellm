@@ -4503,7 +4503,7 @@ class TestPriceDataReloadAPI:
     """Test cases for price data reload API endpoints"""
 
     @pytest.fixture
-    def client_with_auth(self):
+    def client_with_auth(self, monkeypatch):
         """Create a test client with authentication"""
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.proxy_server import cleanup_router_config_variables
@@ -4516,7 +4516,7 @@ class TestPriceDataReloadAPI:
         # Mock admin user authentication
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         return TestClient(app)
 
@@ -4557,12 +4557,12 @@ class TestPriceDataReloadAPI:
             litellm.model_cost = original_model_cost
             _invalidate_model_cost_lowercase_map()
 
-    def test_reload_model_cost_map_non_admin_access(self, client_with_auth):
+    def test_reload_model_cost_map_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot access the reload endpoint"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.post("/reload/model_cost_map")
 
@@ -4623,12 +4623,12 @@ class TestPriceDataReloadAPI:
             assert set(create_payload.keys()) == {"param_name", "param_value"}
             assert json.loads(create_payload["param_value"]) == {"interval_hours": 6}
 
-    def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth):
+    def test_schedule_model_cost_map_reload_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot schedule periodic reload"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.post("/schedule/model_cost_map_reload?hours=6")
 
@@ -4663,12 +4663,12 @@ class TestPriceDataReloadAPI:
             }
             mock_prisma.db.litellm_config.delete.assert_not_called()
 
-    def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth):
+    def test_cancel_model_cost_map_reload_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot cancel periodic reload"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.delete("/schedule/model_cost_map_reload")
 
@@ -4701,12 +4701,12 @@ class TestPriceDataReloadAPI:
             assert data["last_run"] == "2024-01-01T06:00:00+00:00"
             assert data["next_run"] == "2024-01-01T12:00:00+00:00"
 
-    def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth):
+    def test_get_model_cost_map_reload_status_non_admin_access(self, client_with_auth, monkeypatch):
         """Test that non-admin users cannot get reload status"""
         # Mock non-admin user
         mock_auth = MagicMock()
         mock_auth.user_role = "user"  # Non-admin role
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         response = client_with_auth.get("/schedule/model_cost_map_reload/status")
 
@@ -4769,7 +4769,7 @@ class TestPriceDataReloadIntegration:
     """Integration tests for the complete price data reload feature"""
 
     @pytest.fixture
-    def client_with_auth(self):
+    def client_with_auth(self, monkeypatch):
         """Create a test client with authentication"""
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.proxy_server import cleanup_router_config_variables
@@ -4782,7 +4782,7 @@ class TestPriceDataReloadIntegration:
         # Mock admin user authentication
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         return TestClient(app)
 
@@ -5262,7 +5262,7 @@ class TestPriceDataReloadIntegration:
             litellm_utils._runtime_registered_model_cost.update(original_registry)
             _invalidate_model_cost_lowercase_map()
 
-    def test_manual_reload_preserves_interval_hours(self):
+    def test_manual_reload_preserves_interval_hours(self, monkeypatch):
         """
         Regression: manual reload owns only the run columns, so it never reads or rewrites
         param_value and cannot destroy an existing schedule
@@ -5277,7 +5277,7 @@ class TestPriceDataReloadIntegration:
 
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
         client = TestClient(app)
         frozen_now = datetime(2024, 1, 1, 7, 0, tzinfo=timezone.utc)
 
@@ -5358,7 +5358,7 @@ class TestPriceDataReloadIntegration:
                 "dropping it causes the schedule to self-destruct"
             )
 
-    def test_anthropic_beta_headers_manual_reload_preserves_interval_hours(self):
+    def test_anthropic_beta_headers_manual_reload_preserves_interval_hours(self, monkeypatch):
         """Test that manual reload via /reload/anthropic_beta_headers preserves existing interval_hours.
 
         Regression test: the manual reload endpoint was overwriting param_value with
@@ -5374,7 +5374,7 @@ class TestPriceDataReloadIntegration:
 
         mock_auth = MagicMock()
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
         client = TestClient(app)
 
         with patch("litellm.anthropic_beta_headers_manager.reload_beta_headers_config") as mock_reload:
@@ -6189,7 +6189,7 @@ async def test_tag_cache_update_called():
         "spend": 10.0,
     }
 
-    with patch.object(cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)) as mock_get_cache:
+    with patch.object(cache, "async_batch_get_cache", new=AsyncMock(return_value=[mock_tag_obj])) as mock_get_cache:
         with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
             await litellm.proxy.proxy_server.update_cache(
                 token=None,
@@ -6203,7 +6203,7 @@ async def test_tag_cache_update_called():
 
             await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
+            mock_get_cache.assert_awaited_once_with(keys=["tag:test-tag"], parent_otel_span=None, throttle_redis=False)
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -6234,15 +6234,11 @@ async def test_tag_cache_update_multiple_tags():
     mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
     mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
 
-    async def mock_get_cache_side_effect(key):
-        if key == "tag:tag1":
-            return mock_tag1_obj
-        elif key == "tag:tag2":
-            return mock_tag2_obj
-        return None
+    async def mock_get_cache_side_effect(keys, **kwargs):
+        return [{"tag:tag1": mock_tag1_obj, "tag:tag2": mock_tag2_obj}.get(key) for key in keys]
 
     with patch.object(
-        cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
+        cache, "async_batch_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
     ) as mock_get_cache:
         with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
             await litellm.proxy.proxy_server.update_cache(
@@ -6257,7 +6253,7 @@ async def test_tag_cache_update_multiple_tags():
 
             await asyncio.sleep(0.1)
 
-            assert mock_get_cache.call_count == 2
+            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -6288,8 +6284,8 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
     try:
         with patch.object(
             cache,
-            "async_get_cache",
-            new=AsyncMock(return_value={"tag_name": "active-tag", "spend": 1.0}),
+            "async_batch_get_cache",
+            new=AsyncMock(return_value=[{"tag_name": "active-tag", "spend": 1.0}]),
         ):
             with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
                 await litellm.proxy.proxy_server.update_cache(
@@ -6376,18 +6372,21 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
     global_key = "{}:spend".format(admin_name)
 
-    async def fake_get(key, **kwargs):
+    def fake_get(key):
         if key == "user-lit":
             return {"user_id": "user-lit", "spend": 1.0}
         if key == global_key:
             return 10.0
         return None
 
+    async def fake_batch_get(keys, **kwargs):
+        return [fake_get(key) for key in keys]
+
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
     cache = DualCache(default_in_memory_ttl=300)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     try:
-        with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=fake_get)):
+        with patch.object(cache, "async_batch_get_cache", new=AsyncMock(side_effect=fake_batch_get)):
             with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
                 await litellm.proxy.proxy_server.update_cache(
                     token=None,
@@ -6853,7 +6852,6 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
-    # Track path.exists calls to verify it checks /var/lib/litellm/assets/logo.jpg
     exists_calls = []
 
     def exists_side_effect(path):
@@ -6888,8 +6886,7 @@ async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
-        # Verify that exists was called to check /var/lib/litellm/assets/logo.jpg
-        assets_logo_path = "/var/lib/litellm/assets/logo.jpg"
+        assets_logo_path = "/var/lib/litellm/assets/logo.png"
         assert any(assets_logo_path in str(call) for call in exists_calls), f"Should check if {assets_logo_path} exists"
 
         # Verify FileResponse was called (with fallback logo)
@@ -7003,7 +7000,7 @@ async def test_get_image_default_logo_ignores_stale_cache(monkeypatch, tmp_path)
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(cache_path.resolve())
-    assert served_path.endswith("logo.jpg")
+    assert served_path.endswith("/logo.png")
 
 
 @pytest.mark.asyncio
@@ -7035,7 +7032,7 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(custom_logo_path), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith("logo.jpg")
+    assert served_path.endswith("/logo.png")
 
 
 @pytest.mark.asyncio
@@ -7068,7 +7065,7 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch
     assert len(calls_to_file_response) == 1, "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
     assert served_path != str(custom_logo_path), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith("logo.jpg"), f"Expected fallback to default logo.jpg, got {served_path}"
+    assert served_path.endswith("/logo.png"), f"Expected fallback to default logo.png, got {served_path}"
 
 
 def test_get_config_normalizes_string_callbacks(monkeypatch):
@@ -7158,7 +7155,7 @@ class TestInvitationEndpoints:
     """Tests for /invitation/new and /invitation/delete endpoints."""
 
     @pytest.fixture
-    def client_with_auth(self):
+    def client_with_auth(self, monkeypatch):
         """Create a test client with admin authentication."""
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.proxy_server import cleanup_router_config_variables
@@ -7172,7 +7169,7 @@ class TestInvitationEndpoints:
         mock_auth.user_id = "admin-user-id"
         mock_auth.user_role = LitellmUserRoles.PROXY_ADMIN
         mock_auth.api_key = "sk-test"
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         return TestClient(app)
 
@@ -7241,7 +7238,7 @@ class TestInvitationEndpoints:
             ("/invitation/delete", {"invitation_id": "inv-456"}),
         ],
     )
-    def test_invitation_endpoints_non_admin_denied(self, client_with_auth, endpoint, payload):
+    def test_invitation_endpoints_non_admin_denied(self, client_with_auth, endpoint, payload, monkeypatch):
         """Non-admin users cannot access invitation endpoints."""
         from litellm.proxy._types import LitellmUserRoles
 
@@ -7249,7 +7246,7 @@ class TestInvitationEndpoints:
         mock_auth.user_id = "regular-user"
         mock_auth.user_role = LitellmUserRoles.INTERNAL_USER
         mock_auth.api_key = "sk-regular"
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: mock_auth)
 
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_prisma.db.litellm_invitationlink = MagicMock()
@@ -11944,6 +11941,23 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.parametrize("worker_value, db_value", [(True, False), (False, True)])
+def test_log_auth_failure_key_identity_follows_db_config_reload(monkeypatch, worker_value, db_value):
+    """A /config/update that flips `log_auth_failure_key_identity` lands on the DB row; every
+    worker must take that value on its next config reload, so turning the PII suffix off stops
+    it without a restart."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "log_auth_failure_key_identity", worker_value)
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values("litellm_settings", {"log_auth_failure_key_identity": db_value})
+    )
+
+    assert litellm.log_auth_failure_key_identity is db_value
+
+
 @pytest.mark.asyncio
 async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
     """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
@@ -11978,6 +11992,139 @@ async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(mon
     assert len(datadog_loggers) == 1
     assert datadog_loggers[0].turn_off_message_logging is True
     assert litellm.turn_off_message_logging is True
+
+
+def _reset_runtime_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import litellm_logging
+
+    for list_name in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("HUMANLOOP_API_KEY", "test-key")
+
+
+def _runtime_callback_names() -> frozenset[str]:
+    manager = litellm.logging_callback_manager
+    return frozenset(manager._get_callback_string(callback) for callback in manager._get_all_callbacks())
+
+
+@pytest.mark.parametrize("setting_key", ["success_callback", "failure_callback", "callbacks"])
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "helicone"])
+def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists(
+    monkeypatch: pytest.MonkeyPatch, setting_key: str, callback_name: str
+):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    pc = ps.ProxyConfig()
+
+    for _ in range(2):
+        pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: [callback_name]}})
+    assert callback_name in _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: []}})
+    assert callback_name not in _runtime_callback_names()
+
+
+def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    _reset_runtime_callbacks(monkeypatch)
+    _add_custom_logger_callback_to_specific_event("langfuse_otel", "success")
+    litellm.logging_callback_manager.add_litellm_success_callback("helicone")
+    pc = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config(
+        {"litellm_settings": {"success_callback": ["langfuse_otel", "helicone", "humanloop", "supabase"]}}
+    )
+    assert {"humanloop", "supabase"} <= _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    remaining: Final = _runtime_callback_names()
+    assert {"langfuse_otel", "helicone"} <= remaining
+    assert not {"humanloop", "supabase"} & remaining
+
+
+def test_db_config_sync_restores_a_code_callback_it_replaced(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    litellm.logging_callback_manager.add_litellm_success_callback("langfuse_otel")
+    pc = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["langfuse_otel"]}})
+    assert "langfuse_otel" not in litellm.success_callback
+    assert "langfuse_otel" in _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    assert litellm.success_callback == ["langfuse_otel"]
+
+
+@pytest.mark.parametrize(
+    ("setting_key", "event", "list_name"),
+    [
+        ("success_callback", "success", "_async_success_callback"),
+        ("failure_callback", "failure", "_async_failure_callback"),
+    ],
+)
+def test_db_config_sync_registers_otel_v2_arize_next_to_otel(
+    monkeypatch: pytest.MonkeyPatch, setting_key: str, event: str, list_name: str
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    _reset_runtime_callbacks(monkeypatch)
+    for extra_list in ("input_callback", "service_callback"):
+        monkeypatch.setattr(litellm, extra_list, [])
+    monkeypatch.setattr(ps, "open_telemetry_logger", None)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("OTEL_EXPORTER", "console")
+    monkeypatch.setenv("ARIZE_API_KEY", "test-arize-key")
+    monkeypatch.setenv("ARIZE_SPACE_ID", "test-space-id")
+    monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "http://127.0.0.1:4318/v1/traces")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        getattr(litellm.logging_callback_manager, f"add_litellm_{event}_callback")("helicone")
+        _add_custom_logger_callback_to_specific_event("otel", event)
+        pc = ps.ProxyConfig()
+        for _ in range(2):
+            pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: ["arize"]}})
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+    v2_names: Final = [cb.callback_name for cb in getattr(litellm, list_name) if isinstance(cb, OpenTelemetryV2)]
+    assert len(v2_names) == 2
+    assert "arize" in v2_names
+
+
+@pytest.mark.asyncio
+async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    pc = ps.ProxyConfig()
+    monkeypatch.setattr(ps, "proxy_config", pc)
+    monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(ps, "master_key", "sk-1234")
+    monkeypatch.setattr(
+        pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": ["helicone"]}})
+    )
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" in _runtime_callback_names()
+
+    monkeypatch.setattr(pc, "get_config", AsyncMock(side_effect=TimeoutError("config read timed out")))
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" in _runtime_callback_names()
+
+    monkeypatch.setattr(pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": []}}))
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" not in _runtime_callback_names()
 
 
 @pytest.mark.parametrize(
@@ -13757,7 +13904,7 @@ async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved()
     }
 
     original_reconcile = br.reconcile_budget_reservation
-    br.reconcile_budget_reservation = AsyncMock(return_value=None)
+    br.reconcile_budget_reservation = AsyncMock(return_value=())
     try:
         with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
             await increment_spend_counters(
