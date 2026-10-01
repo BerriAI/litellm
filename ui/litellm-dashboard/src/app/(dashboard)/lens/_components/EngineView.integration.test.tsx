@@ -230,6 +230,7 @@ it("opens the saved results of an older batch", async () => {
     ...engine.jobs[0],
     id: "older",
     created_at: "2026-09-29T10:00:00Z",
+    finished_at: "2026-09-29T10:02:13Z",
     findings: [{ ...issue, title: "Earlier batch finding" }],
   };
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
@@ -244,6 +245,9 @@ it("opens the saved results of an older batch", async () => {
   await user.selectOptions(screen.getByRole("combobox", { name: "Investigation batch" }), "older");
   expect(await screen.findByText("Earlier batch finding")).toBeVisible();
   expect(screen.queryByText(issue.title)).not.toBeInTheDocument();
+  expect(screen.getByText(/Took 2m 13s/)).toBeVisible();
+  await user.click(screen.getByRole("tab", { name: "Scans" }));
+  expect(within(screen.getByRole("tabpanel", { name: "Scans" })).getByText(/Took 2m 13s/)).toBeVisible();
 });
 
 it("reads request content from the beginning after its abbreviated preview", async () => {

@@ -16,6 +16,7 @@ import { EngineProgress, NextCheck } from "./EngineProgress";
 import { WorkerSetup } from "./WorkerSetup";
 import { LensWelcome } from "./LensWelcome";
 import {
+  analysisElapsed,
   engineStatus,
   evidenceTarget,
   sortedFindings,
@@ -299,7 +300,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 {lastCompleted && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     {lastCompleted.coverage?.screened ?? 0} of {lastCompleted.coverage?.eligible ?? 0} eligible runs
-                    reviewed
+                    reviewed <ScanDuration job={lastCompleted} />
                   </p>
                 )}
               </div>
@@ -359,6 +360,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
               <p className="text-xs text-muted-foreground">
                 {when(job.start)} to {when(job.end)} · {job.coverage?.screened ?? 0} / {job.coverage?.selected ?? 0}{" "}
                 selected runs reviewed · {money(job.cost ?? 0)}
+                <ScanDuration job={job} />
               </p>
             )}
             {missingSnapshot && (
@@ -554,6 +556,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {when(j.created_at)} · Settings version {j.revision}
+                      <ScanDuration job={j} />
                     </p>
                     <p className="mt-3 text-sm">
                       {j.coverage?.screened ?? 0} reviewed / {j.coverage?.eligible ?? 0} eligible ·{" "}
@@ -632,7 +635,8 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 <div>
                   <p className="text-sm font-medium">Evidence by run</p>
                   <p className="mt-1 mb-3 text-xs text-muted-foreground">
-                    Exact quotes from the recorded activity. Linked runs can include counterexamples.
+                    Exact quotes from the recorded activity. Counterexamples are labeled separately from supporting
+                    evidence.
                   </p>
                   <div className="space-y-2">
                     {evidenceGroups.map((group) => (
@@ -753,5 +757,15 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
         </SheetContent>
       </Sheet>
     </main>
+  );
+}
+
+function ScanDuration({ job }: { job: Job }) {
+  if (!job.finished_at) return null;
+  return (
+    <span title="Total time, including any wait for an analyzer">
+      {" · Took "}
+      {analysisElapsed(job.created_at, Date.parse(job.finished_at))}
+    </span>
   );
 }
