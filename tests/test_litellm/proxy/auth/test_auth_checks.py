@@ -4,7 +4,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2672,7 +2672,6 @@ async def test_get_tag_objects_batch():
 
     mock_prisma = MagicMock()
     mock_cache = MagicMock()
-    mock_cache.redis_cache = None
     mock_proxy_logging = MagicMock()
 
     # Simulate 5 tags: 2 cached, 3 uncached
@@ -2744,8 +2743,6 @@ async def test_get_tag_objects_batch():
             return cached_tag_1
         if key == "tag:cached-2":
             return cached_tag_2
-        if key == "tag_registry" and mock_cache.async_set_cache.call_args is not None:
-            return mock_cache.async_set_cache.call_args.kwargs["value"]
         return None
 
     mock_cache.async_get_cache = AsyncMock(side_effect=mock_get_cache)
@@ -2790,8 +2787,8 @@ async def test_get_tag_objects_batch():
     ]
 
     # Verify uncached tags were cached after fetching, alongside the tag-name registry
-    cache_calls: Final = mock_cache.async_set_cache.call_args_list
-    cached_keys: Final = [call.kwargs["key"] for call in cache_calls if not call.kwargs.get("local_only", False)]
+    cache_calls = mock_cache.async_set_cache.call_args_list
+    cached_keys = [call.kwargs["key"] for call in cache_calls]
     assert sorted(cached_keys) == [
         "tag:uncached-1",
         "tag:uncached-2",
@@ -2942,110 +2939,6 @@ async def test_get_tag_objects_batch_caches_empty_registry():
         == {}
     )
     assert mock_prisma.db.litellm_tagtable.find_many.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_bounded_registry_does_not_cache_after_invalidation_during_fetch():
-    from litellm.proxy.auth.auth_checks import _load_bounded_registry
-
-    cache: Final = UserApiKeyCache()
-    cache_key: Final = "test_registry"
-    fetched_ids: Final = ("registered-id",)
-
-    async def invalidate_registry() -> tuple[str, ...]:
-        await cache.async_delete_cache(key=cache_key)
-        return fetched_ids
-
-    fetch_ids: Final[AsyncMock] = AsyncMock(side_effect=invalidate_registry)
-    first: Final = await _load_bounded_registry(
-        cache_key=cache_key,
-        overflow_sentinel="registry_overflow",
-        max_size=3,
-        load_lock=asyncio.Lock(),
-        fetch_ids=fetch_ids,
-        user_api_key_cache=cache,
-    )
-    assert first == frozenset(fetched_ids)
-    assert await cache.async_get_cache(key=cache_key) is None
-
-    second: Final = await _load_bounded_registry(
-        cache_key=cache_key,
-        overflow_sentinel="registry_overflow",
-        max_size=3,
-        load_lock=asyncio.Lock(),
-        fetch_ids=fetch_ids,
-        user_api_key_cache=cache,
-    )
-    assert second == frozenset(fetched_ids)
-    assert fetch_ids.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_bounded_registry_does_not_overwrite_another_loading_marker():
-    from litellm.proxy.auth.auth_checks import (
-        _REGISTRY_LOADING_MARKER_PREFIX,
-        _REGISTRY_NOT_CACHED,
-        _cached_registry,
-        _load_bounded_registry,
-    )
-
-    cache: Final = UserApiKeyCache()
-    cache_key: Final = "test_registry"
-    fetched_ids: Final = ("registered-id",)
-    other_marker: Final = f"{_REGISTRY_LOADING_MARKER_PREFIX}another-load"
-
-    async def overwrite_registry() -> tuple[str, ...]:
-        await cache.async_set_cache(key=cache_key, value=other_marker, ttl=60)
-        return fetched_ids
-
-    fetch_ids: Final[AsyncMock] = AsyncMock(side_effect=overwrite_registry)
-    result: Final = await _load_bounded_registry(
-        cache_key=cache_key,
-        overflow_sentinel="registry_overflow",
-        max_size=3,
-        load_lock=asyncio.Lock(),
-        fetch_ids=fetch_ids,
-        user_api_key_cache=cache,
-    )
-
-    assert result == frozenset(fetched_ids)
-    assert await cache.async_get_cache(key=cache_key) == other_marker
-    assert (
-        await _cached_registry(
-            cache_key=cache_key,
-            overflow_sentinel="registry_overflow",
-            user_api_key_cache=cache,
-        )
-        is _REGISTRY_NOT_CACHED
-    )
-
-
-@pytest.mark.asyncio
-async def test_bounded_registry_does_not_store_ids_in_redis_after_invalidation():
-    from litellm.proxy.auth.auth_checks import _load_bounded_registry
-
-    redis: Final = _SharedFakeRedis()
-    cache: Final = UserApiKeyCache(redis_cache=redis)
-    cache_key: Final = "test_registry"
-    fetched_ids: Final = ("registered-id",)
-
-    async def invalidate_registry() -> tuple[str, ...]:
-        assert await redis.async_get_cache(key=cache_key) is not None
-        await redis.async_delete_cache(key=cache_key)
-        cache.in_memory_cache.delete_cache(key=cache_key)
-        return fetched_ids
-
-    result: Final = await _load_bounded_registry(
-        cache_key=cache_key,
-        overflow_sentinel="registry_overflow",
-        max_size=3,
-        load_lock=asyncio.Lock(),
-        fetch_ids=invalidate_registry,
-        user_api_key_cache=cache,
-    )
-
-    assert result == frozenset(fetched_ids)
-    assert await redis.async_get_cache(key=cache_key) is None
 
 
 @pytest.mark.asyncio
@@ -5886,28 +5779,17 @@ class _SharedFakeRedis(RedisCache):
     implemented; ``super().__init__`` is skipped intentionally."""
 
     def __init__(self):
-        self._store: Final[dict[str, str]] = {}
+        self._store: dict = {}
 
-    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> bool:
+    async def async_set_cache(self, key, value, **kwargs):
         self._store[key] = json.dumps(value)
-        return True
 
-    async def async_get_cache(self, key: str, **kwargs: object) -> object | None:
+    async def async_get_cache(self, key, **kwargs):
         raw = self._store.get(key)
         return json.loads(raw) if raw is not None else None
 
-    async def async_delete_cache(self, key: str) -> None:
+    async def async_delete_cache(self, key):
         self._store.pop(key, None)
-
-    def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
-        async def run_script(*, keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> int:
-            key: Final = keys[0]
-            if "redis.call('GET', KEYS[1])" in script and self._store.get(key) != args[0]:
-                return 0
-            self._store[key] = str(args[1])
-            return 1
-
-        return run_script
 
 
 @pytest.mark.asyncio

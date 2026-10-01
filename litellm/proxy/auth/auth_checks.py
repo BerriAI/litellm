@@ -10,11 +10,9 @@ Run checks for:
 """
 
 import asyncio
-import json
 import math
 import re
 import time
-import uuid as uuid_module
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import partial
 from types import MappingProxyType
@@ -27,7 +25,6 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
-from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
     CLI_SESSION_KEY_PREFIX,
@@ -1725,15 +1722,15 @@ def _column_is_set(column: str) -> Mapping[str, object]:
     return {column: {"not": None}}  # mutable-ok: prisma's query builder isinstance-checks for dict
 
 
+def _array_is_not_empty(column: str) -> Mapping[str, object]:
+    """``column`` holds at least one element, as a plain dict for prisma's builder."""
+    return {column: {"is_empty": False}}  # mutable-ok: prisma's query builder isinstance-checks for dict
+
+
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    return {
-        "OR": [  # mutable-ok: prisma filter requires mutable dict/list
-            {"blocked": True},  # mutable-ok: prisma filter requires mutable dict/list
-            *map(_column_is_set, _RESTRICTED_COLUMNS),
-            {"models": {"is_empty": False}},  # mutable-ok: prisma filter requires mutable dict/list
-        ]
-    }
+    restrictions: Final = (*map(_column_is_set, _RESTRICTED_COLUMNS), _array_is_not_empty("models"))
+    return {"OR": [{"blocked": True}, *restrictions]}  # mutable-ok: prisma needs dict/list
 
 
 class _RegistryNotCached:
@@ -1741,15 +1738,6 @@ class _RegistryNotCached:
 
 
 _REGISTRY_NOT_CACHED: Final = _RegistryNotCached()
-_REGISTRY_LOADING_MARKER_PREFIX: Final = "registry_loading:"
-_REGISTRY_CACHE_CAS_SCRIPT: Final = """
-local current = redis.call('GET', KEYS[1])
-if current == ARGV[1] then
-  redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
-  return 1
-end
-return 0
-"""
 
 #: One lock per registry; module-level because the stampede to collapse is worker-wide.
 _TAG_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
@@ -1777,61 +1765,18 @@ async def _cache_registry_answer(
     value: tuple[str, ...] | str,
     ttl: float,
     user_api_key_cache: UserApiKeyCache,
-    *,
-    local_only: bool = False,
 ) -> None:
     """Best-effort: a cache backend failure must not turn a registry load into a failed request."""
     try:
-        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl, local_only=local_only)
+        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
     except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
         verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
 
 
-async def _cache_registry_loading_marker(
-    cache_key: str,
-    loading_marker: str,
-    ttl: float,
-    redis_cache: RedisCache | None,
-    user_api_key_cache: UserApiKeyCache,
-) -> bool:
-    if redis_cache is None:
-        await _cache_registry_answer(
-            cache_key=cache_key,
-            value=loading_marker,
-            ttl=ttl,
-            user_api_key_cache=user_api_key_cache,
-            local_only=True,
-        )
-        return True
-
-    try:
-        redis_write: Final = await redis_cache.async_set_cache(key=cache_key, value=loading_marker, ttl=ttl)
-    except Exception as e:  # noqa: BLE001  # best-effort marker write: auth must survive a cache backend error
-        verbose_proxy_logger.warning("Failed to cache registry loading marker %s: %s", cache_key, e)
-        return False
-    if not redis_write:
-        verbose_proxy_logger.warning(
-            "Failed to cache registry loading marker %s: Redis SET returned no result", cache_key
-        )
-        return False
-
-    await _cache_registry_answer(
-        cache_key=cache_key,
-        value=loading_marker,
-        ttl=ttl,
-        user_api_key_cache=user_api_key_cache,
-        local_only=True,
-    )
-    return True
-
-
 async def _fetch_and_cache_registry(
     cache_key: str,
-    loading_marker: str,
     overflow_sentinel: str,
     max_size: int,
-    redis_cache: RedisCache | None,
-    marker_written: bool,
     fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None:
@@ -1863,48 +1808,12 @@ async def _fetch_and_cache_registry(
         )
         return None
 
-    if redis_cache is None:
-        cached_marker: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
-        if cached_marker != loading_marker:
-            return frozenset(registry_ids)
-        await _cache_registry_answer(
-            cache_key=cache_key,
-            value=registry_ids,
-            ttl=get_management_object_ttl(user_api_key_cache),
-            user_api_key_cache=user_api_key_cache,
-        )
-        return frozenset(registry_ids)
-
-    if not marker_written:
-        return frozenset(registry_ids)
-
-    ttl: Final = get_management_object_ttl(user_api_key_cache)
-    ttl_seconds: Final = redis_cache.get_ttl(ttl=ttl)
-    if ttl_seconds is None:
-        verbose_proxy_logger.warning("Failed to cache registry %s: Redis TTL is unavailable", cache_key)
-        return frozenset(registry_ids)
-
-    try:
-        serialized_marker: Final = json.dumps(CacheCodec.serialize(loading_marker))
-        serialized_registry_ids: Final = json.dumps(CacheCodec.serialize(registry_ids))
-        compare_and_set: Final = redis_cache.async_register_script(_REGISTRY_CACHE_CAS_SCRIPT)
-        cas_result: Final = await compare_and_set(
-            keys=(cache_key,),
-            args=(serialized_marker, serialized_registry_ids, ttl_seconds),
-        )
-    except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
-        verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
-        return frozenset(registry_ids)
-
-    verbose_proxy_logger.debug("Registry cache compare-and-set for %s returned %s", cache_key, cas_result)
-    if cas_result == 1:
-        await _cache_registry_answer(
-            cache_key=cache_key,
-            value=registry_ids,
-            ttl=ttl,
-            user_api_key_cache=user_api_key_cache,
-            local_only=True,
-        )
+    await _cache_registry_answer(
+        cache_key=cache_key,
+        value=registry_ids,
+        ttl=get_management_object_ttl(user_api_key_cache),
+        user_api_key_cache=user_api_key_cache,
+    )
     return frozenset(registry_ids)
 
 
@@ -1933,22 +1842,10 @@ async def _load_bounded_registry(
             if not isinstance(cached_after_wait, _RegistryNotCached):
                 return cached_after_wait
 
-        loading_marker: Final = f"{_REGISTRY_LOADING_MARKER_PREFIX}{uuid_module.uuid4().hex}"
-        redis_cache: Final = user_api_key_cache.redis_cache
-        marker_written: Final = await _cache_registry_loading_marker(
-            cache_key=cache_key,
-            loading_marker=loading_marker,
-            ttl=get_management_object_ttl(user_api_key_cache),
-            redis_cache=redis_cache,
-            user_api_key_cache=user_api_key_cache,
-        )
         return await _fetch_and_cache_registry(
             cache_key=cache_key,
-            loading_marker=loading_marker,
             overflow_sentinel=overflow_sentinel,
             max_size=max_size,
-            redis_cache=redis_cache,
-            marker_written=marker_written,
             fetch_ids=fetch_ids,
             user_api_key_cache=user_api_key_cache,
         )

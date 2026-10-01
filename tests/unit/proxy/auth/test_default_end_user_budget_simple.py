@@ -224,7 +224,6 @@ async def test_system_works_without_default_budget_configured():
     )
 
     mock_cache = AsyncMock(spec=DualCache)
-    mock_cache.redis_cache = None
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
 
