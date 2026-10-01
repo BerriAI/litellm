@@ -82,7 +82,7 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         )
         assert stored_worker is not None and stored_worker.id == worker.id
         assert worker.id == registration.worker.id
-        listing: Final = await endpoints.list_lenses(admin)
+        listing: Final = await endpoints.list_lenses(admin, storage=None)
         assert lens.id in tuple(e.id for e in listing.lenses)
         assert worker.id in tuple(w.id for w in listing.workers)
         claims: Final = await asyncio.gather(
@@ -180,13 +180,13 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
         assert needs_billing.value.status_code == 409
         assert await endpoints.heartbeat(lens.id, claimed.job.id, authenticated_legacy)
         finished: Final = await endpoints.result(
-            lens.id, claimed.job.id, Result(coverage=Coverage(screened=2)), authenticated_legacy
+            lens.id, claimed.job.id, Result(coverage=Coverage(screened=2)), authenticated_legacy, storage=None
         )
         assert finished.jobs[0].status == "completed"
         assert finished.jobs[0].coverage.screened == 2
         assert finished.last_scan_at == claimed.job.end
         assert finished.next_run_at > finished.jobs[0].finished_at
-        assert await endpoints.result(lens.id, claimed.job.id, Result(coverage=Coverage()), worker) == finished
+        assert await endpoints.result(lens.id, claimed.job.id, Result(coverage=Coverage()), worker, storage=None) == finished
         with pytest.raises(HTTPException) as stale:
             await endpoints.heartbeat(lens.id, claimed.job.id, worker)
         assert stale.value.status_code == 409

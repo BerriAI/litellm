@@ -23,9 +23,9 @@ from litellm.constants import (
     OTLP_OFFLOAD_DECODE_BYTES,
 )
 from litellm.integrations.clickhouse.schema import ensure_schema
-from litellm.rust_bridge.traces import TraceStorage
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing.decode import OTLPPayloadTooLargeError, decode_otlp
-from litellm.tracing.store import ClickHouseTraceStore
+from litellm.tracing.store import TraceStore
 from litellm.tracing.types import (
     SpanDetail,
     SpanRow,
@@ -60,14 +60,14 @@ class Tenant:
 
 
 class TraceReceiver:
-    def __init__(self, store: ClickHouseTraceStore) -> None:
+    def __init__(self, store: TraceStore) -> None:
         self.store = store
 
     @classmethod
     def from_env(cls) -> "TraceReceiver":
         return cls(
-            store=ClickHouseTraceStore(
-                TraceStorage(
+            store=TraceStore(
+                ClickHouseStorage(
                     database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
                     url=os.environ["CLICKHOUSE_URL"],
                     reader_url=os.environ["CLICKHOUSE_READER_URL"],
