@@ -182,7 +182,7 @@ async def _read_request_body(request: Request | None) -> dict:
             return {}
 
         if request.scope.get("path") == "/v1/traces" and request.scope.get("method") == "POST":
-            return {}  # mutable-ok: auth callers mutate the returned request parameters
+            return {}
 
         # Check if we already read and parsed the body
         _cached_request_body: Final[dict | None] = _safe_get_request_parsed_body(request=request)

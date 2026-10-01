@@ -126,14 +126,14 @@ class SpanRow(TypedDict):
     StatusMessage: ReadOnly[str]
     TeamId: ReadOnly[str]
     ApiKeyHash: ReadOnly[str]
-    ObservationType: ReadOnly[SpanType]
-    AgentName: ReadOnly[str]
-    LiteLLMRequestId: ReadOnly[str]
-    Model: ReadOnly[str]
-    InputTokens: ReadOnly[int]
-    OutputTokens: ReadOnly[int]
-    Input: ReadOnly[str]
-    Output: ReadOnly[str]
+    ObservationType: SpanType
+    AgentName: str
+    LiteLLMRequestId: str
+    Model: str
+    InputTokens: int
+    OutputTokens: int
+    Input: str
+    Output: str
 
 
 class SpendLogRecord(TypedDict):

@@ -9,10 +9,10 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from litellm.rust_bridge._native import NativeTraceStorage, trace_decode_otlp
-from litellm.rust_bridge.traces import TraceStorage
+from litellm.rust_bridge.traces import ClickHouseStorage
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.decode import decode_otlp
-from litellm.tracing.store import ClickHouseTraceStore
+from litellm.tracing.store import TraceStore
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -160,7 +160,7 @@ def test_decode_and_tenant_stamping_share_resources_without_crossing_groups() ->
 @pytest.mark.asyncio
 async def test_resource_fanout_reaches_insert_with_identical_values(recording_server: RecordingServer) -> None:
     body: Final = _resource_export(16 * 1024, 1024)
-    receiver: Final = TraceReceiver(ClickHouseTraceStore(TraceStorage("trace_test", recording_server.base_url)))
+    receiver: Final = TraceReceiver(TraceStore(ClickHouseStorage("trace_test", recording_server.base_url)))
     tenant: Final = Tenant("team-a", "key-a", "org-a")
     assert await receiver.ingest(body, "application/json", None, tenant) == 1024
     encoded: Final = gzip.decompress(recording_server.requests[0].raw_body)
@@ -177,7 +177,7 @@ async def test_resource_fanout_reaches_insert_with_identical_values(recording_se
 async def test_shared_resource_still_hits_insert_limit_before_transport(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = 0
     body: Final = _resource_export(64 * 1024, 1024)
-    receiver: Final = TraceReceiver(ClickHouseTraceStore(TraceStorage("trace_test", recording_server.base_url)))
+    receiver: Final = TraceReceiver(TraceStore(ClickHouseStorage("trace_test", recording_server.base_url)))
     with pytest.raises(TracingPayloadTooLargeError, match="encoded size limit"):
         await receiver.ingest(body, "application/json", None, Tenant("team-a", "key-a"))
     assert recording_server.requests == []
@@ -185,7 +185,7 @@ async def test_shared_resource_still_hits_insert_limit_before_transport(recordin
 
 @pytest.mark.asyncio
 async def test_insert_validates_values_without_pydantic_copy(recording_server: RecordingServer) -> None:
-    storage: Final = TraceStorage("trace_test", recording_server.base_url)
+    storage: Final = ClickHouseStorage("trace_test", recording_server.base_url)
     invalid: Final = object()
     with pytest.raises(ValueError, match=type(invalid).__name__):
         await storage.insert_rows("otel_traces", [{"ResourceAttributes": invalid}])
