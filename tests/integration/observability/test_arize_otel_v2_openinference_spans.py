@@ -924,3 +924,43 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
         assert len(sentinel_spans) == 1, spans
         _assert_tool_span_for_marker(sentinel_spans[0], sentinel)
         assert not any(attributes.get("litellm.metadata.trace_marker") == marker for attributes in spans), spans
+
+
+def test_arize_otel_v2_cache_hit_exports_llm_span(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip("BUG: LIT-9127 response-cache hits emit no OTel v2 LLM span")
+    marker: Final = "a-cache-hit-" + uuid.uuid4().hex
+    sentinel: Final = f"{marker}-sentinel"
+
+    def upstream(request: Request) -> Reply:
+        request_marker: Final = _chat_request_marker(request)
+        assert request_marker in (marker, sentinel), request
+        _assert_chat_request(request, messages=[{"role": "user", "content": request_marker}])
+        return _chat_response(request_marker)
+
+    with _rig(gateway, tmp_path, upstream, workers=1) as rig:
+        first: Final = _cache_call(rig, "chat", marker)
+        assert first[0] == (f"call_{marker}", "lookup_weather", '{"city": "Paris"}'), first
+        assert first[1] == marker, first
+        assert not first[2].get("x-litellm-cache-key"), first[2]
+        second: Final = _cache_call(rig, "chat", marker, cache_hit=True)
+        assert second[0] == first[0], second
+        assert second[1] == first[1], second
+        assert second[2].get("x-litellm-cache-key"), second[2]
+        forwarded: Final = tuple(
+            request for request in rig.provider.drain() if request.method == "POST" and marker.encode() in request.body
+        )
+        assert len(forwarded) == 1, forwarded
+        sentinel_response: Final = _cache_call(rig, "chat", sentinel)
+        assert not sentinel_response[2].get("x-litellm-cache-key"), sentinel_response[2]
+        sentinel_forwarded: Final = tuple(
+            request
+            for request in rig.provider.drain()
+            if request.method == "POST" and sentinel.encode() in request.body
+        )
+        assert len(sentinel_forwarded) == 1, sentinel_forwarded
+        spans: Final = _llm_spans_through_markers(rig.destination, (sentinel,))
+        marker_spans: Final = tuple(
+            attributes for attributes in spans if attributes.get("litellm.metadata.trace_marker") == marker
+        )
+        assert len(marker_spans) == 2, spans
+        _assert_tool_span_for_marker(marker_spans[1], marker)
