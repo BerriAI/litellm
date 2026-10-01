@@ -23,3 +23,33 @@ def test_admin_can_configure_lens_and_viewer_can_only_read() -> None:
     viewer: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
     assert user_scope(admin, write=True).all_teams
     assert user_scope(viewer).all_teams
+
+
+@pytest.mark.parametrize("identity", ("not-an-execution", "W10=", "WyJvdGhlciIsICIiLCAiaWQiXQ=="))
+def test_invalid_explicit_execution_ids_are_rejected(identity: str) -> None:
+    from litellm.proxy.engine.endpoints import validate_selection
+    from tests.unit.proxy.engine.test_state import engine
+
+    settings: Final = engine().settings.model_copy(update={"execution_ids": (identity,)})
+    with pytest.raises(HTTPException) as error:
+        validate_selection(settings)
+    assert error.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_incompatible_worker_is_rejected_before_claiming_work() -> None:
+    from litellm.proxy.engine.endpoints import claim
+    from tests.unit.proxy.engine.test_state import worker
+
+    with pytest.raises(HTTPException) as error:
+        await claim(worker(), protocol_version=1)
+    assert error.value.status_code == 409
+    assert "Upgrade" in error.value.detail
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM, None))
+def test_regular_keys_cannot_read_lens_results(role: LitellmUserRoles | None) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role, team_id="team", token="hashed-test-key")
+    with pytest.raises(HTTPException) as error:
+        user_scope(auth)
+    assert error.value.status_code == 403

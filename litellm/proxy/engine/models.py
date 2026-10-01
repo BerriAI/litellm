@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -32,24 +32,47 @@ class EngineSettings(Record):
     lookback_hours: int = Field(default=24, ge=1, le=720)
     service: str = Field(default="", max_length=200)
     filters: tuple[MetadataFilter, ...] = Field(default=(), max_length=8)
-    checks: tuple[Check, ...] = Field(min_length=1, max_length=12)
+    checks: tuple[Check, ...] = ()
     model: str = Field(min_length=1, max_length=200)
     enabled: bool = True
     interval_minutes: int = Field(default=15, ge=1, le=10080)
-    sample_size: int = Field(default=100, ge=1, le=500)
+    sample_size: int | None = Field(default=None, ge=1)
+    sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
+    concurrency: int = Field(default=8, ge=1)
+    team_id: str = ""
+    execution_ids: tuple[str, ...] = ()
     monthly_budget: float = Field(default=20, gt=0, le=100000, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def unique_checks(self) -> "EngineSettings":
         if len(frozenset(c.id for c in self.checks)) != len(self.checks):
             raise ValueError("Each check must have a unique ID")
+        if not self.context.strip() and not any(c.enabled for c in self.checks):
+            raise ValueError("Describe expected behavior or add an enabled check")
+        if any(c.id == "expected_behavior" for c in self.checks):
+            raise ValueError("expected_behavior is reserved for the behavior description")
         return self
+
+    @property
+    def analysis_checks(self) -> tuple[Check, ...]:
+        behavior: Final = (
+            (
+                Check(
+                    id="expected_behavior",
+                    instruction="Identify deviations from the expected behavior described in context.",
+                ),
+            )
+            if self.context.strip()
+            else ()
+        )
+        return (*behavior, *(c for c in self.checks if c.enabled))
 
 
 class Evidence(Record):
     execution_id: str
     span_id: str
     quote: str = Field(min_length=1, max_length=1000)
+    role: Literal["support", "counterexample"] = "support"
 
 
 class FindingDraft(Record):
@@ -79,6 +102,7 @@ class Coverage(Record):
     selected: int = 0
     screened: int = 0
     investigated: int = 0
+    inconclusive: int = 0
     grouping_batches: int = 0
     grouped_batches: int = 0
     candidates: int = 0
@@ -120,6 +144,16 @@ class ExecutionContent(Record):
 class Sample(Record):
     executions: tuple[Execution, ...]
     eligible: int
+    selected: int = 0
+    next_offset: int | None = None
+    next_cursor: str | None = None
+
+
+class RunAssessment(Record):
+    execution_id: str
+    issue_checks: tuple[str, ...] = ()
+    pattern_checks: tuple[str, ...] = ()
+    cannot_assess: bool = False
 
 
 class Job(Record):
@@ -139,6 +173,8 @@ class Job(Record):
     error: str = ""
     sample: Sample | None = None
     cost: float = 0
+    findings: tuple[Finding, ...] | None = None
+    assessments: tuple[RunAssessment, ...] = ()
 
 
 class Engine(Record):
@@ -176,6 +212,7 @@ class EngineList(Record):
 
 
 class RunRequest(Record):
+    settings: EngineSettings | None = None
     lookback_hours: int | None = Field(default=None, ge=1, le=720)
 
 
@@ -196,7 +233,8 @@ class Progress(Record):
 
 
 class Result(Record):
-    findings: tuple[FindingDraft, ...] = Field(default=(), max_length=30)
+    assessments: tuple[RunAssessment, ...] = ()
+    findings: tuple[FindingDraft, ...] = ()
     coverage: Coverage
     error: str = Field(default="", max_length=1000)
 

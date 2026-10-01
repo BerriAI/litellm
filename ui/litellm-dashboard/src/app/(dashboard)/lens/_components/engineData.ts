@@ -137,7 +137,10 @@ export function analysisModelOptions(models: string[], details: AnalysisModelInf
 
 export function durationLabel(value: number, base: "minutes" | "hours" = "minutes"): string {
   const minutes = base === "hours" ? value * 60 : value;
-  if (minutes % 1440 === 0) return `${minutes / 1440} ${minutes === 1440 ? "day" : "days"}`;
+  if (minutes >= 1440) {
+    const days = Number((minutes / 1440).toFixed(2));
+    return `${days} ${days === 1 ? "day" : "days"}`;
+  }
   if (minutes % 60 === 0) return `${minutes / 60} ${minutes === 60 ? "hour" : "hours"}`;
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }

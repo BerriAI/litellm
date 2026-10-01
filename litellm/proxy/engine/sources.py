@@ -25,6 +25,7 @@ class Storage(Protocol):
 
 
 class ExecutionRow(BaseModel):
+    selection_key: str = ""
     source: Literal["traces", "requests"]
     trace_id: str
     trace_ref: str = ""
@@ -34,6 +35,7 @@ class ExecutionRow(BaseModel):
     span_count: int
     root_seen: int
     eligible: int
+    selected: int = 0
     service: str = ""
     attributes: tuple[tuple[str, str], ...] = ()
 
@@ -79,11 +81,26 @@ def parameters(scope: Scope, filters: tuple[MetadataFilter, ...]) -> Mapping[str
     )
 
 
+def selection_id(value: str) -> str:
+    source, team, trace_id, trace_ref = parse_execution(value)
+    return "\0".join((source, team, trace_ref or trace_id))
+
+
 class SourceReader:
     def __init__(self, storage: Storage) -> None:
         self.storage: Final = storage
 
-    async def sample(self, scope: Scope, settings: EngineSettings, start: int, end: int) -> Sample:
+    async def sample(
+        self,
+        scope: Scope,
+        settings: EngineSettings,
+        start: int,
+        end: int,
+        offset: int = 0,
+        page_size: int = 100,
+        preview: bool = False,
+        cursor: str = "",
+    ) -> Sample:
         params: Final = MappingProxyType(
             {
                 **parameters(scope, settings.filters),
@@ -91,12 +108,26 @@ class SourceReader:
                 "start": start,
                 "end": end,
                 "service": settings.service,
-                "limit": settings.sample_size,
+                "limit": page_size,
+                "offset": offset,
+                "after": cursor,
+                "sample_percent": str(settings.sample_percent),
+                "sample_cap": settings.sample_size or 0,
+                "preview": int(preview),
+                "selected_team": settings.team_id,
+                "execution_ids": tuple(selection_id(value) for value in settings.execution_ids),
             }
         )
         rows: Final = _ROWS.validate_python(await self.storage.lens_sample(params))
         return Sample(
             eligible=rows[0].eligible if rows else 0,
+            selected=rows[0].selected if rows else 0,
+            next_cursor=rows[-1].selection_key if len(rows) == page_size else None,
+            next_offset=(
+                offset + len(rows)
+                if page_size and rows and offset + len(rows) < (rows[0].eligible if preview else rows[0].selected)
+                else None
+            ),
             executions=tuple(
                 Execution(
                     id=execution_id(row.source, row.team_id, row.trace_id, row.trace_ref),

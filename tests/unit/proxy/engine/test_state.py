@@ -55,12 +55,44 @@ def test_queue_is_idempotent_and_settings_are_frozen() -> None:
     edited: Final = queued.model_copy(
         update={"settings": original.settings.model_copy(update={"model": "replacement"})}
     )
+
     assert queue_job(edited, NOW, "duplicate") is edited
     assert edited.jobs[0].settings.model == "analysis"
     assert (edited.jobs[0].start, edited.jobs[0].end) == (
-        NOW - timedelta(hours=24, minutes=5),
+        NOW - timedelta(hours=24),
         NOW - timedelta(minutes=2),
     )
+
+
+def test_one_off_overrides_do_not_change_saved_monitoring_settings() -> None:
+    original: Final = engine()
+    override: Final = original.settings.model_copy(
+        update={"sample_percent": 10, "sample_size": None, "concurrency": 3, "lookback_hours": 72}
+    )
+    queued: Final = queue_job(original, NOW, "one-off", settings=override)
+    assert queued.settings == original.settings
+    assert queued.jobs[0].settings == override
+    assert queued.jobs[0].start == NOW - timedelta(hours=72)
+    later: Final = queue_job(original, NOW + timedelta(days=1), "scheduled")
+    assert later.jobs[0].settings == original.settings
+    assert later.jobs[0].start == NOW
+
+
+def test_behavior_description_is_sufficient_without_separate_checks() -> None:
+    settings: Final = EngineSettings(name="Behavior", model="analysis", context="Answer using cited sources")
+    assert tuple(c.id for c in settings.analysis_checks) == ("expected_behavior",)
+    assert settings.sample_size is None
+    assert settings.sample_percent == 100
+
+
+@pytest.mark.parametrize(
+    "field,value", (("sample_percent", 0), ("sample_percent", 101), ("sample_size", 0), ("concurrency", 0))
+)
+def test_invalid_selection_and_parallelism_are_rejected(field: str, value: int) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        EngineSettings.model_validate({**engine().settings.model_dump(), field: value})
 
 
 def test_lease_prevents_double_claim_and_expires_with_bounded_retries() -> None:
@@ -78,10 +110,26 @@ def test_lease_prevents_double_claim_and_expires_with_bounded_retries() -> None:
 
 
 def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
+    from litellm.proxy.engine.state import snapshot_finding
+
     original: Final = engine()
     resolved: Final = merge_finding(original, finding("run1"), 1, NOW).model_copy(update={"status": "resolved"})
     reviewed: Final = original.model_copy(update={"findings": (resolved,)})
     assert merge_finding(reviewed, finding("run1"), 1, NOW).status == "resolved"
+    comparison: Final = finding("run1").model_copy(
+        update={
+            "evidence": (
+                *finding("run1").evidence,
+                Evidence(execution_id="recovered", span_id="step", quote="Recovered", role="counterexample"),
+            )
+        }
+    )
+    compared: Final = merge_finding(reviewed, comparison, 1, NOW + timedelta(days=1))
+    assert compared.status == "resolved"
+    assert compared.occurrences == ("run1",)
+    assert compared.last_seen == resolved.last_seen
+    assert compared.evidence[-1].role == "counterexample"
+    assert snapshot_finding(reviewed, comparison, 1, NOW).occurrences == ("run1",)
     recurring: Final = merge_finding(reviewed, finding("run2"), 1, NOW + timedelta(days=1))
     assert recurring.status == "open"
     assert recurring.occurrences == ("run1", "run2")
@@ -98,15 +146,15 @@ def test_monthly_budget_renews_without_erasing_job_costs() -> None:
 
 
 @pytest.mark.parametrize("hours", (24, 168, 720))
-def test_initial_scan_uses_selected_history_then_continues_from_last_scan(hours: int) -> None:
+def test_every_scan_uses_the_configured_lookback_window(hours: int) -> None:
     original: Final = engine()
     configured: Final = original.model_copy(
         update={"settings": original.settings.model_copy(update={"lookback_hours": hours})}
     )
     first: Final = queue_job(configured, NOW, "first")
-    assert first.jobs[0].start == NOW - timedelta(hours=hours, minutes=5)
+    assert first.jobs[0].start == NOW - timedelta(hours=hours)
     resumed: Final = configured.model_copy(update={"last_scan_at": NOW - timedelta(hours=1)})
-    assert queue_job(resumed, NOW, "next").jobs[0].start == NOW - timedelta(hours=1, minutes=5)
+    assert queue_job(resumed, NOW, "next").jobs[0].start == NOW - timedelta(hours=hours)
 
 
 def test_finding_keeps_uncertainty_separate_from_the_main_summary() -> None:
@@ -131,3 +179,24 @@ def test_invalid_schedule_is_rejected(interval: float) -> None:
 
     with pytest.raises(ValidationError):
         EngineSettings.model_validate({**engine().settings.model_dump(), "interval_minutes": interval})
+
+
+def test_batch_snapshot_keeps_feedback_identity_and_only_current_evidence() -> None:
+    from litellm.proxy.engine.state import snapshot_finding
+
+    original: Final = engine()
+    dismissed: Final = merge_finding(original, finding("old-run"), 1, NOW).model_copy(
+        update={"status": "dismissed", "reason": "Expected recovery"}
+    )
+    saved: Final = original.model_copy(update={"findings": (dismissed,)})
+    draft: Final = finding("new-run").model_copy(
+        update={"title": "Updated wording", "existing_finding_id": dismissed.id}
+    )
+    snapshot: Final = snapshot_finding(saved, draft, 2, NOW + timedelta(days=1))
+    assert snapshot.id == dismissed.id
+    assert snapshot.status == "dismissed"
+    assert snapshot.reason == "Expected recovery"
+    assert snapshot.occurrences == ("new-run",)
+    assert snapshot.title == "Updated wording"
+    assert snapshot.evidence == draft.evidence
+    assert snapshot.revision == 2

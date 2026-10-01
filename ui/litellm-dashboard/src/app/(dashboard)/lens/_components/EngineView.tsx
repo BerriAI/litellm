@@ -3,17 +3,30 @@
 import type { components } from "@/lib/http/schema";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Aperture, ArrowUpRight, CheckCircle2, Circle, Layers3, Pause, Play, Plus, Settings2 } from "lucide-react";
+import {
+  Aperture,
+  ArrowUpRight,
+  CheckCircle2,
+  Circle,
+  Info,
+  Layers3,
+  Pause,
+  Play,
+  Plus,
+  Settings2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { apiClient } from "@/components/networking";
 import { TracePanel } from "./TracePanel";
 import { EngineSetup } from "./EngineSetup";
-import { RunList } from "./ActivityScope";
-import { EngineProgress, NextCheck } from "./EngineProgress";
+import { LensRuns } from "./LensRuns";
+import { EngineProgress, NextCheck, ScanDuration } from "./EngineProgress";
 import { WorkerSetup } from "./WorkerSetup";
+import { LensWelcome } from "./LensWelcome";
 import {
   engineStatus,
   evidenceTarget,
@@ -23,6 +36,7 @@ import {
   type EngineList,
   type Finding,
   type Settings,
+  type Job,
 } from "./engineData";
 
 const money = (n: number) =>
@@ -58,12 +72,18 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   );
   const selectLens = (id: string) => {
     setSelected(id);
+    setBatchId("latest");
+    setHistoryOffset(0);
+    setFindingId(null);
     const url = new URL(window.location.href);
     url.searchParams.set("lens", id);
     window.history.replaceState(window.history.state, "", url);
   };
-  const [editing, setEditing] = useState<"new" | "edit" | null>(null);
+  const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
   const [workerSetup, setWorkerSetup] = useState(false);
+  const [batchId, setBatchId] = useState("latest");
+  const [historyOffset, setHistoryOffset] = useState(0);
+  const [tab, setTab] = useState("findings");
   const [findingId, setFindingId] = useState<string | null>(null);
   const [filter, setFilter] = useState("open");
   const [kind, setKind] = useState<"issue" | "pattern">("issue");
@@ -74,16 +94,47 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   const engines = [...(query.data?.engines ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
   const showEmpty = !query.isLoading && !query.error && engines.length === 0;
   const engine = engines.find((e) => e.id === selected) ?? engines[0];
-  const finding = engine?.findings?.find((f) => f.id === findingId);
   const connected =
     query.data?.workers?.some((w) => !w.revoked && query.dataUpdatedAt - Date.parse(w.last_seen) < 120000) ?? false;
-  const job = engine?.jobs?.[0];
+  const historyQuery = {
+    queryKey: ["lens-history", engine?.id, historyOffset, accessToken],
+    enabled: !!engine,
+    queryFn: () =>
+      apiClient.get<Job[]>(`/engine/${engine?.id}/runs`, { accessToken, query: { offset: historyOffset } }),
+    refetchInterval: 10000,
+  };
+  const history = useQuery(historyQuery);
+  const historical = useQuery({
+    queryKey: ["lens-batch", engine?.id, batchId, accessToken],
+    enabled: !!engine && !["latest", "all"].includes(batchId),
+    queryFn: () => apiClient.get<Job>(`/engine/${engine?.id}/runs/${batchId}`, { accessToken }),
+  });
+  const job = ["latest", "all"].includes(batchId) ? engine?.jobs?.[0] : historical.data;
+  const missingSnapshot = job?.status === "completed" && job.findings == null && batchId !== "all";
+  const selectedOutsideHistory = !["latest", "all"].includes(batchId) && !history.data?.some((j) => j.id === batchId);
+  const batchSettings = job?.settings ?? engine?.settings;
+  const batchFindings = (batchId === "all" ? engine?.findings ?? [] : job?.findings ?? []).map((f) => {
+    const feedback = engine?.findings?.find((current) => current.id === f.id);
+    return feedback ? { ...f, status: feedback.status, reason: feedback.reason } : f;
+  });
+  const finding = batchFindings.find((f) => f.id === findingId);
+  const openBatch = (id: string) => {
+    setBatchId(id);
+    setTab("findings");
+    setFindingId(null);
+  };
+  const setupSettings = () => {
+    if (editing === "new") return undefined;
+    if (editing === "duplicate" && engine)
+      return { ...engine.settings, name: `${engine.settings.name} copy`, enabled: false };
+    return engine?.settings;
+  };
   const lastCompleted = engine?.jobs?.find((j) => j.status === "completed");
   const active = engine?.jobs?.find((j) => j.status === "queued" || j.status === "running");
   const visibleFindings = sortedFindings(
-    (engine?.findings ?? []).filter((f) => (filter === "all" || f.status === filter) && f.kind === kind),
+    batchFindings.filter((f) => (filter === "all" || f.status === filter) && f.kind === kind),
   );
-  const sampledRuns = engine?.jobs?.flatMap((j) => j.sample?.executions ?? []) ?? [];
+  const sampledRuns = job?.sample?.executions ?? [];
   const evidenceGroups = finding
     ? [...new Set(finding.evidence.map((e) => e.execution_id))].map((id) => ({
         id,
@@ -104,6 +155,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
   });
   const refresh = () => {
     void client.invalidateQueries({ queryKey: key });
+    void client.invalidateQueries({ queryKey: ["lens-history"] });
   };
   const update = async (path: string, body: unknown, method: "post" | "put" | "patch" = "post") => {
     setBusy(true);
@@ -175,26 +227,12 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
         </p>
       )}
       {showEmpty && (
-        <section className="flex min-h-[430px] flex-col items-center justify-center rounded-xl border bg-card px-6 text-center">
-          <div className="mb-5 rounded-xl border p-3">
-            <Aperture className="size-6 text-muted-foreground" strokeWidth={1.75} />
-          </div>
-          <h2 className="text-xl font-medium">What would you like to understand?</h2>
-          <p className="mt-3 max-w-md text-sm leading-6 text-muted-foreground">
-            Choose the activity to review, ask your questions, and get findings linked to the runs that explain them.
-          </p>
-          {!readOnly && (
-            <Button className="mt-6" onClick={() => setEditing("new")}>
-              Set up your first lens
-              <ArrowUpRight className="size-4" />
-            </Button>
-          )}
-          <div className="mt-10 flex flex-wrap justify-center gap-6 text-xs text-muted-foreground">
-            <span>Recurring failures</span>
-            <span>Unnecessary work</span>
-            <span>How people use your agent</span>
-          </div>
-        </section>
+        <LensWelcome
+          connected={connected}
+          readOnly={!!readOnly}
+          onConnect={() => setWorkerSetup(true)}
+          onCreate={() => setEditing("new")}
+        />
       )}
       {engine && (
         <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
@@ -202,10 +240,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
             {engines.map((e) => (
               <button
                 key={e.id}
-                onClick={() => {
-                  selectLens(e.id);
-                  setFindingId(null);
-                }}
+                onClick={() => selectLens(e.id)}
                 aria-current={engine.id === e.id ? "page" : undefined}
                 className={`min-w-44 rounded-lg px-3 py-3 text-left transition-colors ${engine.id === e.id ? "bg-muted" : "hover:bg-muted/50"}`}
               >
@@ -229,6 +264,9 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                   <Button variant="ghost" size="icon" aria-label="Lens settings" onClick={() => setEditing("edit")}>
                     <Settings2 className="size-4" />
                   </Button>
+                  <Button variant="outline" onClick={() => setEditing("duplicate")}>
+                    Duplicate
+                  </Button>
                   <Button
                     variant="outline"
                     disabled={busy}
@@ -244,7 +282,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     onClick={() => update(`/engine/${engine.id}/runs`, {})}
                   >
                     <Play className="size-3" />
-                    Analyze now
+                    Run now
                   </Button>
                 </div>
               )}
@@ -273,7 +311,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 {lastCompleted && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     {lastCompleted.coverage?.screened ?? 0} of {lastCompleted.coverage?.eligible ?? 0} eligible runs
-                    reviewed
+                    reviewed <ScanDuration job={lastCompleted} />
                   </p>
                 )}
               </div>
@@ -304,13 +342,80 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 {job.error}
               </p>
             )}
-            <Tabs defaultValue="findings" key={engine.id}>
-              <TabsList variant="line">
-                <TabsTrigger value="findings">Findings</TabsTrigger>
-                <TabsTrigger value="checks">Questions & checks</TabsTrigger>
-                <TabsTrigger value="runs">Runs</TabsTrigger>
-                <TabsTrigger value="activity">Scans</TabsTrigger>
-              </TabsList>
+            <Tabs value={tab} onValueChange={setTab} key={engine.id}>
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">
+                <TabsList variant="line">
+                  <TabsTrigger value="findings">Findings</TabsTrigger>
+                  <TabsTrigger value="checks">Questions & checks</TabsTrigger>
+                  <TabsTrigger value="runs">Runs</TabsTrigger>
+                  <TabsTrigger value="activity">Scans</TabsTrigger>
+                </TabsList>
+                {tab !== "activity" && (
+                  <div className="flex min-w-0 items-center gap-1 pb-1">
+                    <select
+                      aria-label="Investigation batch"
+                      className="h-8 w-44 max-w-full truncate rounded-md border-0 bg-transparent px-2 text-xs text-muted-foreground hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+                      value={batchId}
+                      onChange={(e) => {
+                        setBatchId(e.target.value);
+                        setFindingId(null);
+                      }}
+                    >
+                      <option value="latest">Latest batch</option>
+                      {job && selectedOutsideHistory && (
+                        <option value={batchId}>
+                          {when(job.created_at)} · {job.status}
+                        </option>
+                      )}
+                      {(history.data ?? engine.jobs)?.map((j) => (
+                        <option key={j.id} value={j.id}>
+                          {when(j.created_at)} · {j.status}
+                        </option>
+                      ))}
+                      <option value="all">All accumulated findings</option>
+                    </select>
+                    {job && batchId !== "all" && (
+                      <Popover key={job.id}>
+                        <PopoverTrigger
+                          aria-label="Batch details"
+                          render={<Button variant="ghost" size="icon" className="size-7 text-muted-foreground" />}
+                        >
+                          <Info className="size-3.5" />
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="gap-3">
+                          <PopoverTitle>Batch details</PopoverTitle>
+                          <p className="text-xs text-muted-foreground">
+                            {job.coverage?.screened ?? 0} / {job.coverage?.selected ?? 0} selected runs reviewed
+                            <ScanDuration job={job} />
+                          </p>
+                          <dl className="space-y-2 text-xs">
+                            <div>
+                              <dt className="text-muted-foreground">Activity window</dt>
+                              <dd className="mt-1">
+                                {when(job.start)} to {when(job.end)}
+                              </dd>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <dt className="text-muted-foreground">Analysis cost</dt>
+                              <dd>{money(job.cost ?? 0)}</dd>
+                            </div>
+                            <div className="flex justify-between gap-2">
+                              <dt className="text-muted-foreground">Status</dt>
+                              <dd className="capitalize">{job.status}</dd>
+                            </div>
+                          </dl>
+                        </PopoverContent>
+                      </Popover>
+                    )}
+                  </div>
+                )}
+              </div>
+              {missingSnapshot && tab !== "activity" && (
+                <p className="text-sm text-muted-foreground">
+                  This older batch predates saved result snapshots. Its findings remain available under All accumulated
+                  findings.
+                </p>
+              )}
               <TabsContent value="findings" className="pt-4 space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex gap-1" aria-label="Finding category">
@@ -320,15 +425,14 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                       onClick={() => setKind("issue")}
                     >
                       Needs attention (
-                      {engine.findings?.filter((f) => f.kind === "issue" && f.status === "open").length ?? 0})
+                      {batchFindings.filter((f) => f.kind === "issue" && f.status === "open").length ?? 0})
                     </Button>
                     <Button
                       size="sm"
                       variant={kind === "pattern" ? "secondary" : "ghost"}
                       onClick={() => setKind("pattern")}
                     >
-                      Patterns (
-                      {engine.findings?.filter((f) => f.kind === "pattern" && f.status === "open").length ?? 0})
+                      Patterns ({batchFindings.filter((f) => f.kind === "pattern" && f.status === "open").length ?? 0})
                     </Button>
                   </div>
                   <select
@@ -388,24 +492,24 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
               </TabsContent>
               <TabsContent value="checks" className="pt-4 space-y-4">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">What this lens looks for in your runs</p>
+                  <p className="text-sm text-muted-foreground">Checks used for the selected batch</p>
                   {!readOnly && (
                     <Button variant="outline" size="sm" onClick={() => setEditing("edit")}>
                       Edit questions
                     </Button>
                   )}
                 </div>
-                {engine.settings.context && (
+                {batchSettings?.context && (
                   <div className="rounded-lg bg-muted/40 p-4">
-                    <p className="text-xs font-medium">Agent context</p>
-                    <p className="mt-2 whitespace-pre-wrap text-sm">{engine.settings.context}</p>
+                    <p className="text-xs font-medium">Expected behavior</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm">{batchSettings.context}</p>
                   </div>
                 )}
-                {engine.settings.checks.map((c) => (
+                {batchSettings?.checks.map((c) => (
                   <div key={c.id} className="flex items-start gap-3 rounded-lg border p-4">
                     <Layers3 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                     <p className="text-sm flex-1">{c.instruction}</p>
-                    {!readOnly && (
+                    {!readOnly && batchId === "latest" && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -431,9 +535,9 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                   <Button
                     variant="outline"
                     disabled={!!active || !connected}
-                    onClick={() => update(`/engine/${engine.id}/runs`, { lookback_hours: 24 })}
+                    onClick={() => update(`/engine/${engine.id}/runs`, {})}
                   >
-                    Recheck the last 24 hours
+                    Run saved settings now
                   </Button>
                 )}
                 <p className="text-xs text-muted-foreground">
@@ -444,9 +548,9 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 <div className="rounded-lg border p-4 text-sm space-y-2">
                   <p className="font-medium">Activity this lens reviews</p>
                   <p>
-                    {sourceLabels[engine.settings.source ?? "traces"]} · {engine.settings.service || "All services"}
+                    {sourceLabels[batchSettings?.source ?? "traces"]} · {batchSettings?.service || "All services"}
                   </p>
-                  {engine.settings.filters?.map((f) => (
+                  {batchSettings?.filters?.map((f) => (
                     <p key={f.key} className="text-muted-foreground">
                       {f.key} is {f.value}
                     </p>
@@ -457,41 +561,34 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     </Button>
                   )}
                 </div>
-                <p className="text-sm font-medium">
-                  {active ? "Runs selected for this scan" : "Runs from the last scan"}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {job?.sample?.executions.length ?? 0} selected from {job?.sample?.eligible ?? 0} matches. Open a run
-                  to inspect its original activity.
-                </p>
-                <div className="max-h-[480px] overflow-y-auto rounded-lg border px-4 divide-y">
-                  {job?.sample?.executions.map((run) => (
-                    <div key={run.id} className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <RunList executions={[run]} />
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setRequestOffset(0);
-                          setEvidence({ id: run.id, span: "" });
-                        }}
-                      >
-                        Open {run.source === "traces" ? "run" : "request"}
-                        <ArrowUpRight className="size-3" />
-                      </Button>
-                    </div>
-                  ))}
-                  {!job?.sample?.executions.length && (
-                    <p className="py-4 text-sm text-muted-foreground">
-                      The selected runs appear here when an analyzer starts the scan.
-                    </p>
-                  )}
-                </div>
+                <LensRuns
+                  key={job?.id ?? batchId}
+                  job={job}
+                  onOpen={(id) => {
+                    setRequestOffset(0);
+                    setEvidence({ id, span: "" });
+                  }}
+                />
               </TabsContent>
               <TabsContent value="activity" className="pt-4 space-y-3">
-                {engine.jobs?.map((j) => (
+                <div className="flex justify-between">
+                  <Button
+                    variant="outline"
+                    disabled={!historyOffset}
+                    onClick={() => setHistoryOffset(Math.max(0, historyOffset - 50))}
+                  >
+                    Newer batches
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={(history.data?.length ?? 0) < 50}
+                    onClick={() => setHistoryOffset(historyOffset + 50)}
+                  >
+                    Older batches
+                  </Button>
+                </div>
+                {history.error && <p role="alert">{history.error.message}</p>}
+                {(history.data ?? engine.jobs)?.map((j) => (
                   <div key={j.id} className="rounded-lg border p-4">
                     <div className="flex justify-between gap-3 text-sm">
                       <span className="font-medium">{j.stage}</span>
@@ -499,15 +596,20 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {when(j.created_at)} · Settings version {j.revision}
+                      <ScanDuration job={j} />
                     </p>
                     <p className="mt-3 text-sm">
                       {j.coverage?.screened ?? 0} reviewed / {j.coverage?.eligible ?? 0} eligible ·{" "}
-                      {j.coverage?.investigated ?? 0} patterns investigated
+                      {j.coverage?.investigated ?? 0} patterns investigated · {j.coverage?.inconclusive ?? 0}{" "}
+                      inconclusive
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {j.coverage?.partial ?? 0} partial executions · {j.coverage?.unassessable ?? 0} could not be
                       assessed
                     </p>
+                    <Button size="sm" variant="outline" className="mt-3" onClick={() => openBatch(j.id)}>
+                      View results
+                    </Button>
                     {j.error && <p className="mt-2 text-sm text-destructive">{j.error}</p>}
                   </div>
                 ))}
@@ -518,7 +620,8 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
       )}
       {editing && (
         <EngineSetup
-          initial={editing === "edit" ? engine?.settings : undefined}
+          mode={editing}
+          initial={setupSettings()}
           models={models.data?.data.map((m) => m.id) ?? []}
           modelDetails={modelDetails.data?.data ?? []}
           modelsLoading={models.isLoading}
@@ -572,7 +675,8 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 <div>
                   <p className="text-sm font-medium">Evidence by run</p>
                   <p className="mt-1 mb-3 text-xs text-muted-foreground">
-                    Exact quotes from the recorded activity. Linked runs can include counterexamples.
+                    Exact quotes from the recorded activity. Counterexamples are labeled separately from supporting
+                    evidence.
                   </p>
                   <div className="space-y-2">
                     {evidenceGroups.map((group) => (
@@ -586,6 +690,9 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                         <div className="mt-3 space-y-3">
                           {group.quotes.map((e, i) => (
                             <div key={`${e.span_id}-${i}`} className="rounded-md bg-muted/40 p-3">
+                              {e.role === "counterexample" && (
+                                <p className="mb-1 text-xs font-medium text-muted-foreground">Counterexample</p>
+                              )}
                               <blockquote className="text-xs leading-5 whitespace-pre-wrap break-words">
                                 {e.quote}
                               </blockquote>
@@ -613,13 +720,14 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                 {!readOnly && (
                   <div className="space-y-3 border-t pt-4">
                     <label className="grid gap-2 text-sm">
-                      Feedback (optional)
+                      What should Lens remember?
                       <Textarea
                         value={reason}
                         onChange={(e) => setReason(e.target.value)}
                         placeholder="What should Lens know about this finding?"
                       />
                     </label>
+                    <p className="text-xs text-muted-foreground">Your explanation informs future scans of this Lens.</p>
                     <div className="flex flex-wrap gap-2">
                       {finding.kind === "issue" && (
                         <Button
@@ -630,7 +738,7 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
                         </Button>
                       )}
                       <Button disabled={busy} variant="outline" onClick={() => changeFinding("dismissed")}>
-                        Dismiss
+                        This is expected
                       </Button>
                     </div>
                   </div>
@@ -672,12 +780,15 @@ export function EngineView({ accessToken, readOnly = false }: { accessToken: str
             {requestEvidence.data?.parts.length === 0 && <p>Request was not found or is past retention</p>}
             <div className="flex gap-2">
               {requestOffset > 0 && (
-                <Button variant="outline" onClick={() => setRequestOffset(requestOffset - 8000)}>
+                <Button variant="outline" onClick={() => setRequestOffset(Math.max(0, requestOffset - 8000))}>
                   Previous section
                 </Button>
               )}
               {requestEvidence.data?.parts.some((p) => p.truncated) && (
-                <Button variant="outline" onClick={() => setRequestOffset(requestOffset + 8000)}>
+                <Button
+                  variant="outline"
+                  onClick={() => setRequestOffset(requestOffset === 0 ? 1 : requestOffset + 8000)}
+                >
                   Next section
                 </Button>
               )}
