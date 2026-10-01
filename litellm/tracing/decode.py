@@ -116,7 +116,10 @@ def _truncate_payload(value: str) -> str:
         return "[" + ", ".join((encoded[0], _elided(len(messages) - 1 - kept), *tail)) + "]"
     half: Final = (OTLP_MAX_ATTRIBUTE_VALUE_BYTES - marker_budget - 4) // 2
     middle: Final = (_elided(len(messages) - 2),) if len(messages) > 2 else ()
-    return "[" + ", ".join((_shrunk_message(messages[0], half), *middle, _shrunk_message(messages[-1], half))) + "]"
+    shrunk: Final = (
+        "[" + ", ".join((_shrunk_message(messages[0], half), *middle, _shrunk_message(messages[-1], half))) + "]"
+    )
+    return shrunk if _size(shrunk) <= OTLP_MAX_ATTRIBUTE_VALUE_BYTES else "[" + _elided(len(messages)) + "]"
 
 
 def decode_otlp(

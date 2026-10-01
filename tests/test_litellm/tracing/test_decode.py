@@ -278,6 +278,15 @@ def test_oversized_message_arrays_are_shortened_not_cut(messages):
     assert all(isinstance(m["content"], str) for m in kept)
 
 
+def test_oversized_non_content_fields_still_fit_the_limit():
+    heavy = {"role": "assistant", "content": "x", "tool_calls": [{"name": "t", "args": {"blob": "z" * 3000}}]}
+    messages = [heavy, {"role": "user", "content": "—" * 900}]
+    with patch.object(decode, "OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 400):
+        out = decode._truncate_payload(json.dumps(messages))
+    assert len(out.encode()) <= 400
+    assert "earlier messages truncated" in json.loads(out)[0]["content"]
+
+
 # ---------------------------------------------------------------- status / exceptions
 
 
