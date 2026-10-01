@@ -12,10 +12,12 @@ export default function AgentTracesPage({
   accessToken,
   isActive = true,
   readOnly = false,
+  canMintTracingKey = false,
 }: {
   accessToken: string;
   isActive?: boolean;
   readOnly?: boolean;
+  canMintTracingKey?: boolean;
 }) {
   const [rangeHours, setRangeHours] = useState(DEFAULT_RANGE_HOURS);
   const [live, setLive] = useState(true);
@@ -43,6 +45,7 @@ export default function AgentTracesPage({
         isCustomDate={false}
         isLiveTail={live}
         readOnly={readOnly}
+        canMintTracingKey={canMintTracingKey}
         timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: setLive }}
       />
     </div>
